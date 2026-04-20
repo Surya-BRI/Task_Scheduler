@@ -3,7 +3,7 @@
   "version": "0.1.0",
   "private": true,
   "scripts": {
-    "dev": "next dev -p 5000",
+    "dev": "powershell -NoProfile -Command \"Start-Process 'http://localhost:5000/login'; next dev -p 5000\"",
     "build": "next build",
     "start": "next start -p 5000",
     "lint": "eslint",
@@ -13,6 +13,7 @@
   "dependencies": {
     "@hookform/resolvers": "^5.2.2",
     "@tanstack/react-table": "^8.21.3",
+    "lucide-react": "^1.8.0",
     "next": "16.2.3",
     "react": "19.2.4",
     "react-dom": "19.2.4",
