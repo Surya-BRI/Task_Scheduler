@@ -205,6 +205,7 @@ const WEEKLY_CAPACITY = 40; // 5 working days × 8hrs
 const WEEKDAY_INDICES = [0, 1, 2, 3, 4];
 const ALL_DAY_INDICES = [0, 1, 2, 3, 4, 5, 6];
 const ALEX_DAY_SAMPLE_TASK_IDS = ["ax1", "ax2", "ax3", "ax4", "ax5", "ax6", "ax7", "ax8"];
+const isWeekdayIndex = (dayIndex: number) => WEEKDAY_INDICES.includes(dayIndex);
 const cloneState = <T,>(value: T): T => JSON.parse(JSON.stringify(value)) as T;
 const getCurrentDayIndex = (date: Date) => (date.getDay() + 6) % 7; // Mon=0 ... Sun=6
 const getWeekDays = (baseDate: Date) => {
@@ -269,7 +270,7 @@ export function DesignSchedulerScreen() {
   const hasSwappedD1AndD20Ref = useRef(false);
   const hasNormalizedAlexMondayRef = useRef(false);
   const [viewMode, setViewMode] = useState<ViewMode>("week");
-  const [selectedDays, setSelectedDays] = useState<number[]>([0, 1, 2, 3, 4, 5, 6]);
+  const [selectedDays, setSelectedDays] = useState<number[]>(WEEKDAY_INDICES);
   const [currentDay, setCurrentDay] = useState<number>(getCurrentDayIndex(new Date()));
   const [dropIndicator, setDropIndicator] = useState<DropIndicator | null>(null);
   
@@ -331,16 +332,24 @@ export function DesignSchedulerScreen() {
     });
   }, []);
 
-  const visibleDays = viewMode === "week" ? ALL_DAY_INDICES : selectedDays;
+  const customVisibleDays = useMemo(() => {
+    const filtered = [...new Set(selectedDays.filter(isWeekdayIndex))].sort((a, b) => a - b);
+    if (filtered.length > 0) return filtered;
+    return [isWeekdayIndex(currentDay) ? currentDay : WEEKDAY_INDICES[0]];
+  }, [selectedDays, currentDay]);
+
+  const visibleDays = viewMode === "week" ? ALL_DAY_INDICES : customVisibleDays;
   const layoutMode = visibleDays.length === 1 ? "single-column" : visibleDays.length <= 3 ? "grid" : "horizontal-scroll";
 
   const handleDayToggle = (dayIndex: number) => {
     if (viewMode !== "custom") return;
-    if (!ALL_DAY_INDICES.includes(dayIndex)) return;
+    if (!isWeekdayIndex(dayIndex)) return;
     setCurrentDay(dayIndex);
     setSelectedDays((prev) => {
       const exists = prev.includes(dayIndex);
-      const next = exists ? prev.filter((d) => d !== dayIndex) : [...prev, dayIndex];
+      const next = exists
+        ? prev.filter((d) => d !== dayIndex && isWeekdayIndex(d))
+        : [...prev.filter(isWeekdayIndex), dayIndex];
       if (next.length === 0) return prev;
       return [...next].sort((a, b) => a - b);
     });
@@ -709,8 +718,10 @@ export function DesignSchedulerScreen() {
             <button
               type="button"
               onClick={() => {
+                const weekdayCurrentDay = isWeekdayIndex(currentDay) ? currentDay : WEEKDAY_INDICES[0];
                 setViewMode("custom");
-                setSelectedDays([currentDay]);
+                setCurrentDay(weekdayCurrentDay);
+                setSelectedDays([weekdayCurrentDay]);
               }}
               className={`px-3 py-1 rounded-full border text-xs font-semibold ${viewMode === "custom" ? "bg-blue-50 border-blue-300 text-blue-700" : "bg-white border-gray-300 text-gray-600"}`}
             >
@@ -723,7 +734,7 @@ export function DesignSchedulerScreen() {
         <div className="bg-white border-b border-gray-200 px-6 py-2 flex items-center gap-2 text-xs shrink-0">
           <div className="w-64 border-r border-gray-200 pr-4 text-gray-500 font-medium">Visible Days</div>
           <div className="flex-1 flex items-center gap-1 px-6">
-            {ALL_DAY_INDICES.map((dayIndex) => {
+            {WEEKDAY_INDICES.map((dayIndex) => {
               const label = weekDates[dayIndex].toLocaleDateString("en-US", { weekday: "short" });
               const active = selectedDays.includes(dayIndex);
               return (
