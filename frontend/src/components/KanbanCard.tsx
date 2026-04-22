@@ -34,14 +34,14 @@ export function KanbanCard({ row }) {
 
   return (
     <div
-      onClick={() => router.push(`/design-list/task/${row.id}`)}
+      onClick={() => router.push(`/design-list/record/${row.id}`)}
       className={`group rounded-xl p-4 shadow-sm ring-1 transition hover:-translate-y-0.5 hover:shadow-md ${bg}`}
       role="button"
       tabIndex={0}
       onKeyDown={(event) => {
         if (event.key === 'Enter' || event.key === ' ') {
           event.preventDefault()
-          router.push(`/design-list/task/${row.id}`)
+          router.push(`/design-list/record/${row.id}`)
         }
       }}
     >

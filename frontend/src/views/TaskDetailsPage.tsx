@@ -201,22 +201,10 @@ export function TaskDetailsPage() {
   const [projectCreateModalOpen, setProjectCreateModalOpen] = useState(false)
   const [chatterMessage, setChatterMessage] = useState('')
   const [chatterEntries, setChatterEntries] = useState([])
-  const [priorityLevel, setPriorityLevel] = useState(
-    record && record.designType !== 'Retail'
-      ? (record.agingDays > 20 ? 'High' : 'Medium')
-      : '',
-  )
-  const [hoursRequired, setHoursRequired] = useState(
-    record && record.designType !== 'Retail'
-      ? String(record.agingDays + 20)
-      : '',
-  )
-  const [dateIssued, setDateIssued] = useState(
-    record && record.designType !== 'Retail' ? record.created : '',
-  )
-  const [dateSubmission, setDateSubmission] = useState(
-    record && record.designType !== 'Retail' ? record.deadline : '',
-  )
+  const [priorityLevel, setPriorityLevel] = useState('')
+  const [hoursRequired, setHoursRequired] = useState('')
+  const [dateIssued, setDateIssued] = useState('')
+  const [dateSubmission, setDateSubmission] = useState('')
   const [technicalHead, setTechnicalHead] = useState('')
   const [teamLead, setTeamLead] = useState('')
   const [subTeamLead, setSubTeamLead] = useState('')

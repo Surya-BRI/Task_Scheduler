@@ -1,7 +1,7 @@
 // @ts-nocheck
 import { useEffect, useRef, useState } from 'react'
 import { useRouter } from 'next/navigation'
-import { Bell, CalendarDays, ChevronDown, Home, LogOut } from 'lucide-react'
+import { Bell, ChevronDown, Home, LogOut, Users } from 'lucide-react'
 import { useAuth } from '../state/AuthContext'
 
 const NAV_ITEMS = [
@@ -104,6 +104,8 @@ function ProfileDropdown() {
 
 export function Navbar() {
   const router = useRouter()
+  const iconButtonClass =
+    'grid h-9 w-9 place-items-center rounded-md bg-white text-slate-800 ring-1 ring-slate-200 hover:bg-slate-50'
 
   return (
     <header className="sticky top-0 z-40 border-b border-slate-200">
@@ -125,14 +127,15 @@ export function Navbar() {
           <div className="ml-auto flex items-center gap-2">
             <button
               type="button"
-              className="grid h-9 w-9 place-items-center rounded-md bg-white text-slate-800 ring-1 ring-slate-200 hover:bg-slate-50"
-              aria-label="Calendar"
+              onClick={() => router.push('/project-design')}
+              className={iconButtonClass}
+              aria-label="Team and designers"
             >
-              <CalendarDays className="h-5 w-5" />
+              <Users className="h-5 w-5" />
             </button>
             <button
               type="button"
-              className="grid h-9 w-9 place-items-center rounded-md bg-white text-slate-800 ring-1 ring-slate-200 hover:bg-slate-50"
+              className={iconButtonClass}
               aria-label="Notifications"
             >
               <Bell className="h-5 w-5" />

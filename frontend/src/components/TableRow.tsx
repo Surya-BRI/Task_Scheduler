@@ -43,15 +43,19 @@ export function TableRow({ row, gridClass }) {
         className={`grid ${gridClass} items-center text-[11px] text-slate-700`}
       >
         <Link
-          href={`/design-list/task/${row.id}`}
+          href={`/design-list/record/${row.id}`}
           className="truncate px-2 text-left text-[#1e5aa7] hover:underline"
           title={row.opNo}
         >
           {row.opNo}
         </Link>
-        <div className="truncate px-2 text-left text-[#1e5aa7] hover:underline" title={row.projectNo}>
+        <Link
+          href={`/design-list/record/${row.id}`}
+          className="truncate px-2 text-left text-[#1e5aa7] hover:underline"
+          title={row.projectNo}
+        >
           {row.projectNo}
-        </div>
+        </Link>
         <div className="flex items-center justify-center whitespace-nowrap px-2 text-center">
           {row.designType}
         </div>
@@ -81,7 +85,7 @@ export function TableRow({ row, gridClass }) {
         <div className="flex flex-nowrap items-center justify-center gap-1 px-2">
           <IconButton
             label="View"
-            onClick={() => router.push(`/design-list/task/${row.id}`)}
+            onClick={() => router.push(`/design-list/record/${row.id}`)}
           >
             <Eye className="h-3 w-3" />
           </IconButton>
