@@ -1,4 +1,3 @@
-// @ts-nocheck
 import { useCallback, useEffect, useRef, useState } from 'react'
 import { CalendarCheck2, ChevronLeft, FileText, Hourglass, Pencil, ShieldCheck, ShieldX } from 'lucide-react'
 import { useParams, usePathname, useRouter, useSearchParams } from 'next/navigation'
@@ -85,8 +84,9 @@ export function DesignListRecordPage() {
   const { taskId } = useParams()
   const { records } = useDesignListStore()
   const record = records.find((item) => item.id === taskId)
-  const [activeTab, setActiveTab] = useState('details')
   const [providedFile, setProvidedFile] = useState('Design.ZIP')
+  const rawTab = searchParams.get('tab')
+  const activeTab = RECORD_TAB_IDS.includes(rawTab) ? rawTab : 'details'
 
   useEffect(() => {
     if (!record) {
@@ -94,16 +94,8 @@ export function DesignListRecordPage() {
     }
   }, [record, router])
 
-  useEffect(() => {
-    if (!record) return
-    const raw = searchParams.get('tab')
-    if (!raw || !RECORD_TAB_IDS.includes(raw)) return
-    setActiveTab(raw)
-  }, [searchParams, record])
-
   const selectRecordTab = useCallback(
     (tab) => {
-      setActiveTab(tab)
       const next = new URLSearchParams(searchParams.toString())
       if (tab === 'details') {
         next.delete('tab')

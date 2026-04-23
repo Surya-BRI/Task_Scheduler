@@ -1,4 +1,3 @@
-// @ts-nocheck
 import { useEffect, useId, useState } from 'react'
 import { ChevronDown, ChevronRight, Pencil, X } from 'lucide-react'
 

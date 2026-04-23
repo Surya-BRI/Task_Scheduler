@@ -1,4 +1,3 @@
-// @ts-nocheck
 'use client'
 
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
@@ -153,7 +152,6 @@ export function RetailProjectPage() {
     [projectRowId],
   )
 
-  const [activeTab, setActiveTab] = useState('details')
   const [createModalOpen, setCreateModalOpen] = useState(false)
   const [chatterMessage, setChatterMessage] = useState('')
   const [chatterEntries, setChatterEntries] = useState([])
@@ -168,26 +166,21 @@ export function RetailProjectPage() {
     }
   }, [row, router])
 
-  useEffect(() => {
-    if (!row) return
-    const raw = searchParams.get('tab')
-    if (!raw || !RETAIL_TAB_IDS.includes(raw)) return
-    setActiveTab(raw)
-  }, [searchParams, row])
+  const rawTab = searchParams.get('tab')
+  const activeTab = RETAIL_TAB_IDS.includes(rawTab) ? rawTab : 'details'
+  const isCreateRequested = searchParams.get('create') === '1'
 
   useEffect(() => {
     if (!row) return
-    if (searchParams.get('create') !== '1') return
-    setCreateModalOpen(true)
+    if (!isCreateRequested) return
     const next = new URLSearchParams(searchParams.toString())
     next.delete('create')
     const qs = next.toString()
     router.replace(qs ? `${pathname}?${qs}` : pathname, { scroll: false })
-  }, [row, searchParams, pathname, router])
+  }, [isCreateRequested, row, searchParams, pathname, router])
 
   const selectTab = useCallback(
     (tabId) => {
-      setActiveTab(tabId)
       const next = new URLSearchParams(searchParams.toString())
       if (tabId === 'details') {
         next.delete('tab')
@@ -408,7 +401,7 @@ export function RetailProjectPage() {
         </div>
       </main>
 
-      <CreateTaskModal open={createModalOpen} onClose={() => setCreateModalOpen(false)} />
+      <CreateTaskModal open={createModalOpen || isCreateRequested} onClose={() => setCreateModalOpen(false)} />
     </div>
   )
 }

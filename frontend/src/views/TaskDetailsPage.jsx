@@ -1,4 +1,3 @@
-// @ts-nocheck
 import { useCallback, useEffect, useRef, useState } from 'react'
 import { ChevronLeft, CircleCheck, Clock3, Flag, Hourglass, Info, Pencil, Shield, Upload } from 'lucide-react'
 import { useParams, usePathname, useRouter, useSearchParams } from 'next/navigation'
@@ -199,7 +198,6 @@ export function TaskDetailsPage() {
   const { taskId } = useParams()
   const { records } = useDesignListStore()
   const record = records.find((item) => item.id === taskId)
-  const [activeTab, setActiveTab] = useState('details')
   const [createModalOpen, setCreateModalOpen] = useState(false)
   const [projectCreateModalOpen, setProjectCreateModalOpen] = useState(false)
   const [chatterMessage, setChatterMessage] = useState('')
@@ -219,31 +217,19 @@ export function TaskDetailsPage() {
     }
   }, [record, router])
 
-  useEffect(() => {
-    if (!record) return
-    const raw = searchParams.get('tab')
-    if (!raw || !TASK_TAB_IDS.includes(raw)) return
-    if (raw === 'team' && record.designType === 'Retail') return
-    setActiveTab(raw)
-  }, [searchParams, record])
+  const isCreateRequested = searchParams.get('create') === '1'
 
   useEffect(() => {
     if (!record) return
-    if (searchParams.get('create') !== '1') return
-    if (record.designType === 'Retail') {
-      setCreateModalOpen(true)
-    } else {
-      setProjectCreateModalOpen(true)
-    }
+    if (!isCreateRequested) return
     const next = new URLSearchParams(searchParams.toString())
     next.delete('create')
     const qs = next.toString()
     router.replace(qs ? `${pathname}?${qs}` : pathname, { scroll: false })
-  }, [record, searchParams, pathname, router])
+  }, [isCreateRequested, record, searchParams, pathname, router])
 
   const selectTaskTab = useCallback(
     (tabId) => {
-      setActiveTab(tabId)
       const next = new URLSearchParams(searchParams.toString())
       if (tabId === 'details') {
         next.delete('tab')
@@ -261,6 +247,11 @@ export function TaskDetailsPage() {
   }
 
   const isRetail = record.designType === 'Retail'
+  const rawTab = searchParams.get('tab')
+  const activeTab =
+    TASK_TAB_IDS.includes(rawTab) && !(rawTab === 'team' && isRetail)
+      ? rawTab
+      : 'details'
   const tabs = isRetail ? TABS : [...TABS, PROJECT_TAB]
   const from = searchParams.get('from')
   const backPath =
@@ -520,8 +511,14 @@ export function TaskDetailsPage() {
         </div>
       </main>
 
-      <CreateTaskModal open={createModalOpen} onClose={() => setCreateModalOpen(false)} />
-      <ProjectCreateTaskModal open={projectCreateModalOpen} onClose={() => setProjectCreateModalOpen(false)} />
+      <CreateTaskModal
+        open={createModalOpen || (isCreateRequested && isRetail)}
+        onClose={() => setCreateModalOpen(false)}
+      />
+      <ProjectCreateTaskModal
+        open={projectCreateModalOpen || (isCreateRequested && !isRetail)}
+        onClose={() => setProjectCreateModalOpen(false)}
+      />
     </div>
   )
 }

@@ -1,6 +1,6 @@
 "use client";
 
-import { useEffect, useState } from "react";
+import { useState } from "react";
 import { useRouter } from "next/navigation";
 import {
   Activity,
@@ -442,7 +442,6 @@ export function DesignListScreen() {
   const { records } = useDesignListStore();
   const designs = records;
   const [viewMode, setViewMode] = useState("list");
-  const [mounted, setMounted] = useState(false);
   const [filters, setFilters] = useState({
     type: "",
     status: "",
@@ -451,14 +450,6 @@ export function DesignListScreen() {
     endDate: "",
     searchQuery: "",
   });
-
-  useEffect(() => {
-    setMounted(true);
-  }, []);
-
-  if (!mounted) {
-    return null;
-  }
 
   const uniqueSalesPersons = Array.from(new Set(designs.map((d) => d.salesPerson))).sort();
 

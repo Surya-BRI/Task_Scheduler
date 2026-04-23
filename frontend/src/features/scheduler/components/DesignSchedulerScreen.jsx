@@ -1,5 +1,5 @@
 "use client";
-/* eslint-disable react-hooks/set-state-in-effect, react-hooks/preserve-manual-memoization */
+/* eslint-disable react-hooks/set-state-in-effect */
 import { useState, useEffect, useRef, useMemo } from "react";
 import { useRouter } from "next/navigation";
 import { Calendar, Bell, Search, Users, Home, Plus, PauseCircle, AlertTriangle } from "lucide-react";
@@ -524,9 +524,19 @@ export function DesignSchedulerScreen() {
     const isDesignerOverloaded = (designerId) => {
         return WEEKDAY_INDICES.some((dayIndex) => getDayHours(designerId, dayIndex) > DAILY_CAPACITY);
     };
-    const totalScheduledHours = useMemo(() => DUMMY_DESIGNERS.reduce((acc, d) => acc + getDesignerBookedHours(d.id), 0), [schedules, tasks]);
+    const totalScheduledHours = useMemo(() => DUMMY_DESIGNERS.reduce((acc, designer) => {
+        const days = schedules[designer.id] || {};
+        const designerTotal = WEEKDAY_INDICES.reduce((dayAcc, dayIdx) => {
+            const dayTasks = days[dayIdx.toString()] || [];
+            return dayAcc + sumTaskHours(tasks, dayTasks);
+        }, 0);
+        return acc + designerTotal;
+    }, 0), [schedules, tasks]);
     const totalDesignersCount = DUMMY_DESIGNERS.length;
-    const overloadedCount = useMemo(() => DUMMY_DESIGNERS.filter((d) => isDesignerOverloaded(d.id)).length, [schedules, tasks]);
+    const overloadedCount = useMemo(() => DUMMY_DESIGNERS.filter((designer) => WEEKDAY_INDICES.some((dayIndex) => {
+        const dayTasks = (schedules[designer.id] || {})[dayIndex.toString()] || [];
+        return sumTaskHours(tasks, dayTasks) > DAILY_CAPACITY;
+    })).length, [schedules, tasks]);
     const totalScheduledTaskCount = useMemo(() => Object.values(schedules).reduce((acc, curr) => acc + Object.values(curr).flat().length, 0), [schedules]);
     return (<div className="h-screen flex flex-col bg-gray-50 overflow-hidden font-sans">
       <header className="flex items-center justify-between px-6 py-3 bg-white border-b border-gray-200 shadow-sm shrink-0 relative z-20">
