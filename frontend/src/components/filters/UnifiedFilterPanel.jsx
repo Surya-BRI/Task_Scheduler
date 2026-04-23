@@ -1,4 +1,3 @@
-// @ts-nocheck
 import { CalendarDays, ListFilter, Shapes, UserRound } from 'lucide-react'
 import { DateRangeFilter } from './DateRangeFilter'
 import { FilterDropdown } from './FilterDropdown'

@@ -1,4 +1,3 @@
-// @ts-nocheck
 'use client'
 
 import { DesignListProvider } from '@/state/DesignListContext'

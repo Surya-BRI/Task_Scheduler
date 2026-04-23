@@ -1,10 +1,4 @@
-export function Table({
-  headers,
-  rows,
-}: {
-  headers: string[];
-  rows: Array<Array<string | number | null>>;
-}) {
+export function Table({ headers, rows }) {
   return (
     <div className="overflow-hidden rounded-lg border border-slate-200 bg-white">
       <table className="w-full text-left text-sm">

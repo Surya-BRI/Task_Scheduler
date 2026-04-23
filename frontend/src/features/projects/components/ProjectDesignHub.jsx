@@ -8,7 +8,7 @@ import { Navbar } from "@/components/Navbar";
 
 const FROM = "project-design";
 
-function hubTaskUrl(recordId: string, opts?: { tab?: string; create?: boolean }) {
+function hubTaskUrl(recordId, opts) {
   const sp = new URLSearchParams();
   sp.set("from", FROM);
   if (opts?.tab) sp.set("tab", opts.tab);
@@ -16,7 +16,7 @@ function hubTaskUrl(recordId: string, opts?: { tab?: string; create?: boolean })
   return `/design-list/task/${encodeURIComponent(recordId)}?${sp.toString()}`;
 }
 
-function ActionLink({ href, label }: { href: string; label: string }) {
+function ActionLink({ href, label }) {
   return (
     <Link
       href={href}
@@ -27,19 +27,7 @@ function ActionLink({ href, label }: { href: string; label: string }) {
   );
 }
 
-function DesignTypeTable({
-  rows,
-  variant,
-}: {
-  rows: Array<{
-    id: string;
-    opNo: string;
-    projectNo: string;
-    name: string;
-    status: string;
-  }>;
-  variant: "retail" | "project";
-}) {
+function DesignTypeTable({ rows, variant }) {
   return (
     <div className="flex flex-col min-h-0 flex-1">
       <div className="border border-gray-200 rounded-lg overflow-auto bg-white shadow-sm flex-1 min-h-[240px]">
@@ -106,25 +94,15 @@ function DesignTypeTable({
   );
 }
 
-type DesignRecordRow = {
-  id: string;
-  opNo: string;
-  projectNo: string;
-  name: string;
-  status: string;
-  designType: string;
-  businessUnit: string;
-};
-
 export function ProjectDesignHub() {
   const { records } = useDesignListStore();
-  const list = records as unknown as DesignRecordRow[];
+  const list = records;
   const [searchQuery, setSearchQuery] = useState("");
-  const [segment, setSegment] = useState<"retail" | "project">("retail");
+  const [segment, setSegment] = useState("retail");
 
   const { retailRows, projectRows } = useMemo(() => {
     const q = searchQuery.trim().toLowerCase();
-    const match = (r: DesignRecordRow) => {
+    const match = (r) => {
       if (!q) return true;
       const hay = [r.opNo, r.projectNo, r.name, r.businessUnit].join(" ").toLowerCase();
       return hay.includes(q);
@@ -149,7 +127,7 @@ export function ProjectDesignHub() {
     };
   }, [list, searchQuery]);
 
-  const tabClass = (active: boolean) =>
+  const tabClass = (active) =>
     `rounded-lg px-4 py-2 text-sm font-semibold transition-colors ${
       active
         ? "bg-blue-600 text-white shadow"

@@ -1,4 +1,3 @@
-// @ts-nocheck
 import { createContext, useContext, useMemo, useState } from 'react'
 import { DESIGN_RECORDS } from '../data/designs.js'
 

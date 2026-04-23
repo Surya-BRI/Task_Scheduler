@@ -1,4 +1,3 @@
-// @ts-nocheck
 const MAP = {
   WIP: {
     cls: 'bg-blue-100 text-blue-700 ring-blue-200',

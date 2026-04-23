@@ -1,4 +1,3 @@
-// @ts-nocheck
 import { useEffect, useId, useRef, useState } from 'react'
 import { Pencil, X } from 'lucide-react'
 

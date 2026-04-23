@@ -1,4 +1,3 @@
-// @ts-nocheck
 import { CalendarDays, X } from 'lucide-react'
 
 function formatDateLabel(value) {
