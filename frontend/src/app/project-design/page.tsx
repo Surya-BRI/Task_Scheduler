@@ -1,5 +1,5 @@
-import { redirect } from 'next/navigation';
+import { ProjectDesignHub } from '@/features/projects/components/ProjectDesignHub';
 
-export default function HomePage() {
-  redirect('/design-list');
+export default function ProjectDesignRoutePage() {
+  return <ProjectDesignHub />;
 }

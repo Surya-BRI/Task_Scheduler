@@ -3,7 +3,7 @@
   "version": "0.1.0",
   "private": true,
   "scripts": {
-    "dev": "powershell -NoProfile -Command \"Start-Process 'http://localhost:5000/login'; next dev -p 5000\"",
+    "dev": "powershell -NoProfile -Command \"Start-Process 'http://localhost:5000/design-list'; next dev -p 5000\"",
     "build": "next build",
     "start": "next start -p 5000",
     "lint": "eslint",

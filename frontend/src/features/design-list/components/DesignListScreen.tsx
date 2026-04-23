@@ -3,24 +3,21 @@
 import React, { useState, useEffect } from "react";
 import { useRouter } from "next/navigation";
 import {
+  Activity,
+  Briefcase,
   Calendar,
-  Bell,
-  Search,
+  Clock,
   Filter,
-  ArrowUpDown,
-  Users,
-  Eye,
-  Edit2,
-  UserPlus,
-  History,
   GalleryVerticalEnd,
-  Home,
   LayoutGrid,
   List,
-  Clock
+  MessageCircle,
+  Search,
+  Users,
 } from "lucide-react";
-import Image from "next/image";
-import { dummyDesigns, DesignEntry, DesignStatus } from "../data/dummy-designs";
+import type { DesignEntry, DesignStatus } from "../data/dummy-designs";
+import { useDesignListStore } from "@/state/DesignListContext";
+import { Navbar } from "@/components/Navbar";
 
 const getStatusColor = (status: DesignStatus) => {
   switch (status) {
@@ -48,74 +45,6 @@ const getStatusDot = (status: DesignStatus) => {
     case "Approved": return "bg-purple-500";
     default: return "bg-gray-500";
   }
-};
-
-const Header = () => {
-  const router = useRouter();
-  return (
-    <header className="flex items-center justify-between px-6 py-3 bg-white border-b">
-      <div className="flex items-center gap-2">
-        <img
-          src="/logo.png"
-          alt="Blue Rhine Industries"
-          className="h-10 object-contain cursor-pointer"
-          onClick={() => router.push("/design-list")}
-          title="Go to Home"
-        />
-      </div>
-      <div className="flex items-center gap-6 text-gray-600">
-        <button onClick={() => router.push('/design-scheduler')} className="hover:text-black transition-colors rounded-full hover:bg-gray-100 p-2 cursor-pointer" title="Go to Scheduler">
-          <Calendar size={20} />
-        </button>
-        <button className="hover:text-black transition-colors rounded-full hover:bg-gray-100 p-2 relative">
-          <Bell size={20} />
-          <span className="absolute top-1 right-2 w-2 h-2 bg-red-500 rounded-full"></span>
-        </button>
-        <button className="w-10 h-10 rounded-full bg-gray-200 overflow-hidden border border-gray-300">
-          <div className="w-full h-full bg-slate-300 flex items-center justify-center text-slate-500">
-            <Users size={20} />
-          </div>
-        </button>
-      </div>
-    </header>
-  );
-};
-
-const Navigation = () => {
-  const router = useRouter();
-  const navItems = [
-    { label: "Activities", active: false },
-    { label: "Dashboards", active: false },
-    { label: "Transactions", active: false },
-    { label: "Reports", active: false },
-    { label: "Analytics", active: false },
-    { label: "Screens", active: false },
-    { label: "Setup", active: false },
-    { label: "Support", active: false },
-  ];
-
-  return (
-    <nav className="bg-[#b3c6ea] px-6 py-3 flex items-center shadow-sm">
-      <button
-        onClick={() => router.push("/projects-list")}
-        title="Go to Project List"
-        className="text-gray-800 hover:text-black transition-colors cursor-pointer"
-      >
-        <Home size={18} />
-      </button>
-      <div className="flex-1 flex justify-around px-8">
-        {navItems.map((item, index) => (
-          <button
-            key={index}
-            className={`font-semibold text-sm transition-colors cursor-pointer ${item.active ? "text-blue-900 border-b-2 border-blue-900 pb-1" : "text-gray-800 hover:text-black"
-              }`}
-          >
-            {item.label}
-          </button>
-        ))}
-      </div>
-    </nav>
-  );
 };
 
 type FilterState = { type: string; status: string; salesPerson: string; startDate: string; endDate: string; searchQuery: string };
@@ -281,73 +210,118 @@ const Toolbar = ({
   );
 };
 
-const Table = ({ data }: { data: DesignEntry[] }) => (
-  <div className="px-6 pb-6 flex-1 min-h-0 flex flex-col">
-    <div className="border border-gray-200 rounded-lg overflow-auto bg-white shadow-sm h-full">
-      <table className="w-full text-xs text-left leading-tight">
-        <thead className="bg-[#f0f3fa] text-gray-600 uppercase font-semibold sticky top-0 z-10 outline outline-1 outline-gray-200">
-          <tr>
-            <th className="px-2 py-1">OP No</th>
-            <th className="px-2 py-1">Project No</th>
-            <th className="px-2 py-1">Design Type</th>
-            <th className="px-2 py-1">Business Unit</th>
-            <th className="px-2 py-1">Name</th>
-            <th className="px-2 py-1">Status</th>
-            <th className="px-2 py-1">Sales Person</th>
-            <th className="px-2 py-1">Created</th>
-            <th className="px-2 py-1">Deadline</th>
-            <th className="px-2 py-1">Aging</th>
-            <th className="px-2 py-1 text-center">Actions</th>
-          </tr>
-        </thead>
-        <tbody className="divide-y divide-gray-100">
-          {data.map((row) => (
-            <tr key={row.id} className="hover:bg-gray-50 transition-colors">
-              <td className="px-2 py-0 text-blue-600 cursor-pointer hover:underline font-medium">
-                {row.opNo}
-              </td>
-              <td className="px-2 py-0 text-blue-600 cursor-pointer hover:underline font-medium">
-                {row.projectNo}
-              </td>
-              <td className="px-2 py-0 text-gray-700">{row.designType}</td>
-              <td className="px-2 py-0 text-gray-700">{row.businessUnit}</td>
-              <td className="px-2 py-0 text-gray-900 font-medium whitespace-nowrap">{row.name}</td>
-              <td className="px-2 py-0">
-                <span className={`px-1.5 py-0.5 rounded-full text-[10px] font-medium leading-none inline-block ${getStatusColor(row.status)}`}>
-                  {row.status}
-                </span>
-              </td>
-              <td className="px-2 py-0 text-gray-700">{row.salesPerson}</td>
-              <td className="px-2 py-0 text-gray-500 whitespace-nowrap">{row.created}</td>
-              <td className="px-2 py-0 text-gray-500 whitespace-nowrap">{row.deadline}</td>
-              <td className={`px-2 py-0 font-medium whitespace-nowrap ${row.agingDays > 20 ? "text-red-600" : "text-gray-500"}`}>
-                {row.agingDays} d
-              </td>
-              <td className="px-2 py-0">
-                <div className="flex items-center justify-center gap-2 text-gray-500">
-                  <button className="hover:text-blue-600 transition-colors p-0.5" title="View">
-                    <Eye size={12} />
-                  </button>
-                  <button className="hover:text-green-600 transition-colors p-0.5" title="Edit">
-                    <Edit2 size={12} />
-                  </button>
-                  <button className="hover:text-purple-600 transition-colors p-0.5" title="Assign">
-                    <UserPlus size={12} />
-                  </button>
-                  <button className="hover:text-orange-600 transition-colors p-0.5" title="History">
-                    <History size={12} />
-                  </button>
-                </div>
-              </td>
+/** Record detail view (Details / Activity / Chatter) — same as `DesignListRecordPage`. */
+function recordDetailPath(id: string) {
+  return `/design-list/record/${id}`;
+}
+
+function recordTabPath(id: string, tab: "activity" | "chatter") {
+  return `${recordDetailPath(id)}?tab=${tab}`;
+}
+
+const Table = ({ data }: { data: DesignEntry[] }) => {
+  const router = useRouter();
+  return (
+    <div className="px-6 pb-6 flex-1 min-h-0 flex flex-col">
+      <div className="border border-gray-200 rounded-lg overflow-auto bg-white shadow-sm h-full">
+        <table className="w-full text-xs text-left leading-tight">
+          <thead className="bg-[#f0f3fa] text-gray-600 uppercase font-semibold sticky top-0 z-10 outline outline-1 outline-gray-200">
+            <tr>
+              <th className="px-2 py-1">OP No</th>
+              <th className="px-2 py-1">Project No</th>
+              <th className="px-2 py-1">Design Type</th>
+              <th className="px-2 py-1">Business Unit</th>
+              <th className="px-2 py-1">Name</th>
+              <th className="px-2 py-1">Status</th>
+              <th className="px-2 py-1">Sales Person</th>
+              <th className="px-2 py-1">Created</th>
+              <th className="px-2 py-1">Deadline</th>
+              <th className="px-2 py-1">Aging</th>
+              <th className="px-2 py-1 text-center">Actions</th>
             </tr>
-          ))}
-        </tbody>
-      </table>
+          </thead>
+          <tbody className="divide-y divide-gray-100">
+            {data.map((row) => (
+              <tr key={row.id} className="hover:bg-gray-50 transition-colors">
+                <td className="px-2 py-0">
+                  <button
+                    type="button"
+                    onClick={() => router.push(recordDetailPath(row.id))}
+                    className="text-left text-blue-600 cursor-pointer hover:underline font-medium"
+                  >
+                    {row.opNo}
+                  </button>
+                </td>
+                <td className="px-2 py-0">
+                  <button
+                    type="button"
+                    onClick={() => router.push(recordDetailPath(row.id))}
+                    className="text-left text-blue-600 cursor-pointer hover:underline font-medium"
+                  >
+                    {row.projectNo}
+                  </button>
+                </td>
+                <td className="px-2 py-0 text-gray-700">{row.designType}</td>
+                <td className="px-2 py-0 text-gray-700">{row.businessUnit}</td>
+                <td className="px-2 py-0">
+                  <button
+                    type="button"
+                    onClick={() => router.push(recordDetailPath(row.id))}
+                    className="text-left text-gray-900 font-medium whitespace-nowrap hover:text-blue-600 hover:underline"
+                  >
+                    {row.name}
+                  </button>
+                </td>
+                <td className="px-2 py-0">
+                  <span className={`px-1.5 py-0.5 rounded-full text-[10px] font-medium leading-none inline-block ${getStatusColor(row.status)}`}>
+                    {row.status}
+                  </span>
+                </td>
+                <td className="px-2 py-0 text-gray-700">{row.salesPerson}</td>
+                <td className="px-2 py-0 text-gray-500 whitespace-nowrap">{row.created}</td>
+                <td className="px-2 py-0 text-gray-500 whitespace-nowrap">{row.deadline}</td>
+                <td className={`px-2 py-0 font-medium whitespace-nowrap ${row.agingDays > 20 ? "text-red-600" : "text-gray-500"}`}>
+                  {row.agingDays} d
+                </td>
+                <td className="px-2 py-0">
+                  <div className="flex items-center justify-center gap-1.5 text-gray-500">
+                    <button
+                      type="button"
+                      onClick={() => router.push(recordDetailPath(row.id))}
+                      className="rounded p-0.5 hover:text-blue-600 transition-colors"
+                      title="Details"
+                    >
+                      <Briefcase size={12} />
+                    </button>
+                    <button
+                      type="button"
+                      onClick={() => router.push(recordTabPath(row.id, "activity"))}
+                      className="rounded p-0.5 hover:text-emerald-600 transition-colors"
+                      title="Activity"
+                    >
+                      <Activity size={12} />
+                    </button>
+                    <button
+                      type="button"
+                      onClick={() => router.push(recordTabPath(row.id, "chatter"))}
+                      className="rounded p-0.5 hover:text-violet-600 transition-colors"
+                      title="Chatter"
+                    >
+                      <MessageCircle size={12} />
+                    </button>
+                  </div>
+                </td>
+              </tr>
+            ))}
+          </tbody>
+        </table>
+      </div>
     </div>
-  </div>
-);
+  );
+};
 
 const Board = ({ data }: { data: DesignEntry[] }) => {
+  const router = useRouter();
   const columns: { title: string, status: DesignStatus }[] = [
     { title: "WIP", status: "WIP" },
     { title: "Completed", status: "Completed" },
@@ -366,22 +340,41 @@ const Board = ({ data }: { data: DesignEntry[] }) => {
           </div>
           <div className="flex flex-col gap-3">
             {data.filter(d => d.status === col.status).map(item => (
-              <div key={item.id} className={`p-2.5 h-[84px] rounded-lg border flex flex-col ${getStatusColor(item.status).replace('text-', 'text-gray-900 border-').split(' ')[0]} bg-opacity-50`}>
+              <div
+                key={item.id}
+                onClick={() => router.push(recordDetailPath(item.id))}
+                className={`p-2.5 min-h-[84px] rounded-lg border flex flex-col cursor-pointer hover:ring-1 hover:ring-blue-300/60 ${getStatusColor(item.status).replace('text-', 'text-gray-900 border-').split(' ')[0]} bg-opacity-50`}
+              >
                 <div className="text-[10px] border-b border-gray-200/50 pb-1 mb-1 whitespace-nowrap overflow-hidden text-ellipsis">
                   <span className="font-semibold text-gray-900">{item.opNo}</span> | <span className="text-gray-700">{item.projectNo}</span>
                 </div>
                 <div className="text-xs font-medium mb-1.5 text-gray-800 truncate leading-tight">
                   {item.businessUnit} — {item.name}
                 </div>
-                <div className="flex items-center justify-between mt-auto">
+                <div className="flex items-center justify-between mt-auto gap-1">
                   <div className={`flex items-center gap-1 text-[9px] font-semibold uppercase tracking-wider ${item.agingDays > 20 ? 'text-red-500' : 'text-gray-600'}`}>
                     <div className={`p-0.5 rounded flex shrink-0 ${getStatusColor(item.status)}`}>
                       <Clock size={10} className="text-gray-700" />
                     </div>
                     Aging {item.agingDays}d
                   </div>
-                  <div className="w-5 h-5 shrink-0 rounded-full bg-gray-300 overflow-hidden flex items-center justify-center">
-                    <Users size={10} className="text-gray-500" />
+                  <div className="flex items-center gap-0.5 shrink-0" onClick={(e) => e.stopPropagation()}>
+                    <button
+                      type="button"
+                      onClick={() => router.push(recordTabPath(item.id, "activity"))}
+                      className="grid h-6 w-6 place-items-center rounded-full bg-white/90 text-gray-600 ring-1 ring-gray-200 hover:text-emerald-600"
+                      title="Activity"
+                    >
+                      <Activity size={11} />
+                    </button>
+                    <button
+                      type="button"
+                      onClick={() => router.push(recordTabPath(item.id, "chatter"))}
+                      className="grid h-6 w-6 place-items-center rounded-full bg-white/90 text-gray-600 ring-1 ring-gray-200 hover:text-violet-600"
+                      title="Chatter"
+                    >
+                      <MessageCircle size={11} />
+                    </button>
                   </div>
                 </div>
               </div>
@@ -394,7 +387,8 @@ const Board = ({ data }: { data: DesignEntry[] }) => {
 };
 
 export function DesignListScreen() {
-  const [designs] = useState<DesignEntry[]>(dummyDesigns);
+  const { records } = useDesignListStore();
+  const designs = records as unknown as DesignEntry[];
   const [viewMode, setViewMode] = useState<"list" | "board">("list");
   const [mounted, setMounted] = useState(false);
 
@@ -450,8 +444,7 @@ export function DesignListScreen() {
 
   return (
     <div className="h-screen bg-gray-50 flex flex-col font-sans overflow-hidden">
-      <Header />
-      <Navigation />
+      <Navbar />
       <div className="flex-1 flex flex-col min-h-0">
         <div className="shrink-0">
           <Toolbar

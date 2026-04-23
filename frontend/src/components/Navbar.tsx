@@ -1,8 +1,9 @@
 // @ts-nocheck
 import { useEffect, useRef, useState } from 'react'
 import { useRouter } from 'next/navigation'
-import { Bell, ChevronDown, Home, LogOut, Users } from 'lucide-react'
-import { useAuth } from '../state/AuthContext'
+import { Bell, Calendar, Home, Users } from 'lucide-react'
+
+const PROFILE_USER = { name: 'Sarah', role: 'Designer' }
 
 const NAV_ITEMS = [
   'Activities',
@@ -16,8 +17,6 @@ const NAV_ITEMS = [
 ]
 
 function ProfileDropdown() {
-  const { user, logout } = useAuth()
-  const router = useRouter()
   const [open, setOpen] = useState(false)
   const rootRef = useRef(null)
 
@@ -42,38 +41,17 @@ function ProfileDropdown() {
     }
   }, [open])
 
-  function handleLogout() {
-    logout()
-    setOpen(false)
-    router.replace('/login')
-  }
-
-  const initials = user.name
-    .split(/\s+/)
-    .map((p) => p[0])
-    .join('')
-    .slice(0, 2)
-    .toUpperCase()
-
   return (
     <div className="relative" ref={rootRef}>
       <button
         type="button"
         onClick={() => setOpen((v) => !v)}
-        className="flex items-center gap-1.5 rounded-lg py-1 pl-1 pr-2 text-left hover:bg-slate-50 focus:outline-none focus-visible:ring-2 focus-visible:ring-blue-500 focus-visible:ring-offset-2"
+        className="grid h-10 w-10 place-items-center rounded-full bg-[#c5d9ed] text-slate-700 shadow-sm transition hover:bg-[#b5cee6] focus:outline-none focus-visible:ring-2 focus-visible:ring-blue-400 focus-visible:ring-offset-2"
         aria-expanded={open}
         aria-haspopup="menu"
         aria-label="Account menu"
       >
-        <div className="h-9 w-9 overflow-hidden rounded-full bg-white ring-1 ring-slate-300">
-          <div className="grid h-full w-full place-items-center text-xs font-semibold text-slate-600">
-            {initials}
-          </div>
-        </div>
-        <ChevronDown
-          className={`h-4 w-4 shrink-0 text-slate-600 transition-transform ${open ? 'rotate-180' : ''}`}
-          aria-hidden
-        />
+        <Users className="h-5 w-5" aria-hidden />
       </button>
 
       {open ? (
@@ -83,19 +61,9 @@ function ProfileDropdown() {
           aria-label="Account"
         >
           <div className="px-3 py-2" role="none">
-            <p className="text-sm font-semibold text-slate-900">{user.name}</p>
-            <p className="text-xs text-slate-500">{user.role}</p>
+            <p className="text-sm font-semibold text-slate-900">{PROFILE_USER.name}</p>
+            <p className="text-xs text-slate-500">{PROFILE_USER.role}</p>
           </div>
-          <div className="my-1 border-t border-slate-100" role="separator" />
-          <button
-            type="button"
-            role="menuitem"
-            onClick={handleLogout}
-            className="flex w-full items-center gap-2 px-3 py-2 text-left text-sm font-medium text-red-600 hover:bg-red-50 focus:outline-none focus-visible:bg-red-50"
-          >
-            <LogOut className="h-4 w-4 shrink-0" aria-hidden />
-            Logout
-          </button>
         </div>
       ) : null}
     </div>
@@ -104,8 +72,8 @@ function ProfileDropdown() {
 
 export function Navbar() {
   const router = useRouter()
-  const iconButtonClass =
-    'grid h-9 w-9 place-items-center rounded-md bg-white text-slate-800 ring-1 ring-slate-200 hover:bg-slate-50'
+  const utilityIconClass =
+    'grid h-9 w-9 place-items-center rounded-lg text-slate-800 transition hover:bg-slate-100 focus:outline-none focus-visible:ring-2 focus-visible:ring-slate-300'
 
   return (
     <header className="sticky top-0 z-40 border-b border-slate-200">
@@ -113,7 +81,7 @@ export function Navbar() {
         <div className="w-full flex items-center gap-3 px-4 py-2 sm:px-6">
           <button
             type="button"
-            onClick={() => router.push('/design-list/table')}
+            onClick={() => router.push('/design-list')}
             className="rounded-md bg-white px-2 py-1"
             aria-label="Go to main page"
           >
@@ -124,21 +92,22 @@ export function Navbar() {
             />
           </button>
 
-          <div className="ml-auto flex items-center gap-2">
+          <div className="ml-auto flex items-center gap-1 sm:gap-2">
             <button
               type="button"
-              onClick={() => router.push('/project-design')}
-              className={iconButtonClass}
-              aria-label="Team and designers"
+              onClick={() => router.push('/design-scheduler')}
+              className={utilityIconClass}
+              aria-label="Open calendar"
             >
-              <Users className="h-5 w-5" />
+              <Calendar className="h-5 w-5" strokeWidth={1.75} />
             </button>
             <button
               type="button"
-              className={iconButtonClass}
+              className={`relative ${utilityIconClass}`}
               aria-label="Notifications"
             >
-              <Bell className="h-5 w-5" />
+              <Bell className="h-5 w-5" strokeWidth={1.75} />
+              <span className="pointer-events-none absolute right-1 top-1 h-2 w-2 rounded-full bg-red-500 ring-2 ring-white" />
             </button>
             <ProfileDropdown />
           </div>
@@ -147,17 +116,17 @@ export function Navbar() {
 
       <div className="bg-[#cfd9ea]">
         <div className="w-full flex items-center px-4 py-1.5 sm:px-6">
-          <div className="flex w-full items-center">
+          <div className="flex w-full items-center gap-1">
             <button
               type="button"
-              onClick={() => router.push('/project-design')}
+              onClick={() => router.push('/projects-list')}
               className="grid h-8 w-8 flex-none place-items-center rounded-md text-slate-700 hover:bg-white/40"
               aria-label="Home"
             >
               <Home className="h-4 w-4" />
             </button>
 
-            <nav className="ml-2 flex-1">
+            <nav className="min-w-0 flex-1">
               <div className="flex w-full items-center justify-evenly">
                 {NAV_ITEMS.map((item) => (
                   <button

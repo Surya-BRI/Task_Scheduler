@@ -1,11 +1,12 @@
 // @ts-nocheck
-import { useCallback, useEffect, useRef, useState } from 'react'
-import { ChevronLeft, CircleCheck, Clock3, Flag, Hourglass, Info, Pencil, Shield, Upload } from 'lucide-react'
+'use client'
+
+import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import { useParams, usePathname, useRouter, useSearchParams } from 'next/navigation'
+import { ChevronLeft, CircleCheck, Clock3, Flag, Hourglass, Info, Pencil, Shield, Upload } from 'lucide-react'
 import { CreateTaskModal } from '../components/CreateTaskModal'
-import { ProjectCreateTaskModal } from '../components/ProjectCreateTaskModal'
 import { Navbar } from '../components/Navbar'
-import { useDesignListStore } from '../state/DesignListContext'
+import { dummyProjects, ProjectEntry } from '../features/projects/data/dummy-projects'
 
 const STAGE_ITEMS = [
   { id: 'new', label: 'Design Task New', hint: 'Awaiting project allocation', icon: Flag },
@@ -22,7 +23,6 @@ const TABS = [
   { id: 'activity', label: 'Activity' },
   { id: 'chatter', label: 'Chatter' },
 ]
-const PROJECT_TAB = { id: 'team', label: 'Team' }
 
 const PROJECT_HISTORY = [
   'Designer viewed the task',
@@ -36,21 +36,6 @@ const FIELD_HISTORY = [
   'Total Opportunity Value updated by Lara Thompson',
   'Stage changed to Estimation/BOQ by Ahmed Khalil',
 ]
-
-const PROJECT_TABLE_ROWS = Array.from({ length: 15 }, (_, idx) => ({
-  tNo: idx === 0 ? '1' : '',
-  no: `${idx + 1}`,
-  signType: 'B315',
-  planCode: 'CP-2-344',
-  estQty: '1',
-  qsQty: '1',
-  areaZone: 'CP',
-  levelParcel: '2',
-  sequence: '2344',
-  status: 'Art Work IP',
-  comment: '',
-  contRef: `QE$294$59${70 + idx}`,
-}))
 
 function StagePill({ item }) {
   const Icon = item.icon
@@ -118,17 +103,12 @@ function FormFieldWithPencil({ id, label, value, onChange, placeholder }) {
 
 function FilesPanel() {
   const fileInputRef = useRef(null)
-
-  const openFilePicker = () => {
-    fileInputRef.current?.click()
-  }
-
   return (
     <section className="rounded-lg border border-slate-200 bg-white p-3 shadow-sm">
       <h2 className="text-sm font-semibold text-slate-900">Files</h2>
       <button
         type="button"
-        onClick={openFilePicker}
+        onClick={() => fileInputRef.current?.click()}
         className="mt-2 inline-flex w-full items-center justify-center gap-2 rounded-md bg-blue-50 px-3 py-1.5 text-xs font-semibold text-blue-700 hover:bg-blue-100"
       >
         <Upload className="h-3.5 w-3.5" />
@@ -143,105 +123,69 @@ function FilesPanel() {
   )
 }
 
-function ProjectDetailsTable() {
-  return (
-    <div className="mt-3 overflow-hidden rounded-md border border-slate-200">
-      <div className="grid grid-cols-[0.5fr_0.5fr_0.8fr_0.5fr_1fr_0.7fr_0.7fr_0.9fr_0.9fr_0.8fr_0.9fr_0.8fr_0.9fr] bg-slate-100 px-2 py-1 text-[11px] font-semibold text-slate-700">
-        <div>T. No</div>
-        <div>No</div>
-        <div>Sign Type</div>
-        <div>Image</div>
-        <div>Plan Code</div>
-        <div>Est QTY</div>
-        <div>Qs QTY</div>
-        <div>Area/ Zone</div>
-        <div>Level/ Parcel</div>
-        <div>Sequence</div>
-        <div>Status</div>
-        <div>Comment</div>
-        <div>Cont. Ref</div>
-      </div>
-      <div className="max-h-[260px] overflow-auto">
-        {PROJECT_TABLE_ROWS.map((row) => (
-          <div key={row.no} className="grid grid-cols-[0.5fr_0.5fr_0.8fr_0.5fr_1fr_0.7fr_0.7fr_0.9fr_0.9fr_0.8fr_0.9fr_0.8fr_0.9fr] items-center border-t border-slate-100 px-2 py-1 text-[11px] text-slate-800">
-            <div>{row.tNo}</div>
-            <div>{row.no}</div>
-            <div>{row.signType}</div>
-            <div>🏠</div>
-            <div>
-              <input value={row.planCode} readOnly className="h-5 w-full rounded border border-slate-300 px-2 text-[10px]" />
-            </div>
-            <div>{row.estQty}</div>
-            <div>{row.qsQty}</div>
-            <div>{row.areaZone}</div>
-            <div>{row.levelParcel}</div>
-            <div>{row.sequence}</div>
-            <div>
-              <span className="inline-flex rounded bg-teal-200 px-2 py-0.5 text-[10px] font-semibold text-slate-700">{row.status}</span>
-            </div>
-            <div>
-              <input readOnly value={row.comment} className="h-5 w-full rounded border border-slate-300 px-2 text-[10px]" />
-            </div>
-            <div className="truncate">{row.contRef}</div>
-          </div>
-        ))}
-      </div>
-    </div>
-  )
+const RETAIL_TAB_IDS = ['details', 'activity', 'chatter']
+
+function modelFromProjectRow(row: ProjectEntry) {
+  const digits = row.projectId.replace(/\D/g, '')
+  const opCore = digits.slice(-5) || row.id
+  const at = row.projectName.match(/@(.+)/i)
+  const location = at ? at[1].split(/[,:]/)[0].trim().toUpperCase() : 'MAIN SITE'
+  return {
+    pageTitle: row.projectName.toUpperCase(),
+    projectName: row.projectName,
+    projectNo: row.projectId,
+    opNo: `OP${opCore}`,
+    businessUnit: 'Green Valley Developers',
+    projectLocation: location,
+    salesPerson: row.salesPerson,
+  }
 }
 
-const TASK_TAB_IDS = ['details', 'activity', 'chatter', 'team']
-
-export function TaskDetailsPage() {
+export function RetailProjectPage() {
   const router = useRouter()
   const pathname = usePathname()
   const searchParams = useSearchParams()
-  const { taskId } = useParams()
-  const { records } = useDesignListStore()
-  const record = records.find((item) => item.id === taskId)
+  const params = useParams()
+  const projectRowId = String(params.projectRowId ?? '')
+
+  const row = useMemo(
+    () => dummyProjects.find((p) => p.id === projectRowId && p.category === 'Retail'),
+    [projectRowId],
+  )
+
   const [activeTab, setActiveTab] = useState('details')
   const [createModalOpen, setCreateModalOpen] = useState(false)
-  const [projectCreateModalOpen, setProjectCreateModalOpen] = useState(false)
   const [chatterMessage, setChatterMessage] = useState('')
   const [chatterEntries, setChatterEntries] = useState([])
   const [priorityLevel, setPriorityLevel] = useState('')
   const [hoursRequired, setHoursRequired] = useState('')
   const [dateIssued, setDateIssued] = useState('')
   const [dateSubmission, setDateSubmission] = useState('')
-  const [technicalHead, setTechnicalHead] = useState('')
-  const [teamLead, setTeamLead] = useState('')
-  const [subTeamLead, setSubTeamLead] = useState('')
-  const [designers, setDesigners] = useState('')
 
   useEffect(() => {
-    if (!record) {
-      router.replace('/design-list')
+    if (!row) {
+      router.replace('/projects-list')
     }
-  }, [record, router])
+  }, [row, router])
 
   useEffect(() => {
-    if (!record) return
+    if (!row) return
     const raw = searchParams.get('tab')
-    if (!raw || !TASK_TAB_IDS.includes(raw)) return
-    if (raw === 'team' && record.designType === 'Retail') return
+    if (!raw || !RETAIL_TAB_IDS.includes(raw)) return
     setActiveTab(raw)
-  }, [searchParams, record])
+  }, [searchParams, row])
 
   useEffect(() => {
-    if (!record) return
+    if (!row) return
     if (searchParams.get('create') !== '1') return
-    if (record.designType === 'Retail') {
-      setCreateModalOpen(true)
-    } else {
-      setProjectCreateModalOpen(true)
-    }
+    setCreateModalOpen(true)
     const next = new URLSearchParams(searchParams.toString())
     next.delete('create')
     const qs = next.toString()
     router.replace(qs ? `${pathname}?${qs}` : pathname, { scroll: false })
-  }, [record, searchParams, pathname, router])
+  }, [row, searchParams, pathname, router])
 
-  const selectTaskTab = useCallback(
+  const selectTab = useCallback(
     (tabId) => {
       setActiveTab(tabId)
       const next = new URLSearchParams(searchParams.toString())
@@ -256,20 +200,11 @@ export function TaskDetailsPage() {
     [pathname, router, searchParams],
   )
 
-  if (!record) {
+  if (!row) {
     return null
   }
 
-  const isRetail = record.designType === 'Retail'
-  const tabs = isRetail ? TABS : [...TABS, PROJECT_TAB]
-  const from = searchParams.get('from')
-  const backPath =
-    from === 'project-design'
-      ? '/project-design'
-      : from === 'projects-list'
-        ? '/projects-list'
-        : '/design-list'
-  const pageTitle = `${record.name.toUpperCase()} — ${record.clientName ?? record.businessUnit} @ ${record.businessUnit.toUpperCase()}`
+  const m = modelFromProjectRow(row)
   const canPostChatter = chatterMessage.trim().length > 0
 
   function handlePostChatter() {
@@ -287,7 +222,7 @@ export function TaskDetailsPage() {
           <div className="flex items-center justify-between gap-3">
             <button
               type="button"
-              onClick={() => router.push(backPath)}
+              onClick={() => router.push('/projects-list')}
               className="inline-flex items-center gap-2 rounded-md border border-slate-300 bg-white px-3 py-1.5 text-sm font-medium text-slate-700 hover:bg-slate-100"
             >
               <ChevronLeft className="h-4 w-4" />
@@ -296,11 +231,8 @@ export function TaskDetailsPage() {
           </div>
 
           <h1 className="text-base font-semibold leading-tight tracking-tight text-slate-900 sm:text-lg">
-            {pageTitle}
+            {m.pageTitle}
           </h1>
-          <p className="text-xs text-slate-500">
-            Retail tasks use CreateTaskModal; project tasks use ProjectCreateTaskModal.
-          </p>
 
           <div className="flex gap-2 overflow-x-auto pb-0.5">
             {STAGE_ITEMS.map((item) => (
@@ -312,108 +244,85 @@ export function TaskDetailsPage() {
             <section className="rounded-lg border border-slate-200 bg-white p-2.5 shadow-sm">
               <div className="flex items-center justify-between border-b border-slate-200 pb-1.5">
                 <div className="flex items-center gap-4">
-                  {tabs.map((tab) => (
+                  {TABS.map((tab) => (
                     <TabButton
                       key={tab.id}
                       label={tab.label}
                       active={activeTab === tab.id}
-                      onClick={() => selectTaskTab(tab.id)}
+                      onClick={() => selectTab(tab.id)}
                     />
                   ))}
                 </div>
-                <p className="text-[11px] text-slate-500">OP NO: {record.opNo.replace('OP- ', 'OP-')}</p>
+                <p className="text-[11px] text-slate-500">OP NO: {m.opNo}</p>
               </div>
 
               {activeTab === 'details' ? (
                 <>
                   <div className="mt-2.5 grid gap-3 lg:grid-cols-2">
                     <div className="space-y-0.5">
-                      <DetailRow label="Project Name" value={`${record.name} — ${record.clientName ?? record.businessUnit}`} />
-                      <DetailRow label="OP No" value={record.opNo.replace(/^OP-\s*/, 'OP')} />
-                      <DetailRow label="Project No" value={record.projectNo} />
+                      <DetailRow label="Project Name" value={m.projectName} />
+                      <DetailRow label="OP No" value={m.opNo} />
+                      <DetailRow label="Project No" value={m.projectNo} />
                     </div>
                     <div className="space-y-0.5">
-                      <DetailRow label="Project Location" value={`${record.businessUnit.toUpperCase()} — main site`} />
-                      <DetailRow label="Business Unit" value={record.businessUnit} />
-                      <DetailRow label="Sales Person" value={record.salesPerson} />
+                      <DetailRow label="Project Location" value={m.projectLocation} />
+                      <DetailRow label="Business Unit" value={m.businessUnit} />
+                      <DetailRow label="Sales Person" value={m.salesPerson} />
                     </div>
                   </div>
 
-                  {isRetail ? (
-                    <div className="mt-3 border-t border-slate-200 pt-3">
-                      <div className="grid gap-2.5 sm:grid-cols-2">
-                        <FormFieldWithPencil
-                          id="retail-priority"
-                          label="Priority Level"
-                          value={priorityLevel}
-                          onChange={setPriorityLevel}
-                          placeholder=""
-                        />
-                        <FormFieldWithPencil
-                          id="retail-hours"
-                          label="Hours Required"
-                          value={hoursRequired}
-                          onChange={setHoursRequired}
-                          placeholder=""
-                        />
-                        <FormFieldWithPencil
-                          id="retail-issued"
-                          label="Date of Issued"
-                          value={dateIssued}
-                          onChange={setDateIssued}
-                          placeholder=""
-                        />
-                        <FormFieldWithPencil
-                          id="retail-submission"
-                          label="Date of Submission"
-                          value={dateSubmission}
-                          onChange={setDateSubmission}
-                          placeholder=""
-                        />
-                      </div>
-                      <div className="mt-2.5 flex justify-end">
-                        <button
-                          type="button"
-                          onClick={() => setCreateModalOpen(true)}
-                          className="rounded-md bg-[#10a6e3] px-5 py-1.5 text-xs font-semibold text-white shadow-sm transition hover:bg-[#0f96cd] focus:outline-none focus-visible:ring-2 focus-visible:ring-blue-500 focus-visible:ring-offset-2"
-                        >
-                          Create
-                        </button>
-                      </div>
+                  <div className="mt-3 border-t border-slate-200 pt-3">
+                    <div className="grid gap-2.5 sm:grid-cols-2">
+                      <FormFieldWithPencil
+                        id="retail-priority"
+                        label="Priority Level"
+                        value={priorityLevel}
+                        onChange={setPriorityLevel}
+                        placeholder=""
+                      />
+                      <FormFieldWithPencil
+                        id="retail-hours"
+                        label="Hours Required"
+                        value={hoursRequired}
+                        onChange={setHoursRequired}
+                        placeholder=""
+                      />
+                      <FormFieldWithPencil
+                        id="retail-issued"
+                        label="Date of Issued"
+                        value={dateIssued}
+                        onChange={setDateIssued}
+                        placeholder=""
+                      />
+                      <FormFieldWithPencil
+                        id="retail-submission"
+                        label="Date of Submission"
+                        value={dateSubmission}
+                        onChange={setDateSubmission}
+                        placeholder=""
+                      />
                     </div>
-                  ) : (
-                    <div className="mt-3 border-t border-slate-200 pt-3">
-                      <div className="grid gap-2.5 sm:grid-cols-2">
-                        <FormFieldWithPencil id="project-priority" label="Priority Level" value={priorityLevel} onChange={setPriorityLevel} placeholder="" />
-                        <FormFieldWithPencil id="project-hours" label="Hours Required" value={hoursRequired} onChange={setHoursRequired} placeholder="" />
-                        <FormFieldWithPencil id="project-issued" label="Date of Issued" value={dateIssued} onChange={setDateIssued} placeholder="" />
-                        <FormFieldWithPencil id="project-submission" label="Date of Submission" value={dateSubmission} onChange={setDateSubmission} placeholder="" />
-                      </div>
-                      <ProjectDetailsTable />
-                      <div className="mt-2.5 flex justify-end">
-                        <button
-                          type="button"
-                          onClick={() => setProjectCreateModalOpen(true)}
-                          className="rounded-md bg-[#10a6e3] px-5 py-1.5 text-xs font-semibold text-white shadow-sm transition hover:bg-[#0f96cd] focus:outline-none focus-visible:ring-2 focus-visible:ring-blue-500 focus-visible:ring-offset-2"
-                        >
-                          Create
-                        </button>
-                      </div>
+                    <div className="mt-2.5 flex justify-end">
+                      <button
+                        type="button"
+                        onClick={() => setCreateModalOpen(true)}
+                        className="rounded-md bg-[#10a6e3] px-5 py-1.5 text-xs font-semibold text-white shadow-sm transition hover:bg-[#0f96cd] focus:outline-none focus-visible:ring-2 focus-visible:ring-blue-500 focus-visible:ring-offset-2"
+                      >
+                        Create
+                      </button>
                     </div>
-                  )}
+                  </div>
 
-                  {isRetail ? (
-                    <div className="mt-3 overflow-hidden rounded-md border border-slate-200">
-                      <div className="grid grid-cols-5 bg-slate-100 px-2.5 py-1.5 text-[11px] font-semibold text-slate-600">
-                        <div>Sign Family</div>
-                        <div>Sign Type</div>
-                        <div>Plan Code</div>
-                        <div>Contract Reference</div>
-                        <div>Quantity</div>
-                      </div>
-                      <div className="px-3 py-6 text-center text-xs text-slate-500">No rows yet.</div>
+                  <div className="mt-3 overflow-hidden rounded-md border border-slate-200">
+                    <div className="grid grid-cols-5 bg-slate-100 px-2.5 py-1.5 text-[11px] font-semibold text-slate-600">
+                      <div>Sign Family</div>
+                      <div>Sign Type</div>
+                      <div>Plan Code</div>
+                      <div>Contract Reference</div>
+                      <div>Quantity</div>
                     </div>
-                  ) : null}
+                    <div className="px-3 py-6 text-center text-xs text-slate-500">No rows yet.</div>
+                  </div>
                 </>
               ) : null}
 
@@ -426,11 +335,11 @@ export function TaskDetailsPage() {
               {activeTab === 'chatter' ? (
                 <div className="mt-3">
                   <div className="rounded-lg border border-slate-200 bg-slate-50 p-2.5">
-                    <label htmlFor="chatter-input" className="text-xs font-semibold text-slate-700">
+                    <label htmlFor="retail-chatter-input" className="text-xs font-semibold text-slate-700">
                       Enter a chatter message
                     </label>
                     <textarea
-                      id="chatter-input"
+                      id="retail-chatter-input"
                       value={chatterMessage}
                       onChange={(event) => setChatterMessage(event.target.value)}
                       rows={3}
@@ -461,27 +370,6 @@ export function TaskDetailsPage() {
                         </article>
                       ))
                     )}
-                  </div>
-                </div>
-              ) : null}
-
-              {activeTab === 'team' && !isRetail ? (
-                <div className="mt-3 border-t border-slate-200 pt-3">
-                  <div className="grid gap-2.5 sm:grid-cols-2">
-                    <FormFieldWithPencil id="team-technical-head" label="Technical Head" value={technicalHead} onChange={setTechnicalHead} placeholder="" />
-                    <FormFieldWithPencil id="team-team-lead" label="Team Lead" value={teamLead} onChange={setTeamLead} placeholder="" />
-                    <FormFieldWithPencil id="team-sub-team-lead" label="Sub Team Lead" value={subTeamLead} onChange={setSubTeamLead} placeholder="" />
-                    <FormFieldWithPencil id="team-designers" label="Designers" value={designers} onChange={setDesigners} placeholder="" />
-                  </div>
-                  <ProjectDetailsTable />
-                  <div className="mt-2.5 flex justify-end">
-                    <button
-                      type="button"
-                      onClick={() => setProjectCreateModalOpen(true)}
-                      className="rounded-md bg-[#10a6e3] px-5 py-1.5 text-xs font-semibold text-white shadow-sm transition hover:bg-[#0f96cd] focus:outline-none focus-visible:ring-2 focus-visible:ring-blue-500 focus-visible:ring-offset-2"
-                    >
-                      Create
-                    </button>
                   </div>
                 </div>
               ) : null}
@@ -521,7 +409,6 @@ export function TaskDetailsPage() {
       </main>
 
       <CreateTaskModal open={createModalOpen} onClose={() => setCreateModalOpen(false)} />
-      <ProjectCreateTaskModal open={projectCreateModalOpen} onClose={() => setProjectCreateModalOpen(false)} />
     </div>
   )
 }
