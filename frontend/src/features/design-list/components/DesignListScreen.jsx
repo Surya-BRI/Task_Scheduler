@@ -3,16 +3,16 @@
 import { useState } from "react";
 import { useRouter } from "next/navigation";
 import {
-  Activity,
-  Briefcase,
   Calendar,
   Clock,
+  Eye,
   Filter,
   GalleryVerticalEnd,
+  History,
   LayoutGrid,
   List,
-  MessageCircle,
   Search,
+  UserRoundPlus,
   Users,
 } from "lucide-react";
 import { useDesignListStore } from "@/state/DesignListContext";
@@ -332,7 +332,7 @@ const Table = ({ data }) => {
                       className="rounded p-0.5 hover:text-blue-600 transition-colors"
                       title="Details"
                     >
-                      <Briefcase size={12} />
+                      <Eye size={12} />
                     </button>
                     <button
                       type="button"
@@ -340,7 +340,7 @@ const Table = ({ data }) => {
                       className="rounded p-0.5 hover:text-emerald-600 transition-colors"
                       title="Activity"
                     >
-                      <Activity size={12} />
+                      <History size={12} />
                     </button>
                     <button
                       type="button"
@@ -348,7 +348,7 @@ const Table = ({ data }) => {
                       className="rounded p-0.5 hover:text-violet-600 transition-colors"
                       title="Chatter"
                     >
-                      <MessageCircle size={12} />
+                      <UserRoundPlus size={12} />
                     </button>
                   </div>
                 </td>
@@ -417,7 +417,7 @@ const Board = ({ data }) => {
                         className="grid h-6 w-6 place-items-center rounded-full bg-white/90 text-gray-600 ring-1 ring-gray-200 hover:text-emerald-600"
                         title="Activity"
                       >
-                        <Activity size={11} />
+                        <History size={11} />
                       </button>
                       <button
                         type="button"
@@ -425,7 +425,7 @@ const Board = ({ data }) => {
                         className="grid h-6 w-6 place-items-center rounded-full bg-white/90 text-gray-600 ring-1 ring-gray-200 hover:text-violet-600"
                         title="Chatter"
                       >
-                        <MessageCircle size={11} />
+                        <UserRoundPlus size={11} />
                       </button>
                     </div>
                   </div>
