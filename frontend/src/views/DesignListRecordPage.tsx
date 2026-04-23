@@ -1,7 +1,7 @@
 // @ts-nocheck
-import { useEffect, useRef, useState } from 'react'
+import { useCallback, useEffect, useRef, useState } from 'react'
 import { CalendarCheck2, ChevronLeft, FileText, Hourglass, Pencil, ShieldCheck, ShieldX } from 'lucide-react'
-import { useParams, useRouter } from 'next/navigation'
+import { useParams, usePathname, useRouter, useSearchParams } from 'next/navigation'
 import { Navbar } from '../components/Navbar'
 import { useDesignListStore } from '../state/DesignListContext'
 
@@ -75,8 +75,12 @@ function RowField({ label, value }) {
   )
 }
 
+const RECORD_TAB_IDS = ['details', 'activity', 'chatter']
+
 export function DesignListRecordPage() {
   const router = useRouter()
+  const pathname = usePathname()
+  const searchParams = useSearchParams()
   const fileInputRef = useRef(null)
   const { taskId } = useParams()
   const { records } = useDesignListStore()
@@ -86,9 +90,31 @@ export function DesignListRecordPage() {
 
   useEffect(() => {
     if (!record) {
-      router.replace('/design-list/table')
+      router.replace('/design-list')
     }
   }, [record, router])
+
+  useEffect(() => {
+    if (!record) return
+    const raw = searchParams.get('tab')
+    if (!raw || !RECORD_TAB_IDS.includes(raw)) return
+    setActiveTab(raw)
+  }, [searchParams, record])
+
+  const selectRecordTab = useCallback(
+    (tab) => {
+      setActiveTab(tab)
+      const next = new URLSearchParams(searchParams.toString())
+      if (tab === 'details') {
+        next.delete('tab')
+      } else {
+        next.set('tab', tab)
+      }
+      const qs = next.toString()
+      router.replace(qs ? `${pathname}?${qs}` : pathname, { scroll: false })
+    },
+    [pathname, router, searchParams],
+  )
 
   if (!record) return null
 
@@ -102,7 +128,7 @@ export function DesignListRecordPage() {
           <div>
             <button
               type="button"
-              onClick={() => router.push('/design-list/table')}
+              onClick={() => router.push('/design-list')}
               className="inline-flex items-center gap-2 rounded-md border border-slate-300 bg-white px-3 py-1.5 text-sm font-medium text-slate-700 hover:bg-slate-100"
             >
               <ChevronLeft className="h-4 w-4" />
@@ -126,7 +152,7 @@ export function DesignListRecordPage() {
                     <button
                       key={tab}
                       type="button"
-                      onClick={() => setActiveTab(tab)}
+                      onClick={() => selectRecordTab(tab)}
                       className={`border-b-2 pb-1 capitalize ${
                         activeTab === tab
                           ? 'border-slate-900 font-semibold text-slate-900'

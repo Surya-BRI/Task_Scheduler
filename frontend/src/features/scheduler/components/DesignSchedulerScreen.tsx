@@ -4,15 +4,13 @@ import React, { useState, useEffect } from "react";
 import { useRouter } from "next/navigation";
 import {
   Calendar,
-  Bell,
   Search,
-  Users,
-  Home,
   Plus,
   PauseCircle,
   AlertTriangle,
   History
 } from "lucide-react";
+import { Navbar } from "@/components/Navbar";
 
 // DUMMY DATA FOR SCHEDULER
 type SchedulerTask = {
@@ -54,42 +52,6 @@ const DUMMY_DESIGNERS: DesignerInfo[] = [
   { id: "d19", name: "Designer 19", initials: "DX", capacityHours: 40 },
   { id: "d20", name: "Designer 20", initials: "DX", capacityHours: 40 },
 ];
-
-const Navigation = () => {
-  const router = useRouter();
-  const navItems = [
-    { label: "Activities" },
-    { label: "Dashboards" },
-    { label: "Transactions" },
-    { label: "Reports" },
-    { label: "Analytics" },
-    { label: "Screens" },
-    { label: "Setup" },
-    { label: "Support" },
-  ];
-
-  return (
-    <nav className="bg-[#b3c6ea] px-6 py-3 flex items-center shadow-sm shrink-0">
-      <button
-        onClick={() => router.push("/projects-list")}
-        title="Home"
-        className="text-gray-800 hover:text-black transition-colors cursor-pointer"
-      >
-        <Home size={18} />
-      </button>
-      <div className="flex-1 flex justify-around px-8">
-        {navItems.map((item, index) => (
-          <button
-            key={index}
-            className="font-semibold text-sm text-gray-800 hover:text-black transition-colors cursor-pointer"
-          >
-            {item.label}
-          </button>
-        ))}
-      </div>
-    </nav>
-  );
-};
 
 const INITIAL_TASKS: Record<string, SchedulerTask> = {
   // Unassigned tasks (small, 1–8hr)
@@ -431,49 +393,26 @@ export function DesignSchedulerScreen() {
 
   return (
     <div className="h-screen flex flex-col bg-gray-50 overflow-hidden font-sans">
-      <header className="flex items-center justify-between px-6 py-3 bg-white border-b border-gray-200 shadow-sm shrink-0 relative z-20">
-        <div className="flex items-center gap-4">
-          <img
-            src="/logo.png"
-            alt="Blue Rhine Industries"
-            className="h-10 object-contain cursor-pointer"
-            onClick={() => router.push("/design-list")}
-            title="Go to Home"
-            onError={(e) => { e.currentTarget.src = "https://via.placeholder.com/150x50?text=Logo" }}
-          />
-          <div className="text-gray-400 text-sm font-medium border-l border-gray-300 pl-4">
-            {formattedWeekRange}
-          </div>
-        </div>
-        
-        <div className="flex items-center gap-6">
-          <div className="text-gray-900 font-semibold text-sm">{formattedTitleDate}</div>
-          <div className="flex items-center gap-3 text-gray-700 pl-4 border-l border-gray-200">
-             <div className="relative group cursor-pointer p-1">
-               <Calendar size={22} className="text-gray-500 group-hover:text-black transition-colors" />
-               <input 
-                 type="date"
-                 className="absolute inset-0 opacity-0 cursor-pointer w-full h-full"
-                 value={currentDate.toISOString().split('T')[0]}
-                 onChange={handleDateChange}
-                 onClick={(e) => {
-                   if ('showPicker' in e.currentTarget) {
-                     try { (e.currentTarget as any).showPicker(); } catch (err) {}
-                   }
-                 }}
-               />
-             </div>
-             <button className="hover:text-black transition p-1 cursor-pointer"><Bell size={22} /></button>
-          </div>
-          <div className="w-10 h-10 rounded-full border border-gray-300 overflow-hidden bg-gray-200">
-             <div className="w-full h-full bg-slate-300 flex items-center justify-center text-slate-500">
-                <Users size={20} />
-             </div>
-          </div>
-        </div>
-      </header>
+      <Navbar />
 
-      <Navigation />
+      <div className="flex flex-wrap items-center justify-between gap-3 border-b border-gray-200 bg-white px-4 py-2 text-sm text-gray-700 shadow-sm sm:px-6 shrink-0 z-10 relative">
+        <div className="text-gray-500 font-medium">{formattedWeekRange}</div>
+        <div className="text-gray-900 font-semibold">{formattedTitleDate}</div>
+        <div className="relative group cursor-pointer rounded-lg p-1 hover:bg-gray-100">
+          <Calendar size={20} className="text-gray-600 group-hover:text-gray-900 transition-colors" />
+          <input
+            type="date"
+            className="absolute inset-0 cursor-pointer opacity-0 w-full h-full"
+            value={currentDate.toISOString().split('T')[0]}
+            onChange={handleDateChange}
+            onClick={(e) => {
+              if ('showPicker' in e.currentTarget) {
+                try { (e.currentTarget as any).showPicker(); } catch (err) {}
+              }
+            }}
+          />
+        </div>
+      </div>
 
       <div className="bg-white border-b border-gray-200 flex items-center px-6 py-2 text-sm text-gray-700 font-medium shrink-0 z-10 relative">
         <div className="w-64 border-r border-gray-200 pr-4">Unassigned &amp; On-HOLD</div>

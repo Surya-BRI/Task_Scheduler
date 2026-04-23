@@ -218,10 +218,23 @@ export function ProjectCreateTaskModal({ open, onClose }) {
     }
   }, [open, onClose])
 
+  function rowHasSelection(r) {
+    const hasFlag =
+      r.artwork || r.technical || r.location || r.asBuilt || r.bim
+    const hasHours = [r.artHours, r.techHours, r.locationHours, r.asBuiltHours].some(
+      (h) => String(h ?? '').trim() !== '',
+    )
+    return hasFlag || hasHours
+  }
+
+  /** Count sign-type lines (parent row + child rows) that have any work type or hours — not BIM-only. */
   const selectedCount = rows.reduce((count, row) => {
-    const parentCount = row.bim ? 1 : 0
-    const childCount = row.children.filter((child) => child.bim).length
-    return count + parentCount + childCount
+    let c = 0
+    if (rowHasSelection(row)) c += 1
+    for (const child of row.children) {
+      if (rowHasSelection(child)) c += 1
+    }
+    return count + c
   }, 0)
 
   if (!open) return null
@@ -256,6 +269,22 @@ export function ProjectCreateTaskModal({ open, onClose }) {
     )
   }
 
+  function emptyWorkFields(r) {
+    return {
+      ...r,
+      artwork: false,
+      artHours: '',
+      technical: false,
+      techHours: '',
+      location: false,
+      locationHours: '',
+      asBuilt: false,
+      asBuiltHours: '',
+      bim: false,
+      deadline: '',
+    }
+  }
+
   function clearNeeds() {
     setSelectedSignType('')
     setSelectedArea('')
@@ -263,9 +292,8 @@ export function ProjectCreateTaskModal({ open, onClose }) {
     setPlanCode('')
     setRows((prev) =>
       prev.map((row) => ({
-        ...row,
-        bim: false,
-        children: row.children.map((child) => ({ ...child, bim: false })),
+        ...emptyWorkFields(row),
+        children: row.children.map((child) => emptyWorkFields(child)),
       })),
     )
   }
@@ -403,7 +431,12 @@ export function ProjectCreateTaskModal({ open, onClose }) {
             <div className="rounded bg-blue-50 px-3 py-2 text-sm text-blue-700">
               {selectedCount} tasks selected
             </div>
-            <button type="button" className="rounded-md bg-[#1f3b68] px-8 py-2.5 text-sm font-semibold text-white disabled:opacity-60" disabled={selectedCount === 0}>
+            <button
+              type="button"
+              className="rounded-md bg-[#1f3b68] px-8 py-2.5 text-sm font-semibold text-white shadow-sm transition hover:bg-[#163056] focus:outline-none focus-visible:ring-2 focus-visible:ring-[#1f3b68] focus-visible:ring-offset-2 disabled:pointer-events-none disabled:opacity-45"
+              disabled={selectedCount === 0}
+              title={selectedCount === 0 ? 'Select at least one work type or enter hours on a row' : undefined}
+            >
               Create Tasks
             </button>
           </div>
