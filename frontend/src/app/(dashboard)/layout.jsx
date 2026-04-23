@@ -2,7 +2,7 @@ import { Sidebar } from '@/components/layout/sidebar';
 import { Topbar } from '@/components/layout/topbar';
 import { PageContainer } from '@/components/layout/page-container';
 
-export default function DashboardLayout({ children }: { children: React.ReactNode }) {
+export default function DashboardLayout({ children }) {
   return (
     <div className="flex min-h-screen bg-slate-100">
       <Sidebar />

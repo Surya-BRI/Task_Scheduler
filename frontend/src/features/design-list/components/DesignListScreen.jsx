@@ -1,13 +1,12 @@
 "use client";
 
-import React, { useState, useEffect } from "react";
+import { useEffect, useState } from "react";
 import { useRouter } from "next/navigation";
 import {
   Calendar,
   Bell,
   Search,
   Filter,
-  ArrowUpDown,
   Users,
   Eye,
   Edit2,
@@ -19,10 +18,9 @@ import {
   List,
   Clock
 } from "lucide-react";
-import Image from "next/image";
-import { dummyDesigns, DesignEntry, DesignStatus } from "../data/dummy-designs";
+import { dummyDesigns } from "../data/dummy-designs";
 
-const getStatusColor = (status: DesignStatus) => {
+const getStatusColor = (status) => {
   switch (status) {
     case "WIP":
       return "bg-blue-100 text-blue-700 border-blue-200";
@@ -39,7 +37,7 @@ const getStatusColor = (status: DesignStatus) => {
   }
 };
 
-const getStatusDot = (status: DesignStatus) => {
+const getStatusDot = (status) => {
   switch (status) {
     case "WIP": return "bg-blue-500";
     case "Completed": return "bg-green-500";
@@ -118,28 +116,18 @@ const Navigation = () => {
   );
 };
 
-type FilterState = { type: string; status: string; salesPerson: string; startDate: string; endDate: string; searchQuery: string };
-
 const Toolbar = ({
   viewMode, setViewMode, filters, setFilters, salesPersons
-}: {
-  viewMode: string,
-  setViewMode: (v: "list" | "board") => void,
-  filters: FilterState,
-  setFilters: React.Dispatch<React.SetStateAction<FilterState>>,
-  salesPersons: string[]
 }) => {
   const [showFilters, setShowFilters] = useState(false);
-
-  // Calculate active filter count (exclude search query)
   const activeCount = [filters.type, filters.status, filters.salesPerson, filters.startDate, filters.endDate].filter(Boolean).length;
+  const designStatuses = ["WIP", "Completed", "Pending", "Revision", "Approved"];
 
   return (
     <div className="flex flex-col md:flex-row md:items-center justify-between mb-4 mt-6 px-6 gap-4">
       <h1 className="text-2xl font-bold text-gray-900 leading-none">Design List</h1>
 
       <div className="flex items-center gap-3 relative">
-        {/* Moved Search Input */}
         <div className="relative mr-2 hidden md:block">
           <Search className="absolute left-3 top-1/2 -translate-y-1/2 text-gray-400" size={16} />
           <input
@@ -151,7 +139,6 @@ const Toolbar = ({
           />
         </div>
 
-        {/* Toggle Filters Button */}
         <button
           onClick={() => setShowFilters(!showFilters)}
           className={`flex items-center gap-2 px-4 py-2 rounded-full border transition-colors shadow-sm cursor-pointer ${activeCount > 0 ? "bg-blue-50 border-blue-200 text-blue-700" : "bg-white border-gray-200 text-gray-700 hover:bg-gray-50"}`}
@@ -160,7 +147,6 @@ const Toolbar = ({
           <span className="text-sm font-medium">Filters {activeCount > 0 && `(${activeCount})`}</span>
         </button>
 
-        {/* Filters Popover */}
         {showFilters && (
           <div className="absolute top-12 right-20 z-50 bg-white border border-gray-200 rounded-xl shadow-lg p-5 flex flex-col gap-4 w-[340px]">
             <div className="flex items-center justify-between border-b border-gray-100 pb-2 mb-2">
@@ -175,7 +161,6 @@ const Toolbar = ({
               )}
             </div>
 
-            {/* Type */}
             <div className="flex flex-col gap-1.5">
               <label className="text-xs font-semibold text-gray-500 uppercase">Type</label>
               <div className="flex items-center bg-gray-50 border border-gray-200 rounded-lg px-3 py-2">
@@ -188,7 +173,6 @@ const Toolbar = ({
               </div>
             </div>
 
-            {/* Status (Color Pills) */}
             <div className="flex flex-col gap-1.5 mt-2">
               <label className="text-xs font-semibold text-gray-500 uppercase">Status</label>
               <div className="flex flex-wrap gap-2 mt-1">
@@ -198,7 +182,7 @@ const Toolbar = ({
                 >
                   All
                 </button>
-                {(["WIP", "Completed", "Pending", "Revision", "Approved"] as DesignStatus[]).map(status => (
+                {designStatuses.map(status => (
                   <button
                     key={status}
                     onClick={() => setFilters({ ...filters, status })}
@@ -213,7 +197,6 @@ const Toolbar = ({
               </div>
             </div>
 
-            {/* Sales Person */}
             <div className="flex flex-col gap-1.5">
               <label className="text-xs font-semibold text-gray-500 uppercase">Sales Person</label>
               <div className="flex items-center bg-gray-50 border border-gray-200 rounded-lg px-3 py-2">
@@ -225,7 +208,6 @@ const Toolbar = ({
               </div>
             </div>
 
-            {/* Date Range Filter */}
             <div className="flex flex-col gap-1.5">
               <label className="text-xs font-semibold text-gray-500 uppercase">Date Range</label>
               <div className="grid grid-cols-2 gap-2">
@@ -261,7 +243,6 @@ const Toolbar = ({
           </div>
         )}
 
-        {/* View Toggle */}
         <div className="flex bg-gray-100 rounded-full p-1 border border-gray-200 ml-2">
           <button
             onClick={() => setViewMode("list")}
@@ -281,7 +262,7 @@ const Toolbar = ({
   );
 };
 
-const Table = ({ data }: { data: DesignEntry[] }) => (
+const Table = ({ data }) => (
   <div className="px-6 pb-6 flex-1 min-h-0 flex flex-col">
     <div className="border border-gray-200 rounded-lg overflow-auto bg-white shadow-sm h-full">
       <table className="w-full text-xs text-left leading-tight">
@@ -347,8 +328,8 @@ const Table = ({ data }: { data: DesignEntry[] }) => (
   </div>
 );
 
-const Board = ({ data }: { data: DesignEntry[] }) => {
-  const columns: { title: string, status: DesignStatus }[] = [
+const Board = ({ data }) => {
+  const columns = [
     { title: "WIP", status: "WIP" },
     { title: "Completed", status: "Completed" },
     { title: "Confirmation Pending", status: "Pending" },
@@ -394,27 +375,25 @@ const Board = ({ data }: { data: DesignEntry[] }) => {
 };
 
 export function DesignListScreen() {
-  const [designs] = useState<DesignEntry[]>(dummyDesigns);
-  const [viewMode, setViewMode] = useState<"list" | "board">("list");
+  const [designs] = useState(dummyDesigns);
+  const [viewMode, setViewMode] = useState("list");
   const [mounted, setMounted] = useState(false);
+
+  const [filters, setFilters] = useState({
+    type: "", status: "", salesPerson: "", startDate: "", endDate: "", searchQuery: ""
+  });
 
   useEffect(() => {
     setMounted(true);
   }, []);
 
-  const [filters, setFilters] = useState<FilterState>({
-    type: "", status: "", salesPerson: "", startDate: "", endDate: "", searchQuery: ""
-  });
-
   if (!mounted) {
     return null;
   }
 
-  // Extract exactly unique sales persons for the dropdown
   const uniqueSalesPersons = Array.from(new Set(designs.map(d => d.salesPerson))).sort();
 
   const filteredDesigns = designs.filter(d => {
-    // Search Query (Op No, Project No, Name)
     if (filters.searchQuery) {
       const q = filters.searchQuery.toLowerCase();
       if (!d.opNo.toLowerCase().includes(q) &&
@@ -429,7 +408,6 @@ export function DesignListScreen() {
     if (filters.salesPerson && d.salesPerson !== filters.salesPerson) return false;
 
     if (filters.startDate || filters.endDate) {
-      // Assuming DD/MM/YYYY locally from dummy data as provided previously
       const parts = d.created.split('/');
       if (parts.length === 3) {
         const designDate = new Date(`${parts[2]}-${parts[1]}-${parts[0]}T00:00:00`).getTime();
@@ -439,7 +417,6 @@ export function DesignListScreen() {
           if (designDate < start) return false;
         }
         if (filters.endDate) {
-          // Setting end to edge of the day to make it inclusive
           const end = new Date(filters.endDate + "T23:59:59").getTime();
           if (designDate > end) return false;
         }

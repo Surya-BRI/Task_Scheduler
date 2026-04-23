@@ -4,7 +4,7 @@ import { useState } from 'react';
 import { useRouter } from 'next/navigation';
 import { useForm } from 'react-hook-form';
 import { zodResolver } from '@hookform/resolvers/zod';
-import { loginSchema, type LoginSchema } from '../schemas/login.schema';
+import { loginSchema } from '../schemas/login.schema';
 import { login } from '../services/auth.api';
 import { setAccessToken } from '@/lib/auth-token';
 import { Button } from '@/components/ui/button';
@@ -13,7 +13,7 @@ import { Input } from '@/components/ui/input';
 export function LoginForm() {
   const router = useRouter();
   const [error, setError] = useState('');
-  const form = useForm<LoginSchema>({
+  const form = useForm({
     resolver: zodResolver(loginSchema),
     defaultValues: { email: '', password: '' },
   });

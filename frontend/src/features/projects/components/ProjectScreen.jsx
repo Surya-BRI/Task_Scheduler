@@ -1,6 +1,6 @@
 "use client";
 
-import React, { useState } from "react";
+import { useState } from "react";
 import { useRouter } from "next/navigation";
 import {
   Calendar,
@@ -8,11 +8,9 @@ import {
   Search,
   Users,
   Home,
-  LayoutGrid,
 } from "lucide-react";
-import { dummyProjects, ProjectEntry, ProjectCategory } from "../data/dummy-projects";
+import { dummyProjects } from "../data/dummy-projects";
 
-// ─── Header ────────────────────────────────────────────────────────────────────
 const Header = () => {
   const router = useRouter();
   return (
@@ -27,8 +25,8 @@ const Header = () => {
         />
       </div>
       <div className="flex items-center gap-6 text-gray-600">
-        <button 
-          onClick={() => router.push('/design-scheduler')} 
+        <button
+          onClick={() => router.push('/design-scheduler')}
           className="hover:text-black transition-colors rounded-full hover:bg-gray-100 p-2 cursor-pointer"
           title="Go to Scheduler"
         >
@@ -48,7 +46,6 @@ const Header = () => {
   );
 };
 
-// ─── Navigation ────────────────────────────────────────────────────────────────
 const Navigation = () => {
   const router = useRouter();
   const navItems = [
@@ -85,12 +82,10 @@ const Navigation = () => {
   );
 };
 
-// ─── Category color ────────────────────────────────────────────────────────────
-const getCategoryColor = (category: ProjectCategory) =>
+const getCategoryColor = (category) =>
   category === "Retail" ? "text-blue-600" : "text-orange-500";
 
-// ─── Table ─────────────────────────────────────────────────────────────────────
-const ProjectTable = ({ data }: { data: ProjectEntry[] }) => (
+const ProjectTable = ({ data }) => (
   <div className="px-6 pb-6 flex-1 min-h-0 flex flex-col">
     <div className="border border-gray-200 rounded-lg overflow-auto bg-white shadow-sm h-full">
       <table className="w-full text-sm text-left relative">
@@ -125,9 +120,8 @@ const ProjectTable = ({ data }: { data: ProjectEntry[] }) => (
   </div>
 );
 
-// ─── Main Screen ───────────────────────────────────────────────────────────────
 export function ProjectScreen() {
-  const [projects] = useState<ProjectEntry[]>(dummyProjects);
+  const [projects] = useState(dummyProjects);
   const [searchQuery, setSearchQuery] = useState("");
 
   const filtered = projects.filter((p) => {
@@ -145,7 +139,6 @@ export function ProjectScreen() {
       <Header />
       <Navigation />
       <div className="flex-1 flex flex-col min-h-0">
-        {/* Toolbar */}
         <div className="shrink-0 flex items-center justify-between mt-6 mb-4 px-6">
           <h1 className="text-2xl font-bold text-gray-900">Project Design</h1>
           <div className="relative">
