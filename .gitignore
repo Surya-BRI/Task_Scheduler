@@ -3,6 +3,9 @@ dist/
 coverage/
 .next/
 .turbo/
+.cursor/
+*.log
+package-lock.json
 .DS_Store
 
 .env

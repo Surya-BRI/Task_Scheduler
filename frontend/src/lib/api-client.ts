@@ -17,12 +17,6 @@ async function request<T>(path: string, init?: RequestInit): Promise<T> {
 
   if (response.status === 401) {
     clearAccessToken();
-    // Do not redirect on login/register failure — same-page reload looks like a "loop"
-    const isPublicAuth =
-      path === '/auth/login' || path === '/auth/register';
-    if (!isPublicAuth && typeof window !== 'undefined') {
-      window.location.href = '/login';
-    }
     throw new Error('Unauthorized');
   }
 
