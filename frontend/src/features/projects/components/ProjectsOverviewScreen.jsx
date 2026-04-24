@@ -76,9 +76,9 @@ export function ProjectsOverviewScreen() {
   };
 
   return (
-    <div className="min-h-screen bg-slate-50">
+    <div className="h-screen overflow-hidden bg-slate-50">
       <Navbar />
-      <main className="mx-auto w-full max-w-[1450px] px-3 py-1.5 sm:px-5">
+      <main className="mx-auto h-[calc(100vh-150px)] w-full max-w-[1450px] px-3 py-1.5 sm:px-5">
         <div className="mb-1.5 flex items-center justify-between">
           <h1 className="text-[30px] font-bold tracking-tight text-slate-900">Projects</h1>
           <div className="flex items-center gap-2">
