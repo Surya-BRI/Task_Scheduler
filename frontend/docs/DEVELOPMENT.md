@@ -37,7 +37,7 @@ Or from `frontend/`:
 npm run dev
 ```
 
-Open http://localhost:5000 — root redirects to `/login` unless you change `src/app/page.tsx`.
+Open http://localhost:5000 — root redirects to `/login` unless you change `src/app/page.jsx`.
 
 ## Auth and API client
 
