@@ -1,6 +1,6 @@
 import { useEffect, useRef, useState } from 'react'
 import { useRouter } from 'next/navigation'
-import { Bell, Calendar, Home, Users } from 'lucide-react'
+import { Bell, Calendar, FolderKanban, Home, Users } from 'lucide-react'
 
 const PROFILE_USER = { name: 'Sarah', role: 'Designer' }
 
@@ -99,6 +99,14 @@ export function Navbar() {
               aria-label="Open calendar"
             >
               <Calendar className="h-5 w-5" strokeWidth={1.75} />
+            </button>
+            <button
+              type="button"
+              onClick={() => router.push('/projects-overview')}
+              className={utilityIconClass}
+              aria-label="Open projects overview"
+            >
+              <FolderKanban className="h-5 w-5" strokeWidth={1.75} />
             </button>
             <button
               type="button"
