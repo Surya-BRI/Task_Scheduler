@@ -16,5 +16,8 @@
   },
   "engines": {
     "node": ">=20.0.0"
+  },
+  "devDependencies": {
+    "chokidar": "^5.0.0"
   }
 }
