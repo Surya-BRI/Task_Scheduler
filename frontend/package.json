@@ -4,6 +4,7 @@
   "private": true,
   "scripts": {
     "dev": "next dev -p 5000",
+    "dev:frontend": "next dev -p 5000",
     "dev:open": "start \"\" \"http://localhost:5000/design-list\"",
     "build": "next build",
     "start": "next start -p 5000",

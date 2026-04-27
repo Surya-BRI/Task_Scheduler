@@ -29,8 +29,8 @@ function ActionLink({ href, label }) {
 
 function DesignTypeTable({ rows, variant }) {
   return (
-    <div className="flex flex-col min-h-0 flex-1">
-      <div className="border border-gray-200 rounded-lg overflow-auto bg-white shadow-sm flex-1 min-h-[240px]">
+    <div className="flex flex-col">
+      <div className="border border-gray-200 rounded-lg overflow-x-auto bg-white shadow-sm min-h-[240px]">
         <table className="w-full text-xs text-left">
           <thead className="bg-[#f0f3fa] text-gray-600 uppercase font-semibold sticky top-0 z-10 outline outline-1 outline-gray-200">
             <tr>
@@ -135,9 +135,9 @@ export function ProjectDesignHub() {
     }`;
 
   return (
-    <div className="h-screen bg-gray-50 flex flex-col font-sans overflow-hidden">
+    <div className="min-h-screen bg-gray-50 flex flex-col font-sans overflow-x-hidden">
       <Navbar />
-      <div className="flex-1 flex flex-col min-h-0 px-6 pb-6">
+      <div className="flex flex-col px-6 pb-6">
         <div className="shrink-0 flex flex-col gap-3 sm:flex-row sm:items-center sm:justify-between mt-6 mb-4">
           <h1 className="text-2xl font-bold text-gray-900">Project Design</h1>
           <div className="relative max-w-md">
@@ -161,7 +161,7 @@ export function ProjectDesignHub() {
           </button>
         </div>
 
-        <div className="flex-1 flex flex-col min-h-0 overflow-hidden">
+        <div className="flex flex-col">
           {segment === "retail" ? (
             <DesignTypeTable rows={retailRows} variant="retail" />
           ) : (
