@@ -1,8 +1,8 @@
 "use client";
 /* eslint-disable react-hooks/set-state-in-effect */
 import { useState, useEffect, useRef, useMemo } from "react";
-import { useRouter } from "next/navigation";
-import { Calendar, Bell, Search, Users, Home, Plus, PauseCircle, AlertTriangle } from "lucide-react";
+import { Search, Plus, PauseCircle, AlertTriangle } from "lucide-react";
+import { Navbar } from "@/components/Navbar";
 const DUMMY_DESIGNERS = [
     { id: "d1", name: "Alex Johnson", initials: "AJ" },
     { id: "d2", name: "Alexander Allen", initials: "AA" },
@@ -25,29 +25,6 @@ const DUMMY_DESIGNERS = [
     { id: "d19", name: "Designer 19", initials: "DX" },
     { id: "d20", name: "Designer 20", initials: "DX" },
 ];
-const Navigation = () => {
-    const router = useRouter();
-    const navItems = [
-        { label: "Activities" },
-        { label: "Dashboards" },
-        { label: "Transactions" },
-        { label: "Reports" },
-        { label: "Analytics" },
-        { label: "Screens" },
-        { label: "Setup" },
-        { label: "Support" },
-    ];
-    return (<nav className="bg-[#b3c6ea] px-6 py-3 flex items-center shadow-sm shrink-0">
-      <button onClick={() => router.push("/projects-list")} title="Home" className="text-gray-800 hover:text-black transition-colors cursor-pointer">
-        <Home size={18}/>
-      </button>
-      <div className="flex-1 flex justify-around px-8">
-        {navItems.map((item, index) => (<button key={index} className="font-semibold text-sm text-gray-800 hover:text-black transition-colors cursor-pointer">
-            {item.label}
-          </button>))}
-      </div>
-    </nav>);
-};
 const INITIAL_TASKS = {
     // Unassigned tasks (small, 1–8hr)
     "t1": { id: "t1", name: "Icon Set", tag: "Mobile App", estimatedHours: 3, status: "unassigned", colorClass: "bg-slate-50 border border-slate-200 text-slate-700" },
@@ -203,7 +180,6 @@ const INITIAL_SCHEDULES = {
     "d20": { "0": ["s1", "s2", "s3", "s4", "s5", "s6", "s7", "s8"] },
 };
 export function DesignSchedulerScreen() {
-    const router = useRouter();
     const [tasks, setTasks] = useState(INITIAL_TASKS);
     const [schedules, setSchedules] = useState(INITIAL_SCHEDULES);
     const [searchQuery, setSearchQuery] = useState("");
@@ -217,14 +193,6 @@ export function DesignSchedulerScreen() {
     // Custom Date selection state
     const [currentDate, setCurrentDate] = useState(new Date(2026, 2, 3));
     const weekDates = useMemo(() => getWeekDays(currentDate), [currentDate]);
-    const formattedWeekRange = `${weekDates[0].toLocaleDateString("en-US", { month: "short", day: "numeric" })} — ${weekDates[6].toLocaleDateString("en-US", { month: "short", day: "numeric", year: "numeric" })}`;
-    const formattedTitleDate = currentDate.toLocaleDateString("en-US", { weekday: "long", month: "short", day: "numeric" }).toUpperCase();
-    const handleDateChange = (e) => {
-        if (e.target.value) {
-            const parts = e.target.value.split('-');
-            setCurrentDate(new Date(Number(parts[0]), Number(parts[1]) - 1, Number(parts[2])));
-        }
-    };
     useEffect(() => {
         if (hasSwappedD1AndD20Ref.current)
             return;
@@ -539,39 +507,7 @@ export function DesignSchedulerScreen() {
     })).length, [schedules, tasks]);
     const totalScheduledTaskCount = useMemo(() => Object.values(schedules).reduce((acc, curr) => acc + Object.values(curr).flat().length, 0), [schedules]);
     return (<div className="h-screen flex flex-col bg-gray-50 overflow-hidden font-sans">
-      <header className="flex items-center justify-between px-6 py-3 bg-white border-b border-gray-200 shadow-sm shrink-0 relative z-20">
-        <div className="flex items-center gap-4">
-          <img src="/logo.png" alt="Blue Rhine Industries" className="h-10 object-contain cursor-pointer" onClick={() => router.push("/design-list")} title="Go to Home" onError={(e) => { e.currentTarget.src = "https://via.placeholder.com/150x50?text=Logo"; }}/>
-          <div className="text-gray-400 text-sm font-medium border-l border-gray-300 pl-4">
-            {formattedWeekRange}
-          </div>
-        </div>
-        
-        <div className="flex items-center gap-6">
-          <div className="text-gray-900 font-semibold text-sm">{formattedTitleDate}</div>
-          <div className="flex items-center gap-3 text-gray-700 pl-4 border-l border-gray-200">
-             <div className="relative group cursor-pointer p-1">
-               <Calendar size={22} className="text-gray-500 group-hover:text-black transition-colors"/>
-               <input type="date" className="absolute inset-0 opacity-0 cursor-pointer w-full h-full" value={currentDate.toISOString().split('T')[0]} onChange={handleDateChange} onClick={(e) => {
-            if ('showPicker' in e.currentTarget) {
-                try {
-                    e.currentTarget.showPicker();
-                }
-                catch { }
-            }
-        }}/>
-             </div>
-             <button className="hover:text-black transition p-1 cursor-pointer"><Bell size={22}/></button>
-          </div>
-          <div className="w-10 h-10 rounded-full border border-gray-300 overflow-hidden bg-gray-200">
-             <div className="w-full h-full bg-slate-300 flex items-center justify-center text-slate-500">
-                <Users size={20}/>
-             </div>
-          </div>
-        </div>
-      </header>
-
-      <Navigation />
+      <Navbar />
 
       <div className="bg-white border-b border-gray-200 flex items-center px-6 py-2 text-sm text-gray-700 font-medium shrink-0 z-10 relative">
         <div className="w-64 border-r border-gray-200 pr-4">Unassigned &amp; On-HOLD</div>

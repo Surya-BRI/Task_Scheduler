@@ -76,9 +76,9 @@ export function ProjectsOverviewScreen() {
   };
 
   return (
-    <div className="h-screen overflow-hidden bg-slate-50">
+    <div className="min-h-screen bg-slate-50">
       <Navbar />
-      <main className="mx-auto h-[calc(100vh-165px)] w-full max-w-[1450px] overflow-hidden px-3 py-1.5 sm:px-5">
+      <main className="mx-auto h-[calc(100vh-165px)] w-full max-w-[1450px] overflow-y-auto px-3 py-1.5 sm:px-5">
         <div className="mb-1.5 flex items-center justify-between">
           <h1 className="text-[30px] font-bold tracking-tight text-slate-900">Projects</h1>
           <div className="flex items-center gap-2">
@@ -118,7 +118,7 @@ export function ProjectsOverviewScreen() {
           </div>
         </div>
 
-        <div className="grid h-[calc(100%-36px)] gap-1.5 lg:grid-cols-[1fr_1fr_220px]">
+        <div className="grid min-h-[calc(100%-36px)] gap-1.5 lg:grid-cols-[1fr_1fr_220px]">
           <CompactCard title="Scheduled Tasks">
             <MiniTable
               headers={['ID', 'Description', 'Assignee', 'Due Date']}
