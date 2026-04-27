@@ -286,12 +286,9 @@ export function TaskDetailsPage() {
             </button>
           </div>
 
-          <h1 className="text-base font-semibold leading-tight tracking-tight text-slate-900 sm:text-lg">
+          <h1 className="text-xl font-semibold tracking-tight text-slate-900 sm:text-2xl">
             {pageTitle}
           </h1>
-          <p className="text-xs text-slate-500">
-            Retail tasks use CreateTaskModal; project tasks use ProjectCreateTaskModal.
-          </p>
 
           <div className="flex gap-2 overflow-x-auto pb-0.5">
             {STAGE_ITEMS.map((item) => (

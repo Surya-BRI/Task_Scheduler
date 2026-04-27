@@ -36,17 +36,17 @@ const getCategoryColor = (category) =>
 function ProjectTable({ data, records }) {
   return (
     <div className="px-6 pb-6 flex-1 min-h-0 flex flex-col">
-      <div className="border border-gray-200 rounded-lg overflow-auto bg-white shadow-sm h-full">
+      <div className="border border-slate-200 rounded-xl overflow-auto bg-white shadow-sm h-full">
         <table className="w-full text-sm text-left relative">
-          <thead className="bg-[#f0f3fa] text-gray-600 text-xs uppercase font-semibold sticky top-0 z-10 outline outline-1 outline-gray-200 shadow-sm">
+          <thead className="bg-[#f0f3fa] text-slate-600 text-xs uppercase font-semibold sticky top-0 z-10 outline outline-1 outline-slate-200 shadow-sm">
             <tr>
-              <th className="px-2 py-1 whitespace-nowrap">Project ID</th>
-              <th className="px-2 py-1 whitespace-nowrap">Project Name</th>
-              <th className="px-2 py-1 whitespace-nowrap">Sales Person</th>
-              <th className="px-2 py-1 whitespace-nowrap">Category</th>
+              <th className="px-2 py-1.5 whitespace-nowrap">Project ID</th>
+              <th className="px-2 py-1.5 whitespace-nowrap">Project Name</th>
+              <th className="px-2 py-1.5 whitespace-nowrap">Sales Person</th>
+              <th className="px-2 py-1.5 whitespace-nowrap">Category</th>
             </tr>
           </thead>
-          <tbody className="divide-y divide-gray-100">
+          <tbody className="divide-y divide-slate-100">
             {data.map((row) => {
               const isRetail = row.category === "Retail";
               const retailHref = retailProjectHref(row.id);
@@ -58,19 +58,19 @@ function ProjectTable({ data, records }) {
                   : null;
 
               return (
-                <tr key={row.id} className="hover:bg-gray-50 transition-colors">
-                  <td className="px-2 py-0.5 whitespace-nowrap text-xs">
+                <tr key={row.id} className="hover:bg-slate-50 transition-colors">
+                  <td className="px-2 py-1 whitespace-nowrap text-xs">
                     {projectHref ? (
                       <Link href={projectHref} className="font-medium text-blue-600 hover:underline">
                         {row.projectId}
                       </Link>
                     ) : (
-                      <span className="font-medium text-gray-500">{row.projectId}</span>
+                      <span className="font-medium text-slate-400">{row.projectId}</span>
                     )}
                   </td>
-                  <td className="px-2 py-0.5 text-gray-700 text-xs leading-tight">{row.projectName}</td>
-                  <td className="px-2 py-0.5 text-gray-700 whitespace-nowrap text-xs">{row.salesPerson}</td>
-                  <td className="px-2 py-0.5 whitespace-nowrap text-xs">
+                  <td className="px-2 py-1 text-slate-700 text-xs leading-tight">{row.projectName}</td>
+                  <td className="px-2 py-1 text-slate-700 whitespace-nowrap text-xs">{row.salesPerson}</td>
+                  <td className="px-2 py-1 whitespace-nowrap text-xs">
                     {projectHref ? (
                       <Link
                         href={projectHref}
@@ -111,19 +111,21 @@ export function ProjectScreen() {
   });
 
   return (
-    <div className="h-screen bg-gray-50 flex flex-col font-sans overflow-hidden">
+    <div className="h-screen bg-slate-50 flex flex-col font-sans overflow-hidden">
       <Navbar />
       <div className="flex-1 flex flex-col min-h-0">
-        <div className="shrink-0 flex items-center justify-between mt-6 mb-4 px-6">
-          <h1 className="text-2xl font-bold text-gray-900">Project Design</h1>
+        <div className="shrink-0 flex items-center justify-between mt-4 mb-4 px-6">
+          <h1 className="text-2xl font-semibold tracking-tight text-slate-900">Project Design</h1>
           <div className="relative">
-            <Search className="absolute left-3 top-1/2 -translate-y-1/2 text-gray-400" size={15} />
+            <div className="pointer-events-none absolute inset-y-0 left-0 flex items-center pl-3">
+              <Search className="h-4 w-4 text-slate-400" />
+            </div>
             <input
               type="text"
               value={searchQuery}
               onChange={(e) => setSearchQuery(e.target.value)}
               placeholder="Search by Project ID..."
-              className="pl-9 pr-4 py-2 border border-gray-200 rounded-md text-sm w-60 focus:outline-none focus:ring-2 focus:ring-blue-500 bg-white"
+              className="pl-9 pr-4 py-1.5 border border-slate-300 rounded-md text-sm w-60 focus:outline-none focus:ring-2 focus:ring-blue-500/25 focus:border-blue-500 bg-white text-slate-900"
             />
           </div>
         </div>
