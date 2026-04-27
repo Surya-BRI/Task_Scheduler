@@ -69,7 +69,7 @@ const Toolbar = ({ viewMode, setViewMode, filters, setFilters, salesPersons }) =
     filters.startDate,
     filters.endDate,
   ].filter(Boolean).length;
-  const designStatuses = ["WIP", "Completed", "Pending", "Revision", "Approved"];
+  const designStatuses = ["WIP", "Pending", "Revision", "Approved", "Completed"];
 
   return (
     <div className="flex flex-col md:flex-row md:items-center justify-between mb-4 mt-6 px-6 gap-4">
@@ -365,10 +365,10 @@ const Board = ({ data }) => {
   const router = useRouter();
   const columns = [
     { title: "WIP", status: "WIP" },
-    { title: "Completed", status: "Completed" },
     { title: "Confirmation Pending", status: "Pending" },
     { title: "Revision", status: "Revision" },
     { title: "Approved", status: "Approved" },
+    { title: "Completed", status: "Completed" },
   ];
 
   return (

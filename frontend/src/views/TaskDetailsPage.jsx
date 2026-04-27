@@ -273,8 +273,8 @@ export function TaskDetailsPage() {
   return (
     <div className="min-h-screen bg-slate-50">
       <Navbar />
-      <main className="h-[calc(100vh-128px)] overflow-auto px-2.5 py-2 pb-3 sm:px-3">
-        <div className="mx-auto max-w-[1460px] space-y-1.5">
+      <main className="h-[calc(100vh-128px)] w-full overflow-y-auto px-4 py-4 sm:px-6">
+        <div className="w-full space-y-1.5">
           <div className="flex items-center justify-between gap-3">
             <button
               type="button"
