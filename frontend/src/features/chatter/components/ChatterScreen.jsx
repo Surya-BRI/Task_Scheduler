@@ -271,10 +271,10 @@ function SegmentButton({ label, isActive, onClick }) {
     <button
       type="button"
       onClick={onClick}
-      className={`rounded-full px-3 py-0.5 text-[11px] font-medium transition-colors ${
+      className={`rounded px-3 py-1.5 text-sm font-medium transition-colors border ${
         isActive
-          ? "bg-[#1d4f91] text-white"
-          : "bg-slate-200 text-slate-700 hover:bg-slate-300"
+          ? "bg-indigo-50 border-indigo-300 text-indigo-700 shadow-sm"
+          : "bg-white border-gray-300 text-gray-500 hover:bg-gray-50"
       }`}
     >
       {label}
@@ -293,66 +293,66 @@ function ChatterCard({
   const hasComments = (post.comments?.length ?? 0) > 0;
 
   return (
-    <article className="rounded-lg border border-slate-200 bg-[#e9edf3] p-2.5 shadow-sm">
-      <div className="flex gap-3">
+    <article className="rounded-xl border border-slate-200 bg-white p-4 shadow-sm flex flex-col gap-3">
+      <div className="flex gap-4">
         <div className="flex-1 min-w-0">
           <div className="flex flex-wrap items-center gap-x-2 gap-y-1">
-            <p className="truncate text-xs font-semibold uppercase tracking-tight text-[#1d4f91]">
+            <p className="truncate text-sm font-semibold uppercase tracking-tight text-slate-900">
               {post.title}
             </p>
             <span className="text-xs text-slate-500">- {post.author}</span>
           </div>
-          <p className="mt-0.5 text-[10px] text-slate-500">{post.time}</p>
-          <p className="mt-1.5 text-[11px] font-medium text-[#1d4f91]">{post.mention}</p>
-          <p className="mt-1 text-xs text-slate-700">{post.message}</p>
-          <div className="mt-2 flex items-center gap-3 text-[11px] text-slate-600">
-            <button type="button" className="hover:text-slate-900">
+          <p className="mt-1 text-xs text-slate-400">{post.time}</p>
+          <p className="mt-2 text-sm font-medium text-blue-600">{post.mention}</p>
+          <p className="mt-1.5 text-sm text-slate-700">{post.message}</p>
+          <div className="mt-3 flex items-center gap-4 text-xs text-slate-500 font-medium">
+            <button type="button" className="hover:text-slate-900 transition-colors">
               Like
             </button>
             <button
               type="button"
-              className={hasComments ? "font-semibold text-red-600 hover:text-red-700" : "hover:text-slate-900"}
+              className={`transition-colors ${hasComments ? "font-semibold text-blue-600 hover:text-blue-700" : "hover:text-slate-900"}`}
               onClick={onOpenComposer}
             >
               {hasComments ? "Commented" : "Comment"}
             </button>
           </div>
         </div>
-        <aside className="w-full max-w-[220px] border-l-4 border-slate-800 pl-2.5 text-[11px] text-slate-700">
-          <p>Project Name: {post.projectName}</p>
-          <p>Responsible User: {post.responsibleUser}</p>
-          <p className="mt-1 flex items-center gap-2">
-            Priority Label:
+        <aside className="w-full max-w-[240px] border-l-4 border-slate-200 pl-4 text-xs text-slate-600 space-y-1">
+          <p><span className="font-medium text-slate-700">Project:</span> {post.projectName}</p>
+          <p><span className="font-medium text-slate-700">Responsible:</span> {post.responsibleUser}</p>
+          <div className="flex items-center gap-2 pt-1">
+            <span className="font-medium text-slate-700">Priority:</span>
             <span
-              className={`inline-block h-3 w-3 rounded-full ${PRIORITY_STYLES[post.priority]}`}
+              className={`inline-block h-2.5 w-2.5 rounded-full ${PRIORITY_STYLES[post.priority]}`}
               aria-label={`${post.priority} priority`}
             />
-          </p>
-          <p className="mt-2 text-right text-slate-600">Seen by {post.seenBy}</p>
+          </div>
+          <p className="mt-3 text-slate-400">Seen by {post.seenBy}</p>
         </aside>
       </div>
       {isComposerOpen ? (
-        <div className="mt-2.5 rounded-md border border-slate-200 bg-white p-2">
+        <div className="mt-2 rounded-lg border border-slate-200 bg-slate-50 p-3">
           <textarea
             value={draftComment}
             onChange={(event) => onDraftChange(event.target.value)}
             placeholder="Write a comment..."
-            className="min-h-[72px] w-full resize-none rounded border border-slate-200 bg-white px-2 py-1.5 text-xs text-slate-700 outline-none focus:border-blue-300 focus:ring-1 focus:ring-blue-300"
+            className="min-h-[80px] w-full resize-none rounded-md border border-slate-300 bg-white px-3 py-2 text-sm text-slate-900 outline-none focus:border-blue-500 focus:ring-1 focus:ring-blue-500"
           />
-          <div className="mt-2 flex items-center justify-between">
-            <div className="flex items-center gap-1.5 text-[11px] text-slate-500">
-              <span>B</span>
-              <span>I</span>
-              <span>U</span>
-              <span>S</span>
-              <span>@</span>
-              <span>#</span>
+          <div className="mt-3 flex items-center justify-between">
+            <div className="flex items-center gap-3 text-sm font-medium text-slate-500">
+              <span className="cursor-pointer hover:text-slate-800">B</span>
+              <span className="cursor-pointer hover:text-slate-800 italic">I</span>
+              <span className="cursor-pointer hover:text-slate-800 underline">U</span>
+              <span className="cursor-pointer hover:text-slate-800 line-through">S</span>
+              <span className="cursor-pointer hover:text-slate-800">@</span>
+              <span className="cursor-pointer hover:text-slate-800">#</span>
             </div>
             <button
               type="button"
               onClick={onSubmitComment}
               disabled={!draftComment.trim()}
-              className="rounded bg-slate-200 px-3 py-1 text-[11px] font-semibold text-slate-700 hover:bg-slate-300 disabled:cursor-not-allowed disabled:opacity-50"
+              className="rounded-md bg-blue-600 px-4 py-1.5 text-sm font-semibold text-white hover:bg-blue-700 disabled:cursor-not-allowed disabled:opacity-50 transition-colors"
             >
               Comment
             </button>
@@ -513,11 +513,14 @@ export function ChatterScreen() {
   };
 
   return (
-    <div className="min-h-screen bg-[#f4f6fa] font-sans">
+    <div className="min-h-screen bg-slate-50 font-sans">
       <Navbar />
-      <main className="mx-auto w-full max-w-[1320px] px-4 py-3">
-        <div className="flex flex-wrap items-center justify-between gap-2">
-          <div className="flex items-center gap-2">
+      <main className="mx-auto w-full px-4 py-4 sm:px-6">
+        <div className="mb-6 flex flex-col sm:flex-row sm:items-center sm:justify-between gap-4">
+          <div className="flex items-center gap-4">
+            <h1 className="text-xl font-semibold tracking-tight text-slate-900 sm:text-2xl mr-2">
+              Chatter
+            </h1>
             <SegmentButton
               label="Posts"
               isActive={activeTab === "posts"}
@@ -534,14 +537,14 @@ export function ChatterScreen() {
               onClick={() => setActiveTab("task-updates")}
             />
           </div>
-          <div className="flex items-center gap-2 text-slate-600">
+          <div className="flex items-center gap-3 text-slate-600">
             <div className="relative">
               <button
                 type="button"
-                className="inline-flex items-center gap-1.5 rounded-md border border-slate-200 bg-white px-2 py-0.5 text-[11px]"
+                className="inline-flex items-center gap-2 rounded-md border border-slate-300 bg-white px-3 py-1.5 text-sm font-medium text-slate-700 shadow-sm hover:bg-slate-50"
               >
-                <CalendarDays className="h-3 w-3" />
                 {weekLabel}
+                <CalendarDays className="h-4 w-4 text-slate-500" />
               </button>
               <input
                 type="date"
@@ -558,15 +561,15 @@ export function ChatterScreen() {
                 }}
               />
             </div>
-            <button type="button" className="grid h-7 w-7 place-items-center rounded-md bg-white border border-slate-200">
-              <Search className="h-3 w-3" />
+            <button type="button" className="grid h-8 w-8 place-items-center rounded-md bg-white border border-slate-300 shadow-sm hover:bg-slate-50 transition">
+              <Search className="h-4 w-4 text-slate-500" />
             </button>
             <button
               type="button"
-              className="grid h-7 w-7 place-items-center rounded-md bg-[#1d4f91] text-white"
+              className="grid h-8 w-8 place-items-center rounded-md bg-blue-600 text-white shadow-sm hover:bg-blue-700 transition"
               aria-label="Create new chatter post"
             >
-              <PlusSquare className="h-3 w-3" />
+              <PlusSquare className="h-4 w-4" />
             </button>
           </div>
         </div>
@@ -593,13 +596,13 @@ export function ChatterScreen() {
               <h2 className="mb-2 text-sm font-semibold text-slate-900">Mentioned to You</h2>
               <div className="space-y-2">
                 {privateMentions.length === 0 ? (
-                  <p className="text-xs text-slate-500">No mentions for @{CURRENT_USER}.</p>
+                  <p className="text-sm text-slate-500">No mentions for @{CURRENT_USER}.</p>
                 ) : (
                   privateMentions.map((item) => (
-                    <div key={`mention-${item.id}`} className="rounded border border-slate-200 bg-slate-50 p-2">
-                      <p className="text-[11px] font-semibold text-[#1d4f91]">{item.title}</p>
-                      <p className="mt-1 text-[11px] text-slate-700">{item.message}</p>
-                      <p className="mt-1 text-[10px] text-slate-500">{item.time}</p>
+                    <div key={`mention-${item.id}`} className="rounded-lg border border-slate-200 bg-slate-50 p-3 shadow-sm">
+                      <p className="text-sm font-semibold text-slate-900">{item.title}</p>
+                      <p className="mt-1 text-sm text-slate-700">{item.message}</p>
+                      <p className="mt-2 text-xs text-slate-500">{item.time}</p>
                     </div>
                   ))
                 )}
@@ -610,13 +613,13 @@ export function ChatterScreen() {
               <h2 className="mb-2 text-sm font-semibold text-slate-900">Your Posted Comments</h2>
               <div className="space-y-2">
                 {privateComments.length === 0 ? (
-                  <p className="text-xs text-slate-500">No comments posted yet.</p>
+                  <p className="text-sm text-slate-500">No comments posted yet.</p>
                 ) : (
                   privateComments.map((item) => (
-                    <div key={`my-comment-${item.id}`} className="rounded border border-slate-200 bg-slate-50 p-2">
-                      <p className="text-[11px] font-semibold text-[#1d4f91]">{item.title}</p>
-                      <p className="mt-1 text-[11px] text-slate-700">{item.message}</p>
-                      <p className="mt-1 text-[10px] text-slate-500">{item.projectName}</p>
+                    <div key={`my-comment-${item.id}`} className="rounded-lg border border-slate-200 bg-slate-50 p-3 shadow-sm">
+                      <p className="text-sm font-semibold text-slate-900">{item.title}</p>
+                      <p className="mt-1 text-sm text-slate-700">{item.message}</p>
+                      <p className="mt-2 text-xs font-medium text-blue-600">{item.projectName}</p>
                     </div>
                   ))
                 )}
@@ -628,28 +631,28 @@ export function ChatterScreen() {
         {activeTab === "task-updates" ? (
           <section className="mt-3 rounded-lg border border-slate-200 bg-white p-3">
             <h2 className="mb-3 text-sm font-semibold text-slate-900">Task Updates</h2>
-            <div className="space-y-2">
+            <div className="space-y-3">
               {taskUpdates.map((task) => {
                 const isOpen = openTaskId === task.id;
                 return (
-                  <div key={task.id} className="rounded border border-slate-200">
+                  <div key={task.id} className="rounded-lg border border-slate-200 shadow-sm overflow-hidden">
                     <button
                       type="button"
                       onClick={() => setOpenTaskId((prev) => (prev === task.id ? null : task.id))}
-                      className="flex w-full items-center justify-between bg-slate-50 px-3 py-2 text-left"
+                      className="flex w-full items-center justify-between bg-slate-50 px-4 py-3 text-left hover:bg-slate-100 transition-colors"
                     >
-                      <span className="text-xs font-semibold text-slate-800">{task.taskName}</span>
-                      <span className="text-[11px] text-slate-500">
+                      <span className="text-sm font-semibold text-slate-800">{task.taskName}</span>
+                      <span className="text-xs font-medium text-slate-500 bg-white border border-slate-200 px-2 py-0.5 rounded-full">
                         {task.chats.length} chatter {task.chats.length > 1 ? "items" : "item"}
                       </span>
                     </button>
                     {isOpen ? (
-                      <div className="space-y-1.5 p-2">
+                      <div className="space-y-2 p-3 bg-white">
                         {task.chats.map((chat) => (
-                          <div key={chat.id} className="rounded bg-slate-50 p-2">
-                            <p className="text-[11px] font-semibold text-[#1d4f91]">{chat.title}</p>
-                            <p className="mt-1 text-[11px] text-slate-700">{chat.message}</p>
-                            <p className="mt-1 text-[10px] text-slate-500">
+                          <div key={chat.id} className="rounded-md border border-slate-100 bg-slate-50 p-3">
+                            <p className="text-sm font-semibold text-slate-900">{chat.title}</p>
+                            <p className="mt-1.5 text-sm text-slate-700">{chat.message}</p>
+                            <p className="mt-2 text-xs text-slate-500 font-medium">
                               {chat.author} - {chat.time}
                             </p>
                           </div>
@@ -663,12 +666,6 @@ export function ChatterScreen() {
           </section>
         ) : null}
 
-        <div className="mt-6 rounded-xl border border-dashed border-slate-300 bg-white/70 p-4 text-center">
-          <MessageSquareText className="mx-auto h-5 w-5 text-slate-500" />
-          <p className="mt-2 text-xs text-slate-600">
-            Chatter workflow scaffold is ready. Share the first process step and I will wire it in.
-          </p>
-        </div>
       </main>
     </div>
   );

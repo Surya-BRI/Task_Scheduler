@@ -1,6 +1,6 @@
 import { useEffect, useRef, useState } from 'react'
 import { useRouter } from 'next/navigation'
-import { Bell, Calendar, CalendarDays, FolderKanban, Home, MessageSquareText, Users } from 'lucide-react'
+import { Bell, Calendar, ClipboardList, Home, MessageSquareText, Users } from 'lucide-react'
 
 const PROFILE_USER = { name: 'Sarah', role: 'Designer' }
 
@@ -69,7 +69,7 @@ function ProfileDropdown() {
   )
 }
 
-export function Navbar() {
+export function Navbar({ currentDate, onCalendarChange, dateRangeText }) {
   const router = useRouter()
   const utilityIconClass =
     'grid h-9 w-9 place-items-center rounded-lg text-slate-800 transition hover:bg-slate-100 focus:outline-none focus-visible:ring-2 focus-visible:ring-slate-300'
@@ -78,43 +78,75 @@ export function Navbar() {
     <header className="sticky top-0 z-40 border-b border-slate-200">
       <div className="bg-white">
         <div className="w-full flex items-center gap-3 px-4 py-2 sm:px-6">
-          <button
-            type="button"
-            onClick={() => router.push('/design-list')}
-            className="rounded-md bg-white px-2 py-1"
-            aria-label="Go to main page"
-          >
-            <img
-              src="/blue-rhine-logo.png"
-              alt="Blue Rhine Industries"
-              className="h-12 w-auto object-contain"
-            />
-          </button>
+          <div className="flex items-center gap-4">
+            <button
+              type="button"
+              onClick={() => router.push('/design-list')}
+              className="rounded-md bg-white px-2 py-1 flex items-center gap-4"
+              aria-label="Go to main page"
+            >
+              <img
+                src="/blue-rhine-logo.png"
+                alt="Blue Rhine Industries"
+                className="h-12 w-auto object-contain"
+              />
+            </button>
+            {dateRangeText && (
+              <div className="hidden sm:block text-sm font-semibold text-slate-700 bg-slate-50 px-3 py-1.5 rounded-md border border-slate-200">
+                {dateRangeText}
+              </div>
+            )}
+          </div>
 
           <div className="ml-auto flex items-center gap-1 sm:gap-2">
-            <button
-              type="button"
-              onClick={() => router.push('/design-scheduler')}
-              className={utilityIconClass}
-              aria-label="Open calendar"
-            >
-              <Calendar className="h-5 w-5" strokeWidth={1.75} />
-            </button>
-            <button
-              type="button"
-              onClick={() => router.push('/design-scheduler')}
-              className={utilityIconClass}
-              aria-label="Open calendar view"
-            >
-              <CalendarDays className="h-5 w-5" strokeWidth={1.75} />
-            </button>
+            {currentDate ? (
+              <div className="flex items-center gap-2">
+                <span className="text-sm font-semibold text-slate-700">
+                  {currentDate.toLocaleDateString("en-GB", { day: '2-digit', month: 'short', year: 'numeric' })}
+                </span>
+                <div className="relative">
+                  <button
+                    type="button"
+                    className={utilityIconClass}
+                    aria-label="Select date"
+                  >
+                    <Calendar className="h-5 w-5" strokeWidth={1.75} />
+                  </button>
+                  <input
+                    type="date"
+                    className="absolute inset-0 w-full h-full opacity-0 cursor-pointer"
+                    value={`${currentDate.getFullYear()}-${String(currentDate.getMonth() + 1).padStart(2, '0')}-${String(currentDate.getDate()).padStart(2, '0')}`}
+                    onChange={(e) => {
+                      if (e.target.value && onCalendarChange) {
+                        const [y, m, d] = e.target.value.split('-');
+                        onCalendarChange(new Date(Number(y), Number(m) - 1, Number(d)));
+                      }
+                    }}
+                    onClick={(e) => {
+                      if ('showPicker' in e.currentTarget) {
+                        try { e.currentTarget.showPicker(); } catch {}
+                      }
+                    }}
+                  />
+                </div>
+              </div>
+            ) : (
+              <button
+                type="button"
+                onClick={() => router.push('/design-scheduler')}
+                className={utilityIconClass}
+                aria-label="Open calendar"
+              >
+                <Calendar className="h-5 w-5" strokeWidth={1.75} />
+              </button>
+            )}
             <button
               type="button"
               onClick={() => router.push('/projects-overview')}
               className={utilityIconClass}
               aria-label="Open projects overview"
             >
-              <FolderKanban className="h-5 w-5" strokeWidth={1.75} />
+              <ClipboardList className="h-5 w-5" strokeWidth={1.75} />
             </button>
             <button
               type="button"
