@@ -271,11 +271,7 @@ function SegmentButton({ label, isActive, onClick }) {
     <button
       type="button"
       onClick={onClick}
-      className={`rounded px-3 py-1.5 text-sm font-medium transition-colors border ${
-        isActive
-          ? "bg-indigo-50 border-indigo-300 text-indigo-700 shadow-sm"
-          : "bg-white border-gray-300 text-gray-500 hover:bg-gray-50"
-      }`}
+      className={`ui-chip-button ${isActive ? "ui-chip-button-active" : ""}`}
     >
       {label}
     </button>
@@ -293,7 +289,7 @@ function ChatterCard({
   const hasComments = (post.comments?.length ?? 0) > 0;
 
   return (
-    <article className="rounded-xl border border-slate-200 bg-white p-4 shadow-sm flex flex-col gap-3">
+    <article className="ui-surface ui-card-pad flex flex-col gap-3">
       <div className="flex gap-4">
         <div className="flex-1 min-w-0">
           <div className="flex flex-wrap items-center gap-x-2 gap-y-1">
@@ -513,7 +509,7 @@ export function ChatterScreen() {
   };
 
   return (
-    <div className="min-h-screen bg-slate-50 font-sans">
+    <div className="app-shell font-sans">
       <Navbar />
       <main className="mx-auto w-full px-4 py-4 sm:px-6">
         <div className="mb-6 flex flex-col sm:flex-row sm:items-center sm:justify-between gap-4">
@@ -539,10 +535,7 @@ export function ChatterScreen() {
           </div>
           <div className="flex items-center gap-3 text-slate-600">
             <div className="relative">
-              <button
-                type="button"
-                className="inline-flex items-center gap-2 rounded-md border border-slate-300 bg-white px-3 py-1.5 text-sm font-medium text-slate-700 shadow-sm hover:bg-slate-50"
-              >
+              <button type="button" className="ui-chip-button inline-flex items-center gap-2">
                 {weekLabel}
                 <CalendarDays className="h-4 w-4 text-slate-500" />
               </button>
@@ -561,12 +554,12 @@ export function ChatterScreen() {
                 }}
               />
             </div>
-            <button type="button" className="grid h-8 w-8 place-items-center rounded-md bg-white border border-slate-300 shadow-sm hover:bg-slate-50 transition">
+            <button type="button" className="ui-icon-button h-8 w-8 border border-slate-300 bg-white">
               <Search className="h-4 w-4 text-slate-500" />
             </button>
             <button
               type="button"
-              className="grid h-8 w-8 place-items-center rounded-md bg-blue-600 text-white shadow-sm hover:bg-blue-700 transition"
+              className="grid h-8 w-8 place-items-center rounded-md bg-blue-600 text-white shadow-sm transition hover:bg-blue-700"
               aria-label="Create new chatter post"
             >
               <PlusSquare className="h-4 w-4" />
@@ -592,7 +585,7 @@ export function ChatterScreen() {
 
         {activeTab === "private" ? (
           <section className="mt-3 grid gap-3 md:grid-cols-2">
-            <div className="rounded-lg border border-slate-200 bg-white p-3">
+            <div className="ui-surface p-3">
               <h2 className="mb-2 text-sm font-semibold text-slate-900">Mentioned to You</h2>
               <div className="space-y-2">
                 {privateMentions.length === 0 ? (
@@ -609,7 +602,7 @@ export function ChatterScreen() {
               </div>
             </div>
 
-            <div className="rounded-lg border border-slate-200 bg-white p-3">
+            <div className="ui-surface p-3">
               <h2 className="mb-2 text-sm font-semibold text-slate-900">Your Posted Comments</h2>
               <div className="space-y-2">
                 {privateComments.length === 0 ? (
@@ -629,7 +622,7 @@ export function ChatterScreen() {
         ) : null}
 
         {activeTab === "task-updates" ? (
-          <section className="mt-3 rounded-lg border border-slate-200 bg-white p-3">
+          <section className="ui-surface mt-3 p-3">
             <h2 className="mb-3 text-sm font-semibold text-slate-900">Task Updates</h2>
             <div className="space-y-3">
               {taskUpdates.map((task) => {

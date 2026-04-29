@@ -79,7 +79,7 @@ export function FilterDropdown({
       <button
         type="button"
         onClick={() => setOpen((prev) => !prev)}
-        className="flex h-10 w-full items-center gap-2 rounded-lg bg-white px-3 text-left text-sm text-slate-700 ring-1 ring-slate-200 transition hover:bg-slate-50"
+        className="flex h-10 w-full items-center gap-2 rounded-lg bg-white px-3 text-left text-sm text-slate-700 ring-1 ring-slate-200 transition hover:bg-slate-50 focus:outline-none focus-visible:ring-2 focus-visible:ring-blue-300"
       >
         <Icon className="h-4 w-4 shrink-0 text-slate-500" />
         <span className="min-w-0 flex-1 truncate text-xs text-slate-600">{label}</span>
@@ -89,13 +89,13 @@ export function FilterDropdown({
       </button>
 
       {open ? (
-        <div className="absolute right-0 z-30 mt-1 w-full min-w-[220px] rounded-lg bg-white p-2 shadow-lg ring-1 ring-slate-200">
+        <div className="ui-surface absolute right-0 z-30 mt-1 w-full min-w-[220px] p-2 shadow-lg">
           {searchable ? (
             <input
               value={search}
               onChange={(event) => setSearch(event.target.value)}
               placeholder="Search..."
-              className="mb-2 h-8 w-full rounded-md border border-slate-200 px-2 text-xs outline-none focus:border-blue-300"
+              className="mb-2 h-8 w-full rounded-md border border-slate-200 px-2 text-xs outline-none transition-colors focus:border-blue-500 focus:ring-2 focus:ring-blue-500/20"
             />
           ) : null}
 

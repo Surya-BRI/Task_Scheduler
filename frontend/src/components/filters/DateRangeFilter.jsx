@@ -31,7 +31,7 @@ export function DateRangeFilter({
             type="date"
             value={startDate}
             onChange={(event) => onStartDateChange(event.target.value)}
-            className="h-7 w-full min-w-0 rounded-md border border-slate-200 px-1.5 text-[11px] text-slate-700 outline-none focus:border-blue-300"
+            className="h-7 w-full min-w-0 rounded-md border border-slate-200 px-1.5 text-[11px] text-slate-700 outline-none transition-colors focus:border-blue-500 focus:ring-2 focus:ring-blue-500/20"
             aria-label="Created start date"
           />
           <span className="text-[10px] text-slate-400">to</span>
@@ -39,7 +39,7 @@ export function DateRangeFilter({
             type="date"
             value={endDate}
             onChange={(event) => onEndDateChange(event.target.value)}
-            className="h-7 w-full min-w-0 rounded-md border border-slate-200 px-1.5 text-[11px] text-slate-700 outline-none focus:border-blue-300"
+            className="h-7 w-full min-w-0 rounded-md border border-slate-200 px-1.5 text-[11px] text-slate-700 outline-none transition-colors focus:border-blue-500 focus:ring-2 focus:ring-blue-500/20"
             aria-label="Created end date"
           />
         </div>
@@ -52,7 +52,7 @@ export function DateRangeFilter({
             onStartDateChange('')
             onEndDateChange('')
           }}
-          className="grid h-6 w-6 place-items-center rounded-md text-slate-500 transition hover:bg-slate-100"
+          className="grid h-6 w-6 place-items-center rounded-md text-slate-500 transition hover:bg-slate-100 focus:outline-none focus-visible:ring-2 focus-visible:ring-blue-300"
           aria-label="Clear date range"
         >
           <X className="h-3.5 w-3.5" />

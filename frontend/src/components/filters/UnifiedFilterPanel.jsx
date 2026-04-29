@@ -27,14 +27,14 @@ export function UnifiedFilterPanel({
     >
       <div
         onClick={(event) => event.stopPropagation()}
-        className="mx-auto w-full max-w-xl rounded-xl bg-white p-3 shadow-xl ring-1 ring-slate-200 sm:mx-0"
+        className="ui-surface mx-auto w-full max-w-xl p-3 shadow-xl sm:mx-0"
       >
         <div className="mb-3 flex items-center justify-between">
           <div className="text-sm font-semibold text-slate-900">Filters</div>
           <button
             type="button"
             onClick={onClose}
-            className="rounded-md px-2 py-1 text-xs text-slate-500 hover:bg-slate-100"
+            className="rounded-md px-2 py-1 text-xs text-slate-500 transition-colors hover:bg-slate-100"
           >
             Close
           </button>
@@ -127,14 +127,14 @@ export function UnifiedFilterPanel({
           <button
             type="button"
             onClick={onClearAll}
-            className="inline-flex h-8 items-center rounded-lg bg-white px-3 text-xs text-slate-700 ring-1 ring-slate-200 transition hover:bg-slate-50"
+            className="ui-chip-button inline-flex h-8 items-center px-3 text-xs text-slate-700"
           >
             Clear All
           </button>
           <button
             type="button"
             onClick={onApply}
-            className="inline-flex h-8 items-center rounded-lg bg-blue-600 px-3 text-xs font-semibold text-white transition hover:bg-blue-700"
+            className="inline-flex h-8 items-center rounded-lg bg-blue-600 px-3 text-xs font-semibold text-white transition hover:bg-blue-700 focus:outline-none focus-visible:ring-2 focus-visible:ring-blue-500"
           >
             Apply
           </button>

@@ -62,9 +62,9 @@ export function CreateTaskModal({ open, onClose }) {
         role="dialog"
         aria-modal="true"
         aria-labelledby={titleId}
-        className="relative z-10 w-full max-w-lg overflow-hidden rounded-xl border border-slate-200 bg-white shadow-xl"
+        className="ui-surface relative z-10 w-full max-w-lg overflow-hidden shadow-xl"
       >
-        <div className="flex items-start justify-between gap-3 bg-[#0f4a7a] px-5 py-4 text-white">
+        <div className="flex items-start justify-between gap-3 bg-slate-800 px-5 py-4 text-white">
           <div className="flex items-start gap-3">
             <span className="mt-0.5 grid h-9 w-9 shrink-0 place-items-center rounded-md bg-white/15">
               <Pencil className="h-4 w-4" aria-hidden />
@@ -73,7 +73,7 @@ export function CreateTaskModal({ open, onClose }) {
               <h2 id={titleId} className="text-lg font-semibold leading-tight">
                 Create Task
               </h2>
-              <p className="mt-0.5 text-sm text-blue-100">Get things moving</p>
+              <p className="mt-0.5 text-sm text-slate-200">Get things moving</p>
             </div>
           </div>
           <button
@@ -97,12 +97,12 @@ export function CreateTaskModal({ open, onClose }) {
                 value={providedFile}
                 readOnly
                 placeholder="Select File"
-                className="w-full rounded-md border border-slate-300 bg-white px-3 py-2 text-sm text-slate-900 outline-none"
+                className="w-full rounded-md border border-slate-300 bg-white px-3 py-2 text-sm text-slate-900 outline-none transition-colors focus:border-blue-500 focus:ring-2 focus:ring-blue-500/20"
               />
               <button
                 type="button"
                 onClick={handlePickFile}
-                className="shrink-0 rounded-md border border-slate-300 px-3 py-2 text-sm font-medium text-slate-700 hover:bg-slate-50"
+                className="shrink-0 rounded-md border border-slate-300 px-3 py-2 text-sm font-medium text-slate-700 transition-colors hover:bg-slate-50"
               >
                 Browse
               </button>
@@ -123,7 +123,7 @@ export function CreateTaskModal({ open, onClose }) {
               id="create-hod"
               value={hod}
               onChange={(e) => setHod(e.target.value)}
-              className="mt-1.5 w-full rounded-md border border-slate-300 bg-white px-3 py-2 text-sm text-slate-900 outline-none focus:border-blue-500 focus:ring-2 focus:ring-blue-500/25"
+              className="mt-1.5 w-full rounded-md border border-slate-300 bg-white px-3 py-2 text-sm text-slate-900 outline-none transition-colors focus:border-blue-500 focus:ring-2 focus:ring-blue-500/20"
             >
               <option value="">Select</option>
               <option value="hod-1">A. Khan</option>
@@ -156,7 +156,7 @@ export function CreateTaskModal({ open, onClose }) {
               id="create-deadline"
               value={deadline}
               onChange={(e) => setDeadline(e.target.value)}
-              className="mt-1.5 w-full rounded-md border border-slate-300 bg-white px-3 py-2 text-sm text-slate-900 outline-none focus:border-blue-500 focus:ring-2 focus:ring-blue-500/25"
+              className="mt-1.5 w-full rounded-md border border-slate-300 bg-white px-3 py-2 text-sm text-slate-900 outline-none transition-colors focus:border-blue-500 focus:ring-2 focus:ring-blue-500/20"
             >
               <option value="">Select</option>
               <option value="3d">3 days</option>
@@ -174,14 +174,14 @@ export function CreateTaskModal({ open, onClose }) {
               value={comment}
               onChange={(e) => setComment(e.target.value)}
               rows={4}
-              className="mt-1.5 w-full resize-y rounded-md border border-slate-300 bg-white px-3 py-2 text-sm text-slate-900 outline-none focus:border-blue-500 focus:ring-2 focus:ring-blue-500/25"
+              className="mt-1.5 w-full resize-y rounded-md border border-slate-300 bg-white px-3 py-2 text-sm text-slate-900 outline-none transition-colors focus:border-blue-500 focus:ring-2 focus:ring-blue-500/20"
             />
           </div>
 
           <div className="flex justify-center pt-1">
             <button
               type="submit"
-              className="rounded-full bg-[#10a6e3] px-10 py-2.5 text-sm font-semibold text-white shadow-sm transition hover:bg-[#0f96cd] focus:outline-none focus-visible:ring-2 focus-visible:ring-blue-500 focus-visible:ring-offset-2"
+              className="rounded-full bg-blue-600 px-10 py-2.5 text-sm font-semibold text-white shadow-sm transition hover:bg-blue-700 focus:outline-none focus-visible:ring-2 focus-visible:ring-blue-500 focus-visible:ring-offset-2"
             >
               Create
             </button>
