@@ -35,10 +35,10 @@ const getCategoryColor = (category) =>
 
 function ProjectTable({ data, records }) {
   return (
-    <div className="px-6 pb-6 flex-1 min-h-0 flex flex-col">
-      <div className="border border-slate-200 rounded-xl overflow-auto bg-white shadow-sm h-full">
+    <div className="flex min-h-0 flex-1 flex-col px-4 pb-6 sm:px-6">
+      <div className="ui-surface h-full overflow-auto">
         <table className="w-full text-sm text-left relative">
-          <thead className="bg-[#f0f3fa] text-slate-600 text-xs uppercase font-semibold sticky top-0 z-10 outline outline-1 outline-slate-200 shadow-sm">
+          <thead className="ui-table-header sticky top-0 z-10 border-b border-slate-200">
             <tr>
               <th className="px-2 py-1.5 whitespace-nowrap">Project ID</th>
               <th className="px-2 py-1.5 whitespace-nowrap">Project Name</th>
@@ -111,10 +111,10 @@ export function ProjectScreen() {
   });
 
   return (
-    <div className="h-screen bg-slate-50 flex flex-col font-sans overflow-hidden">
+    <div className="app-shell h-screen flex flex-col overflow-hidden font-sans">
       <Navbar />
       <div className="flex-1 flex flex-col min-h-0">
-        <div className="shrink-0 flex items-center justify-between mt-4 mb-4 px-6">
+        <div className="mb-4 mt-4 flex shrink-0 items-center justify-between px-4 sm:px-6">
           <h1 className="text-2xl font-semibold tracking-tight text-slate-900">Project Design</h1>
           <div className="relative">
             <div className="pointer-events-none absolute inset-y-0 left-0 flex items-center pl-3">

@@ -5,6 +5,12 @@ import { Search, Plus, PauseCircle, AlertTriangle } from "lucide-react";
 import { useRouter } from "next/navigation";
 import { Navbar } from "@/components/Navbar";
 import { useDesignListStore } from "@/state/DesignListContext";
+import {
+    SCHEDULER_DASHBOARD_SYNC_EVENT,
+    SCHEDULER_DASHBOARD_SYNC_KEY,
+    buildDesignerSnapshot,
+    buildSchedulerSnapshot
+} from "../utils/designerDashboardSync";
 const DUMMY_DESIGNERS = [
     { id: "d1", name: "Alex Johnson", initials: "AJ" },
     { id: "d2", name: "Alexander Allen", initials: "AA" },
@@ -401,6 +407,16 @@ export function DesignSchedulerScreen() {
             setSchedules(optimized);
         }
     }, [schedules, tasks]);
+    useEffect(() => {
+        const snapshot = buildSchedulerSnapshot(tasks, schedules);
+        try {
+            localStorage.setItem(SCHEDULER_DASHBOARD_SYNC_KEY, JSON.stringify(snapshot));
+            window.dispatchEvent(new CustomEvent(SCHEDULER_DASHBOARD_SYNC_EVENT, { detail: snapshot }));
+        }
+        catch (error) {
+            console.error("Unable to sync scheduler snapshot", error);
+        }
+    }, [tasks, schedules]);
     // Get total hours for a specific day slot
     const getDayHours = (designerId, dayIndex) => sumTaskHours(tasks, (schedules[designerId] || {})[dayIndex.toString()] || []);
     const getDesignerBookedHours = (designerId) => {
@@ -427,22 +443,22 @@ export function DesignSchedulerScreen() {
         return sumTaskHours(tasks, dayTasks) > DAILY_CAPACITY;
     })).length, [schedules, tasks]);
     const totalScheduledTaskCount = useMemo(() => Object.values(schedules).reduce((acc, curr) => acc + Object.values(curr).flat().length, 0), [schedules]);
-    return (<div className="h-screen flex flex-col bg-gray-50 overflow-hidden font-sans">
+    return (<div className="app-shell h-screen flex flex-col overflow-hidden font-sans">
       <Navbar 
         currentDate={currentDate}
         onCalendarChange={setCurrentDate}
         dateRangeText={dateRangeText}
       />
 
-      <div className="bg-white border-b border-gray-200 flex items-center px-6 py-2 text-sm text-gray-700 font-medium shrink-0 z-10 relative">
-        <div className="w-64 border-r border-gray-200 pr-4">Unassigned &amp; On-HOLD</div>
+      <div className="relative z-10 flex shrink-0 items-center border-b border-slate-200 bg-white px-6 py-2 text-sm font-medium text-slate-700">
+        <div className="w-64 border-r border-slate-200 pr-4">Unassigned &amp; On-HOLD</div>
         <div className="flex-1 flex px-6 justify-between items-center max-w-4xl">
-          <div><span className="text-gray-500 font-medium mr-1">Designers:</span>{totalDesignersCount}</div>
+          <div><span className="mr-1 font-medium text-slate-500">Designers:</span>{totalDesignersCount}</div>
           <div className="flex items-center gap-2"><div className="w-2.5 h-2.5 bg-green-400 rounded-sm"></div> Scheduled: {totalScheduledTaskCount}</div>
           <div className="flex items-center gap-2"><div className="w-2.5 h-2.5 bg-orange-400 rounded-sm"></div> Total Hours: {totalScheduledHours}h</div>
           <div className="flex items-center gap-2 text-red-500"><AlertTriangle size={14}/> Overloaded: {overloadedCount}</div>
           <div className="flex items-center gap-2 ml-2">
-            <button type="button" onClick={() => setViewMode("week")} className={`px-3 py-1.5 rounded border text-sm font-medium transition-colors ${viewMode === "week" ? "bg-indigo-50 border-indigo-300 text-indigo-700 shadow-sm" : "bg-white border-gray-300 text-gray-500 hover:bg-gray-50"}`}>
+            <button type="button" onClick={() => setViewMode("week")} className={`ui-chip-button ${viewMode === "week" ? "ui-chip-button-active" : ""}`}>
               Week
             </button>
             <button type="button" onClick={() => {
@@ -450,21 +466,21 @@ export function DesignSchedulerScreen() {
             setViewMode("custom");
             setCurrentDay(weekdayCurrentDay);
             setSelectedDays([weekdayCurrentDay]);
-        }} className={`px-3 py-1.5 rounded border text-sm font-medium transition-colors ${viewMode === "custom" ? "bg-indigo-50 border-indigo-300 text-indigo-700 shadow-sm" : "bg-white border-gray-300 text-gray-500 hover:bg-gray-50"}`}>
+        }} className={`ui-chip-button ${viewMode === "custom" ? "ui-chip-button-active" : ""}`}>
               Custom
             </button>
           </div>
         </div>
       </div>
-      {viewMode === "custom" && (<div className="bg-white border-b border-gray-200 px-6 py-2 flex items-center gap-2 text-xs shrink-0">
-          <div className="w-64 border-r border-gray-200 pr-4 text-gray-500 font-medium">Visible Days</div>
+      {viewMode === "custom" && (<div className="flex shrink-0 items-center gap-2 border-b border-slate-200 bg-white px-6 py-2 text-xs">
+          <div className="w-64 border-r border-slate-200 pr-4 font-medium text-slate-500">Visible Days</div>
           <div className="flex-1 flex items-center gap-1 px-6">
             {WEEKDAY_INDICES.map((dayIndex) => {
                 const label = weekDates[dayIndex].toLocaleDateString("en-US", { weekday: "short" });
                 const active = selectedDays.includes(dayIndex);
                 return (<button key={`selector-${dayIndex}`} type="button" onClick={() => handleDayToggle(dayIndex)} className={`px-2 py-1 rounded border transition-colors ${active
-                        ? "bg-indigo-50 border-indigo-300 text-indigo-700"
-                        : "bg-white border-gray-300 text-gray-500"}`}>
+                      ? "ui-chip-button ui-chip-button-active"
+                        : "ui-chip-button"}`}>
                   {active ? "✓ " : ""}{label}
                 </button>);
             })}
@@ -473,7 +489,7 @@ export function DesignSchedulerScreen() {
 
       <div className="flex-1 flex overflow-hidden">
         {/* Left Sidebar */}
-        <div className="w-64 bg-[#f8f9fc] border-r border-gray-200 flex flex-col shrink-0" onDragOver={handleDragOver} onDrop={(e) => handleDropToPanel(e, "unassigned")}>
+        <div className="w-64 shrink-0 border-r border-slate-200 bg-slate-50 flex flex-col" onDragOver={handleDragOver} onDrop={(e) => handleDropToPanel(e, "unassigned")}>
           <div className="p-4 flex flex-col h-full">
              <div className="flex items-center justify-between font-semibold text-slate-900 mb-2 text-xl tracking-tight">
                Design Tasks
@@ -521,8 +537,8 @@ export function DesignSchedulerScreen() {
           <div className={`flex-1 ${layoutMode === "horizontal-scroll" ? "overflow-x-auto overflow-y-auto" : "overflow-auto"}`}>
             <div className="min-w-[800px]">
               {/* Grid Header */}
-              <div className="flex bg-[#f0f3fa] text-gray-600 text-xs uppercase font-semibold sticky top-0 z-20 outline outline-1 outline-gray-200 shadow-sm">
-                <div className="w-[180px] shrink-0 px-4 py-2 border-r border-gray-200 flex items-center">DESIGNER</div>
+              <div className="ui-table-header sticky top-0 z-20 flex border border-slate-200 bg-slate-100 shadow-sm">
+                <div className="w-[180px] shrink-0 px-4 py-2 border-r border-slate-200 flex items-center">DESIGNER</div>
                 <div className="flex-1 grid" style={{
             gridTemplateColumns: layoutMode === "single-column"
                 ? "minmax(0, 1fr)"
@@ -547,7 +563,11 @@ export function DesignSchedulerScreen() {
             const designerDays = schedules[designer.id] || {};
             return (<div key={designer.id} className="flex border-b border-gray-100 group relative min-h-[56px] items-stretch">
                       {/* Left: Designer Info */}
-                      <div className="w-[180px] shrink-0 py-1.5 px-3 flex items-center gap-2 border-r border-gray-200 bg-white z-10 transition-colors group-hover:bg-gray-50">
+                      <div className="w-[180px] shrink-0 py-1.5 px-3 flex items-center gap-2 border-r border-gray-200 bg-white z-10 transition-colors group-hover:bg-blue-50 cursor-pointer" onClick={() => {
+                          const routeData = buildDesignerSnapshot(tasks, designerDays);
+                          sessionStorage.setItem(`designer_data_${designer.id}`, JSON.stringify(routeData));
+                          router.push(`/designer/${designer.id}`);
+                      }} title={`Open ${designer.name}'s dashboard`}>
                         <div className="w-6 h-6 rounded-full bg-slate-800 text-white flex items-center justify-center text-[10px] font-bold leading-none shrink-0 shadow-sm">
                           {designer.initials}
                         </div>

@@ -33,7 +33,7 @@ const reallocatedTasks = [
 
 function CompactCard({ title, children, className = '' }) {
   return (
-    <section className={`rounded-xl border border-slate-200 bg-white p-4 shadow-sm flex flex-col ${className}`}>
+    <section className={`ui-surface ui-card-pad flex flex-col ${className}`}>
       <h2 className="mb-3 text-sm font-semibold text-slate-900">{title}</h2>
       {children}
     </section>
@@ -42,9 +42,9 @@ function CompactCard({ title, children, className = '' }) {
 
 function MiniTable({ headers, rows, renderRow }) {
   return (
-    <div className="overflow-hidden rounded-lg border border-slate-200">
+    <div className="ui-surface overflow-hidden rounded-lg">
       <table className="w-full text-left text-xs text-slate-700">
-        <thead className="bg-slate-50 text-[11px] uppercase tracking-wider text-slate-500 border-b border-slate-200">
+        <thead className="ui-table-header border-b border-slate-200">
           <tr>
             {headers.map((header) => (
               <th key={header} className="px-3 py-2 font-semibold">
@@ -76,7 +76,7 @@ export function ProjectsOverviewScreen() {
   };
 
   return (
-    <div className="min-h-screen bg-slate-50">
+    <div className="app-shell">
       <Navbar />
       <main className="h-[calc(100vh-165px)] w-full overflow-y-auto px-4 py-4 sm:px-6">
         <div className="mb-4 flex flex-col sm:flex-row sm:items-center sm:justify-between gap-3">
@@ -95,10 +95,7 @@ export function ProjectsOverviewScreen() {
               />
             </div>
             <div className="relative">
-              <button
-                type="button"
-                className="flex items-center gap-2 rounded-md border border-slate-300 bg-white px-3 py-1.5 text-sm font-medium text-slate-700 shadow-sm hover:bg-slate-50"
-              >
+              <button type="button" className="ui-chip-button flex items-center gap-2">
                 {weekLabel}
                 <CalendarDays className="h-4 w-4 text-slate-500" />
               </button>
@@ -193,7 +190,7 @@ export function ProjectsOverviewScreen() {
             />
           </CompactCard>
 
-          <section className="space-y-4 rounded-xl border border-slate-200 bg-white p-4 shadow-sm flex flex-col">
+          <section className="ui-surface ui-card-pad flex flex-col space-y-4">
             <div className="flex items-center justify-between">
               <h2 className="text-sm font-semibold text-slate-900">Task Summary</h2>
               <button className="text-slate-400 hover:text-slate-600 transition">

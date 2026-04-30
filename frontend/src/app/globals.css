@@ -10,3 +10,46 @@ body {
   @apply bg-slate-50 text-slate-800 antialiased;
   font-family: var(--font-geist-sans), Arial, Helvetica, sans-serif;
 }
+
+:root {
+  --app-bg: #f8fafc;
+  --surface-bg: #ffffff;
+  --surface-muted: #f1f5f9;
+  --surface-border: #e2e8f0;
+  --text-strong: #0f172a;
+  --text-muted: #64748b;
+  --brand-500: #2563eb;
+  --brand-600: #1d4ed8;
+}
+
+.app-shell {
+  @apply min-h-screen bg-slate-50 text-slate-800;
+}
+
+.ui-surface {
+  @apply rounded-xl border border-slate-200 bg-white shadow-sm;
+}
+
+.ui-surface-header {
+  @apply border-b border-slate-200 bg-slate-50;
+}
+
+.ui-icon-button {
+  @apply grid h-9 w-9 place-items-center rounded-lg text-slate-700 transition hover:bg-slate-100 focus:outline-none focus-visible:ring-2 focus-visible:ring-blue-300;
+}
+
+.ui-chip-button {
+  @apply rounded-md border border-slate-300 bg-white px-3 py-1.5 text-sm font-medium text-slate-600 transition-colors hover:bg-slate-50;
+}
+
+.ui-chip-button-active {
+  @apply border-blue-300 bg-blue-50 text-blue-700 shadow-sm;
+}
+
+.ui-table-header {
+  @apply bg-slate-100 text-[11px] font-semibold uppercase tracking-wide text-slate-600;
+}
+
+.ui-card-pad {
+  @apply p-4 sm:p-5;
+}

@@ -71,11 +71,10 @@ function ProfileDropdown() {
 
 export function Navbar({ currentDate, onCalendarChange, dateRangeText }) {
   const router = useRouter()
-  const utilityIconClass =
-    'grid h-9 w-9 place-items-center rounded-lg text-slate-800 transition hover:bg-slate-100 focus:outline-none focus-visible:ring-2 focus-visible:ring-slate-300'
+  const utilityIconClass = 'ui-icon-button'
 
   return (
-    <header className="sticky top-0 z-40 border-b border-slate-200">
+    <header className="sticky top-0 z-40 border-b border-slate-200 bg-white">
       <div className="bg-white">
         <div className="w-full flex items-center gap-3 px-4 py-2 sm:px-6">
           <div className="flex items-center gap-4">
@@ -169,13 +168,13 @@ export function Navbar({ currentDate, onCalendarChange, dateRangeText }) {
         </div>
       </div>
 
-      <div className="bg-[#cfd9ea]">
+      <div className="bg-slate-200/80 border-t border-slate-200">
         <div className="w-full flex items-center px-4 py-1.5 sm:px-6">
           <div className="flex w-full items-center gap-1">
             <button
               type="button"
               onClick={() => router.push('/projects-list')}
-              className="grid h-8 w-8 flex-none place-items-center rounded-md text-slate-700 hover:bg-white/40"
+              className="ui-icon-button h-8 w-8"
               aria-label="Home"
             >
               <Home className="h-4 w-4" />
@@ -187,7 +186,7 @@ export function Navbar({ currentDate, onCalendarChange, dateRangeText }) {
                   <button
                     key={item}
                     type="button"
-                    className="rounded-lg px-3 py-1.5 text-sm font-semibold text-slate-800 hover:bg-white/40"
+                    className="rounded-lg px-3 py-1.5 text-sm font-semibold text-slate-700 transition-colors hover:bg-white/50"
                   >
                     {item}
                   </button>

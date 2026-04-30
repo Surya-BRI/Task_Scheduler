@@ -1,0 +1,68 @@
+{
+  "id": "d1",
+  "name": "Alex Johnson",
+  "designation": "CAD Designer",
+  "avatar": null,
+  "dateRange": "Mar 2 \u2013 Mar 8, 2026",
+  "currentDay": "TUESDAY, MAR 3",
+  "stats": {
+    "workLoad": { "tasks": 17, "hours": 14 },
+    "workTill": { "label": "Tuesday 24th", "hours": 6 },
+    "monthlyTaskCount": 200,
+    "monthlyHourCount": 154,
+    "score": 95,
+    "pendingRegularization": 2,
+    "xp": 100,
+    "streak": 12
+  },
+  "donut": {
+    "active": { "value": 113, "pct": 78, "color": "#22c55e" },
+    "onHold": { "value": 36, "pct": 25, "color": "#f97316" },
+    "completed": { "value": 29, "pct": 20, "color": "#3b82f6" },
+    "centerPct": 39,
+    "centerTotal": 144
+  },
+  "schedule": {
+    "Monday": [
+      { "id": "T1", "label": "T1- Pepsi", "color": "#3b82f6", "startHr": 0, "endHr": 4 },
+      { "id": "T2", "label": "T2- Nike",  "color": "#ef4444", "startHr": 4, "endHr": 5 },
+      { "id": "T3", "label": "T3- Max",   "color": "#22c55e", "startHr": 5, "endHr": 6 },
+      { "id": "T4", "label": "T4- Home Box","color": "#f59e0b","startHr": 6, "endHr": 8 },
+      { "id": "T5", "label": "T5- Hp",    "color": "#8b5cf6", "startHr": 8, "endHr": 9 }
+    ],
+    "Tuesday": [
+      { "id": "T5b", "label": "T5- Hp",   "color": "#8b5cf6", "startHr": 0, "endHr": 1 },
+      { "id": "T6",  "label": "T6- XYZ",  "color": "#1e3a5f", "startHr": 1, "endHr": 4 }
+    ],
+    "Wednesday": [],
+    "Thursday": [],
+    "Friday": [],
+    "Saturday": [],
+    "Sunday": []
+  },
+  "onHoldTasks": [
+    { "no": 1, "details": "P1", "taskNo": "T13", "projectDetails": "Content Calendar Plan", "pct": 5,  "deadline": "5th Mar",  "urgent": true  },
+    { "no": 2, "details": "P1", "taskNo": "T14", "projectDetails": "Content Eatcgation C",  "pct": 11, "deadline": "28th Mar", "urgent": false },
+    { "no": 3, "details": "P1", "taskNo": "T15", "projectDetails": "Merial Pronuct on",     "pct": 10, "deadline": "14th May", "urgent": false }
+  ],
+  "completedTasksByWeek": {
+    "Week 1": [
+      { "taskNo": "T16", "projectDetails": "Task Description A", "pctComplete": 100, "deadline": "4th Feb"  },
+      { "taskNo": "T17", "projectDetails": "Task Description B", "pctComplete": 100, "deadline": "5th Mar"  },
+      { "taskNo": "T18", "projectDetails": "Task Description C", "pctComplete": 100, "deadline": "5th Mar"  },
+      { "taskNo": "T19", "projectDetails": "Task Description D", "pctComplete": 100, "deadline": "5th Mar"  }
+    ],
+    "Week 2": [
+      { "taskNo": "T20", "projectDetails": "Task Description E", "pctComplete": 100, "deadline": "10th Mar" },
+      { "taskNo": "T21", "projectDetails": "Task Description F", "pctComplete": 100, "deadline": "12th Mar" }
+    ],
+    "Week 3": [
+      { "taskNo": "T22", "projectDetails": "Task Description G", "pctComplete": 100, "deadline": "17th Mar" },
+      { "taskNo": "T23", "projectDetails": "Task Description H", "pctComplete": 100, "deadline": "19th Mar" },
+      { "taskNo": "T24", "projectDetails": "Task Description I", "pctComplete": 100, "deadline": "21st Mar" }
+    ],
+    "Week 4": [
+      { "taskNo": "T25", "projectDetails": "Task Description J", "pctComplete": 100, "deadline": "24th Mar" }
+    ]
+  }
+}
