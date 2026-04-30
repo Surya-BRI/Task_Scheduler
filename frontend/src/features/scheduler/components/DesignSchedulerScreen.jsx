@@ -2,7 +2,15 @@
 /* eslint-disable react-hooks/set-state-in-effect */
 import { useState, useEffect, useRef, useMemo } from "react";
 import { Search, Plus, PauseCircle, AlertTriangle } from "lucide-react";
+import { useRouter } from "next/navigation";
 import { Navbar } from "@/components/Navbar";
+import { useDesignListStore } from "@/state/DesignListContext";
+import {
+    SCHEDULER_DASHBOARD_SYNC_EVENT,
+    SCHEDULER_DASHBOARD_SYNC_KEY,
+    buildDesignerSnapshot,
+    buildSchedulerSnapshot
+} from "../utils/designerDashboardSync";
 const DUMMY_DESIGNERS = [
     { id: "d1", name: "Alex Johnson", initials: "AJ" },
     { id: "d2", name: "Alexander Allen", initials: "AA" },
@@ -25,109 +33,12 @@ const DUMMY_DESIGNERS = [
     { id: "d19", name: "Designer 19", initials: "DX" },
     { id: "d20", name: "Designer 20", initials: "DX" },
 ];
-const INITIAL_TASKS = {
-    // Unassigned tasks (small, 1–8hr)
-    "t1": { id: "t1", name: "Icon Set", tag: "Mobile App", estimatedHours: 3, status: "unassigned", colorClass: "bg-slate-50 border border-slate-200 text-slate-700" },
-    "t2": { id: "t2", name: "Store Redesign", tag: "WebApp v3", estimatedHours: 5, status: "unassigned", colorClass: "bg-red-50 border border-red-200 text-red-700" },
-    "t3": { id: "t3", name: "Dark Mode", tag: "Design System", estimatedHours: 2, status: "unassigned", colorClass: "bg-gray-100 border border-gray-200 text-gray-800" },
-    "t4": { id: "t4", name: "Checkout Anim", tag: "E-Commerce", estimatedHours: 4, status: "unassigned", colorClass: "bg-blue-50 border border-blue-200 text-blue-700" },
-    "t5": { id: "t5", name: "Dashboard Charts", tag: "Analytics", estimatedHours: 6, status: "unassigned", colorClass: "bg-orange-50 border border-orange-200 text-orange-700" },
-    "t6": { id: "t6", name: "User Research", tag: "WebApp v3", estimatedHours: 8, status: "unassigned", colorClass: "bg-teal-50 border border-teal-200 text-teal-800" },
-    "t7": { id: "t7", name: "Nav Menu", tag: "Frontend", estimatedHours: 3, status: "unassigned", colorClass: "bg-purple-50 border border-purple-200 text-purple-700" },
-    "t8": { id: "t8", name: "DB Schema", tag: "Backend", estimatedHours: 5, status: "unassigned", colorClass: "bg-gray-100 border border-gray-200 text-gray-800" },
-    "t9": { id: "t9", name: "Landing Copy", tag: "Marketing", estimatedHours: 2, status: "unassigned", colorClass: "bg-blue-50 border border-blue-200 text-blue-700" },
-    "t10": { id: "t10", name: "Wireframe Check", tag: "Design", estimatedHours: 1, status: "unassigned", colorClass: "bg-red-50 border border-red-200 text-red-700" },
-    // On-hold tasks
-    "t11": { id: "t11", name: "Server Maint", tag: "DevOps", estimatedHours: 4, status: "on-hold", holdTime: "2 Days", colorClass: "bg-slate-50 border border-slate-200 text-slate-700" },
-    "t12": { id: "t12", name: "Client Meeting", tag: "Management", estimatedHours: 2, status: "on-hold", holdTime: "Blocker", colorClass: "bg-red-50 border border-red-200 text-red-700" },
-    // Assigned tasks — 7 days × 20 designers (compact 1–8h each)
-    "a1": { id: "a1", name: "Icons", tag: "", estimatedHours: 3, status: "assigned", colorClass: "bg-orange-100 border border-orange-300 text-orange-800" },
-    "a2": { id: "a2", name: "Wireframe", tag: "", estimatedHours: 5, status: "assigned", colorClass: "bg-blue-100 border border-blue-300 text-blue-800" },
-    "a3": { id: "a3", name: "Prototype", tag: "", estimatedHours: 8, status: "assigned", colorClass: "bg-indigo-100 border border-indigo-300 text-indigo-800" },
-    "a4": { id: "a4", name: "Review", tag: "", estimatedHours: 4, status: "assigned", colorClass: "bg-purple-100 border border-purple-300 text-purple-800" },
-    "a5": { id: "a5", name: "UX Audit", tag: "", estimatedHours: 6, status: "assigned", colorClass: "bg-green-100 border border-green-300 text-green-800" },
-    "a6": { id: "a6", name: "Handoff", tag: "", estimatedHours: 2, status: "assigned", colorClass: "bg-pink-100 border border-pink-300 text-pink-800" },
-    "a7": { id: "a7", name: "Copy Edit", tag: "", estimatedHours: 1, status: "assigned", colorClass: "bg-yellow-100 border border-yellow-300 text-yellow-800" },
-    "a8": { id: "a8", name: "Sketch", tag: "", estimatedHours: 7, status: "assigned", colorClass: "bg-teal-100 border border-teal-300 text-teal-800" },
-    "a9": { id: "a9", name: "Comp", tag: "", estimatedHours: 4, status: "assigned", colorClass: "bg-red-100 border border-red-300 text-red-800" },
-    "a10": { id: "a10", name: "Test", tag: "", estimatedHours: 3, status: "assigned", colorClass: "bg-cyan-100 border border-cyan-300 text-cyan-800" },
-    "a11": { id: "a11", name: "QA Pass", tag: "", estimatedHours: 5, status: "assigned", colorClass: "bg-lime-100 border border-lime-300 text-lime-800" },
-    "a12": { id: "a12", name: "Deploy", tag: "", estimatedHours: 2, status: "assigned", colorClass: "bg-violet-100 border border-violet-300 text-violet-800" },
-    "a13": { id: "a13", name: "Sprint Plan", tag: "", estimatedHours: 8, status: "assigned", colorClass: "bg-amber-100 border border-amber-300 text-amber-800" },
-    "a14": { id: "a14", name: "Retro", tag: "", estimatedHours: 6, status: "assigned", colorClass: "bg-rose-100 border border-rose-300 text-rose-800" },
-    "a15": { id: "a15", name: "Branding", tag: "", estimatedHours: 7, status: "assigned", colorClass: "bg-fuchsia-100 border border-fuchsia-300 text-fuchsia-800" },
-    "a16": { id: "a16", name: "Assets", tag: "", estimatedHours: 4, status: "assigned", colorClass: "bg-sky-100 border border-sky-300 text-sky-800" },
-    "a17": { id: "a17", name: "Redline", tag: "", estimatedHours: 3, status: "assigned", colorClass: "bg-orange-100 border border-orange-300 text-orange-800" },
-    "a18": { id: "a18", name: "Doc Review", tag: "", estimatedHours: 5, status: "assigned", colorClass: "bg-blue-100 border border-blue-300 text-blue-800" },
-    "a19": { id: "a19", name: "Storyboard", tag: "", estimatedHours: 6, status: "assigned", colorClass: "bg-indigo-100 border border-indigo-300 text-indigo-800" },
-    "a20": { id: "a20", name: "Mockup", tag: "", estimatedHours: 8, status: "assigned", colorClass: "bg-purple-100 border border-purple-300 text-purple-800" },
-    "a21": { id: "a21", name: "Spec Write", tag: "", estimatedHours: 2, status: "assigned", colorClass: "bg-green-100 border border-green-300 text-green-800" },
-    "a22": { id: "a22", name: "Export", tag: "", estimatedHours: 1, status: "assigned", colorClass: "bg-pink-100 border border-pink-300 text-pink-800" },
-    "a23": { id: "a23", name: "Flow Map", tag: "", estimatedHours: 4, status: "assigned", colorClass: "bg-yellow-100 border border-yellow-300 text-yellow-800" },
-    "a24": { id: "a24", name: "Sprint 2", tag: "", estimatedHours: 7, status: "assigned", colorClass: "bg-teal-100 border border-teal-300 text-teal-800" },
-    "a25": { id: "a25", name: "Logo v2", tag: "", estimatedHours: 5, status: "assigned", colorClass: "bg-red-100 border border-red-300 text-red-800" },
-    "a26": { id: "a26", name: "Fonts", tag: "", estimatedHours: 3, status: "assigned", colorClass: "bg-cyan-100 border border-cyan-300 text-cyan-800" },
-    "a27": { id: "a27", name: "Color Pal", tag: "", estimatedHours: 2, status: "assigned", colorClass: "bg-lime-100 border border-lime-300 text-lime-800" },
-    "a28": { id: "a28", name: "Illustrate", tag: "", estimatedHours: 8, status: "assigned", colorClass: "bg-violet-100 border border-violet-300 text-violet-800" },
-    "a29": { id: "a29", name: "Grid Sys", tag: "", estimatedHours: 6, status: "assigned", colorClass: "bg-amber-100 border border-amber-300 text-amber-800" },
-    "a30": { id: "a30", name: "Copy", tag: "", estimatedHours: 4, status: "assigned", colorClass: "bg-rose-100 border border-rose-300 text-rose-800" },
-    "a31": { id: "a31", name: "A11y Check", tag: "", estimatedHours: 5, status: "assigned", colorClass: "bg-fuchsia-100 border border-fuchsia-300 text-fuchsia-800" },
-    "a32": { id: "a32", name: "Print Prep", tag: "", estimatedHours: 3, status: "assigned", colorClass: "bg-sky-100 border border-sky-300 text-sky-800" },
-    "a33": { id: "a33", name: "UX Writing", tag: "", estimatedHours: 4, status: "assigned", colorClass: "bg-orange-100 border border-orange-300 text-orange-800" },
-    "a34": { id: "a34", name: "Motion", tag: "", estimatedHours: 7, status: "assigned", colorClass: "bg-blue-100 border border-blue-300 text-blue-800" },
-    "a35": { id: "a35", name: "Anim Frame", tag: "", estimatedHours: 6, status: "assigned", colorClass: "bg-indigo-100 border border-indigo-300 text-indigo-800" },
-    "a36": { id: "a36", name: "Lottie", tag: "", estimatedHours: 5, status: "assigned", colorClass: "bg-purple-100 border border-purple-300 text-purple-800" },
-    "a37": { id: "a37", name: "Research", tag: "", estimatedHours: 8, status: "assigned", colorClass: "bg-green-100 border border-green-300 text-green-800" },
-    "a38": { id: "a38", name: "Survey", tag: "", estimatedHours: 2, status: "assigned", colorClass: "bg-pink-100 border border-pink-300 text-pink-800" },
-    "a39": { id: "a39", name: "Persona", tag: "", estimatedHours: 3, status: "assigned", colorClass: "bg-yellow-100 border border-yellow-300 text-yellow-800" },
-    "a40": { id: "a40", name: "Journey Map", tag: "", estimatedHours: 4, status: "assigned", colorClass: "bg-teal-100 border border-teal-300 text-teal-800" },
-    "a41": { id: "a41", name: "Card Sort", tag: "", estimatedHours: 1, status: "assigned", colorClass: "bg-red-100 border border-red-300 text-red-800" },
-    "a42": { id: "a42", name: "Usability", tag: "", estimatedHours: 5, status: "assigned", colorClass: "bg-cyan-100 border border-cyan-300 text-cyan-800" },
-    "a43": { id: "a43", name: "Report", tag: "", estimatedHours: 3, status: "assigned", colorClass: "bg-lime-100 border border-lime-300 text-lime-800" },
-    "a44": { id: "a44", name: "Design Sys", tag: "", estimatedHours: 7, status: "assigned", colorClass: "bg-violet-100 border border-violet-300 text-violet-800" },
-    "a45": { id: "a45", name: "Tokens", tag: "", estimatedHours: 4, status: "assigned", colorClass: "bg-amber-100 border border-amber-300 text-amber-800" },
-    "a46": { id: "a46", name: "Layout Grid", tag: "", estimatedHours: 6, status: "assigned", colorClass: "bg-rose-100 border border-rose-300 text-rose-800" },
-    "a47": { id: "a47", name: "Component", tag: "", estimatedHours: 8, status: "assigned", colorClass: "bg-fuchsia-100 border border-fuchsia-300 text-fuchsia-800" },
-    "a48": { id: "a48", name: "Variants", tag: "", estimatedHours: 5, status: "assigned", colorClass: "bg-sky-100 border border-sky-300 text-sky-800" },
-    "a49": { id: "a49", name: "States", tag: "", estimatedHours: 3, status: "assigned", colorClass: "bg-orange-100 border border-orange-300 text-orange-800" },
-    "a50": { id: "a50", name: "Atomic Sys", tag: "", estimatedHours: 7, status: "assigned", colorClass: "bg-blue-100 border border-blue-300 text-blue-800" },
-    "a51": { id: "a51", name: "Theme Dark", tag: "", estimatedHours: 5, status: "assigned", colorClass: "bg-indigo-100 border border-indigo-300 text-indigo-800" },
-    "a52": { id: "a52", name: "Style Guide", tag: "", estimatedHours: 6, status: "assigned", colorClass: "bg-purple-100 border border-purple-300 text-purple-800" },
-    "a53": { id: "a53", name: "Checklist", tag: "", estimatedHours: 2, status: "assigned", colorClass: "bg-green-100 border border-green-300 text-green-800" },
-    "a54": { id: "a54", name: "Sprint 3", tag: "", estimatedHours: 8, status: "assigned", colorClass: "bg-pink-100 border border-pink-300 text-pink-800" },
-    "a55": { id: "a55", name: "Backlog", tag: "", estimatedHours: 4, status: "assigned", colorClass: "bg-yellow-100 border border-yellow-300 text-yellow-800" },
-    "a56": { id: "a56", name: "Triage", tag: "", estimatedHours: 3, status: "assigned", colorClass: "bg-teal-100 border border-teal-300 text-teal-800" },
-    "a57": { id: "a57", name: "Kickoff", tag: "", estimatedHours: 1, status: "assigned", colorClass: "bg-red-100 border border-red-300 text-red-800" },
-    "a58": { id: "a58", name: "UAT Final", tag: "", estimatedHours: 7, status: "assigned", colorClass: "bg-cyan-100 border border-cyan-300 text-cyan-800" },
-    "a59": { id: "a59", name: "Sign-off", tag: "", estimatedHours: 2, status: "assigned", colorClass: "bg-lime-100 border border-lime-300 text-lime-800" },
-    "a60": { id: "a60", name: "Go Live", tag: "", estimatedHours: 6, status: "assigned", colorClass: "bg-violet-100 border border-violet-300 text-violet-800" },
-    "a61": { id: "a61", name: "Post Launch", tag: "", estimatedHours: 4, status: "assigned", colorClass: "bg-amber-100 border border-amber-300 text-amber-800" },
-    "a62": { id: "a62", name: "Metrics", tag: "", estimatedHours: 3, status: "assigned", colorClass: "bg-rose-100 border border-rose-300 text-rose-800" },
-    "a63": { id: "a63", name: "Bug Fix", tag: "", estimatedHours: 5, status: "assigned", colorClass: "bg-fuchsia-100 border border-fuchsia-300 text-fuchsia-800" },
-    "a64": { id: "a64", name: "Patch", tag: "", estimatedHours: 8, status: "assigned", colorClass: "bg-sky-100 border border-sky-300 text-sky-800" },
-    "a65": { id: "a65", name: "Audit Log", tag: "", estimatedHours: 2, status: "assigned", colorClass: "bg-orange-100 border border-orange-300 text-orange-800" },
-    "a66": { id: "a66", name: "Cleanup", tag: "", estimatedHours: 4, status: "assigned", colorClass: "bg-blue-100 border border-blue-300 text-blue-800" },
-    "a67": { id: "a67", name: "Archive", tag: "", estimatedHours: 1, status: "assigned", colorClass: "bg-indigo-100 border border-indigo-300 text-indigo-800" },
-    "a68": { id: "a68", name: "Migration", tag: "", estimatedHours: 7, status: "assigned", colorClass: "bg-purple-100 border border-purple-300 text-purple-800" },
-    "a69": { id: "a69", name: "Rollback", tag: "", estimatedHours: 6, status: "assigned", colorClass: "bg-green-100 border border-green-300 text-green-800" },
-    "a70": { id: "a70", name: "Infra", tag: "", estimatedHours: 5, status: "assigned", colorClass: "bg-pink-100 border border-pink-300 text-pink-800" },
-    // Sample dense day data: 8 tasks × 1h in one slot
-    "s1": { id: "s1", name: "Task 1", tag: "", estimatedHours: 1, status: "assigned", colorClass: "bg-blue-100 border border-blue-300 text-blue-800" },
-    "s2": { id: "s2", name: "Task 2", tag: "", estimatedHours: 1, status: "assigned", colorClass: "bg-green-100 border border-green-300 text-green-800" },
-    "s3": { id: "s3", name: "Task 3", tag: "", estimatedHours: 1, status: "assigned", colorClass: "bg-amber-100 border border-amber-300 text-amber-800" },
-    "s4": { id: "s4", name: "Task 4", tag: "", estimatedHours: 1, status: "assigned", colorClass: "bg-purple-100 border border-purple-300 text-purple-800" },
-    "s5": { id: "s5", name: "Task 5", tag: "", estimatedHours: 1, status: "assigned", colorClass: "bg-pink-100 border border-pink-300 text-pink-800" },
-    "s6": { id: "s6", name: "Task 6", tag: "", estimatedHours: 1, status: "assigned", colorClass: "bg-cyan-100 border border-cyan-300 text-cyan-800" },
-    "s7": { id: "s7", name: "Task 7", tag: "", estimatedHours: 1, status: "assigned", colorClass: "bg-rose-100 border border-rose-300 text-rose-800" },
-    "s8": { id: "s8", name: "Task 8", tag: "", estimatedHours: 1, status: "assigned", colorClass: "bg-indigo-100 border border-indigo-300 text-indigo-800" },
-};
 // Capacity constants
 const DAILY_CAPACITY = 8; // 8hrs per day = normal capacity (green/blue)
 const MAX_DAILY_HOURS = 12; // absolute max assignable per day
 const WEEKLY_CAPACITY = 40; // 5 working days × 8hrs
 const WEEKDAY_INDICES = [0, 1, 2, 3, 4];
 const ALL_DAY_INDICES = [0, 1, 2, 3, 4, 5, 6];
-const ALEX_DAY_SAMPLE_TASK_IDS = ["ax1", "ax2", "ax3", "ax4", "ax5", "ax6", "ax7", "ax8"];
 const isWeekdayIndex = (dayIndex) => WEEKDAY_INDICES.includes(dayIndex);
 const cloneState = (value) => JSON.parse(JSON.stringify(value));
 const getCurrentDayIndex = (date) => (date.getDay() + 6) % 7; // Mon=0 ... Sun=6
@@ -144,96 +55,112 @@ const getWeekDays = (baseDate) => {
     return dates;
 };
 const sumTaskHours = (taskMap, taskIds) => taskIds.reduce((acc, taskId) => acc + (taskMap[taskId]?.estimatedHours || 0), 0);
-// Map day 0 (Mon) to 4 (Fri) — multiple tasks per day summing to ~8hrs
-// Sat(5)/Sun(6) are holidays — no tasks
-const INITIAL_SCHEDULES = {
-    // d1: Mon=3+5=8h, Tue=8h, Wed=4+4=8h, Thu=5+3=8h, Fri=6+2=8h
-    "d1": { "0": ["a1", "a2"], "1": ["a3"], "2": ["a4", "a23"], "3": ["a2", "a1"], "4": ["a5", "a6"] },
-    // d2: Mon=7h, Tue=4+4=8h, Wed=5+3=8h, Thu=8h, Fri=2+6=8h
-    "d2": { "0": ["a8"], "1": ["a9", "a4"], "2": ["a10", "a1"], "3": ["a13"], "4": ["a6", "a29"] },
-    // d3: Mon=7+1=8h, Tue=4h, Wed=3+5=8h, Thu=6+2=8h, Fri=8h
-    "d3": { "0": ["a15", "a7"], "1": ["a16"], "2": ["a17", "a2"], "3": ["a19", "a6"], "4": ["a20"] },
-    // d4: Mon=1+7=8h, Tue=4+4=8h, Wed=7h, Thu=5h, Fri=3+5=8h
-    "d4": { "0": ["a22", "a8"], "1": ["a23", "a4"], "2": ["a24"], "3": ["a25"], "4": ["a26", "a10"] },
-    // d5: varied
-    "d5": { "0": ["a29", "a7"], "1": ["a30", "a4"], "2": ["a31", "a1"], "3": ["a32", "a9"], "4": ["a33"] },
-    // d6
-    "d6": { "0": ["a36", "a1"], "1": ["a37", "a7"], "2": ["a38", "a9"], "3": ["a39", "a4"], "4": ["a40", "a6"] },
-    // d7
-    "d7": { "0": ["a43", "a7"], "1": ["a44", "a1"], "2": ["a45", "a4"], "3": ["a46", "a6"], "4": ["a47", "a1"] },
-    // d8
-    "d8": { "0": ["a50", "a1"], "1": ["a51", "a7"], "2": ["a52", "a6"], "3": ["a53", "a9"], "4": ["a54", "a4"] },
-    // d9
-    "d9": { "0": ["a57", "a7"], "1": ["a58", "a1"], "2": ["a59", "a6"], "3": ["a60", "a2"], "4": ["a61", "a4"] },
-    // d10
-    "d10": { "0": ["a64", "a1"], "1": ["a65", "a7"], "2": ["a66", "a4"], "3": ["a67", "a7"], "4": ["a68", "a7"] },
-    // d11–d20 single tasks (will auto-fill on button press)
-    "d11": { "0": ["a1"], "1": ["a8"], "2": ["a15"], "3": ["a22"], "4": ["a29"] },
-    "d12": { "0": ["a2"], "1": ["a9"], "2": ["a16"], "3": ["a23"], "4": ["a30"] },
-    "d13": { "0": ["a3"], "1": ["a10"], "2": ["a17"], "3": ["a24"], "4": ["a31"] },
-    "d14": { "0": ["a4"], "1": ["a11"], "2": ["a18"], "3": ["a25"], "4": ["a32"] },
-    "d15": { "0": ["a5"], "1": ["a12"], "2": ["a19"], "3": ["a26"], "4": ["a33"] },
-    "d16": { "0": ["a6"], "1": ["a13"], "2": ["a20"], "3": ["a27"], "4": ["a34"] },
-    "d17": { "0": ["a7"], "1": ["a14"], "2": ["a21"], "3": ["a28"], "4": ["a35"] },
-    "d18": { "0": ["a50"], "1": ["a51"], "2": ["a52"], "3": ["a53"], "4": ["a60"] },
-    "d19": { "0": ["a63"], "1": ["a64"], "2": ["a65"], "3": ["a66"], "4": ["a67"] },
-    "d20": { "0": ["s1", "s2", "s3", "s4", "s5", "s6", "s7", "s8"] },
-};
+
+const TASK_COLORS = [
+    "bg-orange-100 border border-orange-300 text-orange-800",
+    "bg-blue-100 border border-blue-300 text-blue-800",
+    "bg-indigo-100 border border-indigo-300 text-indigo-800",
+    "bg-purple-100 border border-purple-300 text-purple-800",
+    "bg-green-100 border border-green-300 text-green-800",
+    "bg-pink-100 border border-pink-300 text-pink-800",
+    "bg-yellow-100 border border-yellow-300 text-yellow-800",
+    "bg-teal-100 border border-teal-300 text-teal-800",
+    "bg-red-100 border border-red-300 text-red-800",
+    "bg-cyan-100 border border-cyan-300 text-cyan-800",
+    "bg-lime-100 border border-lime-300 text-lime-800",
+    "bg-violet-100 border border-violet-300 text-violet-800",
+    "bg-amber-100 border border-amber-300 text-amber-800",
+    "bg-rose-100 border border-rose-300 text-rose-800",
+    "bg-fuchsia-100 border border-fuchsia-300 text-fuchsia-800",
+    "bg-sky-100 border border-sky-300 text-sky-800"
+];
+
 export function DesignSchedulerScreen() {
-    const [tasks, setTasks] = useState(INITIAL_TASKS);
-    const [schedules, setSchedules] = useState(INITIAL_SCHEDULES);
+    const router = useRouter();
+    const { records } = useDesignListStore();
+
+    const initialData = useMemo(() => {
+        const tasksObj = {};
+        const schedulesObj = {};
+        
+        for (let i = 1; i <= 20; i++) {
+            schedulesObj[`d${i}`] = { "0": [], "1": [], "2": [], "3": [], "4": [] };
+        }
+
+        records.slice(0, 100).forEach((record, idx) => {
+            let status = "unassigned";
+            if (idx < 8) status = "on-hold";
+            else if (idx < 27) status = "unassigned";
+            else status = "assigned";
+
+            tasksObj[record.id] = {
+                id: record.id,
+                name: record.name,
+                tag: record.designType,
+                estimatedHours: (idx % 3) + 2,
+                status,
+                colorClass: status === "on-hold" || status === "unassigned" && idx % 3 === 0
+                    ? "bg-slate-50 border border-slate-200 text-slate-700"
+                    : TASK_COLORS[idx % TASK_COLORS.length],
+                baseName: record.name,
+                holdTime: idx < 8 ? "2 Days" : undefined
+            };
+        });
+
+        let assignedIdx = 27;
+        const addSchedule = (d, day, count) => {
+            for (let i = 0; i < count && assignedIdx < 100; i++) {
+                schedulesObj[d][day].push(records[assignedIdx++].id);
+            }
+        };
+
+        addSchedule("d1", "0", 2); addSchedule("d1", "1", 2); addSchedule("d1", "2", 1);
+        addSchedule("d2", "0", 1); addSchedule("d2", "1", 2); addSchedule("d2", "3", 1);
+        addSchedule("d3", "2", 2); addSchedule("d3", "4", 1);
+        addSchedule("d4", "0", 1); addSchedule("d4", "1", 1); addSchedule("d4", "2", 1); addSchedule("d4", "3", 1);
+        
+        let d = 5;
+        let day = 0;
+        while (assignedIdx < 100) {
+            schedulesObj[`d${d}`][`${day}`].push(records[assignedIdx++].id);
+            day++;
+            if (day > 4) {
+                day = 0;
+                d++;
+                if (d > 20) d = 5;
+            }
+        }
+
+        schedulesObj["d1"]["0"] = [];
+        assignedIdx = 27; 
+        for (let i = 0; i < 8 && assignedIdx < 100; i++) {
+            const r = records[assignedIdx++];
+            tasksObj[r.id].estimatedHours = 1;
+            tasksObj[r.id].tag = "Alex Monday";
+            schedulesObj["d1"]["0"].push(r.id);
+        }
+
+        return { tasksObj, schedulesObj };
+    }, [records]);
+
+    const [tasks, setTasks] = useState(initialData.tasksObj);
+    const [schedules, setSchedules] = useState(initialData.schedulesObj);
     const [searchQuery, setSearchQuery] = useState("");
     const splitIdCounterRef = useRef(0);
-    const hasSwappedD1AndD20Ref = useRef(false);
-    const hasNormalizedAlexMondayRef = useRef(false);
     const [viewMode, setViewMode] = useState("week");
     const [selectedDays, setSelectedDays] = useState(WEEKDAY_INDICES);
     const [currentDay, setCurrentDay] = useState(getCurrentDayIndex(new Date()));
     const [dropIndicator, setDropIndicator] = useState(null);
+    
     // Custom Date selection state
     const [currentDate, setCurrentDate] = useState(new Date(2026, 2, 3));
     const weekDates = useMemo(() => getWeekDays(currentDate), [currentDate]);
-    useEffect(() => {
-        if (hasSwappedD1AndD20Ref.current)
-            return;
-        hasSwappedD1AndD20Ref.current = true;
-        setSchedules((prev) => {
-            const next = cloneState(prev);
-            const d1Schedule = next["d1"] || {};
-            const d20Schedule = next["d20"] || {};
-            next["d1"] = d20Schedule;
-            next["d20"] = d1Schedule;
-            return next;
-        });
-    }, []);
-    useEffect(() => {
-        if (hasNormalizedAlexMondayRef.current)
-            return;
-        hasNormalizedAlexMondayRef.current = true;
-        const mondayKey = "0";
-        setTasks((prev) => {
-            const next = { ...prev };
-            ALEX_DAY_SAMPLE_TASK_IDS.forEach((id, index) => {
-                next[id] = {
-                    ...next[id],
-                    id,
-                    name: `Task ${index + 1}`,
-                    tag: "Alex Monday",
-                    estimatedHours: 1,
-                    status: "assigned",
-                    colorClass: "bg-blue-100 border border-blue-300 text-blue-800",
-                };
-            });
-            return next;
-        });
-        setSchedules((prev) => {
-            const next = cloneState(prev);
-            if (!next.d1)
-                next.d1 = {};
-            next.d1[mondayKey] = [...ALEX_DAY_SAMPLE_TASK_IDS];
-            return next;
-        });
-    }, []);
+    const dateRangeText = useMemo(() => {
+        if (!weekDates || weekDates.length === 0) return "";
+        const start = weekDates[0];
+        const end = weekDates[6] || weekDates[weekDates.length - 1];
+        return `${start.toLocaleDateString("en-US", { month: "short", day: "numeric" })} - ${end.toLocaleDateString("en-US", { month: "short", day: "numeric", year: "numeric" })}`;
+    }, [weekDates]);
     const customVisibleDays = useMemo(() => {
         const filtered = [...new Set(selectedDays.filter(isWeekdayIndex))].sort((a, b) => a - b);
         if (filtered.length > 0)
@@ -480,6 +407,16 @@ export function DesignSchedulerScreen() {
             setSchedules(optimized);
         }
     }, [schedules, tasks]);
+    useEffect(() => {
+        const snapshot = buildSchedulerSnapshot(tasks, schedules);
+        try {
+            localStorage.setItem(SCHEDULER_DASHBOARD_SYNC_KEY, JSON.stringify(snapshot));
+            window.dispatchEvent(new CustomEvent(SCHEDULER_DASHBOARD_SYNC_EVENT, { detail: snapshot }));
+        }
+        catch (error) {
+            console.error("Unable to sync scheduler snapshot", error);
+        }
+    }, [tasks, schedules]);
     // Get total hours for a specific day slot
     const getDayHours = (designerId, dayIndex) => sumTaskHours(tasks, (schedules[designerId] || {})[dayIndex.toString()] || []);
     const getDesignerBookedHours = (designerId) => {
@@ -506,18 +443,22 @@ export function DesignSchedulerScreen() {
         return sumTaskHours(tasks, dayTasks) > DAILY_CAPACITY;
     })).length, [schedules, tasks]);
     const totalScheduledTaskCount = useMemo(() => Object.values(schedules).reduce((acc, curr) => acc + Object.values(curr).flat().length, 0), [schedules]);
-    return (<div className="h-screen flex flex-col bg-gray-50 overflow-hidden font-sans">
-      <Navbar />
+    return (<div className="app-shell h-screen flex flex-col overflow-hidden font-sans">
+      <Navbar 
+        currentDate={currentDate}
+        onCalendarChange={setCurrentDate}
+        dateRangeText={dateRangeText}
+      />
 
-      <div className="bg-white border-b border-gray-200 flex items-center px-6 py-2 text-sm text-gray-700 font-medium shrink-0 z-10 relative">
-        <div className="w-64 border-r border-gray-200 pr-4">Unassigned &amp; On-HOLD</div>
+      <div className="relative z-10 flex shrink-0 items-center border-b border-slate-200 bg-white px-6 py-2 text-sm font-medium text-slate-700">
+        <div className="w-64 border-r border-slate-200 pr-4">Unassigned &amp; On-HOLD</div>
         <div className="flex-1 flex px-6 justify-between items-center max-w-4xl">
-          <div><span className="text-gray-500 font-medium mr-1">Designers:</span>{totalDesignersCount}</div>
+          <div><span className="mr-1 font-medium text-slate-500">Designers:</span>{totalDesignersCount}</div>
           <div className="flex items-center gap-2"><div className="w-2.5 h-2.5 bg-green-400 rounded-sm"></div> Scheduled: {totalScheduledTaskCount}</div>
           <div className="flex items-center gap-2"><div className="w-2.5 h-2.5 bg-orange-400 rounded-sm"></div> Total Hours: {totalScheduledHours}h</div>
           <div className="flex items-center gap-2 text-red-500"><AlertTriangle size={14}/> Overloaded: {overloadedCount}</div>
-          <div className="flex items-center gap-1.5 ml-2">
-            <button type="button" onClick={() => setViewMode("week")} className={`px-3 py-1 rounded-full border text-xs font-semibold ${viewMode === "week" ? "bg-blue-50 border-blue-300 text-blue-700" : "bg-white border-gray-300 text-gray-600"}`}>
+          <div className="flex items-center gap-2 ml-2">
+            <button type="button" onClick={() => setViewMode("week")} className={`ui-chip-button ${viewMode === "week" ? "ui-chip-button-active" : ""}`}>
               Week
             </button>
             <button type="button" onClick={() => {
@@ -525,21 +466,21 @@ export function DesignSchedulerScreen() {
             setViewMode("custom");
             setCurrentDay(weekdayCurrentDay);
             setSelectedDays([weekdayCurrentDay]);
-        }} className={`px-3 py-1 rounded-full border text-xs font-semibold ${viewMode === "custom" ? "bg-blue-50 border-blue-300 text-blue-700" : "bg-white border-gray-300 text-gray-600"}`}>
+        }} className={`ui-chip-button ${viewMode === "custom" ? "ui-chip-button-active" : ""}`}>
               Custom
             </button>
           </div>
         </div>
       </div>
-      {viewMode === "custom" && (<div className="bg-white border-b border-gray-200 px-6 py-2 flex items-center gap-2 text-xs shrink-0">
-          <div className="w-64 border-r border-gray-200 pr-4 text-gray-500 font-medium">Visible Days</div>
+      {viewMode === "custom" && (<div className="flex shrink-0 items-center gap-2 border-b border-slate-200 bg-white px-6 py-2 text-xs">
+          <div className="w-64 border-r border-slate-200 pr-4 font-medium text-slate-500">Visible Days</div>
           <div className="flex-1 flex items-center gap-1 px-6">
             {WEEKDAY_INDICES.map((dayIndex) => {
                 const label = weekDates[dayIndex].toLocaleDateString("en-US", { weekday: "short" });
                 const active = selectedDays.includes(dayIndex);
                 return (<button key={`selector-${dayIndex}`} type="button" onClick={() => handleDayToggle(dayIndex)} className={`px-2 py-1 rounded border transition-colors ${active
-                        ? "bg-indigo-50 border-indigo-300 text-indigo-700"
-                        : "bg-white border-gray-300 text-gray-500"}`}>
+                      ? "ui-chip-button ui-chip-button-active"
+                        : "ui-chip-button"}`}>
                   {active ? "✓ " : ""}{label}
                 </button>);
             })}
@@ -548,9 +489,9 @@ export function DesignSchedulerScreen() {
 
       <div className="flex-1 flex overflow-hidden">
         {/* Left Sidebar */}
-        <div className="w-64 bg-[#f8f9fc] border-r border-gray-200 flex flex-col shrink-0" onDragOver={handleDragOver} onDrop={(e) => handleDropToPanel(e, "unassigned")}>
+        <div className="w-64 shrink-0 border-r border-slate-200 bg-slate-50 flex flex-col" onDragOver={handleDragOver} onDrop={(e) => handleDropToPanel(e, "unassigned")}>
           <div className="p-4 flex flex-col h-full">
-             <div className="flex items-center justify-between font-semibold text-gray-900 mb-2 text-lg">
+             <div className="flex items-center justify-between font-semibold text-slate-900 mb-2 text-xl tracking-tight">
                Design Tasks
              </div>
              <div className="flex gap-4 text-xs font-medium text-gray-500 mb-4">
@@ -560,12 +501,14 @@ export function DesignSchedulerScreen() {
              </div>
 
              <div className="relative mb-6">
-                <Search size={14} className="absolute left-3 top-1/2 -translate-y-1/2 text-gray-400"/>
-                <input type="text" value={searchQuery} onChange={(e) => setSearchQuery(e.target.value)} placeholder="Search tasks..." className="w-full bg-white border border-gray-200 shadow-sm rounded-md py-1.5 pl-8 pr-3 text-sm focus:outline-none focus:ring-1 focus:ring-blue-500"/>
+                <div className="pointer-events-none absolute inset-y-0 left-0 flex items-center pl-3">
+                  <Search className="h-4 w-4 text-slate-400" />
+                </div>
+                <input type="text" value={searchQuery} onChange={(e) => setSearchQuery(e.target.value)} placeholder="Search tasks..." className="w-full rounded-md border border-slate-300 bg-white py-1.5 pl-9 pr-3 text-sm text-slate-900 outline-none transition focus:border-blue-500 focus:ring-2 focus:ring-blue-500/25"/>
              </div>
 
              <div className="flex-1 overflow-y-auto space-y-1.5 pr-1 pb-4 custom-scrollbar">
-                {onHoldTasks.map(task => (<div key={task.id} draggable onDragStart={(e) => handleDragStart(e, task.id, "on-hold")} onDragEnd={() => setDropIndicator(null)} className={`p-2 rounded cursor-grab active:cursor-grabbing flex flex-col relative bg-white shadow-sm hover:shadow-md transition-shadow ${task.colorClass}`}>
+                {onHoldTasks.map(task => (<div key={task.id} draggable onDragStart={(e) => handleDragStart(e, task.id, "on-hold")} onDragEnd={() => setDropIndicator(null)} onClick={() => router.push(`/design-list/record/${encodeURIComponent(task.id)}?from=design-scheduler`)} className={`p-2 rounded cursor-grab active:cursor-grabbing flex flex-col relative bg-white shadow-sm hover:shadow-md transition-shadow ${task.colorClass}`}>
                     <div className="flex justify-between items-start">
                       <span className="font-semibold text-[11px] leading-tight pr-5">{getTaskLabel(task)}</span>
                       <button className="bg-gray-200 hover:bg-gray-300 rounded-full p-0.5 text-gray-600 transition-colors absolute right-1.5 top-1.5">
@@ -576,7 +519,7 @@ export function DesignSchedulerScreen() {
                     <div className="text-[9px] font-bold mt-1.5 bg-slate-100 text-slate-600 inline-block px-1.5 py-0.5 rounded uppercase self-start">Hold: {task.holdTime}</div>
                   </div>))}
 
-                {unassignedTasks.map(task => (<div key={task.id} draggable onDragStart={(e) => handleDragStart(e, task.id, "unassigned")} onDragEnd={() => setDropIndicator(null)} className={`p-2 rounded cursor-grab active:cursor-grabbing flex flex-col relative group bg-white shadow-sm hover:shadow-md transition-shadow ${task.colorClass}`}>
+                {unassignedTasks.map(task => (<div key={task.id} draggable onDragStart={(e) => handleDragStart(e, task.id, "unassigned")} onDragEnd={() => setDropIndicator(null)} onClick={() => router.push(`/design-list/record/${encodeURIComponent(task.id)}?from=design-scheduler`)} className={`p-2 rounded cursor-grab active:cursor-grabbing flex flex-col relative group bg-white shadow-sm hover:shadow-md transition-shadow ${task.colorClass}`}>
                     <div className="flex justify-between items-start">
                       <span className="font-semibold text-[11px] leading-tight pr-5">{getTaskLabel(task)}</span>
                       <button className="bg-blue-50 hover:bg-blue-100 text-blue-600 rounded-full p-0.5 absolute right-1.5 top-1.5 opacity-0 group-hover:opacity-100 transition-opacity">
@@ -594,8 +537,8 @@ export function DesignSchedulerScreen() {
           <div className={`flex-1 ${layoutMode === "horizontal-scroll" ? "overflow-x-auto overflow-y-auto" : "overflow-auto"}`}>
             <div className="min-w-[800px]">
               {/* Grid Header */}
-              <div className="flex bg-[#f0f3fa] text-gray-600 text-xs uppercase font-semibold sticky top-0 z-20 outline outline-1 outline-gray-200 shadow-sm">
-                <div className="w-[180px] shrink-0 px-4 py-2 border-r border-gray-200 flex items-center">DESIGNER</div>
+              <div className="ui-table-header sticky top-0 z-20 flex border border-slate-200 bg-slate-100 shadow-sm">
+                <div className="w-[180px] shrink-0 px-4 py-2 border-r border-slate-200 flex items-center">DESIGNER</div>
                 <div className="flex-1 grid" style={{
             gridTemplateColumns: layoutMode === "single-column"
                 ? "minmax(0, 1fr)"
@@ -620,7 +563,11 @@ export function DesignSchedulerScreen() {
             const designerDays = schedules[designer.id] || {};
             return (<div key={designer.id} className="flex border-b border-gray-100 group relative min-h-[56px] items-stretch">
                       {/* Left: Designer Info */}
-                      <div className="w-[180px] shrink-0 py-1.5 px-3 flex items-center gap-2 border-r border-gray-200 bg-white z-10 transition-colors group-hover:bg-gray-50">
+                      <div className="w-[180px] shrink-0 py-1.5 px-3 flex items-center gap-2 border-r border-gray-200 bg-white z-10 transition-colors group-hover:bg-blue-50 cursor-pointer" onClick={() => {
+                          const routeData = buildDesignerSnapshot(tasks, designerDays);
+                          sessionStorage.setItem(`designer_data_${designer.id}`, JSON.stringify(routeData));
+                          router.push(`/designer/${designer.id}`);
+                      }} title={`Open ${designer.name}'s dashboard`}>
                         <div className="w-6 h-6 rounded-full bg-slate-800 text-white flex items-center justify-center text-[10px] font-bold leading-none shrink-0 shadow-sm">
                           {designer.initials}
                         </div>
@@ -679,6 +626,9 @@ export function DesignSchedulerScreen() {
                                     }} onDrop={(e) => {
                                         e.stopPropagation();
                                         handleDropToDay(e, designer.id, dayIndex, idx, getDropPosition(e, e.currentTarget));
+                                    }} onClick={(e) => {
+                                        e.stopPropagation();
+                                        router.push(`/design-list/record/${encodeURIComponent(taskId)}?from=design-scheduler`);
                                     }} className={`h-[24px] min-w-0 rounded flex items-center justify-between px-1.5 cursor-grab active:cursor-grabbing shadow-sm hover:shadow transition-shadow ${dropIndicator &&
                                         dropIndicator.designerId === designer.id &&
                                         dropIndicator.dayIndex === dayIndex &&

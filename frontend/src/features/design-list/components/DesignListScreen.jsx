@@ -69,30 +69,32 @@ const Toolbar = ({ viewMode, setViewMode, filters, setFilters, salesPersons }) =
     filters.startDate,
     filters.endDate,
   ].filter(Boolean).length;
-  const designStatuses = ["WIP", "Completed", "Pending", "Revision", "Approved"];
+  const designStatuses = ["WIP", "Pending", "Revision", "Approved", "Completed"];
 
   return (
-    <div className="flex flex-col md:flex-row md:items-center justify-between mb-4 mt-6 px-6 gap-4">
-      <h1 className="text-2xl font-bold text-gray-900 leading-none">Design List</h1>
+    <div className="mb-4 mt-4 flex flex-col justify-between gap-4 px-4 sm:px-6 md:flex-row md:items-center">
+      <h1 className="text-2xl font-semibold tracking-tight text-slate-900 leading-none">Design List</h1>
 
       <div className="flex items-center gap-3 relative">
         <div className="relative mr-2 hidden md:block">
-          <Search className="absolute left-3 top-1/2 -translate-y-1/2 text-gray-400" size={16} />
+          <div className="pointer-events-none absolute inset-y-0 left-0 flex items-center pl-3">
+            <Search className="h-4 w-4 text-slate-400" />
+          </div>
           <input
             type="text"
             value={filters.searchQuery}
             onChange={(e) => setFilters({ ...filters, searchQuery: e.target.value })}
             placeholder="Search by OP No, Project ..."
-            className="pl-9 pr-4 py-2 border border-gray-200 rounded-full text-sm w-64 focus:outline-none focus:ring-2 focus:ring-blue-500 bg-white"
+            className="pl-9 pr-4 py-1.5 border border-slate-300 rounded-md text-sm w-64 focus:outline-none focus:ring-2 focus:ring-blue-500/25 focus:border-blue-500 bg-white text-slate-900"
           />
         </div>
 
         <button
           onClick={() => setShowFilters(!showFilters)}
-          className={`flex items-center gap-2 px-4 py-2 rounded-full border transition-colors shadow-sm cursor-pointer ${
+          className={`flex cursor-pointer items-center gap-2 rounded-md border px-3 py-1.5 shadow-sm transition-colors ${
             activeCount > 0
-              ? "bg-blue-50 border-blue-200 text-blue-700"
-              : "bg-white border-gray-200 text-gray-700 hover:bg-gray-50"
+              ? "bg-indigo-50 border-indigo-300 text-indigo-700"
+              : "bg-white border-slate-300 text-slate-700 hover:bg-slate-50"
           }`}
         >
           <Filter size={14} />
@@ -102,9 +104,9 @@ const Toolbar = ({ viewMode, setViewMode, filters, setFilters, salesPersons }) =
         </button>
 
         {showFilters && (
-          <div className="absolute top-12 right-20 z-50 bg-white border border-gray-200 rounded-xl shadow-lg p-5 flex flex-col gap-4 w-[340px]">
-            <div className="flex items-center justify-between border-b border-gray-100 pb-2 mb-2">
-              <h3 className="font-semibold text-gray-800 text-sm">Filter Options</h3>
+          <div className="ui-surface absolute right-20 top-12 z-50 flex w-[340px] flex-col gap-4 p-5">
+            <div className="mb-2 flex items-center justify-between border-b border-slate-200 pb-2">
+              <h3 className="text-sm font-semibold text-slate-800">Filter Options</h3>
               {activeCount > 0 && (
                 <button
                   onClick={() =>
@@ -117,7 +119,7 @@ const Toolbar = ({ viewMode, setViewMode, filters, setFilters, salesPersons }) =
                       searchQuery: filters.searchQuery,
                     })
                   }
-                  className="text-xs text-red-500 hover:text-red-700 font-medium px-2 py-1 bg-red-50 rounded transition-colors cursor-pointer"
+                    className="cursor-pointer rounded bg-red-50 px-2 py-1 text-xs font-medium text-red-500 transition-colors hover:text-red-700"
                 >
                   Clear All
                 </button>
@@ -228,12 +230,12 @@ const Toolbar = ({ viewMode, setViewMode, filters, setFilters, salesPersons }) =
           </div>
         )}
 
-        <div className="flex bg-gray-100 rounded-full p-1 border border-gray-200 ml-2">
+        <div className="ml-2 flex rounded-md border border-slate-200 bg-slate-100 p-1">
           <button
             onClick={() => setViewMode("list")}
             title="List View"
-            className={`p-1.5 rounded-full transition-colors cursor-pointer ${
-              viewMode === "list" ? "bg-white shadow text-black" : "text-gray-600 hover:bg-transparent"
+            className={`p-1.5 rounded transition-colors cursor-pointer ${
+              viewMode === "list" ? "bg-white shadow text-slate-900" : "text-slate-500 hover:text-slate-700"
             }`}
           >
             <List size={16} />
@@ -241,8 +243,8 @@ const Toolbar = ({ viewMode, setViewMode, filters, setFilters, salesPersons }) =
           <button
             onClick={() => setViewMode("board")}
             title="Board View"
-            className={`p-1.5 rounded-full transition-colors cursor-pointer ${
-              viewMode === "board" ? "bg-white shadow text-black" : "text-gray-600 hover:bg-transparent"
+            className={`p-1.5 rounded transition-colors cursor-pointer ${
+              viewMode === "board" ? "bg-white shadow text-slate-900" : "text-slate-500 hover:text-slate-700"
             }`}
           >
             <LayoutGrid size={16} />
@@ -257,28 +259,28 @@ const Table = ({ data }) => {
   const router = useRouter();
 
   return (
-    <div className="px-6 pb-6 flex-1 min-h-0 flex flex-col">
-      <div className="border border-gray-200 rounded-lg overflow-auto bg-white shadow-sm h-full">
+    <div className="flex min-h-0 flex-1 flex-col px-4 pb-6 sm:px-6">
+      <div className="ui-surface h-full overflow-auto">
         <table className="w-full text-xs text-left leading-tight">
-          <thead className="bg-[#f0f3fa] text-gray-600 uppercase font-semibold sticky top-0 z-10 outline outline-1 outline-gray-200">
+          <thead className="ui-table-header sticky top-0 z-10 border-b border-slate-200">
             <tr>
-              <th className="px-2 py-1">OP No</th>
-              <th className="px-2 py-1">Project No</th>
-              <th className="px-2 py-1">Design Type</th>
-              <th className="px-2 py-1">Business Unit</th>
-              <th className="px-2 py-1">Name</th>
-              <th className="px-2 py-1">Status</th>
-              <th className="px-2 py-1">Sales Person</th>
-              <th className="px-2 py-1">Created</th>
-              <th className="px-2 py-1">Deadline</th>
-              <th className="px-2 py-1">Aging</th>
-              <th className="px-2 py-1 text-center">Actions</th>
+              <th className="px-2 py-1.5">OP No</th>
+              <th className="px-2 py-1.5">Project No</th>
+              <th className="px-2 py-1.5">Design Type</th>
+              <th className="px-2 py-1.5">Business Unit</th>
+              <th className="px-2 py-1.5">Name</th>
+              <th className="px-2 py-1.5">Status</th>
+              <th className="px-2 py-1.5">Sales Person</th>
+              <th className="px-2 py-1.5">Created</th>
+              <th className="px-2 py-1.5">Deadline</th>
+              <th className="px-2 py-1.5">Aging</th>
+              <th className="px-2 py-1.5 text-center">Actions</th>
             </tr>
           </thead>
-          <tbody className="divide-y divide-gray-100">
+          <tbody className="divide-y divide-slate-100">
             {data.map((row) => (
-              <tr key={row.id} className="hover:bg-gray-50 transition-colors">
-                <td className="px-2 py-0">
+              <tr key={row.id} className="hover:bg-slate-50 transition-colors">
+                <td className="px-2 py-1">
                   <button
                     type="button"
                     onClick={() => router.push(recordDetailPath(row.id))}
@@ -287,7 +289,7 @@ const Table = ({ data }) => {
                     {row.opNo}
                   </button>
                 </td>
-                <td className="px-2 py-0">
+                <td className="px-2 py-1">
                   <button
                     type="button"
                     onClick={() => router.push(recordDetailPath(row.id))}
@@ -296,36 +298,36 @@ const Table = ({ data }) => {
                     {row.projectNo}
                   </button>
                 </td>
-                <td className="px-2 py-0 text-gray-700">{row.designType}</td>
-                <td className="px-2 py-0 text-gray-700">{row.businessUnit}</td>
-                <td className="px-2 py-0">
+                <td className="px-2 py-1 text-slate-700">{row.designType}</td>
+                <td className="px-2 py-1 text-slate-700">{row.businessUnit}</td>
+                <td className="px-2 py-1">
                   <button
                     type="button"
                     onClick={() => router.push(recordDetailPath(row.id))}
-                    className="text-left text-gray-900 font-medium whitespace-nowrap hover:text-blue-600 hover:underline"
+                    className="text-left text-slate-900 font-medium whitespace-nowrap hover:text-blue-600 hover:underline"
                   >
                     {row.name}
                   </button>
                 </td>
-                <td className="px-2 py-0">
+                <td className="px-2 py-1">
                   <span
                     className={`px-1.5 py-0.5 rounded-full text-[10px] font-medium leading-none inline-block ${getStatusColor(row.status)}`}
                   >
                     {row.status}
                   </span>
                 </td>
-                <td className="px-2 py-0 text-gray-700">{row.salesPerson}</td>
-                <td className="px-2 py-0 text-gray-500 whitespace-nowrap">{row.created}</td>
-                <td className="px-2 py-0 text-gray-500 whitespace-nowrap">{row.deadline}</td>
+                <td className="px-2 py-1 text-slate-700">{row.salesPerson}</td>
+                <td className="px-2 py-1 text-slate-500 whitespace-nowrap">{row.created}</td>
+                <td className="px-2 py-1 text-slate-500 whitespace-nowrap">{row.deadline}</td>
                 <td
-                  className={`px-2 py-0 font-medium whitespace-nowrap ${
-                    row.agingDays > 20 ? "text-red-600" : "text-gray-500"
+                  className={`px-2 py-1 font-medium whitespace-nowrap ${
+                    row.agingDays > 20 ? "text-red-600" : "text-slate-500"
                   }`}
                 >
                   {row.agingDays} d
                 </td>
-                <td className="px-2 py-0">
-                  <div className="flex items-center justify-center gap-1.5 text-gray-500">
+                <td className="px-2 py-1">
+                  <div className="flex items-center justify-center gap-1.5 text-slate-400">
                     <button
                       type="button"
                       onClick={() => router.push(recordDetailPath(row.id))}
@@ -365,14 +367,14 @@ const Board = ({ data }) => {
   const router = useRouter();
   const columns = [
     { title: "WIP", status: "WIP" },
-    { title: "Completed", status: "Completed" },
     { title: "Confirmation Pending", status: "Pending" },
     { title: "Revision", status: "Revision" },
     { title: "Approved", status: "Approved" },
+    { title: "Completed", status: "Completed" },
   ];
 
   return (
-    <div className="px-6 pb-6 flex-1 min-h-0 flex items-start gap-4 overflow-auto">
+    <div className="flex min-h-0 flex-1 items-start gap-4 overflow-auto px-4 pb-6 sm:px-6">
       {columns.map((col) => (
         <div key={col.status} className="flex-1 min-w-[280px] flex flex-col gap-4">
           <div
@@ -488,7 +490,7 @@ export function DesignListScreen() {
   });
 
   return (
-    <div className="h-screen bg-gray-50 flex flex-col font-sans overflow-hidden">
+    <div className="app-shell h-screen flex flex-col overflow-hidden font-sans">
       <Navbar />
       <div className="flex-1 flex flex-col min-h-0">
         <div className="shrink-0">
