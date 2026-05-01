@@ -62,25 +62,6 @@ export function TeamActivityFeedScreenInner() {
     setLikes((prev) => ({ ...prev, [id]: !prev[id] }));
   }, []);
 
-  const onFeedMenuAction = useCallback((id) => {
-    switch (id) {
-      case "sort_latest":
-        setTimeOrder("latest");
-        break;
-      case "sort_oldest":
-        setTimeOrder("oldest");
-        break;
-      case "show_tasks":
-        setActivityKind("task_update");
-        break;
-      case "show_milestones":
-        setActivityKind("project_milestone");
-        break;
-      default:
-        break;
-    }
-  }, []);
-
   return (
     <div className="app-shell flex min-h-dvh flex-col overflow-x-hidden font-sans antialiased">
       <Navbar />
@@ -93,11 +74,12 @@ export function TeamActivityFeedScreenInner() {
           onActivityKind={setActivityKind}
           sortMonthIndex={sortMonthIndex}
           onSortMonthIndex={setSortMonthIndex}
+          timeOrder={timeOrder}
+          onTimeOrderChange={setTimeOrder}
           dateRange={dateRange}
           onDateRangeChange={setDateRange}
           priority={priority}
           onPriorityChange={setPriority}
-          onFeedMenuAction={onFeedMenuAction}
         />
 
         <ActivityFeedList items={visible} likes={likes} onToggleLike={onToggleLike} activityKind={activityKind} />
