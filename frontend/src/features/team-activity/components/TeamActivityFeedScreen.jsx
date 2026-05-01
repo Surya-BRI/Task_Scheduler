@@ -1,0 +1,107 @@
+"use client";
+
+import { useCallback, useEffect, useMemo, useRef, useState } from "react";
+import { useSearchParams } from "next/navigation";
+import { Navbar } from "@/components/Navbar";
+import { MOCK_ACTIVITIES } from "../data/mockActivities";
+import { filterActivities } from "../lib/teamActivityFilters";
+import { TeamActivityFilters } from "./TeamActivityFilters";
+import { ActivityFeedList } from "./ActivityFeedList";
+
+function buildInitialLikes() {
+  const o = {};
+  for (const a of MOCK_ACTIVITIES) {
+    if (a.kind === "task_update" && typeof a.liked === "boolean") o[a.id] = a.liked;
+  }
+  return o;
+}
+
+const DEFAULT_RANGE = () => ({
+  startDate: "",
+  endDate: "",
+});
+
+export function TeamActivityFeedScreenInner() {
+  const searchParams = useSearchParams();
+  const from = searchParams.get("from");
+  const seededFromDesignList = useRef(false);
+
+  const [teammateMode, setTeammateMode] = useState("all");
+  const [activityKind, setActivityKind] = useState("task_update");
+  const [sortMonthIndex, setSortMonthIndex] = useState("all");
+  const [priority, setPriority] = useState("all");
+  const [dateRange, setDateRange] = useState(DEFAULT_RANGE);
+  const [timeOrder, setTimeOrder] = useState("latest");
+  const [likes, setLikes] = useState(buildInitialLikes);
+
+  useEffect(() => {
+    if (from === "design-list" && !seededFromDesignList.current) {
+      seededFromDesignList.current = true;
+      setActivityKind("task_update");
+      setTimeOrder("latest");
+      setSortMonthIndex("all");
+      setTeammateMode("all");
+      setPriority("all");
+    }
+  }, [from]);
+
+  const visible = useMemo(
+    () =>
+      filterActivities(MOCK_ACTIVITIES, {
+        teammateMode,
+        activityKind,
+        sortMonthIndex,
+        dateRange,
+        timeOrder,
+        priority,
+      }),
+    [teammateMode, activityKind, sortMonthIndex, dateRange, timeOrder, priority],
+  );
+
+  const onToggleLike = useCallback((id) => {
+    setLikes((prev) => ({ ...prev, [id]: !prev[id] }));
+  }, []);
+
+  const onFeedMenuAction = useCallback((id) => {
+    switch (id) {
+      case "sort_latest":
+        setTimeOrder("latest");
+        break;
+      case "sort_oldest":
+        setTimeOrder("oldest");
+        break;
+      case "show_tasks":
+        setActivityKind("task_update");
+        break;
+      case "show_milestones":
+        setActivityKind("project_milestone");
+        break;
+      default:
+        break;
+    }
+  }, []);
+
+  return (
+    <div className="app-shell flex min-h-dvh flex-col overflow-x-hidden font-sans antialiased">
+      <Navbar />
+
+      <main className="ui-page-shell ta-page-shell">
+        <TeamActivityFilters
+          teammateMode={teammateMode}
+          onTeammateMode={setTeammateMode}
+          activityKind={activityKind}
+          onActivityKind={setActivityKind}
+          sortMonthIndex={sortMonthIndex}
+          onSortMonthIndex={setSortMonthIndex}
+          dateRange={dateRange}
+          onDateRangeChange={setDateRange}
+          priority={priority}
+          onPriorityChange={setPriority}
+          onFeedMenuAction={onFeedMenuAction}
+        />
+
+        <ActivityFeedList items={visible} likes={likes} onToggleLike={onToggleLike} activityKind={activityKind} />
+      </main>
+    </div>
+  );
+}

@@ -72,10 +72,10 @@ const Toolbar = ({ viewMode, setViewMode, filters, setFilters, salesPersons }) =
   const designStatuses = ["WIP", "Pending", "Revision", "Approved", "Completed"];
 
   return (
-    <div className="mb-4 mt-4 flex flex-col justify-between gap-4 px-4 sm:px-6 md:flex-row md:items-center">
-      <h1 className="text-2xl font-semibold tracking-tight text-slate-900 leading-none">Design List</h1>
+    <div className="mb-4 mt-4 flex flex-col gap-4 px-4 sm:px-6 md:flex-row md:items-center md:justify-between">
+      <h1 className="text-2xl font-semibold tracking-tight text-slate-900 leading-none shrink-0">Design List</h1>
 
-      <div className="flex items-center gap-3 relative">
+      <div className="relative flex flex-wrap items-center justify-end gap-2 sm:gap-3 md:ml-auto">
         <div className="relative mr-2 hidden md:block">
           <div className="pointer-events-none absolute inset-y-0 left-0 flex items-center pl-3">
             <Search className="h-4 w-4 text-slate-400" />
@@ -230,7 +230,7 @@ const Toolbar = ({ viewMode, setViewMode, filters, setFilters, salesPersons }) =
           </div>
         )}
 
-        <div className="ml-2 flex rounded-md border border-slate-200 bg-slate-100 p-1">
+        <div className="ml-0 flex rounded-md border border-slate-200 bg-slate-100 p-1 sm:ml-1">
           <button
             onClick={() => setViewMode("list")}
             title="List View"

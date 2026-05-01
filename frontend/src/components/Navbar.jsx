@@ -1,6 +1,8 @@
+'use client'
+
 import { useEffect, useRef, useState } from 'react'
-import { useRouter } from 'next/navigation'
-import { Bell, Calendar, ClipboardList, Home, MessageSquareText, Users } from 'lucide-react'
+import { usePathname, useRouter } from 'next/navigation'
+import { Bell, Calendar, ClipboardList, Clock, Home, MessageSquareText, Users } from 'lucide-react'
 
 const PROFILE_USER = { name: 'Sarah', role: 'Designer' }
 
@@ -50,7 +52,7 @@ function ProfileDropdown() {
         aria-haspopup="menu"
         aria-label="Account menu"
       >
-        <Users className="h-5 w-5" aria-hidden />
+        <Users className="h-5 w-5" strokeWidth={1.75} aria-hidden />
       </button>
 
       {open ? (
@@ -71,7 +73,9 @@ function ProfileDropdown() {
 
 export function Navbar({ currentDate, onCalendarChange, dateRangeText }) {
   const router = useRouter()
+  const pathname = usePathname() ?? ''
   const utilityIconClass = 'ui-icon-button'
+  const onTeamActivity = pathname === '/team-activity' || pathname.startsWith('/team-activity/')
 
   return (
     <header className="sticky top-0 z-40 border-b border-slate-200 bg-white">
@@ -109,7 +113,7 @@ export function Navbar({ currentDate, onCalendarChange, dateRangeText }) {
                     className={utilityIconClass}
                     aria-label="Select date"
                   >
-                    <Calendar className="h-5 w-5" strokeWidth={1.75} />
+                    <Calendar className="h-5 w-5" strokeWidth={1.75} aria-hidden />
                   </button>
                   <input
                     type="date"
@@ -136,7 +140,7 @@ export function Navbar({ currentDate, onCalendarChange, dateRangeText }) {
                 className={utilityIconClass}
                 aria-label="Open calendar"
               >
-                <Calendar className="h-5 w-5" strokeWidth={1.75} />
+                <Calendar className="h-5 w-5" strokeWidth={1.75} aria-hidden />
               </button>
             )}
             <button
@@ -145,7 +149,7 @@ export function Navbar({ currentDate, onCalendarChange, dateRangeText }) {
               className={utilityIconClass}
               aria-label="Open projects overview"
             >
-              <ClipboardList className="h-5 w-5" strokeWidth={1.75} />
+              <ClipboardList className="h-5 w-5" strokeWidth={1.75} aria-hidden />
             </button>
             <button
               type="button"
@@ -153,14 +157,24 @@ export function Navbar({ currentDate, onCalendarChange, dateRangeText }) {
               className={utilityIconClass}
               aria-label="Open chatter page"
             >
-              <MessageSquareText className="h-5 w-5" strokeWidth={1.75} />
+              <MessageSquareText className="h-5 w-5" strokeWidth={1.75} aria-hidden />
+            </button>
+            <button
+              type="button"
+              onClick={() => router.push('/team-activity')}
+              title="Team activity feed"
+              aria-label="Open team activity feed"
+              aria-current={onTeamActivity ? 'page' : undefined}
+              className={`${utilityIconClass}${onTeamActivity ? ' bg-slate-100 text-slate-900' : ''}`}
+            >
+              <Clock className="h-5 w-5" strokeWidth={1.75} aria-hidden />
             </button>
             <button
               type="button"
               className={`relative ${utilityIconClass}`}
               aria-label="Notifications"
             >
-              <Bell className="h-5 w-5" strokeWidth={1.75} />
+              <Bell className="h-5 w-5" strokeWidth={1.75} aria-hidden />
               <span className="pointer-events-none absolute right-1 top-1 h-2 w-2 rounded-full bg-red-500 ring-2 ring-white" />
             </button>
             <ProfileDropdown />

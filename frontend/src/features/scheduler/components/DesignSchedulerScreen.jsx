@@ -147,6 +147,7 @@ export function DesignSchedulerScreen() {
     const [schedules, setSchedules] = useState(initialData.schedulesObj);
     const [searchQuery, setSearchQuery] = useState("");
     const splitIdCounterRef = useRef(0);
+    const cancelOvertimeButtonRef = useRef(null);
     const [viewMode, setViewMode] = useState("week");
     const [selectedDays, setSelectedDays] = useState(WEEKDAY_INDICES);
     const [currentDay, setCurrentDay] = useState(getCurrentDayIndex(new Date()));
@@ -154,6 +155,10 @@ export function DesignSchedulerScreen() {
     
     // Custom Date selection state
     const [currentDate, setCurrentDate] = useState(new Date(2026, 2, 3));
+    const [overtimePrompt, setOvertimePrompt] = useState({
+        open: false,
+        pending: null
+    });
     const weekDates = useMemo(() => getWeekDays(currentDate), [currentDate]);
     const dateRangeText = useMemo(() => {
         if (!weekDates || weekDates.length === 0) return "";
@@ -169,6 +174,11 @@ export function DesignSchedulerScreen() {
     }, [selectedDays, currentDay]);
     const visibleDays = viewMode === "week" ? ALL_DAY_INDICES : customVisibleDays;
     const layoutMode = visibleDays.length === 1 ? "single-column" : visibleDays.length <= 3 ? "grid" : "horizontal-scroll";
+    useEffect(() => {
+        if (overtimePrompt.open) {
+            cancelOvertimeButtonRef.current?.focus();
+        }
+    }, [overtimePrompt.open]);
     const handleDayToggle = (dayIndex) => {
         if (viewMode !== "custom")
             return;
@@ -217,6 +227,13 @@ export function DesignSchedulerScreen() {
     const getNextVisibleDayIndex = (dayIndex, candidateDays) => {
         return candidateDays.find((idx) => idx > dayIndex);
     };
+    const applyPreparedAssignment = (preparedAssignment) => {
+        if (!preparedAssignment)
+            return;
+        setSchedules(preparedAssignment.updatedSchedules);
+        setTasks(preparedAssignment.updatedTasks);
+        setCurrentDay(preparedAssignment.targetDayIndex);
+    };
     const handleDropToDay = (e, targetDesignerId, targetDayIndex, targetTaskIndex, targetPosition = "after") => {
         e.preventDefault();
         setDropIndicator(null);
@@ -251,7 +268,7 @@ export function DesignSchedulerScreen() {
         const rawInsertIndex = targetTaskIndex === undefined
             ? targetList.length
             : targetTaskIndex + (targetPosition === "after" ? 1 : 0);
-        let insertionIndex = Math.max(0, Math.min(rawInsertIndex, targetList.length));
+        const insertionIndex = Math.max(0, Math.min(rawInsertIndex, targetList.length));
         if (sourceId !== "unassigned" && sourceId !== "on-hold") {
             if (updatedSchedules[sourceId] && updatedSchedules[sourceId][sourceDay]) {
                 updatedSchedules[sourceId][sourceDay] = updatedSchedules[sourceId][sourceDay].filter((id) => id !== taskId);
@@ -263,6 +280,7 @@ export function DesignSchedulerScreen() {
         let remainingHours = droppedTask.estimatedHours;
         const plannedParts = [];
         let currentDayIndex = targetDayIndex;
+        let hasOvertime = false;
         while (remainingHours > 0 &&
             currentDayIndex !== undefined &&
             visibleWeekdays.includes(currentDayIndex)) {
@@ -276,7 +294,11 @@ export function DesignSchedulerScreen() {
                 currentDayIndex = getNextVisibleDayIndex(currentDayIndex, visibleWeekdays) ?? 7;
                 continue;
             }
+            const regularHoursLeft = Math.max(0, DAILY_CAPACITY - usedHours);
             const partHours = Math.min(remainingHours, availableHours);
+            if (partHours > regularHoursLeft) {
+                hasOvertime = true;
+            }
             plannedParts.push({
                 id: plannedParts.length === 0 ? taskId : getNextTaskId(),
                 dayIndex: currentDayIndex,
@@ -322,9 +344,19 @@ export function DesignSchedulerScreen() {
                 status: "unassigned",
             };
         }
-        setSchedules(updatedSchedules);
-        setTasks(updatedTasks);
-        setCurrentDay(targetDayIndex);
+        const preparedAssignment = {
+            updatedSchedules,
+            updatedTasks,
+            targetDayIndex
+        };
+        if (hasOvertime) {
+            setOvertimePrompt({
+                open: true,
+                pending: preparedAssignment
+            });
+            return;
+        }
+        applyPreparedAssignment(preparedAssignment);
     };
     const handleDropToPanel = (e, newStatus) => {
         e.preventDefault();
@@ -658,6 +690,26 @@ export function DesignSchedulerScreen() {
           </div>
         </div>
       </div>
+      {overtimePrompt.open ? (<div className="fixed inset-0 z-[120] flex items-center justify-center bg-slate-900/40 p-4">
+          <div className="ui-surface w-full max-w-lg p-6">
+            <h2 className="text-lg font-semibold text-slate-900">Overtime Assignment Confirmation</h2>
+            <p className="mt-3 text-sm leading-6 text-slate-600">
+              This task is scheduled outside the designer&apos;s working hours and will result in overtime. Do you
+              want to continue with this assignment?
+            </p>
+            <div className="mt-6 flex items-center justify-end gap-2">
+              <button type="button" ref={cancelOvertimeButtonRef} onClick={() => setOvertimePrompt({ open: false, pending: null })} className="ui-chip-button">
+                No, Cancel
+              </button>
+              <button type="button" onClick={() => {
+            applyPreparedAssignment(overtimePrompt.pending);
+            setOvertimePrompt({ open: false, pending: null });
+        }} className="ui-chip-button ui-chip-button-active">
+                Yes, Assign Task
+              </button>
+            </div>
+          </div>
+        </div>) : null}
     </div>);
 }
 function ClockIcon() {
