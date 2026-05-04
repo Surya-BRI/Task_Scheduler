@@ -33,8 +33,8 @@ const reallocatedTasks = [
 
 function CompactCard({ title, children, className = '' }) {
   return (
-    <section className={`rounded-xl border border-slate-200 bg-white p-2.5 shadow-sm ${className}`}>
-      <h2 className="mb-1.5 text-[13px] font-semibold text-slate-900">{title}</h2>
+    <section className={`ui-surface ui-card-pad flex flex-col ${className}`}>
+      <h2 className="mb-3 text-sm font-semibold text-slate-900">{title}</h2>
       {children}
     </section>
   );
@@ -42,12 +42,12 @@ function CompactCard({ title, children, className = '' }) {
 
 function MiniTable({ headers, rows, renderRow }) {
   return (
-    <div className="overflow-hidden rounded-lg border border-slate-100">
-      <table className="w-full text-left text-[11px] text-slate-700">
-        <thead className="bg-slate-50 text-[10px] uppercase tracking-wide text-slate-500">
+    <div className="ui-surface overflow-hidden rounded-lg">
+      <table className="w-full text-left text-xs text-slate-700">
+        <thead className="ui-table-header border-b border-slate-200">
           <tr>
             {headers.map((header) => (
-              <th key={header} className="px-2 py-0.5 font-semibold">
+              <th key={header} className="px-3 py-2 font-semibold">
                 {header}
               </th>
             ))}
@@ -76,23 +76,28 @@ export function ProjectsOverviewScreen() {
   };
 
   return (
-    <div className="min-h-screen bg-slate-50">
+    <div className="app-shell">
       <Navbar />
-      <main className="mx-auto h-[calc(100vh-165px)] w-full max-w-[1450px] overflow-y-auto px-3 py-1.5 sm:px-5">
-        <div className="mb-1.5 flex items-center justify-between">
-          <h1 className="text-[30px] font-bold tracking-tight text-slate-900">Projects</h1>
-          <div className="flex items-center gap-2">
-            <div className="flex h-7 w-40 items-center rounded-md border border-slate-200 bg-white px-2 text-[12px] text-slate-500">
-              <Search className="mr-1.5 h-3 w-3" />
-              Project Filter
+      <main className="h-[calc(100vh-165px)] w-full overflow-y-auto px-4 py-4 sm:px-6">
+        <div className="mb-4 flex flex-col sm:flex-row sm:items-center sm:justify-between gap-3">
+          <h1 className="text-xl font-semibold tracking-tight text-slate-900 sm:text-2xl">
+            Projects Overview
+          </h1>
+          <div className="flex items-center gap-3">
+            <div className="relative w-48 max-w-full">
+              <div className="pointer-events-none absolute inset-y-0 left-0 flex items-center pl-3">
+                <Search className="h-4 w-4 text-slate-400" />
+              </div>
+              <input
+                type="text"
+                placeholder="Project Filter"
+                className="w-full rounded-md border border-slate-300 bg-white py-1.5 pl-9 pr-3 text-sm text-slate-900 outline-none transition focus:border-blue-500 focus:ring-2 focus:ring-blue-500/25"
+              />
             </div>
             <div className="relative">
-              <button
-                type="button"
-                className="flex h-7 items-center gap-1.5 rounded-md border border-slate-200 bg-white px-2 text-[12px] text-slate-700"
-              >
+              <button type="button" className="ui-chip-button flex items-center gap-2">
                 {weekLabel}
-                <CalendarDays className="h-3 w-3" />
+                <CalendarDays className="h-4 w-4 text-slate-500" />
               </button>
               <input
                 type="date"
@@ -109,12 +114,6 @@ export function ProjectsOverviewScreen() {
                 }}
               />
             </div>
-            <button
-              type="button"
-              className="h-7 rounded-md border border-slate-200 bg-[#dce7df] px-2.5 text-[12px] font-semibold text-slate-700"
-            >
-              Filter: All
-            </button>
           </div>
         </div>
 
@@ -125,14 +124,14 @@ export function ProjectsOverviewScreen() {
               rows={scheduledTasks}
               renderRow={(row) => (
                 <tr key={row.id}>
-                  <td className="px-2 py-0.5">{row.id}</td>
-                  <td className="px-2 py-0.5">{row.description}</td>
-                  <td className="px-2 py-0.5">
-                    <span className="inline-flex h-4 w-4 items-center justify-center rounded-full bg-slate-200 text-[9px] font-semibold text-slate-600">
+                  <td className="px-3 py-2">{row.id}</td>
+                  <td className="px-3 py-2">{row.description}</td>
+                  <td className="px-3 py-2">
+                    <span className="inline-flex h-5 w-5 items-center justify-center rounded-full bg-slate-200 text-[10px] font-semibold text-slate-700">
                       {row.assignee}
                     </span>
                   </td>
-                  <td className="px-2 py-0.5">{row.dueDate}</td>
+                  <td className="px-3 py-2">{row.dueDate}</td>
                 </tr>
               )}
             />
@@ -144,11 +143,11 @@ export function ProjectsOverviewScreen() {
               rows={completedTasks}
               renderRow={(row) => (
                 <tr key={row.id}>
-                  <td className="px-2 py-0.5">{row.id}</td>
-                  <td className="px-2 py-0.5">{row.description}</td>
-                  <td className="px-2 py-0.5">{row.completed}</td>
-                  <td className="px-2 py-0.5">
-                    <CheckCircle2 className="h-3 w-3 text-emerald-600" />
+                  <td className="px-3 py-2">{row.id}</td>
+                  <td className="px-3 py-2">{row.description}</td>
+                  <td className="px-3 py-2">{row.completed}</td>
+                  <td className="px-3 py-2 text-right">
+                    <CheckCircle2 className="h-4 w-4 inline-block text-emerald-600" />
                   </td>
                 </tr>
               )}
@@ -156,11 +155,11 @@ export function ProjectsOverviewScreen() {
           </CompactCard>
 
           <CompactCard title="Inbox" className="h-full">
-            <div className="flex items-center justify-between border-b border-slate-100 pb-1.5 text-[11px] text-slate-500">
-              <Inbox className="h-3.5 w-3.5" />
+            <div className="flex items-center justify-between border-b border-slate-100 pb-2 text-xs font-semibold text-slate-500">
+              <Inbox className="h-4 w-4" />
               <span>0</span>
             </div>
-            <div className="grid h-[132px] place-items-center text-xs text-slate-400">EMPTY</div>
+            <div className="flex-1 grid place-items-center text-sm font-medium text-slate-400 min-h-[120px]">EMPTY</div>
           </CompactCard>
 
           <CompactCard title="On Hold Tasks">
@@ -169,10 +168,10 @@ export function ProjectsOverviewScreen() {
               rows={holdTasks}
               renderRow={(row) => (
                 <tr key={row.id}>
-                  <td className="px-2 py-0.5">{row.id}</td>
-                  <td className="px-2 py-0.5">⌛ {row.description}</td>
-                  <td className="px-2 py-0.5">{row.holdDate}</td>
-                  <td className="px-2 py-0.5">{row.reason}</td>
+                  <td className="px-3 py-2">{row.id}</td>
+                  <td className="px-3 py-2 font-medium">⌛ {row.description}</td>
+                  <td className="px-3 py-2">{row.holdDate}</td>
+                  <td className="px-3 py-2 text-slate-500">{row.reason}</td>
                 </tr>
               )}
             />
@@ -184,42 +183,46 @@ export function ProjectsOverviewScreen() {
               rows={reallocatedTasks}
               renderRow={(row) => (
                 <tr key={row.id}>
-                  <td className="px-2 py-0.5">{row.id}</td>
-                  <td className="px-2 py-0.5">✈ {row.description}</td>
+                  <td className="px-3 py-2">{row.id}</td>
+                  <td className="px-3 py-2 font-medium">✈ {row.description}</td>
                 </tr>
               )}
             />
           </CompactCard>
 
-          <section className="space-y-2 rounded-xl border border-slate-200 bg-white p-2.5 shadow-sm">
+          <section className="ui-surface ui-card-pad flex flex-col space-y-4">
             <div className="flex items-center justify-between">
-              <h2 className="text-[13px] font-semibold text-slate-900">Task Summary</h2>
-              <Ellipsis className="h-3.5 w-3.5 text-slate-500" />
+              <h2 className="text-sm font-semibold text-slate-900">Task Summary</h2>
+              <button className="text-slate-400 hover:text-slate-600 transition">
+                <Ellipsis className="h-4 w-4" />
+              </button>
             </div>
-            <div className="mx-auto h-20 w-20 rounded-full bg-[conic-gradient(#1d4f91_0_42%,#24a14d_42%_67%,#e6b422_67%_100%)] p-3">
-              <div className="grid h-full w-full place-items-center rounded-full bg-white text-[9px] text-slate-500">
-                Total
-                <span className="text-sm font-semibold text-slate-900">19</span>
+            <div className="mx-auto h-24 w-24 rounded-full bg-[conic-gradient(#1d4f91_0_42%,#24a14d_42%_67%,#e6b422_67%_100%)] p-4 shadow-inner">
+              <div className="grid h-full w-full place-items-center rounded-full bg-white shadow-sm flex-col">
+                <div className="text-center">
+                  <span className="block text-[10px] font-semibold text-slate-500 uppercase tracking-wider">Total</span>
+                  <span className="block text-lg font-bold text-slate-900">19</span>
+                </div>
               </div>
             </div>
-            <div className="grid grid-cols-2 gap-1 text-[10px]">
-              <div className="rounded-lg border border-slate-100 bg-slate-50 p-1">
-                <p className="text-slate-500">On-Time Completion %</p>
-                <p className="text-base font-semibold text-emerald-600">80.0%</p>
+            <div className="grid grid-cols-2 gap-2 text-xs">
+              <div className="rounded-lg border border-slate-100 bg-slate-50 p-2 shadow-sm text-center">
+                <p className="text-slate-500 font-medium mb-0.5">On-Time %</p>
+                <p className="text-lg font-bold text-emerald-600">80.0%</p>
               </div>
-              <div className="rounded-lg border border-slate-100 bg-slate-50 p-1">
-                <p className="text-slate-500">Reallocated Rate</p>
-                <p className="text-base font-semibold text-slate-900">0.0%</p>
+              <div className="rounded-lg border border-slate-100 bg-slate-50 p-2 shadow-sm text-center">
+                <p className="text-slate-500 font-medium mb-0.5">Reallocated</p>
+                <p className="text-lg font-bold text-slate-900">0.0%</p>
               </div>
             </div>
-            <div>
-              <p className="mb-1 text-[11px] text-slate-500">Overall Task Status</p>
-              <div className="h-2 overflow-hidden rounded-full bg-slate-100">
+            <div className="flex-1 mt-2">
+              <p className="mb-1.5 text-xs font-semibold text-slate-500 uppercase tracking-wider">Overall Task Status</p>
+              <div className="h-2.5 overflow-hidden rounded-full bg-slate-100 shadow-inner">
                 <div className="h-full w-full bg-[linear-gradient(90deg,#1d4f91_0_40%,#24a14d_40%_72%,#e6b422_72%_100%)]" />
               </div>
             </div>
-            <div className="flex items-center justify-end gap-1.5 text-[10px] text-slate-500">
-              <UserRound className="h-3 w-3" />
+            <div className="mt-auto flex items-center justify-end gap-1.5 text-xs font-medium text-slate-400">
+              <UserRound className="h-3.5 w-3.5" />
               Updated just now
             </div>
           </section>

@@ -300,8 +300,8 @@ export function ProjectCreateTaskModal({ open, onClose }) {
   return (
     <div className="fixed inset-0 z-50 flex items-start justify-center bg-slate-900/30 p-4 pt-16">
       <button type="button" className="absolute inset-0" aria-label="Close dialog" onClick={onClose} />
-      <div className="relative z-10 w-full max-w-[1200px] overflow-hidden rounded-xl border border-slate-200 bg-white shadow-xl">
-        <div className="flex items-start justify-between gap-3 bg-[#0f4a7a] px-5 py-4 text-white">
+      <div className="ui-surface relative z-10 w-full max-w-[1200px] overflow-hidden shadow-xl">
+        <div className="flex items-start justify-between gap-3 bg-slate-800 px-5 py-4 text-white">
           <div className="flex items-start gap-4">
             <span className="mt-0.5 grid h-9 w-9 shrink-0 place-items-center rounded-md bg-white/15">
               <Pencil className="h-4 w-4" />
@@ -310,7 +310,7 @@ export function ProjectCreateTaskModal({ open, onClose }) {
               <h2 id={titleId} className="text-lg font-semibold leading-tight">
                 Create Task
               </h2>
-              <p className="mt-0.5 text-sm text-blue-100">Get things moving</p>
+              <p className="mt-0.5 text-sm text-slate-200">Get things moving</p>
             </div>
           </div>
           <button type="button" onClick={onClose} className="rounded-md p-1 hover:bg-white/10" aria-label="Close">
@@ -323,7 +323,7 @@ export function ProjectCreateTaskModal({ open, onClose }) {
             <select
               value={selectedSignType}
               onChange={(event) => setSelectedSignType(event.target.value)}
-              className="h-10 rounded-md border border-slate-300 px-3 text-sm"
+              className="h-10 rounded-md border border-slate-300 px-3 text-sm outline-none transition-colors focus:border-blue-500 focus:ring-2 focus:ring-blue-500/20"
             >
               <option>Select sign type</option>
               {rows.map((row) => (
@@ -335,13 +335,13 @@ export function ProjectCreateTaskModal({ open, onClose }) {
             <input
               value={planCode}
               onChange={(event) => setPlanCode(event.target.value)}
-              className="h-10 rounded-md border border-slate-300 px-3 text-sm"
+              className="h-10 rounded-md border border-slate-300 px-3 text-sm outline-none transition-colors focus:border-blue-500 focus:ring-2 focus:ring-blue-500/20"
               placeholder="Enter Plan Code"
             />
             <select
               value={selectedArea}
               onChange={(event) => setSelectedArea(event.target.value)}
-              className="h-10 rounded-md border border-slate-300 px-3 text-sm"
+              className="h-10 rounded-md border border-slate-300 px-3 text-sm outline-none transition-colors focus:border-blue-500 focus:ring-2 focus:ring-blue-500/20"
             >
               <option value="">Select Area</option>
               {AREA_OPTIONS.map((area) => (
@@ -353,7 +353,7 @@ export function ProjectCreateTaskModal({ open, onClose }) {
             <select
               value={selectedLevel}
               onChange={(event) => setSelectedLevel(event.target.value)}
-              className="h-10 rounded-md border border-slate-300 px-3 text-sm"
+              className="h-10 rounded-md border border-slate-300 px-3 text-sm outline-none transition-colors focus:border-blue-500 focus:ring-2 focus:ring-blue-500/20"
             >
               <option value="">Select Level</option>
               {LEVEL_OPTIONS.map((level) => (
@@ -362,13 +362,13 @@ export function ProjectCreateTaskModal({ open, onClose }) {
                 </option>
               ))}
             </select>
-            <button type="button" className="h-10 rounded-md bg-[#1f3b68] px-8 text-sm font-semibold text-white">Search</button>
-            <button type="button" onClick={clearNeeds} className="h-10 rounded-md border border-slate-300 px-6 text-sm">Reset / Clear</button>
+            <button type="button" className="h-10 rounded-md bg-blue-600 px-8 text-sm font-semibold text-white transition hover:bg-blue-700">Search</button>
+            <button type="button" onClick={clearNeeds} className="h-10 rounded-md border border-slate-300 px-6 text-sm text-slate-700 transition hover:bg-slate-50">Reset / Clear</button>
           </div>
 
           <div className="overflow-hidden rounded-lg border border-slate-200">
-            <div className="grid grid-cols-[1.2fr_0.9fr_0.8fr_0.9fr_0.8fr_0.9fr_0.8fr_0.9fr_0.8fr_0.8fr_1.1fr] bg-[#334b6f] text-xs font-semibold text-white">
-              <div className="bg-[#16a34a] px-3 py-2">Sign Type</div>
+            <div className="ui-table-header grid grid-cols-[1.2fr_0.9fr_0.8fr_0.9fr_0.8fr_0.9fr_0.8fr_0.9fr_0.8fr_0.8fr_1.1fr] bg-slate-700 text-xs font-semibold text-white">
+              <div className="bg-emerald-600 px-3 py-2">Sign Type</div>
               <div className="px-3 py-2">Artwork</div>
               <div className="px-3 py-2">Hours</div>
               <div className="px-3 py-2">Technical</div>
@@ -378,7 +378,7 @@ export function ProjectCreateTaskModal({ open, onClose }) {
               <div className="px-3 py-2">AS Built</div>
               <div className="px-3 py-2">Hours</div>
               <div className="px-3 py-2">BIM</div>
-              <div className="bg-[#f59e0b] px-3 py-2">Deadline</div>
+              <div className="bg-amber-500 px-3 py-2">Deadline</div>
             </div>
 
             <div className="max-h-[360px] overflow-auto">
@@ -432,7 +432,7 @@ export function ProjectCreateTaskModal({ open, onClose }) {
             </div>
             <button
               type="button"
-              className="rounded-md bg-[#1f3b68] px-8 py-2.5 text-sm font-semibold text-white shadow-sm transition hover:bg-[#163056] focus:outline-none focus-visible:ring-2 focus-visible:ring-[#1f3b68] focus-visible:ring-offset-2 disabled:pointer-events-none disabled:opacity-45"
+              className="rounded-md bg-blue-600 px-8 py-2.5 text-sm font-semibold text-white shadow-sm transition hover:bg-blue-700 focus:outline-none focus-visible:ring-2 focus-visible:ring-blue-500 focus-visible:ring-offset-2 disabled:pointer-events-none disabled:opacity-45"
               disabled={selectedCount === 0}
               title={selectedCount === 0 ? 'Select at least one work type or enter hours on a row' : undefined}
             >

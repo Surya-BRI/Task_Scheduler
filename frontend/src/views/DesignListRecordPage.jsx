@@ -110,6 +110,16 @@ export function DesignListRecordPage() {
 
   if (!record) return null
 
+  const from = searchParams.get('from')
+  const backPath =
+    from === 'design-scheduler'
+      ? '/design-scheduler'
+      : from === 'project-design'
+        ? '/project-design'
+        : from === 'projects-list'
+          ? '/projects-list'
+          : '/design-list'
+
   const pageTitle = `${record.name.toUpperCase()} @ ${record.businessUnit.toUpperCase()}`
 
   return (
@@ -120,7 +130,7 @@ export function DesignListRecordPage() {
           <div>
             <button
               type="button"
-              onClick={() => router.push('/design-list')}
+              onClick={() => router.push(backPath)}
               className="inline-flex items-center gap-2 rounded-md border border-slate-300 bg-white px-3 py-1.5 text-sm font-medium text-slate-700 hover:bg-slate-100"
             >
               <ChevronLeft className="h-4 w-4" />

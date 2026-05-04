@@ -1,11 +1,11 @@
 export function Table({ headers, rows }) {
   return (
-    <div className="overflow-hidden rounded-lg border border-slate-200 bg-white">
+    <div className="ui-surface overflow-hidden">
       <table className="w-full text-left text-sm">
-        <thead className="bg-slate-50 text-slate-600">
+        <thead className="ui-table-header">
           <tr>
             {headers.map((header) => (
-              <th key={header} className="px-4 py-3 font-medium">
+              <th key={header} className="px-4 py-2.5 font-semibold">
                 {header}
               </th>
             ))}
@@ -22,7 +22,7 @@ export function Table({ headers, rows }) {
             rows.map((row, index) => (
               <tr key={index} className="border-t border-slate-200">
                 {row.map((cell, cellIndex) => (
-                  <td key={`${index}-${cellIndex}`} className="px-4 py-3 text-slate-700">
+                  <td key={`${index}-${cellIndex}`} className="px-4 py-2.5 text-slate-700">
                     {cell ?? '-'}
                   </td>
                 ))}
