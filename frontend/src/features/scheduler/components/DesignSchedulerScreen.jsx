@@ -56,6 +56,161 @@ const getWeekDays = (baseDate) => {
 };
 const sumTaskHours = (taskMap, taskIds) => taskIds.reduce((acc, taskId) => acc + (taskMap[taskId]?.estimatedHours || 0), 0);
 
+const nextVisibleWeekdayAfter = (dayIndex, candidateDays) => candidateDays.find((idx) => idx > dayIndex);
+
+/**
+ * Computes schedule/task updates after a drop onto a designer day.
+ * @param {boolean} allowOvertime - If false, caps each day at DAILY_CAPACITY (normal hours only).
+ */
+function buildPreparedDropAssignment({
+    droppedTask,
+    taskId,
+    targetDesignerId,
+    targetDayIndex,
+    targetDayStr,
+    insertionIndex,
+    sourceId,
+    sourceDay,
+    schedulesSnapshot,
+    tasksSnapshot,
+    visibleDays,
+    getNextSplitId,
+    allowOvertime,
+}) {
+    const updatedSchedules = cloneState(schedulesSnapshot);
+    const updatedTasks = { ...tasksSnapshot };
+    if (!updatedSchedules[targetDesignerId]) {
+        updatedSchedules[targetDesignerId] = {};
+    }
+    if (!updatedSchedules[targetDesignerId][targetDayStr]) {
+        updatedSchedules[targetDesignerId][targetDayStr] = [];
+    }
+    if (sourceId !== "unassigned" && sourceId !== "on-hold") {
+        if (updatedSchedules[sourceId] && updatedSchedules[sourceId][sourceDay]) {
+            updatedSchedules[sourceId][sourceDay] = updatedSchedules[sourceId][sourceDay].filter((id) => id !== taskId);
+        }
+    }
+    const parentId = droppedTask.parentId ?? droppedTask.id;
+    const baseName = droppedTask.baseName ?? droppedTask.name;
+    const visibleWeekdays = [...visibleDays].filter((d) => d < 5).sort((a, b) => a - b);
+    let remainingHours = droppedTask.estimatedHours;
+    const plannedParts = [];
+    let currentDayIndex = targetDayIndex;
+    let hasOvertimeFlag = false;
+    while (
+        remainingHours > 0 &&
+        currentDayIndex !== undefined &&
+        visibleWeekdays.includes(currentDayIndex)
+    ) {
+        const dayKey = currentDayIndex.toString();
+        if (!updatedSchedules[targetDesignerId][dayKey]) {
+            updatedSchedules[targetDesignerId][dayKey] = [];
+        }
+        const usedHours = sumTaskHours(updatedTasks, updatedSchedules[targetDesignerId][dayKey] || []);
+        const availableHours = Math.max(0, MAX_DAILY_HOURS - usedHours);
+        const regularHoursLeft = Math.max(0, DAILY_CAPACITY - usedHours);
+
+        let partHours = 0;
+        if (allowOvertime) {
+            if (availableHours === 0) {
+                currentDayIndex = nextVisibleWeekdayAfter(currentDayIndex, visibleWeekdays) ?? 7;
+                continue;
+            }
+            partHours = Math.min(remainingHours, availableHours);
+            if (partHours > regularHoursLeft) {
+                hasOvertimeFlag = true;
+            }
+        } else if (regularHoursLeft === 0) {
+            currentDayIndex = nextVisibleWeekdayAfter(currentDayIndex, visibleWeekdays) ?? 7;
+            continue;
+        } else {
+            partHours = Math.min(remainingHours, regularHoursLeft);
+        }
+
+        plannedParts.push({
+            id: plannedParts.length === 0 ? taskId : getNextSplitId(),
+            dayIndex: currentDayIndex,
+            hours: partHours,
+        });
+        remainingHours -= partHours;
+        currentDayIndex = nextVisibleWeekdayAfter(currentDayIndex, visibleWeekdays) ?? 7;
+    }
+
+    if (plannedParts.length === 0) {
+        if (!allowOvertime && droppedTask.estimatedHours > 0) {
+            updatedTasks[taskId] = {
+                ...droppedTask,
+                id: taskId,
+                parentId,
+                baseName,
+                estimatedHours: droppedTask.estimatedHours,
+                splitIndex: undefined,
+                totalParts: undefined,
+                status: "unassigned",
+            };
+            return {
+                preparedAssignment: {
+                    updatedSchedules,
+                    updatedTasks,
+                    targetDayIndex,
+                },
+                hasOvertime: hasOvertimeFlag,
+                hoursAssignableWithinNormal: 0,
+                backlogHoursIfSplit: droppedTask.estimatedHours,
+            };
+        }
+        return null;
+    }
+
+    const backlogAfterSplitPlan = remainingHours;
+    const totalParts = plannedParts.length + (remainingHours > 0 ? 1 : 0);
+    const assignedWithinNormalParts = plannedParts.reduce((acc, part) => acc + part.hours, 0);
+    plannedParts.forEach((part, index) => {
+        updatedTasks[part.id] = {
+            ...droppedTask,
+            id: part.id,
+            parentId,
+            baseName,
+            estimatedHours: part.hours,
+            splitIndex: totalParts > 1 ? index + 1 : undefined,
+            totalParts: totalParts > 1 ? totalParts : undefined,
+            status: "assigned",
+        };
+        const dayKey = part.dayIndex.toString();
+        if (index === 0 && dayKey === targetDayStr) {
+            const dayTasks = updatedSchedules[targetDesignerId][dayKey];
+            const boundedIndex = Math.max(0, Math.min(insertionIndex, dayTasks.length));
+            dayTasks.splice(boundedIndex, 0, part.id);
+        } else {
+            updatedSchedules[targetDesignerId][dayKey].push(part.id);
+        }
+    });
+    if (remainingHours > 0) {
+        const overflowId = getNextSplitId();
+        updatedTasks[overflowId] = {
+            ...droppedTask,
+            id: overflowId,
+            parentId,
+            baseName,
+            estimatedHours: remainingHours,
+            splitIndex: totalParts,
+            totalParts,
+            status: "unassigned",
+        };
+    }
+
+    return {
+        preparedAssignment: {
+            updatedSchedules,
+            updatedTasks,
+            targetDayIndex,
+        },
+        hasOvertime: hasOvertimeFlag,
+        hoursAssignableWithinNormal: assignedWithinNormalParts,
+        backlogHoursIfSplit: backlogAfterSplitPlan,
+    };
+}
+
 const TASK_COLORS = [
     "bg-orange-100 border border-orange-300 text-orange-800",
     "bg-blue-100 border border-blue-300 text-blue-800",
@@ -147,6 +302,7 @@ export function DesignSchedulerScreen() {
     const [schedules, setSchedules] = useState(initialData.schedulesObj);
     const [searchQuery, setSearchQuery] = useState("");
     const splitIdCounterRef = useRef(0);
+    const cancelOvertimeButtonRef = useRef(null);
     const [viewMode, setViewMode] = useState("week");
     const [selectedDays, setSelectedDays] = useState(WEEKDAY_INDICES);
     const [currentDay, setCurrentDay] = useState(getCurrentDayIndex(new Date()));
@@ -154,6 +310,16 @@ export function DesignSchedulerScreen() {
     
     // Custom Date selection state
     const [currentDate, setCurrentDate] = useState(new Date(2026, 2, 3));
+    const [overtimePrompt, setOvertimePrompt] = useState({
+        open: false,
+        pendingFull: null,
+        pendingAvailableOnly: null,
+        totalTaskHours: 0,
+        hoursWithinNormalCapacity: 0,
+        backlogHoursIfSplit: 0,
+        splitIdCounterAfterFull: 0,
+        splitIdCounterAfterSplit: 0,
+    });
     const weekDates = useMemo(() => getWeekDays(currentDate), [currentDate]);
     const dateRangeText = useMemo(() => {
         if (!weekDates || weekDates.length === 0) return "";
@@ -169,6 +335,11 @@ export function DesignSchedulerScreen() {
     }, [selectedDays, currentDay]);
     const visibleDays = viewMode === "week" ? ALL_DAY_INDICES : customVisibleDays;
     const layoutMode = visibleDays.length === 1 ? "single-column" : visibleDays.length <= 3 ? "grid" : "horizontal-scroll";
+    useEffect(() => {
+        if (overtimePrompt.open) {
+            cancelOvertimeButtonRef.current?.focus();
+        }
+    }, [overtimePrompt.open]);
     const handleDayToggle = (dayIndex) => {
         if (viewMode !== "custom")
             return;
@@ -210,12 +381,20 @@ export function DesignSchedulerScreen() {
         }
         return task.name;
     };
+    /** Canonical design-list id for URLs: split segments share parentId with the originating task row. */
+    const getDesignListRoutingTaskId = (task) => task?.totalParts > 1 && task.parentId
+        ? task.parentId
+        : task?.id;
     const getNextTaskId = () => {
         splitIdCounterRef.current += 1;
         return `split-${splitIdCounterRef.current}`;
     };
-    const getNextVisibleDayIndex = (dayIndex, candidateDays) => {
-        return candidateDays.find((idx) => idx > dayIndex);
+    const applyPreparedAssignment = (preparedAssignment) => {
+        if (!preparedAssignment)
+            return;
+        setSchedules(preparedAssignment.updatedSchedules);
+        setTasks(preparedAssignment.updatedTasks);
+        setCurrentDay(preparedAssignment.targetDayIndex);
     };
     const handleDropToDay = (e, targetDesignerId, targetDayIndex, targetTaskIndex, targetPosition = "after") => {
         e.preventDefault();
@@ -239,92 +418,50 @@ export function DesignSchedulerScreen() {
         const droppedTask = tasks[taskId];
         if (!droppedTask)
             return;
-        const updatedSchedules = cloneState(schedules);
-        const updatedTasks = { ...tasks };
-        if (!updatedSchedules[targetDesignerId]) {
-            updatedSchedules[targetDesignerId] = {};
-        }
-        if (!updatedSchedules[targetDesignerId][targetDayStr]) {
-            updatedSchedules[targetDesignerId][targetDayStr] = [];
-        }
-        const targetList = updatedSchedules[targetDesignerId][targetDayStr];
+        const targetList = schedules[targetDesignerId]?.[targetDayStr] ?? [];
         const rawInsertIndex = targetTaskIndex === undefined
             ? targetList.length
             : targetTaskIndex + (targetPosition === "after" ? 1 : 0);
-        let insertionIndex = Math.max(0, Math.min(rawInsertIndex, targetList.length));
-        if (sourceId !== "unassigned" && sourceId !== "on-hold") {
-            if (updatedSchedules[sourceId] && updatedSchedules[sourceId][sourceDay]) {
-                updatedSchedules[sourceId][sourceDay] = updatedSchedules[sourceId][sourceDay].filter((id) => id !== taskId);
-            }
-        }
-        const parentId = droppedTask.parentId ?? droppedTask.id;
-        const baseName = droppedTask.baseName ?? droppedTask.name;
-        const visibleWeekdays = [...visibleDays].filter((d) => d < 5).sort((a, b) => a - b);
-        let remainingHours = droppedTask.estimatedHours;
-        const plannedParts = [];
-        let currentDayIndex = targetDayIndex;
-        while (remainingHours > 0 &&
-            currentDayIndex !== undefined &&
-            visibleWeekdays.includes(currentDayIndex)) {
-            const dayKey = currentDayIndex.toString();
-            if (!updatedSchedules[targetDesignerId][dayKey]) {
-                updatedSchedules[targetDesignerId][dayKey] = [];
-            }
-            const usedHours = sumTaskHours(updatedTasks, updatedSchedules[targetDesignerId][dayKey] || []);
-            const availableHours = Math.max(0, MAX_DAILY_HOURS - usedHours);
-            if (availableHours === 0) {
-                currentDayIndex = getNextVisibleDayIndex(currentDayIndex, visibleWeekdays) ?? 7;
-                continue;
-            }
-            const partHours = Math.min(remainingHours, availableHours);
-            plannedParts.push({
-                id: plannedParts.length === 0 ? taskId : getNextTaskId(),
-                dayIndex: currentDayIndex,
-                hours: partHours,
-            });
-            remainingHours -= partHours;
-            currentDayIndex = getNextVisibleDayIndex(currentDayIndex, visibleWeekdays) ?? 7;
-        }
-        if (plannedParts.length === 0)
+        const insertionIndex = Math.max(0, Math.min(rawInsertIndex, targetList.length));
+        const assignArgs = {
+            droppedTask,
+            taskId,
+            targetDesignerId,
+            targetDayIndex,
+            targetDayStr,
+            insertionIndex,
+            sourceId,
+            sourceDay,
+            schedulesSnapshot: schedules,
+            tasksSnapshot: tasks,
+            visibleDays,
+            getNextSplitId: getNextTaskId,
+        };
+        const splitIdBaseline = splitIdCounterRef.current;
+        const fullResult = buildPreparedDropAssignment({ ...assignArgs, allowOvertime: true });
+        if (!fullResult?.preparedAssignment)
             return;
-        const totalParts = plannedParts.length + (remainingHours > 0 ? 1 : 0);
-        plannedParts.forEach((part, index) => {
-            updatedTasks[part.id] = {
-                ...droppedTask,
-                id: part.id,
-                parentId,
-                baseName,
-                estimatedHours: part.hours,
-                splitIndex: totalParts > 1 ? index + 1 : undefined,
-                totalParts: totalParts > 1 ? totalParts : undefined,
-                status: "assigned",
-            };
-            const dayKey = part.dayIndex.toString();
-            if (index === 0 && dayKey === targetDayStr) {
-                const dayTasks = updatedSchedules[targetDesignerId][dayKey];
-                const boundedIndex = Math.max(0, Math.min(insertionIndex, dayTasks.length));
-                dayTasks.splice(boundedIndex, 0, part.id);
-            }
-            else {
-                updatedSchedules[targetDesignerId][dayKey].push(part.id);
-            }
-        });
-        if (remainingHours > 0) {
-            const overflowId = getNextTaskId();
-            updatedTasks[overflowId] = {
-                ...droppedTask,
-                id: overflowId,
-                parentId,
-                baseName,
-                estimatedHours: remainingHours,
-                splitIndex: totalParts,
-                totalParts,
-                status: "unassigned",
-            };
+        if (!fullResult.hasOvertime) {
+            applyPreparedAssignment(fullResult.preparedAssignment);
+            return;
         }
-        setSchedules(updatedSchedules);
-        setTasks(updatedTasks);
-        setCurrentDay(targetDayIndex);
+        const splitIdAfterFull = splitIdCounterRef.current;
+        splitIdCounterRef.current = splitIdBaseline;
+        const splitResult = buildPreparedDropAssignment({ ...assignArgs, allowOvertime: false });
+        if (!splitResult?.preparedAssignment)
+            return;
+        const splitIdAfterSplit = splitIdCounterRef.current;
+        splitIdCounterRef.current = splitIdBaseline;
+        setOvertimePrompt({
+            open: true,
+            pendingFull: fullResult.preparedAssignment,
+            pendingAvailableOnly: splitResult.preparedAssignment,
+            totalTaskHours: droppedTask.estimatedHours,
+            hoursWithinNormalCapacity: splitResult.hoursAssignableWithinNormal,
+            backlogHoursIfSplit: splitResult.backlogHoursIfSplit ?? 0,
+            splitIdCounterAfterFull: splitIdAfterFull,
+            splitIdCounterAfterSplit: splitIdAfterSplit,
+        });
     };
     const handleDropToPanel = (e, newStatus) => {
         e.preventDefault();
@@ -508,7 +645,7 @@ export function DesignSchedulerScreen() {
              </div>
 
              <div className="flex-1 overflow-y-auto space-y-1.5 pr-1 pb-4 custom-scrollbar">
-                {onHoldTasks.map(task => (<div key={task.id} draggable onDragStart={(e) => handleDragStart(e, task.id, "on-hold")} onDragEnd={() => setDropIndicator(null)} onClick={() => router.push(`/design-list/record/${encodeURIComponent(task.id)}?from=design-scheduler`)} className={`p-2 rounded cursor-grab active:cursor-grabbing flex flex-col relative bg-white shadow-sm hover:shadow-md transition-shadow ${task.colorClass}`}>
+                {onHoldTasks.map(task => (<div key={task.id} draggable onDragStart={(e) => handleDragStart(e, task.id, "on-hold")} onDragEnd={() => setDropIndicator(null)} onClick={() => router.push(`/design-list/record/${encodeURIComponent(getDesignListRoutingTaskId(task))}?from=design-scheduler`)} className={`p-2 rounded cursor-grab active:cursor-grabbing flex flex-col relative bg-white shadow-sm hover:shadow-md transition-shadow ${task.colorClass}`}>
                     <div className="flex justify-between items-start">
                       <span className="font-semibold text-[11px] leading-tight pr-5">{getTaskLabel(task)}</span>
                       <button className="bg-gray-200 hover:bg-gray-300 rounded-full p-0.5 text-gray-600 transition-colors absolute right-1.5 top-1.5">
@@ -519,7 +656,7 @@ export function DesignSchedulerScreen() {
                     <div className="text-[9px] font-bold mt-1.5 bg-slate-100 text-slate-600 inline-block px-1.5 py-0.5 rounded uppercase self-start">Hold: {task.holdTime}</div>
                   </div>))}
 
-                {unassignedTasks.map(task => (<div key={task.id} draggable onDragStart={(e) => handleDragStart(e, task.id, "unassigned")} onDragEnd={() => setDropIndicator(null)} onClick={() => router.push(`/design-list/record/${encodeURIComponent(task.id)}?from=design-scheduler`)} className={`p-2 rounded cursor-grab active:cursor-grabbing flex flex-col relative group bg-white shadow-sm hover:shadow-md transition-shadow ${task.colorClass}`}>
+                {unassignedTasks.map(task => (<div key={task.id} draggable onDragStart={(e) => handleDragStart(e, task.id, "unassigned")} onDragEnd={() => setDropIndicator(null)} onClick={() => router.push(`/design-list/record/${encodeURIComponent(getDesignListRoutingTaskId(task))}?from=design-scheduler`)} className={`p-2 rounded cursor-grab active:cursor-grabbing flex flex-col relative group bg-white shadow-sm hover:shadow-md transition-shadow ${task.colorClass}`}>
                     <div className="flex justify-between items-start">
                       <span className="font-semibold text-[11px] leading-tight pr-5">{getTaskLabel(task)}</span>
                       <button className="bg-blue-50 hover:bg-blue-100 text-blue-600 rounded-full p-0.5 absolute right-1.5 top-1.5 opacity-0 group-hover:opacity-100 transition-opacity">
@@ -628,7 +765,7 @@ export function DesignSchedulerScreen() {
                                         handleDropToDay(e, designer.id, dayIndex, idx, getDropPosition(e, e.currentTarget));
                                     }} onClick={(e) => {
                                         e.stopPropagation();
-                                        router.push(`/design-list/record/${encodeURIComponent(taskId)}?from=design-scheduler`);
+                                        router.push(`/design-list/record/${encodeURIComponent(getDesignListRoutingTaskId(taskInfo))}?from=design-scheduler`);
                                     }} className={`h-[24px] min-w-0 rounded flex items-center justify-between px-1.5 cursor-grab active:cursor-grabbing shadow-sm hover:shadow transition-shadow ${dropIndicator &&
                                         dropIndicator.designerId === designer.id &&
                                         dropIndicator.dayIndex === dayIndex &&
@@ -658,6 +795,83 @@ export function DesignSchedulerScreen() {
           </div>
         </div>
       </div>
+      {overtimePrompt.open ? (<div className="fixed inset-0 z-[120] flex items-center justify-center bg-slate-900/40 p-4" aria-modal="true" role="alertdialog">
+          <div className="ui-surface w-full max-w-lg p-6">
+            <h2 className="text-lg font-semibold text-slate-900">Handle Overtime or Split Task</h2>
+            <p className="mt-3 text-sm leading-6 text-slate-600">
+              Only part of this task fits in available hours. Choose how to proceed.
+            </p>
+            <div className="mt-4 rounded-lg border border-slate-200 bg-slate-50 px-4 py-3 text-sm text-slate-700">
+              <div className="font-medium text-slate-900">Hours breakdown</div>
+              <ul className="mt-2 list-disc space-y-1 pl-4 leading-6">
+                <li>Total task duration: <strong>{overtimePrompt.totalTaskHours} h</strong></li>
+                <li>
+                  Assignable within normal capacity (visible weekdays):{" "}
+                  <strong>{overtimePrompt.hoursWithinNormalCapacity} h</strong>
+                </li>
+                <li>
+                  Stays unassigned/backlog if you split:{" "}
+                  <strong>{overtimePrompt.backlogHoursIfSplit} h</strong>
+                </li>
+              </ul>
+              <p className="mt-3 text-xs text-slate-600">
+                Assign full uses overtime slots where needed within the weekly cap ({MAX_DAILY_HOURS}
+                h/day).
+              </p>
+              {overtimePrompt.hoursWithinNormalCapacity === 0 ? (<p className="mt-3 text-xs text-slate-600">
+                  No open normal capacity on visible weekdays from this drop; split keeps the entire task off the calendar.
+                </p>) : null}
+            </div>
+            <div className="mt-6 flex flex-wrap items-center justify-end gap-2">
+              <button type="button" ref={cancelOvertimeButtonRef} onClick={() => setOvertimePrompt({
+            open: false,
+            pendingFull: null,
+            pendingAvailableOnly: null,
+            totalTaskHours: 0,
+            hoursWithinNormalCapacity: 0,
+            backlogHoursIfSplit: 0,
+            splitIdCounterAfterFull: 0,
+            splitIdCounterAfterSplit: 0
+        })} className="ui-chip-button">
+                Cancel
+              </button>
+              <button type="button" onClick={() => {
+            if (overtimePrompt.pendingAvailableOnly)
+                applyPreparedAssignment(overtimePrompt.pendingAvailableOnly);
+            splitIdCounterRef.current = overtimePrompt.splitIdCounterAfterSplit;
+            setOvertimePrompt({
+                open: false,
+                pendingFull: null,
+                pendingAvailableOnly: null,
+                totalTaskHours: 0,
+                hoursWithinNormalCapacity: 0,
+                backlogHoursIfSplit: 0,
+                splitIdCounterAfterFull: 0,
+                splitIdCounterAfterSplit: 0
+            });
+        }} className="ui-chip-button">
+                Assign Available Only
+              </button>
+              <button type="button" onClick={() => {
+            if (overtimePrompt.pendingFull)
+                applyPreparedAssignment(overtimePrompt.pendingFull);
+            splitIdCounterRef.current = overtimePrompt.splitIdCounterAfterFull;
+            setOvertimePrompt({
+                open: false,
+                pendingFull: null,
+                pendingAvailableOnly: null,
+                totalTaskHours: 0,
+                hoursWithinNormalCapacity: 0,
+                backlogHoursIfSplit: 0,
+                splitIdCounterAfterFull: 0,
+                splitIdCounterAfterSplit: 0
+            });
+        }} className="ui-chip-button ui-chip-button-active">
+                Assign Full (Overtime)
+              </button>
+            </div>
+          </div>
+        </div>) : null}
     </div>);
 }
 function ClockIcon() {
