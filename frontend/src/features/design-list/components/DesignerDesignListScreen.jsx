@@ -566,7 +566,7 @@ export function DesignerDesignListScreen() {
 
   return (
     <div className="app-shell h-screen flex flex-col overflow-hidden font-sans">
-      <Navbar />
+      <Navbar lockPrimaryNav />
       <div className="flex-1 flex flex-col min-h-0">
         <div className="shrink-0">
           <Toolbar
