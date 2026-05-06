@@ -31,7 +31,7 @@ const getStatusColor = (status) => {
     case "Approved":
       return "bg-purple-100 text-purple-700 border-purple-200";
     default:
-      return "bg-gray-100 text-gray-700 border-gray-200";
+      return "bg-slate-100 text-slate-700 border-slate-200";
   }
 };
 
@@ -48,7 +48,7 @@ const getStatusDot = (status) => {
     case "Approved":
       return "bg-purple-500";
     default:
-      return "bg-gray-500";
+      return "bg-slate-500";
   }
 };
 
@@ -93,7 +93,7 @@ const Toolbar = ({ viewMode, setViewMode, filters, setFilters, salesPersons }) =
           onClick={() => setShowFilters(!showFilters)}
           className={`flex cursor-pointer items-center gap-2 rounded-md border px-3 py-1.5 shadow-sm transition-colors ${
             activeCount > 0
-              ? "bg-indigo-50 border-indigo-300 text-indigo-700"
+              ? "bg-blue-50 border-blue-300 text-blue-700"
               : "bg-white border-slate-300 text-slate-700 hover:bg-slate-50"
           }`}
         >
@@ -127,11 +127,11 @@ const Toolbar = ({ viewMode, setViewMode, filters, setFilters, salesPersons }) =
             </div>
 
             <div className="flex flex-col gap-1.5">
-              <label className="text-xs font-semibold text-gray-500 uppercase">Type</label>
-              <div className="flex items-center bg-gray-50 border border-gray-200 rounded-lg px-3 py-2">
-                <GalleryVerticalEnd size={14} className="text-gray-400 mr-2" />
+              <label className="text-xs font-semibold text-slate-500 uppercase">Type</label>
+              <div className="flex items-center bg-slate-50 border border-slate-200 rounded-lg px-3 py-2">
+                <GalleryVerticalEnd size={14} className="text-slate-400 mr-2" />
                 <select
-                  className="text-sm bg-transparent outline-none text-gray-700 cursor-pointer w-full"
+                  className="text-sm bg-transparent outline-none text-slate-700 cursor-pointer w-full"
                   value={filters.type}
                   onChange={(e) => setFilters({ ...filters, type: e.target.value })}
                 >
@@ -143,14 +143,14 @@ const Toolbar = ({ viewMode, setViewMode, filters, setFilters, salesPersons }) =
             </div>
 
             <div className="flex flex-col gap-1.5 mt-2">
-              <label className="text-xs font-semibold text-gray-500 uppercase">Status</label>
+              <label className="text-xs font-semibold text-slate-500 uppercase">Status</label>
               <div className="flex flex-wrap gap-2 mt-1">
                 <button
                   onClick={() => setFilters({ ...filters, status: "" })}
                   className={`px-3 py-1 rounded-full text-xs font-medium border transition-colors cursor-pointer ${
                     filters.status === ""
-                      ? "bg-gray-800 text-white border-gray-800"
-                      : "bg-white text-gray-600 border-gray-200 hover:bg-gray-50"
+                      ? "bg-slate-800 text-white border-slate-800"
+                      : "bg-white text-slate-600 border-slate-200 hover:bg-slate-50"
                   }`}
                 >
                   All
@@ -178,11 +178,11 @@ const Toolbar = ({ viewMode, setViewMode, filters, setFilters, salesPersons }) =
             </div>
 
             <div className="flex flex-col gap-1.5">
-              <label className="text-xs font-semibold text-gray-500 uppercase">Sales Person</label>
-              <div className="flex items-center bg-gray-50 border border-gray-200 rounded-lg px-3 py-2">
-                <Users size={14} className="text-gray-400 mr-2" />
+              <label className="text-xs font-semibold text-slate-500 uppercase">Sales Person</label>
+              <div className="flex items-center bg-slate-50 border border-slate-200 rounded-lg px-3 py-2">
+                <Users size={14} className="text-slate-400 mr-2" />
                 <select
-                  className="text-sm bg-transparent outline-none text-gray-700 cursor-pointer w-full"
+                  className="text-sm bg-transparent outline-none text-slate-700 cursor-pointer w-full"
                   value={filters.salesPerson}
                   onChange={(e) => setFilters({ ...filters, salesPerson: e.target.value })}
                 >
@@ -197,32 +197,32 @@ const Toolbar = ({ viewMode, setViewMode, filters, setFilters, salesPersons }) =
             </div>
 
             <div className="flex flex-col gap-1.5">
-              <label className="text-xs font-semibold text-gray-500 uppercase">Date Range</label>
+              <label className="text-xs font-semibold text-slate-500 uppercase">Date Range</label>
               <div className="grid grid-cols-2 gap-2">
                 <div className="flex flex-col gap-1">
-                  <span className="text-[10px] text-gray-400">From</span>
-                  <div className="relative flex items-center bg-gray-50 border border-gray-200 rounded-lg px-2 py-2 focus-within:ring-2 focus-within:ring-blue-500">
+                  <span className="text-[10px] text-slate-400">From</span>
+                  <div className="relative flex items-center bg-slate-50 border border-slate-200 rounded-lg px-2 py-2 focus-within:ring-2 focus-within:ring-blue-500">
                     <input
                       title="Start Date"
                       type="date"
-                      className="text-xs bg-transparent outline-none text-gray-700 w-full cursor-pointer pr-5 [&::-webkit-calendar-picker-indicator]:opacity-0 [&::-webkit-calendar-picker-indicator]:absolute [&::-webkit-calendar-picker-indicator]:inset-0 [&::-webkit-calendar-picker-indicator]:w-full [&::-webkit-calendar-picker-indicator]:cursor-pointer"
+                      className="text-xs bg-transparent outline-none text-slate-700 w-full cursor-pointer pr-5 [&::-webkit-calendar-picker-indicator]:opacity-0 [&::-webkit-calendar-picker-indicator]:absolute [&::-webkit-calendar-picker-indicator]:inset-0 [&::-webkit-calendar-picker-indicator]:w-full [&::-webkit-calendar-picker-indicator]:cursor-pointer"
                       value={filters.startDate}
                       onChange={(e) => setFilters({ ...filters, startDate: e.target.value })}
                     />
-                    <Calendar size={13} className="text-gray-400 pointer-events-none absolute right-2" />
+                    <Calendar size={13} className="text-slate-400 pointer-events-none absolute right-2" />
                   </div>
                 </div>
                 <div className="flex flex-col gap-1">
-                  <span className="text-[10px] text-gray-400">To</span>
-                  <div className="relative flex items-center bg-gray-50 border border-gray-200 rounded-lg px-2 py-2 focus-within:ring-2 focus-within:ring-blue-500">
+                  <span className="text-[10px] text-slate-400">To</span>
+                  <div className="relative flex items-center bg-slate-50 border border-slate-200 rounded-lg px-2 py-2 focus-within:ring-2 focus-within:ring-blue-500">
                     <input
                       title="End Date"
                       type="date"
-                      className="text-xs bg-transparent outline-none text-gray-700 w-full cursor-pointer pr-5 [&::-webkit-calendar-picker-indicator]:opacity-0 [&::-webkit-calendar-picker-indicator]:absolute [&::-webkit-calendar-picker-indicator]:inset-0 [&::-webkit-calendar-picker-indicator]:w-full [&::-webkit-calendar-picker-indicator]:cursor-pointer"
+                      className="text-xs bg-transparent outline-none text-slate-700 w-full cursor-pointer pr-5 [&::-webkit-calendar-picker-indicator]:opacity-0 [&::-webkit-calendar-picker-indicator]:absolute [&::-webkit-calendar-picker-indicator]:inset-0 [&::-webkit-calendar-picker-indicator]:w-full [&::-webkit-calendar-picker-indicator]:cursor-pointer"
                       value={filters.endDate}
                       onChange={(e) => setFilters({ ...filters, endDate: e.target.value })}
                     />
-                    <Calendar size={13} className="text-gray-400 pointer-events-none absolute right-2" />
+                    <Calendar size={13} className="text-slate-400 pointer-events-none absolute right-2" />
                   </div>
                 </div>
               </div>
@@ -391,24 +391,24 @@ const Board = ({ data }) => {
                   key={item.id}
                   onClick={() => router.push(recordDetailPath(item.id))}
                   className={`p-2.5 min-h-[84px] rounded-lg border flex flex-col cursor-pointer hover:ring-1 hover:ring-blue-300/60 ${
-                    getStatusColor(item.status).replace("text-", "text-gray-900 border-").split(" ")[0]
+                    getStatusColor(item.status).replace("text-", "text-slate-900 border-").split(" ")[0]
                   } bg-opacity-50`}
                 >
-                  <div className="text-[10px] border-b border-gray-200/50 pb-1 mb-1 whitespace-nowrap overflow-hidden text-ellipsis">
-                    <span className="font-semibold text-gray-900">{item.opNo}</span> |{" "}
-                    <span className="text-gray-700">{item.projectNo}</span>
+                  <div className="text-[10px] border-b border-slate-200/50 pb-1 mb-1 whitespace-nowrap overflow-hidden text-ellipsis">
+                    <span className="font-semibold text-slate-900">{item.opNo}</span> |{" "}
+                    <span className="text-slate-700">{item.projectNo}</span>
                   </div>
-                  <div className="text-xs font-medium mb-1.5 text-gray-800 truncate leading-tight">
+                  <div className="text-xs font-medium mb-1.5 text-slate-800 truncate leading-tight">
                     {item.businessUnit} - {item.name}
                   </div>
                   <div className="flex items-center justify-between mt-auto gap-1">
                     <div
                       className={`flex items-center gap-1 text-[9px] font-semibold uppercase tracking-wider ${
-                        item.agingDays > 20 ? "text-red-500" : "text-gray-600"
+                        item.agingDays > 20 ? "text-red-500" : "text-slate-600"
                       }`}
                     >
                       <div className={`p-0.5 rounded flex shrink-0 ${getStatusColor(item.status)}`}>
-                        <Clock size={10} className="text-gray-700" />
+                        <Clock size={10} className="text-slate-700" />
                       </div>
                       Aging {item.agingDays}d
                     </div>
@@ -416,7 +416,7 @@ const Board = ({ data }) => {
                       <button
                         type="button"
                         onClick={() => router.push(recordTabPath(item.id, "activity"))}
-                        className="grid h-6 w-6 place-items-center rounded-full bg-white/90 text-gray-600 ring-1 ring-gray-200 hover:text-emerald-600"
+                        className="grid h-6 w-6 place-items-center rounded-full bg-white/90 text-slate-600 ring-1 ring-slate-200 hover:text-emerald-600"
                         title="Activity"
                       >
                         <History size={11} />
@@ -424,7 +424,7 @@ const Board = ({ data }) => {
                       <button
                         type="button"
                         onClick={() => router.push(recordTabPath(item.id, "chatter"))}
-                        className="grid h-6 w-6 place-items-center rounded-full bg-white/90 text-gray-600 ring-1 ring-gray-200 hover:text-violet-600"
+                        className="grid h-6 w-6 place-items-center rounded-full bg-white/90 text-slate-600 ring-1 ring-slate-200 hover:text-violet-600"
                         title="Chatter"
                       >
                         <UserRoundPlus size={11} />

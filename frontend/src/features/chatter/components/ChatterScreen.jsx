@@ -1,7 +1,7 @@
 "use client";
 
-import { useMemo, useState } from "react";
-import { CalendarDays, MessageSquareText, PlusSquare, Search } from "lucide-react";
+import { useMemo, useState, useEffect } from "react";
+import { CalendarDays, MessageSquareText, PlusSquare, Search, ThumbsUp, MessageCircle, X } from "lucide-react";
 import { Navbar } from "@/components/Navbar";
 
 const CURRENT_USER = "Delbin Delbin";
@@ -278,6 +278,214 @@ function SegmentButton({ label, isActive, onClick }) {
   );
 }
 
+function Toast({ message, onClose }) {
+  if (!message) return null;
+  return (
+    <div className="fixed bottom-4 right-4 z-50 bg-emerald-500 text-white px-4 py-2 rounded-lg shadow-lg flex items-center gap-3 animate-in fade-in slide-in-from-bottom-5">
+      <span className="text-sm font-medium">{message}</span>
+      <button onClick={onClose} className="hover:text-emerald-100">
+        <X className="w-4 h-4" />
+      </button>
+    </div>
+  );
+}
+
+function CreatePostModal({ isOpen, onClose, onSubmit, isSubmitting }) {
+  const [title, setTitle] = useState("");
+  const [mention, setMention] = useState("");
+  const [message, setMessage] = useState("");
+  const [priority, setPriority] = useState("Medium");
+  const [postType, setPostType] = useState("Posts");
+  const [attachment, setAttachment] = useState(null);
+  const [showMentions, setShowMentions] = useState(false);
+  const mentionList = ["@Aneesh Raghu", "@Delbin Delbin", "@Anju Krishna", "@Fahad Quazi", "@Rahul Menon"];
+
+  const handleMentionChange = (e) => {
+    const val = e.target.value;
+    setMention(val);
+    if (val.includes("@")) setShowMentions(true);
+    else setShowMentions(false);
+  };
+
+  const selectMention = (m) => {
+    setMention(m);
+    setShowMentions(false);
+  };
+
+  const handleDragOver = (e) => e.preventDefault();
+  const handleDrop = (e) => {
+    e.preventDefault();
+    if (e.dataTransfer.files && e.dataTransfer.files.length > 0) {
+      setAttachment(e.dataTransfer.files[0]);
+    }
+  };
+
+  useEffect(() => {
+    if (isOpen) {
+      setTitle("");
+      setMention("");
+      setMessage("");
+      setPriority("Medium");
+      setPostType("Posts");
+      setAttachment(null);
+      setShowMentions(false);
+    }
+  }, [isOpen]);
+
+  if (!isOpen) return null;
+
+  const handleSubmit = () => {
+    if (!title.trim() || !message.trim()) {
+      alert("Please fill in the mandatory fields (Post Title, Description)");
+      return;
+    }
+    onSubmit({ title, mention, message, priority, postType, attachment });
+  };
+
+  return (
+    <div className="fixed inset-0 z-[100] flex items-center justify-center p-4 transition-opacity">
+      <div className="absolute inset-0 bg-slate-900/40 backdrop-blur-sm" onClick={onClose}></div>
+      <div className="relative w-full max-w-md rounded-2xl bg-white shadow-2xl overflow-hidden flex flex-col animate-in fade-in zoom-in-95 duration-200">
+        <button onClick={onClose} className="absolute top-4 right-4 text-slate-400 hover:text-slate-600 transition-colors">
+          <X className="w-5 h-5" />
+        </button>
+        <div className="px-6 pt-6 pb-4 max-h-[85vh] overflow-y-auto">
+          <h2 className="text-2xl font-serif text-slate-800 text-center mb-6">Create Post</h2>
+
+          <div className="space-y-4">
+            <div>
+              <label className="block text-[13px] text-slate-700 mb-1 font-medium ml-1">Post Title *</label>
+              <input
+                type="text"
+                value={title}
+                onChange={(e) => setTitle(e.target.value)}
+                className="w-full rounded-full border border-slate-400 px-3 py-1.5 text-sm focus:border-slate-800 focus:outline-none"
+              />
+            </div>
+
+            <div>
+              <label className="block text-[13px] text-slate-700 mb-1 font-medium ml-1">Post Type</label>
+              <div className="flex gap-2 bg-slate-100 p-1 rounded-full">
+                {["Posts", "Private", "Task Updates"].map((type) => (
+                  <button
+                    key={type}
+                    onClick={() => setPostType(type)}
+                    className={`flex-1 rounded-full px-3 py-1.5 text-xs font-semibold transition-colors ${
+                      postType === type
+                        ? "bg-white text-slate-800 shadow-sm"
+                        : "text-slate-500 hover:text-slate-700"
+                    }`}
+                  >
+                    {type}
+                  </button>
+                ))}
+              </div>
+            </div>
+
+            <div className="relative">
+              <label className="block text-[13px] text-slate-700 mb-1 font-medium ml-1">Mentioned</label>
+              <input
+                type="text"
+                value={mention}
+                onChange={handleMentionChange}
+                placeholder="@username"
+                className="w-full rounded-full border border-slate-400 px-3 py-1.5 text-sm focus:border-slate-800 focus:outline-none"
+              />
+              {showMentions && (
+                <ul className="absolute z-10 w-full mt-1 bg-white border border-slate-200 rounded-lg shadow-lg overflow-hidden max-h-32 overflow-y-auto">
+                  {mentionList.filter(m => m.toLowerCase().includes(mention.toLowerCase())).map(m => (
+                    <li key={m} onClick={() => selectMention(m)} className="px-3 py-2 text-sm text-slate-700 hover:bg-slate-100 cursor-pointer">
+                      {m}
+                    </li>
+                  ))}
+                </ul>
+              )}
+            </div>
+
+            <div>
+              <div className="flex justify-between mb-1 ml-1">
+                <label className="block text-[13px] text-slate-700 font-medium">Description *</label>
+                <span className="text-xs text-slate-400">{message.length}/500</span>
+              </div>
+              <textarea
+                value={message}
+                maxLength={500}
+                onChange={(e) => setMessage(e.target.value)}
+                className="w-full rounded-xl border border-slate-400 px-3 py-2 text-sm min-h-[90px] resize-none focus:border-slate-800 focus:outline-none"
+              ></textarea>
+            </div>
+
+            <div>
+              <label className="block text-[13px] text-slate-700 mb-1 font-medium ml-1">Attachment</label>
+              <div
+                className="rounded-xl border border-slate-400 border-dashed p-4 text-center cursor-pointer hover:bg-slate-50 transition-colors"
+                onClick={() => document.getElementById("post-attachment").click()}
+                onDragOver={handleDragOver}
+                onDrop={handleDrop}
+              >
+                <input
+                  type="file"
+                  id="post-attachment"
+                  className="hidden"
+                  onChange={(e) => { if(e.target.files.length) setAttachment(e.target.files[0]) }}
+                />
+                {attachment ? (
+                  <p className="text-sm font-medium text-emerald-600 truncate">{attachment.name}</p>
+                ) : (
+                  <p className="text-xs text-slate-500">Click to upload or drag and drop</p>
+                )}
+              </div>
+            </div>
+
+            <div>
+              <label className="block text-[13px] text-slate-700 mb-1 font-medium ml-1">priority Level</label>
+              <div className="flex gap-3">
+                <button
+                  onClick={() => setPriority("High")}
+                  className={`flex-1 rounded-full py-1.5 text-xs font-semibold transition-all ${
+                    priority === "High" ? "bg-red-500 text-white shadow-md" : "bg-red-100 text-red-700 hover:bg-red-200"
+                  }`}
+                >
+                  High
+                </button>
+                <button
+                  onClick={() => setPriority("Medium")}
+                  className={`flex-1 rounded-full py-1.5 text-xs font-semibold transition-all ${
+                    priority === "Medium" ? "bg-amber-400 text-white shadow-md" : "bg-amber-100 text-amber-700 hover:bg-amber-200"
+                  }`}
+                >
+                  Medium
+                </button>
+                <button
+                  onClick={() => setPriority("Low")}
+                  className={`flex-1 rounded-full py-1.5 text-xs font-semibold transition-all ${
+                    priority === "Low" ? "bg-emerald-500 text-white shadow-md" : "bg-emerald-100 text-emerald-700 hover:bg-emerald-200"
+                  }`}
+                >
+                  Low
+                </button>
+              </div>
+            </div>
+          </div>
+        </div>
+
+        <div className="px-6 py-4 flex items-center justify-center mt-2 pb-6">
+          <button
+            onClick={handleSubmit}
+            disabled={isSubmitting}
+            className="rounded-full bg-slate-400 px-8 py-2 text-sm font-semibold text-white hover:bg-slate-500 transition-colors flex items-center gap-2 shadow-sm"
+          >
+            {isSubmitting ? (
+              <span className="inline-block h-4 w-4 animate-spin rounded-full border-2 border-white border-t-transparent"></span>
+            ) : null}
+            Post
+          </button>
+        </div>
+      </div>
+    </div>
+  );
+}
+
 function ChatterCard({
   post,
   isComposerOpen,
@@ -292,40 +500,79 @@ function ChatterCard({
     <article className="ui-surface ui-card-pad flex flex-col gap-3">
       <div className="flex gap-4">
         <div className="flex-1 min-w-0">
-          <div className="flex flex-wrap items-center gap-x-2 gap-y-1">
-            <p className="truncate text-sm font-semibold uppercase tracking-tight text-slate-900">
-              {post.title}
-            </p>
-            <span className="text-xs text-slate-500">- {post.author}</span>
-          </div>
-          <p className="mt-1 text-xs text-slate-400">{post.time}</p>
-          <p className="mt-2 text-sm font-medium text-blue-600">{post.mention}</p>
-          <p className="mt-1.5 text-sm text-slate-700">{post.message}</p>
-          <div className="mt-3 flex items-center gap-4 text-xs text-slate-500 font-medium">
-            <button type="button" className="hover:text-slate-900 transition-colors">
-              Like
-            </button>
-            <button
-              type="button"
-              className={`transition-colors ${hasComments ? "font-semibold text-blue-600 hover:text-blue-700" : "hover:text-slate-900"}`}
-              onClick={onOpenComposer}
-            >
-              {hasComments ? "Commented" : "Comment"}
-            </button>
+          <div className="flex items-start gap-3">
+            {post.author === "Fahad Quazi" ? (
+              <img src="https://ui-avatars.com/api/?name=Fahad+Quazi&background=random" alt="Fahad" className="h-10 w-10 rounded-full object-cover shrink-0" />
+            ) : post.author === "Delbin Delbin" ? (
+              <img src="https://ui-avatars.com/api/?name=Delbin+Delbin&background=random" alt="Delbin" className="h-10 w-10 rounded-full object-cover shrink-0" />
+            ) : (
+              <div className="h-10 w-10 rounded-md bg-blue-600 text-white flex items-center justify-center font-bold italic text-lg shrink-0">
+                BR
+              </div>
+            )}
+            <div className="flex-1 min-w-0">
+              <div className="flex flex-wrap items-center gap-x-1 gap-y-0.5">
+                <p className="text-[15px] font-semibold uppercase tracking-tight text-blue-600">
+                  {post.title}
+                </p>
+                <span className="text-sm font-medium text-slate-600">- {post.author}</span>
+              </div>
+              <p className="text-xs text-slate-400 mt-0.5">{post.time}</p>
+              
+              <div className="mt-3">
+                <p className="text-sm font-medium text-blue-600 mb-1">{post.mention}</p>
+                <p className="text-sm text-slate-800 leading-relaxed whitespace-pre-wrap">{post.message}</p>
+                
+                {post.attachment && (
+                  <div className="mt-3">
+                    {post.attachment.type?.startsWith('image/') ? (
+                      <img src={URL.createObjectURL(post.attachment)} alt="attachment preview" className="rounded-md border border-slate-200 max-h-48 object-contain" />
+                    ) : (
+                      <div className="inline-flex items-center gap-3 p-2 border border-slate-200 rounded-md bg-slate-50 w-full max-w-sm">
+                        <div className="w-10 h-10 bg-white border border-slate-200 rounded flex items-center justify-center text-lg">
+                          📄
+                        </div>
+                        <div className="flex-1 min-w-0">
+                          <p className="text-sm font-medium text-slate-700 truncate">{post.attachment.name}</p>
+                          <p className="text-xs text-slate-500">{(post.attachment.size / 1024).toFixed(1)} KB</p>
+                        </div>
+                      </div>
+                    )}
+                  </div>
+                )}
+
+                <div className="mt-4 flex items-center gap-4 text-xs font-semibold text-slate-500">
+                  <button type="button" className="flex items-center gap-1.5 hover:text-slate-800 transition-colors">
+                    <ThumbsUp className="w-4 h-4" /> Like
+                  </button>
+                  <button
+                    type="button"
+                    className={`flex items-center gap-1.5 transition-colors ${hasComments ? "text-blue-600 hover:text-blue-700" : "hover:text-slate-800"}`}
+                    onClick={onOpenComposer}
+                  >
+                    <MessageCircle className="w-4 h-4" /> {hasComments ? "Commented" : "Comment"}
+                  </button>
+                </div>
+              </div>
+            </div>
           </div>
         </div>
-        <aside className="w-full max-w-[240px] border-l-4 border-slate-200 pl-4 text-xs text-slate-600 space-y-1">
-          <p><span className="font-medium text-slate-700">Project:</span> {post.projectName}</p>
-          <p><span className="font-medium text-slate-700">Responsible:</span> {post.responsibleUser}</p>
-          <div className="flex items-center gap-2 pt-1">
-            <span className="font-medium text-slate-700">Priority:</span>
-            <span
-              className={`inline-block h-2.5 w-2.5 rounded-full ${PRIORITY_STYLES[post.priority]}`}
-              aria-label={`${post.priority} priority`}
-            />
-          </div>
-          <p className="mt-3 text-slate-400">Seen by {post.seenBy}</p>
-        </aside>
+        
+        {post.postType === "Task Updates" || !post.postType ? (
+          <aside className="hidden sm:flex flex-col justify-between w-[220px] shrink-0 border-l-[3px] border-slate-800 pl-4 py-1 text-xs">
+            <div className="space-y-1.5 text-slate-800">
+              <p><span className="font-medium">Project Name:</span> {post.projectName}</p>
+              <p><span className="font-medium">Responsible User:</span> {post.responsibleUser}</p>
+              <div className="flex items-center gap-2">
+                <span className="font-medium">Priority Label:</span>
+                <span
+                  className={`inline-block h-3.5 w-3.5 rounded-full ${PRIORITY_STYLES[post.priority]}`}
+                />
+              </div>
+            </div>
+            <p className="text-right text-slate-500 mt-4 pr-2">Seen by {post.seenBy}</p>
+          </aside>
+        ) : null}
       </div>
       {isComposerOpen ? (
         <div className="mt-2 rounded-lg border border-slate-200 bg-slate-50 p-3">
@@ -366,6 +613,10 @@ export function ChatterScreen() {
   const [activeTab, setActiveTab] = useState("posts");
   const [openTaskId, setOpenTaskId] = useState(null);
   const [currentDate, setCurrentDate] = useState(new Date(2026, 2, 3));
+  
+  const [isCreateModalOpen, setIsCreateModalOpen] = useState(false);
+  const [isSubmitting, setIsSubmitting] = useState(false);
+  const [toastMessage, setToastMessage] = useState(null);
 
   const weekLabel = useMemo(() => {
     const start = new Date(currentDate);
@@ -508,6 +759,36 @@ export function ChatterScreen() {
     setOpenComposerPostId(null);
   };
 
+  const handleCreatePost = async (postData) => {
+    setIsSubmitting(true);
+    await new Promise((resolve) => setTimeout(resolve, 800));
+
+    const newPost = {
+      id: `new-${Date.now()}`,
+      title: postData.title,
+      author: CURRENT_USER,
+      time: "just now",
+      mention: postData.mention,
+      message: postData.message,
+      projectName: postData.title,
+      responsibleUser: CURRENT_USER,
+      priority: postData.priority.toLowerCase(),
+      seenBy: 0,
+      comments: [],
+      updatedAt: new Date().toISOString(),
+      postType: postData.postType,
+      attachment: postData.attachment,
+    };
+
+    setPosts((prev) => [newPost, ...prev]);
+    setIsSubmitting(false);
+    setIsCreateModalOpen(false);
+    setActiveTab("posts");
+
+    setToastMessage("Post created successfully!");
+    setTimeout(() => setToastMessage(null), 3000);
+  };
+
   return (
     <div className="app-shell font-sans">
       <Navbar />
@@ -559,10 +840,12 @@ export function ChatterScreen() {
             </button>
             <button
               type="button"
-              className="grid h-8 w-8 place-items-center rounded-md bg-blue-600 text-white shadow-sm transition hover:bg-blue-700"
+              onClick={() => setIsCreateModalOpen(true)}
+              className="flex h-8 items-center gap-1.5 rounded-md bg-blue-600 px-3 text-sm font-medium text-white shadow-sm transition hover:bg-blue-700"
               aria-label="Create new chatter post"
             >
               <PlusSquare className="h-4 w-4" />
+              <span className="hidden sm:inline">Create Post</span>
             </button>
           </div>
         </div>
@@ -659,6 +942,13 @@ export function ChatterScreen() {
           </section>
         ) : null}
 
+        <CreatePostModal 
+          isOpen={isCreateModalOpen} 
+          onClose={() => setIsCreateModalOpen(false)} 
+          onSubmit={handleCreatePost} 
+          isSubmitting={isSubmitting} 
+        />
+        <Toast message={toastMessage} onClose={() => setToastMessage(null)} />
       </main>
     </div>
   );

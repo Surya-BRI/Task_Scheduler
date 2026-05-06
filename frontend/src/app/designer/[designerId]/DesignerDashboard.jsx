@@ -1,5 +1,6 @@
 "use client";
 import { useState, useEffect } from "react";
+import { useRouter, useSearchParams } from "next/navigation";
 import { Navbar } from "@/components/Navbar";
 import StatsBar from "./components/StatsBar";
 import SchedulerGrid from "./components/SchedulerGrid";
@@ -13,6 +14,10 @@ import {
 } from "@/features/scheduler/utils/designerDashboardSync";
 
 export default function DesignerDashboard({ designer }) {
+  const router = useRouter();
+  const searchParams = useSearchParams();
+  const isDesignerMode = searchParams?.get("from") !== "home";
+  
   const [activePanel, setActivePanel] = useState(null); // "onHold" | "completed" | null
   const [scheduleData, setScheduleData] = useState(() => {
     const initial = {};
@@ -122,7 +127,7 @@ export default function DesignerDashboard({ designer }) {
       </div>
       
       {/* Stats Bar */}
-      <StatsBar stats={displayStats} />
+      <StatsBar stats={displayStats} isDesignerMode={isDesignerMode} />
 
       {/* Main content */}
       <div className="flex min-w-0 flex-1 gap-6 px-4 py-5 sm:px-6 sm:py-6">
@@ -155,6 +160,15 @@ export default function DesignerDashboard({ designer }) {
             >
               Completed Tasks
             </button>
+            {isDesignerMode && (
+              <button
+                type="button"
+                onClick={() => router.push(`/designer/${designer.id}/requests#overtime`)}
+                className="ui-chip-button ml-auto bg-[#e6e8fc] text-[#5d5baf] border border-[#d2d5f8] hover:bg-[#d8dcfb] font-semibold"
+              >
+                Overtime Request
+              </button>
+            )}
           </div>
 
           {/* On Hold Tasks Table */}

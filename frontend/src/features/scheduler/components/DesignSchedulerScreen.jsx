@@ -214,7 +214,7 @@ function buildPreparedDropAssignment({
 const TASK_COLORS = [
     "bg-orange-100 border border-orange-300 text-orange-800",
     "bg-blue-100 border border-blue-300 text-blue-800",
-    "bg-indigo-100 border border-indigo-300 text-indigo-800",
+    "bg-blue-100 border border-blue-300 text-blue-800",
     "bg-purple-100 border border-purple-300 text-purple-800",
     "bg-green-100 border border-green-300 text-green-800",
     "bg-pink-100 border border-pink-300 text-pink-800",
@@ -631,7 +631,7 @@ export function DesignSchedulerScreen() {
              <div className="flex items-center justify-between font-semibold text-slate-900 mb-2 text-xl tracking-tight">
                Design Tasks
              </div>
-             <div className="flex gap-4 text-xs font-medium text-gray-500 mb-4">
+             <div className="flex gap-4 text-xs font-medium text-slate-500 mb-4">
                <span className="flex items-center gap-1"><ClockIcon /> {unassignedTasks.reduce((acc, t) => acc + t.estimatedHours, 0) + onHoldTasks.reduce((acc, t) => acc + t.estimatedHours, 0)}h</span>
                <span>{unassignedTasks.length + onHoldTasks.length} Tasks</span>
                {onHoldTasks.length > 0 && <span className="text-red-500 flex items-center gap-1"><AlertTriangle size={12}/> {onHoldTasks.length}</span>}
@@ -648,7 +648,7 @@ export function DesignSchedulerScreen() {
                 {onHoldTasks.map(task => (<div key={task.id} draggable onDragStart={(e) => handleDragStart(e, task.id, "on-hold")} onDragEnd={() => setDropIndicator(null)} onClick={() => router.push(`/design-list/record/${encodeURIComponent(getDesignListRoutingTaskId(task))}?from=design-scheduler`)} className={`p-2 rounded cursor-grab active:cursor-grabbing flex flex-col relative bg-white shadow-sm hover:shadow-md transition-shadow ${task.colorClass}`}>
                     <div className="flex justify-between items-start">
                       <span className="font-semibold text-[11px] leading-tight pr-5">{getTaskLabel(task)}</span>
-                      <button className="bg-gray-200 hover:bg-gray-300 rounded-full p-0.5 text-gray-600 transition-colors absolute right-1.5 top-1.5">
+                      <button className="bg-slate-200 hover:bg-slate-300 rounded-full p-0.5 text-slate-600 transition-colors absolute right-1.5 top-1.5">
                         <PauseCircle size={10}/>
                       </button>
                     </div>
@@ -684,9 +684,9 @@ export function DesignSchedulerScreen() {
                   {visibleDays.map((dayIndex) => {
             const date = weekDates[dayIndex];
             const isWeekend = dayIndex >= 5;
-            return (<button key={`header-day-${dayIndex}`} type="button" onClick={() => viewMode === "custom" && handleDayToggle(dayIndex)} className={`px-2 py-2 text-center border-r ${isWeekend ? 'border-orange-100 bg-gray-100 text-gray-400' : 'border-gray-200'} ${viewMode === "custom" ? "cursor-pointer hover:bg-indigo-50/70 transition-colors" : "cursor-default"}`} title={viewMode === "custom" ? "Toggle day visibility" : undefined}>
-                        {date.toLocaleDateString("en-US", { weekday: "short" })} <span className={`font-normal ml-1 ${isWeekend ? 'text-gray-400' : 'text-gray-400'}`}>{date.getDate()}</span>
-                        {isWeekend && <span className="block text-[8px] text-gray-400 font-normal normal-case tracking-wide">Holiday</span>}
+            return (<button key={`header-day-${dayIndex}`} type="button" onClick={() => viewMode === "custom" && handleDayToggle(dayIndex)} className={`px-2 py-2 text-center border-r ${isWeekend ? 'border-orange-100 bg-slate-100 text-slate-400' : 'border-slate-200'} ${viewMode === "custom" ? "cursor-pointer hover:bg-blue-50/70 transition-colors" : "cursor-default"}`} title={viewMode === "custom" ? "Toggle day visibility" : undefined}>
+                        {date.toLocaleDateString("en-US", { weekday: "short" })} <span className={`font-normal ml-1 ${isWeekend ? 'text-slate-400' : 'text-slate-400'}`}>{date.getDate()}</span>
+                        {isWeekend && <span className="block text-[8px] text-slate-400 font-normal normal-case tracking-wide">Holiday</span>}
                       </button>);
         })}
                 </div>
@@ -698,23 +698,23 @@ export function DesignSchedulerScreen() {
             const booked = getDesignerBookedHours(designer.id);
             const overloaded = isDesignerOverloaded(designer.id);
             const designerDays = schedules[designer.id] || {};
-            return (<div key={designer.id} className="flex border-b border-gray-100 group relative min-h-[56px] items-stretch">
+            return (<div key={designer.id} className="flex border-b border-slate-100 group relative min-h-[56px] items-stretch">
                       {/* Left: Designer Info */}
-                      <div className="w-[180px] shrink-0 py-1.5 px-3 flex items-center gap-2 border-r border-gray-200 bg-white z-10 transition-colors group-hover:bg-blue-50 cursor-pointer" onClick={() => {
+                      <div className="w-[180px] shrink-0 py-1.5 px-3 flex items-center gap-2 border-r border-slate-200 bg-white z-10 transition-colors group-hover:bg-blue-50 cursor-pointer" onClick={() => {
                           const routeData = buildDesignerSnapshot(tasks, designerDays);
                           sessionStorage.setItem(`designer_data_${designer.id}`, JSON.stringify(routeData));
-                          router.push(`/designer/${designer.id}`);
+                          router.push(`/designer/${designer.id}?from=home`);
                       }} title={`Open ${designer.name}'s dashboard`}>
                         <div className="w-6 h-6 rounded-full bg-slate-800 text-white flex items-center justify-center text-[10px] font-bold leading-none shrink-0 shadow-sm">
                           {designer.initials}
                         </div>
                         <div className="flex flex-col overflow-hidden w-full justify-center">
-                          <span className="text-[11px] font-semibold text-gray-900 truncate tracking-tight">{designer.name}</span>
+                          <span className="text-[11px] font-semibold text-slate-900 truncate tracking-tight">{designer.name}</span>
                           <div className="flex items-center gap-1">
-                            <div className="flex-1 h-1 bg-gray-100 border border-gray-200 rounded-full mt-0.5 overflow-hidden">
+                            <div className="flex-1 h-1 bg-slate-100 border border-slate-200 rounded-full mt-0.5 overflow-hidden">
                                <div className={`h-full rounded-full transition-all ${overloaded ? 'bg-red-400' : 'bg-blue-400'}`} style={{ width: `${Math.min((booked / WEEKLY_CAPACITY) * 100, 100)}%` }}></div>
                             </div>
-                            <span className={`text-[9px] font-bold mt-0.5 ${overloaded ? 'text-red-500' : 'text-gray-400'}`}>{booked}h</span>
+                            <span className={`text-[9px] font-bold mt-0.5 ${overloaded ? 'text-red-500' : 'text-slate-400'}`}>{booked}h</span>
                           </div>
                         </div>
                       </div>
@@ -736,17 +736,17 @@ export function DesignSchedulerScreen() {
                     const gravityPct = Math.min((dayHours / DAILY_CAPACITY) * 100, 100);
                     return (<div key={dayIndex} className={`border-r relative flex flex-col transition-colors overflow-hidden
                                 ${isWeekend
-                            ? 'bg-gray-100 border-gray-200 cursor-not-allowed'
+                            ? 'bg-slate-100 border-slate-200 cursor-not-allowed'
                             : isDayOverloaded
-                                ? 'border-gray-100 bg-red-50/40'
-                                : 'border-gray-100 hover:bg-blue-50/30'}
+                                ? 'border-slate-100 bg-red-50/40'
+                                : 'border-slate-100 hover:bg-blue-50/30'}
                               `} onDragOver={isWeekend ? undefined : handleDragOver} onDrop={isWeekend ? undefined : (e) => handleDropToDay(e, designer.id, dayIndex)}>
                               {/* Gravity fill bar (background) — weekdays only */}
                               {!isWeekend && dayHours > 0 && (<div className={`absolute bottom-0 left-0 right-0 transition-all opacity-20 ${isDayOverloaded ? 'bg-red-400' : 'bg-blue-400'}`} style={{ height: `${gravityPct}%` }}/>)}
                               {/* Tasks list (single horizontal lane; auto-fit within cell width) */}
                               <div className="flex-1 min-h-0 p-1 relative z-10">
                                 {isWeekend ? (<div className="w-full h-full flex items-center justify-center">
-                                    <span className="text-[8px] text-gray-400 font-medium select-none">—</span>
+                                    <span className="text-[8px] text-slate-400 font-medium select-none">—</span>
                                   </div>) : (<div className="h-full overflow-hidden">
                                     <div className="h-full w-full flex flex-nowrap items-center gap-1 pr-0.5">
                                     {tasksInDay.map((taskId, idx) => {

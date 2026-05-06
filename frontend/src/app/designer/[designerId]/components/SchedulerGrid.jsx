@@ -21,7 +21,7 @@ const TASK_BG = {
 };
 
 function TaskBlock({ task }) {
-  const bgClass = task.colorClass || TASK_BG[task.color] || "bg-gray-100 border border-gray-300 text-gray-800";
+  const bgClass = task.colorClass || TASK_BG[task.color] || "bg-slate-100 border border-slate-300 text-slate-800";
   return (
     <div className="h-full flex items-center w-full relative z-10 px-0.5">
       <div className={`h-[24px] w-full min-w-0 rounded flex items-center justify-between px-1 shadow-sm transition-shadow truncate ${bgClass}`}>
@@ -48,19 +48,19 @@ function SchedulerRow({ day, daySlot }) {
     .filter((task) => task.endHr > task.startHr);
 
   return (
-    <div className="flex border-b border-gray-100 group relative min-h-[56px] items-stretch">
+    <div className="flex border-b border-slate-100 group relative min-h-[56px] items-stretch">
       {/* Day label */}
       <div
-        className={`w-[180px] shrink-0 py-1.5 px-4 flex items-center border-r border-gray-200 z-10 transition-colors group-hover:bg-gray-50 ${isWeekend ? 'bg-gray-50' : 'bg-white'}`}
+        className={`w-[180px] shrink-0 py-1.5 px-4 flex items-center border-r border-slate-200 z-10 transition-colors group-hover:bg-slate-50 ${isWeekend ? 'bg-slate-50' : 'bg-white'}`}
       >
-        <span className={`text-[11px] font-semibold truncate tracking-tight ${isWeekend ? 'text-gray-400' : 'text-gray-900'}`}>{day}</span>
+        <span className={`text-[11px] font-semibold truncate tracking-tight ${isWeekend ? 'text-slate-400' : 'text-slate-900'}`}>{day}</span>
       </div>
 
       {/* Time grid with exact hour-based positioning */}
       <div className="flex-1 relative">
         <div
           className={`h-full grid relative ${
-            isWeekend ? "bg-gray-100" : "bg-white group-hover:bg-blue-50/20"
+            isWeekend ? "bg-slate-100" : "bg-white group-hover:bg-blue-50/20"
           }`}
           style={{ gridTemplateColumns: `repeat(${TOTAL_COLS}, minmax(0, 1fr))` }}
         >
@@ -70,13 +70,13 @@ function SchedulerRow({ day, daySlot }) {
             return (
               <div
                 key={`${day}-cell-${index}`}
-                className={`border-r border-gray-100 ${
+                className={`border-r border-slate-100 ${
                   isWeekend
-                    ? "bg-gray-100 border-gray-200"
+                    ? "bg-slate-100 border-slate-200"
                     : isOutsideAssigned
                       ? isOvertime
                         ? "bg-red-50/25"
-                        : "bg-gray-50"
+                        : "bg-slate-50"
                       : isOvertime
                         ? "bg-red-50/40"
                         : "bg-white"
@@ -110,15 +110,15 @@ function SchedulerRow({ day, daySlot }) {
 
 export default function SchedulerGrid({ schedule }) {
   return (
-    <div className="border border-gray-300 rounded-sm overflow-hidden text-xs">
+    <div className="border border-slate-300 rounded-sm overflow-hidden text-xs">
       {/* Header row */}
-      <div className="flex bg-[#f0f3fa] text-gray-600 text-xs uppercase font-semibold outline outline-1 outline-gray-200 shadow-sm" style={{ minHeight: 32 }}>
-        <div className="w-[180px] shrink-0 px-4 py-2 border-r border-gray-200 flex items-center">DAY</div>
+      <div className="flex bg-[#f0f3fa] text-slate-600 text-xs uppercase font-semibold outline outline-1 outline-slate-200 shadow-sm" style={{ minHeight: 32 }}>
+        <div className="w-[180px] shrink-0 px-4 py-2 border-r border-slate-200 flex items-center">DAY</div>
         {/* Normal hour headers */}
         {HOUR_COLS.slice(0, NORMAL_COL_COUNT).map((h) => (
           <div
             key={h}
-            className="flex-1 flex items-center justify-center text-[10px] font-semibold border-r border-gray-200 px-2 text-center"
+            className="flex-1 flex items-center justify-center text-[10px] font-semibold border-r border-slate-200 px-2 text-center"
             style={{ minWidth: 0 }}
           >
             {h}
@@ -128,7 +128,7 @@ export default function SchedulerGrid({ schedule }) {
         {HOUR_COLS.slice(NORMAL_COL_COUNT).map((h) => (
           <div
             key={h}
-            className="flex-1 flex items-center justify-center text-[10px] font-semibold border-r border-gray-200 px-2 text-center bg-red-50/50"
+            className="flex-1 flex items-center justify-center text-[10px] font-semibold border-r border-slate-200 px-2 text-center bg-red-50/50"
             style={{ minWidth: 0 }}
           >
             {h}
