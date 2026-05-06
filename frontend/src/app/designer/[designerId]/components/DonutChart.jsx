@@ -66,13 +66,13 @@ export default function DonutChart({ donut }) {
         <canvas ref={canvasRef} width={150} height={150} />
         {/* Center text */}
         <div className="absolute inset-0 flex flex-col items-center justify-center pointer-events-none">
-          <span className="text-lg font-extrabold text-gray-900 leading-none">{centerPct}%</span>
-          <span className="text-sm font-bold text-gray-700 leading-none mt-0.5">{centerTotal}</span>
+          <span className="text-lg font-extrabold text-slate-900 leading-none">{centerPct}%</span>
+          <span className="text-sm font-bold text-slate-700 leading-none mt-0.5">{centerTotal}</span>
         </div>
       </div>
 
       {/* Legend */}
-      <div className="flex flex-col gap-1 text-xs text-gray-700 w-full px-2">
+      <div className="flex flex-col gap-1 text-xs text-slate-700 w-full px-2">
         <div className="flex items-center gap-2">
           <span className="h-3 w-3 rounded-sm shrink-0" style={{ backgroundColor: donut.active.color }} />
           <span className="font-semibold">Active</span>

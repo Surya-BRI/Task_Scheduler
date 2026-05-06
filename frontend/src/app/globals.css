@@ -53,3 +53,63 @@ body {
 .ui-card-pad {
   @apply p-4 sm:p-5;
 }
+
+/* Filters / popovers — shared with dashboard-style screens */
+.ui-filter-label {
+  @apply mb-1.5 block text-xs font-semibold uppercase tracking-wide text-slate-500;
+}
+
+.ui-select-trigger {
+  @apply flex w-full min-h-10 items-center justify-between gap-2 rounded-lg border border-slate-200 bg-white px-3 py-2 text-left text-sm font-medium text-slate-800 shadow-sm transition-colors hover:bg-slate-50 focus:outline-none focus-visible:ring-2 focus-visible:ring-blue-300;
+}
+
+.ui-popover-panel {
+  @apply rounded-xl border border-slate-200 bg-white shadow-lg ring-1 ring-black/5;
+}
+
+.ui-segmented {
+  @apply inline-flex rounded-full border border-slate-200 bg-slate-100/90 p-0.5 gap-0.5;
+}
+
+.ui-segmented-tab {
+  @apply cursor-pointer rounded-full border border-transparent px-3 py-1.5 text-sm font-semibold text-slate-600 outline-none transition-colors hover:bg-white/80 focus-visible:ring-2 focus-visible:ring-blue-300 whitespace-nowrap;
+}
+
+.ui-segmented-tab-active {
+  @apply bg-blue-50 text-blue-700 shadow-sm hover:bg-blue-50;
+}
+
+.ui-page-shell {
+  @apply flex min-h-0 w-full flex-1 flex-col gap-6 px-4 py-4 sm:px-6 sm:py-6;
+}
+
+/* Team Activity page — tighter shell so feed fills viewport sooner */
+.ui-page-shell.ta-page-shell {
+  @apply gap-3 px-3 py-3 sm:gap-3 sm:px-4 sm:py-4;
+}
+
+/* Team Activity — compact filter panel (scoped, does not alter other screens) */
+
+.ta-filter-toolbar.ta-filter-panel .ui-filter-label {
+  @apply mb-0.5;
+}
+
+.ta-filter-panel .ui-filter-label {
+  @apply mb-1 text-[10px] leading-tight;
+}
+
+.ta-filter-panel .ui-select-trigger {
+  @apply min-h-9 gap-1.5 px-2.5 py-1.5 text-xs font-medium;
+}
+
+.ta-filter-panel .ui-select-trigger svg {
+  @apply size-4 shrink-0;
+}
+
+.ta-filter-panel .ui-segmented-tab {
+  @apply px-2.5 py-1 text-xs font-semibold;
+}
+
+.ta-filter-panel .ui-popover-panel button[role="option"] {
+  @apply px-2.5 py-1.5 text-xs;
+}

@@ -20,12 +20,16 @@ const toPositiveHours = (value) => {
 const buildDaySlot = (taskIds, tasksMap) => {
   let cursor = 0;
   const rawTasks = [];
+  const rawTaskIds = [];
+  const rawRecordIds = [];
 
   for (const taskId of taskIds) {
     const task = tasksMap[taskId];
     if (!task) continue;
     const hours = toPositiveHours(task.estimatedHours);
     if (!hours) continue;
+    rawTaskIds.push(task.id);
+    rawRecordIds.push(task.parentId ?? task.id);
 
     const startHr = cursor;
     const endHr = cursor + hours;
@@ -60,25 +64,48 @@ const buildDaySlot = (taskIds, tasksMap) => {
     assignedStartHr,
     assignedEndHr,
     tasks: boundedTasks,
+    rawTaskIds,
+    rawRecordIds,
   };
 };
 
 export const buildDesignerSnapshot = (tasksMap, designerScheduleByDayIndex = {}) => {
   const schedule = {};
+  const dayTaskRecordIds = {};
   let totalHours = 0;
   let totalTasks = 0;
+  const assignedRecordIds = [];
+  const seenAssignedRecordIds = new Set();
 
   DAY_NAMES.forEach((dayName, dayIndex) => {
     const dayKey = dayIndex.toString();
     const taskIds = designerScheduleByDayIndex[dayKey] || [];
+    const recordIdsForDay = [];
+    const seenRecordIdsForDay = new Set();
+    for (const taskId of taskIds) {
+      const task = tasksMap[taskId];
+      if (!task) continue;
+      const recordId = task.parentId ?? task.id;
+      if (!recordId || seenRecordIdsForDay.has(recordId)) continue;
+      seenRecordIdsForDay.add(recordId);
+      recordIdsForDay.push(recordId);
+    }
+    dayTaskRecordIds[dayName] = recordIdsForDay;
     const daySlot = buildDaySlot(taskIds, tasksMap);
     schedule[dayName] = daySlot;
     totalTasks += daySlot.tasks.length;
     totalHours += daySlot.tasks.reduce((acc, task) => acc + task.estimatedHours, 0);
+    for (const recordId of daySlot.rawRecordIds || []) {
+      if (!recordId || seenAssignedRecordIds.has(recordId)) continue;
+      seenAssignedRecordIds.add(recordId);
+      assignedRecordIds.push(recordId);
+    }
   });
 
   return {
     schedule,
+    dayTaskRecordIds,
+    assignedRecordIds,
     stats: {
       tasks: totalTasks,
       hours: totalHours,

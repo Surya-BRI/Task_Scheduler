@@ -1,3 +1,5 @@
+'use client'
+
 const VARIANT_CLASSES = {
   primary: "bg-blue-600 text-white hover:bg-blue-700",
   secondary: "border border-slate-300 bg-white text-slate-700 hover:bg-slate-50",

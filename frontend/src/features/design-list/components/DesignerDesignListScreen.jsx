@@ -1,22 +1,29 @@
 "use client";
 
-import { useState } from "react";
+import { useEffect, useMemo, useState } from "react";
 import { useRouter } from "next/navigation";
 import {
   Calendar,
   Clock,
-  Eye,
   Filter,
   GalleryVerticalEnd,
-  History,
   LayoutGrid,
   List,
+  Pause,
+  Play,
   Search,
-  UserRoundPlus,
+  Square,
   Users,
 } from "lucide-react";
 import { useDesignListStore } from "@/state/DesignListContext";
 import { Navbar } from "@/components/Navbar";
+import { ProjectTaskTimer } from "@/components/ProjectTaskTimer";
+import {
+  SCHEDULER_DASHBOARD_SYNC_EVENT,
+  SCHEDULER_DASHBOARD_SYNC_KEY,
+} from "@/features/scheduler/utils/designerDashboardSync";
+
+const ALEX_DESIGNER_ID = "d1";
 
 const getStatusColor = (status) => {
   switch (status) {
@@ -52,12 +59,12 @@ const getStatusDot = (status) => {
   }
 };
 
-function recordDetailPath(id) {
-  return `/design-list/record/${id}`;
+function recordQuery(extra = {}) {
+  return new URLSearchParams({ from: "alex-design-list", ...extra }).toString();
 }
 
-function recordTabPath(id, tab) {
-  return `${recordDetailPath(id)}?tab=${tab}`;
+function recordDetailPath(id, extra = {}) {
+  return `/design-list/record/${id}?${recordQuery(extra)}`;
 }
 
 const Toolbar = ({ viewMode, setViewMode, filters, setFilters, salesPersons }) => {
@@ -73,7 +80,7 @@ const Toolbar = ({ viewMode, setViewMode, filters, setFilters, salesPersons }) =
 
   return (
     <div className="mb-4 mt-4 flex flex-col gap-4 px-4 sm:px-6 md:flex-row md:items-center md:justify-between">
-      <h1 className="text-2xl font-semibold tracking-tight text-slate-900 leading-none shrink-0">Design List</h1>
+      <h1 className="text-2xl font-semibold tracking-tight text-slate-900 leading-none shrink-0">Alex Johnson Design List</h1>
 
       <div className="relative flex flex-wrap items-center justify-end gap-2 sm:gap-3 md:ml-auto">
         <div className="relative mr-2 hidden md:block">
@@ -119,7 +126,7 @@ const Toolbar = ({ viewMode, setViewMode, filters, setFilters, salesPersons }) =
                       searchQuery: filters.searchQuery,
                     })
                   }
-                    className="cursor-pointer rounded bg-red-50 px-2 py-1 text-xs font-medium text-red-500 transition-colors hover:text-red-700"
+                  className="cursor-pointer rounded bg-red-50 px-2 py-1 text-xs font-medium text-red-500 transition-colors hover:text-red-700"
                 >
                   Clear All
                 </button>
@@ -279,7 +286,7 @@ const Table = ({ data }) => {
           </thead>
           <tbody className="divide-y divide-slate-100">
             {data.map((row) => (
-              <tr key={row.id} className="hover:bg-slate-50 transition-colors">
+              <tr key={row.__rowKey ?? row.id} className="hover:bg-slate-50 transition-colors">
                 <td className="px-2 py-1">
                   <button
                     type="button"
@@ -327,31 +334,8 @@ const Table = ({ data }) => {
                   {row.agingDays} d
                 </td>
                 <td className="px-2 py-1">
-                  <div className="flex items-center justify-center gap-1.5 text-slate-400">
-                    <button
-                      type="button"
-                      onClick={() => router.push(recordDetailPath(row.id))}
-                      className="rounded p-0.5 hover:text-blue-600 transition-colors"
-                      title="Details"
-                    >
-                      <Eye size={12} />
-                    </button>
-                    <button
-                      type="button"
-                      onClick={() => router.push(recordTabPath(row.id, "activity"))}
-                      className="rounded p-0.5 hover:text-emerald-600 transition-colors"
-                      title="Activity"
-                    >
-                      <History size={12} />
-                    </button>
-                    <button
-                      type="button"
-                      onClick={() => router.push(recordTabPath(row.id, "chatter"))}
-                      className="rounded p-0.5 hover:text-violet-600 transition-colors"
-                      title="Chatter"
-                    >
-                      <UserRoundPlus size={12} />
-                    </button>
+                  <div className="inline-flex items-center justify-center">
+                    <ProjectTaskTimer taskId={String(row.id)} inline />
                   </div>
                 </td>
               </tr>
@@ -388,7 +372,7 @@ const Board = ({ data }) => {
               .filter((d) => d.status === col.status)
               .map((item) => (
                 <div
-                  key={item.id}
+                  key={item.__rowKey ?? item.id}
                   onClick={() => router.push(recordDetailPath(item.id))}
                   className={`p-2.5 min-h-[84px] rounded-lg border flex flex-col cursor-pointer hover:ring-1 hover:ring-blue-300/60 ${
                     getStatusColor(item.status).replace("text-", "text-slate-900 border-").split(" ")[0]
@@ -415,19 +399,27 @@ const Board = ({ data }) => {
                     <div className="flex items-center gap-0.5 shrink-0" onClick={(e) => e.stopPropagation()}>
                       <button
                         type="button"
-                        onClick={() => router.push(recordTabPath(item.id, "activity"))}
-                        className="grid h-6 w-6 place-items-center rounded-full bg-white/90 text-slate-600 ring-1 ring-slate-200 hover:text-emerald-600"
-                        title="Activity"
+                        onClick={() => router.push(recordDetailPath(item.id, { autostart: "1" }))}
+                        className="grid h-6 w-6 place-items-center rounded-full bg-white/90 text-emerald-600 ring-1 ring-slate-200 hover:bg-emerald-50"
+                        title="Start timer"
                       >
-                        <History size={11} />
+                        <Play size={11} className="fill-current" />
                       </button>
                       <button
                         type="button"
-                        onClick={() => router.push(recordTabPath(item.id, "chatter"))}
-                        className="grid h-6 w-6 place-items-center rounded-full bg-white/90 text-slate-600 ring-1 ring-slate-200 hover:text-violet-600"
-                        title="Chatter"
+                        onClick={() => router.push(recordDetailPath(item.id, { openPause: "1" }))}
+                        className="grid h-6 w-6 place-items-center rounded-full bg-white/90 text-amber-500 ring-1 ring-slate-200 hover:bg-amber-50"
+                        title="Pause timer"
                       >
-                        <UserRoundPlus size={11} />
+                        <Pause size={11} />
+                      </button>
+                      <button
+                        type="button"
+                        onClick={() => router.push(recordDetailPath(item.id, { openComplete: "1" }))}
+                        className="grid h-6 w-6 place-items-center rounded-full bg-white/90 text-red-600 ring-1 ring-slate-200 hover:bg-red-50"
+                        title="Stop and submit"
+                      >
+                        <Square size={10} className="fill-current" />
                       </button>
                     </div>
                   </div>
@@ -440,9 +432,9 @@ const Board = ({ data }) => {
   );
 };
 
-export function DesignListScreen() {
+export function DesignerDesignListScreen() {
   const { records } = useDesignListStore();
-  const designs = records;
+  const [assignedRecordIds, setAssignedRecordIds] = useState([]);
   const [viewMode, setViewMode] = useState("list");
   const [filters, setFilters] = useState({
     type: "",
@@ -452,6 +444,89 @@ export function DesignListScreen() {
     endDate: "",
     searchQuery: "",
   });
+
+  useEffect(() => {
+    if (typeof window === "undefined") return undefined;
+
+    const applySnapshot = () => {
+      try {
+        const raw = localStorage.getItem(SCHEDULER_DASHBOARD_SYNC_KEY);
+        if (!raw) {
+          setAssignedRecordIds([]);
+          return;
+        }
+        const parsed = JSON.parse(raw);
+        const schedule = parsed?.designers?.[ALEX_DESIGNER_ID]?.schedule ?? {};
+        const dayTaskRecordIds = parsed?.designers?.[ALEX_DESIGNER_ID]?.dayTaskRecordIds ?? {};
+        const assignedRecordIds = parsed?.designers?.[ALEX_DESIGNER_ID]?.assignedRecordIds ?? [];
+        const orderedDayNames = ["Monday", "Tuesday", "Wednesday", "Thursday", "Friday", "Saturday", "Sunday"];
+        const ids = [];
+
+        const flatDayIds = [];
+        for (const dayName of orderedDayNames) {
+          const dayIds = dayTaskRecordIds?.[dayName] ?? [];
+          for (const recordId of dayIds) {
+            flatDayIds.push(recordId);
+          }
+        }
+        if (flatDayIds.length) {
+          for (const recordId of flatDayIds) {
+            if (!recordId) continue;
+            ids.push(recordId);
+          }
+          setAssignedRecordIds(ids);
+          return;
+        }
+
+        if (assignedRecordIds.length) {
+          for (const recordId of assignedRecordIds) {
+            if (!recordId) continue;
+            ids.push(recordId);
+          }
+          setAssignedRecordIds(ids);
+          return;
+        }
+
+        for (const dayName of orderedDayNames) {
+          const dayTasks = schedule?.[dayName]?.tasks ?? [];
+          const rawRecordIds = schedule?.[dayName]?.rawRecordIds ?? [];
+          const rawTaskIds = schedule?.[dayName]?.rawTaskIds ?? [];
+          const sourceIds = rawRecordIds.length
+            ? rawRecordIds
+            : rawTaskIds.length
+              ? rawTaskIds
+              : dayTasks.map((task) => task?.id);
+          for (const taskId of sourceIds) {
+            if (!taskId) continue;
+            ids.push(taskId);
+          }
+        }
+        setAssignedRecordIds(ids);
+      } catch {
+        setAssignedRecordIds([]);
+      }
+    };
+
+    applySnapshot();
+    window.addEventListener(SCHEDULER_DASHBOARD_SYNC_EVENT, applySnapshot);
+    window.addEventListener("storage", applySnapshot);
+    return () => {
+      window.removeEventListener(SCHEDULER_DASHBOARD_SYNC_EVENT, applySnapshot);
+      window.removeEventListener("storage", applySnapshot);
+    };
+  }, []);
+
+  const designs = useMemo(() => {
+    if (assignedRecordIds.length < 1) return [];
+    const recordById = new Map(records.map((record) => [record.id, record]));
+    return assignedRecordIds
+      .map((id, index) => {
+        const record = recordById.get(id);
+        if (!record) return null;
+        return { ...record, __rowKey: `${id}-${index}` };
+      })
+      .filter(Boolean);
+  }, [assignedRecordIds, records]);
 
   const uniqueSalesPersons = Array.from(new Set(designs.map((d) => d.salesPerson))).sort();
 
@@ -491,7 +566,7 @@ export function DesignListScreen() {
 
   return (
     <div className="app-shell h-screen flex flex-col overflow-hidden font-sans">
-      <Navbar />
+      <Navbar lockPrimaryNav />
       <div className="flex-1 flex flex-col min-h-0">
         <div className="shrink-0">
           <Toolbar
@@ -502,7 +577,15 @@ export function DesignListScreen() {
             salesPersons={uniqueSalesPersons}
           />
         </div>
-        {viewMode === "list" ? <Table data={filteredDesigns} /> : <Board data={filteredDesigns} />}
+        {filteredDesigns.length < 1 ? (
+          <div className="flex flex-1 items-center justify-center px-6 py-10 text-sm text-slate-500">
+            No projects are assigned to Alex Johnson in Scheduler yet.
+          </div>
+        ) : viewMode === "list" ? (
+          <Table data={filteredDesigns} />
+        ) : (
+          <Board data={filteredDesigns} />
+        )}
       </div>
     </div>
   );
