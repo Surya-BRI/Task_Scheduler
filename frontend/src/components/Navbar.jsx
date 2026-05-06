@@ -3,6 +3,8 @@
 import { useEffect, useRef, useState } from 'react'
 import { usePathname, useRouter } from 'next/navigation'
 import { Bell, Calendar, ClipboardList, Clock, Home, MessageSquareText, Users } from 'lucide-react'
+import { clearAccessToken } from '@/lib/auth-token'
+import { clearAlexSession, isAlexSessionActive } from '@/lib/alex-session'
 
 const PROFILE_USER = { name: 'Alex Johnson', role: 'Designer' }
 
@@ -74,6 +76,19 @@ function ProfileDropdown() {
             <p className="text-sm font-semibold text-slate-900">{PROFILE_USER.name}</p>
             <p className="text-xs text-slate-500">{PROFILE_USER.role}</p>
           </button>
+          <button
+            type="button"
+            role="menuitem"
+            className="w-full border-t border-slate-100 px-3 py-2 text-left text-sm font-medium text-red-600 transition hover:bg-red-50"
+            onClick={() => {
+              clearAccessToken()
+              clearAlexSession()
+              setOpen(false)
+              router.push('/alex-login')
+            }}
+          >
+            Logout
+          </button>
         </div>
       ) : null}
     </div>
@@ -83,8 +98,13 @@ function ProfileDropdown() {
 export function Navbar({ currentDate, onCalendarChange, dateRangeText }) {
   const router = useRouter()
   const pathname = usePathname() ?? ''
+  const [isAlexAccount, setIsAlexAccount] = useState(false)
   const utilityIconClass = 'ui-icon-button'
   const onTeamActivity = pathname === '/team-activity' || pathname.startsWith('/team-activity/')
+
+  useEffect(() => {
+    setIsAlexAccount(isAlexSessionActive())
+  }, [pathname])
 
   return (
     <header className="sticky top-0 z-40 border-b border-slate-200 bg-white">
@@ -93,7 +113,13 @@ export function Navbar({ currentDate, onCalendarChange, dateRangeText }) {
           <div className="flex items-center gap-4">
             <button
               type="button"
-              onClick={() => router.push('/design-list')}
+              onClick={() => {
+                if (isAlexAccount) {
+                  router.push('/design-list/my-work')
+                  return
+                }
+                router.push('/design-list')
+              }}
               className="rounded-md bg-white px-2 py-1 flex items-center gap-4"
               aria-label="Go to main page"
             >
@@ -145,9 +171,15 @@ export function Navbar({ currentDate, onCalendarChange, dateRangeText }) {
             ) : (
               <button
                 type="button"
-                onClick={() => router.push('/design-scheduler')}
+                onClick={() => {
+                  if (isAlexAccount) {
+                    router.push('/designer/d1')
+                    return
+                  }
+                  router.push('/design-scheduler')
+                }}
                 className={utilityIconClass}
-                aria-label="Open calendar"
+                aria-label={isAlexAccount ? 'Open Alex Johnson dashboard' : 'Open calendar'}
               >
                 <Calendar className="h-5 w-5" strokeWidth={1.75} aria-hidden />
               </button>
@@ -196,9 +228,13 @@ export function Navbar({ currentDate, onCalendarChange, dateRangeText }) {
           <div className="flex w-full items-center gap-1">
             <button
               type="button"
-              onClick={() => router.push('/projects-list')}
-              className="ui-icon-button h-8 w-8"
+              onClick={() => {
+                if (isAlexAccount) return
+                router.push('/projects-list')
+              }}
+              className={`ui-icon-button h-8 w-8${isAlexAccount ? ' cursor-not-allowed' : ''}`}
               aria-label="Home"
+              aria-disabled={isAlexAccount}
             >
               <Home className="h-4 w-4" />
             </button>

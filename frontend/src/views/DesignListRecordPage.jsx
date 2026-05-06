@@ -4,6 +4,7 @@ import { useParams, usePathname, useRouter, useSearchParams } from 'next/navigat
 import { Navbar } from '../components/Navbar'
 import { ProjectTaskTimer } from '../components/ProjectTaskTimer'
 import { useDesignListStore } from '../state/DesignListContext'
+import { isAlexSessionActive } from '@/lib/alex-session'
 
 const STAGE_ITEMS = [
   { id: 'new', label: 'Design Task New', hint: 'Awaiting project allocation', icon: FileText },
@@ -88,6 +89,14 @@ export function DesignListRecordPage() {
   const [providedFile, setProvidedFile] = useState('Design.ZIP')
   const rawTab = searchParams.get('tab')
   const activeTab = RECORD_TAB_IDS.includes(rawTab) ? rawTab : 'details'
+  const from = searchParams.get('from')
+  const isAlexFlow = from === 'alex-design-list'
+
+  useEffect(() => {
+    if (!isAlexFlow) return
+    if (isAlexSessionActive()) return
+    router.replace('/alex-login')
+  }, [isAlexFlow, router])
 
   useEffect(() => {
     if (!record) {
@@ -109,7 +118,6 @@ export function DesignListRecordPage() {
     [pathname, router, searchParams],
   )
 
-  const from = searchParams.get('from')
   const showTimerForSource =
     from === 'project-design' ||
     from === 'projects-list' ||
@@ -148,6 +156,7 @@ export function DesignListRecordPage() {
   }, [activeTab, launchAutostart, launchPauseModal, launchCompleteModal, clearTimerLaunchParams])
 
   if (!record) return null
+  if (isAlexFlow && !isAlexSessionActive()) return null
 
   const pageTitle = `${record.name.toUpperCase()} @ ${record.businessUnit.toUpperCase()}`
 
