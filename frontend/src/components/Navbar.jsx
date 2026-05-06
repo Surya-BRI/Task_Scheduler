@@ -4,7 +4,7 @@ import { useEffect, useRef, useState } from 'react'
 import { usePathname, useRouter } from 'next/navigation'
 import { Bell, Calendar, ClipboardList, Clock, Home, MessageSquareText, Users } from 'lucide-react'
 
-const PROFILE_USER = { name: 'Sarah', role: 'Designer' }
+const PROFILE_USER = { name: 'Alex Johnson', role: 'Designer' }
 
 const NAV_ITEMS = [
   'Activities',
@@ -18,6 +18,7 @@ const NAV_ITEMS = [
 ]
 
 function ProfileDropdown() {
+  const router = useRouter()
   const [open, setOpen] = useState(false)
   const rootRef = useRef(null)
 
@@ -61,10 +62,18 @@ function ProfileDropdown() {
           role="menu"
           aria-label="Account"
         >
-          <div className="px-3 py-2" role="none">
+          <button
+            type="button"
+            role="menuitem"
+            className="w-full px-3 py-2 text-left transition hover:bg-slate-50"
+            onClick={() => {
+              setOpen(false)
+              router.push('/design-list/my-work')
+            }}
+          >
             <p className="text-sm font-semibold text-slate-900">{PROFILE_USER.name}</p>
             <p className="text-xs text-slate-500">{PROFILE_USER.role}</p>
-          </div>
+          </button>
         </div>
       ) : null}
     </div>

@@ -2,6 +2,7 @@ import { useCallback, useEffect, useRef, useState } from 'react'
 import { CalendarCheck2, ChevronLeft, FileText, Hourglass, Pencil, ShieldCheck, ShieldX } from 'lucide-react'
 import { useParams, usePathname, useRouter, useSearchParams } from 'next/navigation'
 import { Navbar } from '../components/Navbar'
+import { ProjectTaskTimer } from '../components/ProjectTaskTimer'
 import { useDesignListStore } from '../state/DesignListContext'
 
 const STAGE_ITEMS = [
@@ -108,9 +109,12 @@ export function DesignListRecordPage() {
     [pathname, router, searchParams],
   )
 
-  if (!record) return null
-
   const from = searchParams.get('from')
+  const showTimerForSource =
+    from === 'project-design' ||
+    from === 'projects-list' ||
+    from === 'designer-queue' ||
+    from === 'alex-design-list'
   const backPath =
     from === 'design-scheduler'
       ? '/design-scheduler'
@@ -118,7 +122,32 @@ export function DesignListRecordPage() {
         ? '/project-design'
         : from === 'projects-list'
           ? '/projects-list'
-          : '/design-list'
+          : from === 'designer-queue'
+            ? '/design-list/my-work'
+            : from === 'alex-design-list'
+              ? '/design-list/my-work'
+            : '/design-list'
+
+  const launchAutostart = searchParams.get('autostart') === '1'
+  const launchPauseModal = searchParams.get('openPause') === '1'
+  const launchCompleteModal = searchParams.get('openComplete') === '1'
+
+  const clearTimerLaunchParams = useCallback(() => {
+    const next = new URLSearchParams(searchParams.toString())
+    next.delete('autostart')
+    next.delete('openPause')
+    next.delete('openComplete')
+    const qs = next.toString()
+    router.replace(qs ? `${pathname}?${qs}` : pathname, { scroll: false })
+  }, [pathname, router, searchParams])
+
+  useEffect(() => {
+    if (activeTab === 'details') return
+    if (!launchAutostart && !launchPauseModal && !launchCompleteModal) return
+    clearTimerLaunchParams()
+  }, [activeTab, launchAutostart, launchPauseModal, launchCompleteModal, clearTimerLaunchParams])
+
+  if (!record) return null
 
   const pageTitle = `${record.name.toUpperCase()} @ ${record.businessUnit.toUpperCase()}`
 
@@ -193,7 +222,7 @@ export function DesignListRecordPage() {
                     <label className="text-[11px] text-slate-500">Provided Assets</label>
                     <div className="mt-1 flex items-center gap-2">
                       <input
-                        value={providedFile}
+                        value={providedFile ?? ''}
                         readOnly
                         className="h-8 flex-1 rounded border border-slate-300 px-2 text-xs"
                       />
@@ -208,10 +237,20 @@ export function DesignListRecordPage() {
                         ref={fileInputRef}
                         type="file"
                         className="hidden"
-                        onChange={(event) => setProvidedFile(event.target.files?.[0]?.name ?? providedFile)}
+                        onChange={(event) => setProvidedFile(event.target.files?.[0]?.name ?? '')}
                       />
                     </div>
                   </div>
+
+                  {showTimerForSource ? (
+                    <ProjectTaskTimer
+                      taskId={String(taskId)}
+                      launchAutostart={launchAutostart}
+                      launchPauseModal={launchPauseModal}
+                      launchCompleteModal={launchCompleteModal}
+                      onConsumedLaunchFlags={clearTimerLaunchParams}
+                    />
+                  ) : null}
 
                   <div className="mt-3 overflow-hidden rounded-lg border border-slate-200">
                     <div className="grid grid-cols-5 bg-slate-100 px-3 py-2 text-xs font-semibold text-slate-700">
