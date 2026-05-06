@@ -85,6 +85,18 @@ export function Navbar({ currentDate, onCalendarChange, dateRangeText }) {
   const pathname = usePathname() ?? ''
   const utilityIconClass = 'ui-icon-button'
   const onTeamActivity = pathname === '/team-activity' || pathname.startsWith('/team-activity/')
+  const isDesignerFlow = pathname.startsWith('/designer') || pathname.includes('my-work')
+  const onScheduler = pathname === '/design-scheduler' || pathname.startsWith('/designer')
+
+  const handleSchedulerClick = () => {
+    if (isDesignerFlow) {
+      const match = pathname.match(/\/designer\/([^/]+)/)
+      const designerId = match ? match[1] : 'd1'
+      router.push(`/designer/${designerId}`)
+    } else {
+      router.push('/design-scheduler')
+    }
+  }
 
   return (
     <header className="sticky top-0 z-40 border-b border-slate-200 bg-white">
@@ -119,7 +131,7 @@ export function Navbar({ currentDate, onCalendarChange, dateRangeText }) {
                 <div className="relative">
                   <button
                     type="button"
-                    className={utilityIconClass}
+                    className={`${utilityIconClass}${onScheduler ? ' bg-slate-100 text-slate-900' : ''}`}
                     aria-label="Select date"
                   >
                     <Calendar className="h-5 w-5" strokeWidth={1.75} aria-hidden />
@@ -145,8 +157,9 @@ export function Navbar({ currentDate, onCalendarChange, dateRangeText }) {
             ) : (
               <button
                 type="button"
-                onClick={() => router.push('/design-scheduler')}
-                className={utilityIconClass}
+                onClick={handleSchedulerClick}
+                aria-current={onScheduler ? 'page' : undefined}
+                className={`${utilityIconClass}${onScheduler ? ' bg-slate-100 text-slate-900' : ''}`}
                 aria-label="Open calendar"
               >
                 <Calendar className="h-5 w-5" strokeWidth={1.75} aria-hidden />

@@ -130,7 +130,7 @@ export function ProjectDesignHub() {
   const tabClass = (active) =>
     `rounded border text-sm font-medium transition-colors px-3 py-1.5 ${
       active
-        ? "bg-indigo-50 border-indigo-300 text-indigo-700 shadow-sm"
+        ? "bg-blue-50 border-blue-300 text-blue-700 shadow-sm"
         : "bg-white border-slate-300 text-slate-600 hover:bg-slate-50"
     }`;
 
