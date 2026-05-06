@@ -30,6 +30,7 @@ export function TeamActivityFilters({
   onDateRangeChange,
   priority,
   onPriorityChange,
+  showTeammateFilter = true,
 }) {
   const monthOpts = [{ label: "All months", value: "all" }].concat(
     MONTH_LABELS.map((label, i) => ({ label, value: i })),
@@ -44,16 +45,18 @@ export function TeamActivityFilters({
       </div>
 
       <div className="flex min-w-0 flex-1 flex-wrap items-end justify-evenly gap-x-2 gap-y-2 lg:flex-nowrap lg:gap-x-2.5">
-        <TogglePillGroup
-          label="Designer"
-          value={teammateMode}
-          onChange={onTeammateMode}
-          options={[
-            { label: "All", value: "all" },
-            { label: "Individuals", value: "individuals" },
-          ]}
-          className="shrink-0"
-        />
+        {showTeammateFilter ? (
+          <TogglePillGroup
+            label="Designer"
+            value={teammateMode}
+            onChange={onTeammateMode}
+            options={[
+              { label: "All", value: "all" },
+              { label: "Individuals", value: "individuals" },
+            ]}
+            className="shrink-0"
+          />
+        ) : null}
 
         <DateRangePicker value={dateRange} onChange={onDateRangeChange} className="shrink-0" />
 

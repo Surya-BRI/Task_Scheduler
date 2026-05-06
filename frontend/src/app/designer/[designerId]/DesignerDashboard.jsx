@@ -12,13 +12,23 @@ import {
   SCHEDULER_DASHBOARD_SYNC_KEY,
   buildDesignerSnapshot,
 } from "@/features/scheduler/utils/designerDashboardSync";
+import { getSession } from "@/lib/mock-auth";
 
 export default function DesignerDashboard({ designer }) {
   const router = useRouter();
   const searchParams = useSearchParams();
-  const isDesignerMode = searchParams?.get("from") !== "home";
-  
+  const fromHome = searchParams?.get("from") === "home";
+
+  const [isDesignerMode, setIsDesignerMode] = useState(false);
+
+  useEffect(() => {
+    const session = getSession();
+    // isDesignerMode: true only when the logged-in user is a DESIGNER viewing their OWN dashboard
+    setIsDesignerMode(!fromHome && session?.role === "DESIGNER");
+  }, [fromHome]);
+
   const [activePanel, setActivePanel] = useState(null); // "onHold" | "completed" | null
+
   const [scheduleData, setScheduleData] = useState(() => {
     const initial = {};
     Object.entries(designer.schedule || {}).forEach(([dayName, tasks]) => {

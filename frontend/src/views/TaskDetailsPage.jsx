@@ -261,6 +261,8 @@ export function TaskDetailsPage() {
         ? '/projects-list'
         : from === 'design-scheduler'
           ? '/design-scheduler'
+          : from === 'designer-queue' || from === 'designer-design-list'
+            ? '/design-list/my-work'
           : '/design-list'
   const pageTitle = `${record.name.toUpperCase()} — ${record.clientName ?? record.businessUnit} @ ${record.businessUnit.toUpperCase()}`
   const canPostChatter = chatterMessage.trim().length > 0

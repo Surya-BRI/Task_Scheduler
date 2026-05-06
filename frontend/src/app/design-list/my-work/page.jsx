@@ -3,15 +3,16 @@
 import { useEffect, useState } from 'react'
 import { useRouter } from 'next/navigation'
 import { DesignerDesignListScreen } from '@/features/design-list/components/DesignerDesignListScreen'
-import { isAlexSessionActive } from '@/lib/alex-session'
+import { getSession } from '@/lib/mock-auth'
 
 export default function DesignerMyWorkPage() {
   const router = useRouter()
   const [allowed, setAllowed] = useState(false)
 
   useEffect(() => {
-    if (!isAlexSessionActive()) {
-      router.replace('/alex-login')
+    const session = getSession()
+    if (!session || session.role !== 'DESIGNER') {
+      router.replace('/login')
       return
     }
     setAllowed(true)

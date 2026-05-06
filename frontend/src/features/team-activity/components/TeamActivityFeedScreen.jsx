@@ -21,12 +21,12 @@ const DEFAULT_RANGE = () => ({
   endDate: "",
 });
 
-export function TeamActivityFeedScreenInner() {
+export function TeamActivityFeedScreenInner({ designerMode = false }) {
   const searchParams = useSearchParams();
   const from = searchParams.get("from");
   const seededFromDesignList = useRef(false);
 
-  const [teammateMode, setTeammateMode] = useState("all");
+  const [teammateMode, setTeammateMode] = useState(designerMode ? "individuals" : "all");
   const [activityKind, setActivityKind] = useState("task_update");
   const [sortMonthIndex, setSortMonthIndex] = useState("all");
   const [priority, setPriority] = useState("all");
@@ -40,10 +40,10 @@ export function TeamActivityFeedScreenInner() {
       setActivityKind("task_update");
       setTimeOrder("latest");
       setSortMonthIndex("all");
-      setTeammateMode("all");
+      setTeammateMode(designerMode ? "individuals" : "all");
       setPriority("all");
     }
-  }, [from]);
+  }, [designerMode, from]);
 
   const visible = useMemo(
     () =>
@@ -80,6 +80,7 @@ export function TeamActivityFeedScreenInner() {
           onDateRangeChange={setDateRange}
           priority={priority}
           onPriorityChange={setPriority}
+          showTeammateFilter={!designerMode}
         />
 
         <ActivityFeedList items={visible} likes={likes} onToggleLike={onToggleLike} activityKind={activityKind} />
