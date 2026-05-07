@@ -51,6 +51,13 @@ export function mockLogin(email, password) {
   const { password: _pw, ...session } = user;
   if (typeof window !== "undefined") {
     localStorage.setItem(SESSION_KEY, JSON.stringify(session));
+    
+    // Clear all leave requests on fresh login for demo purposes
+    Object.keys(localStorage).forEach(key => {
+      if (key.startsWith("leave_requests_")) {
+        localStorage.removeItem(key);
+      }
+    });
   }
   return session;
 }

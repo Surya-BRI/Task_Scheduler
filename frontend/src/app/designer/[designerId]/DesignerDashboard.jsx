@@ -171,13 +171,22 @@ export default function DesignerDashboard({ designer }) {
               Completed Tasks
             </button>
             {isDesignerMode && (
-              <button
-                type="button"
-                onClick={() => router.push(`/designer/${designer.id}/requests#overtime`)}
-                className="ui-chip-button ml-auto bg-[#e6e8fc] text-[#5d5baf] border border-[#d2d5f8] hover:bg-[#d8dcfb] font-semibold"
-              >
-                Overtime Request
-              </button>
+              <div className="ml-auto flex gap-3">
+                <button
+                  type="button"
+                  onClick={() => router.push(`/designer/${designer.id}/leave-planner`)}
+                  className="ui-chip-button bg-[#fce8e6] text-[#af5b5b] border border-[#f8d2d2] hover:bg-[#fbd8d8] font-semibold"
+                >
+                  Leave Request
+                </button>
+                <button
+                  type="button"
+                  onClick={() => router.push(`/designer/${designer.id}/requests#overtime`)}
+                  className="ui-chip-button bg-[#e6e8fc] text-[#5d5baf] border border-[#d2d5f8] hover:bg-[#d8dcfb] font-semibold"
+                >
+                  Overtime Request
+                </button>
+              </div>
             )}
           </div>
 
