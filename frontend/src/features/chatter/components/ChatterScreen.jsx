@@ -298,6 +298,7 @@ function CreatePostModal({ isOpen, onClose, onSubmit, isSubmitting }) {
   const [postType, setPostType] = useState("Posts");
   const [attachment, setAttachment] = useState(null);
   const [showMentions, setShowMentions] = useState(false);
+  const [errors, setErrors] = useState({});
   const mentionList = ["@Aneesh Raghu", "@Delbin Delbin", "@Anju Krishna", "@Fahad Quazi", "@Rahul Menon"];
 
   const handleMentionChange = (e) => {
@@ -329,151 +330,179 @@ function CreatePostModal({ isOpen, onClose, onSubmit, isSubmitting }) {
       setPostType("Posts");
       setAttachment(null);
       setShowMentions(false);
+      setErrors({});
     }
   }, [isOpen]);
 
   if (!isOpen) return null;
 
   const handleSubmit = () => {
-    if (!title.trim() || !message.trim()) {
-      alert("Please fill in the mandatory fields (Post Title, Description)");
+    const nextErrors = {};
+    if (!title.trim()) nextErrors.title = "Post title is required.";
+    if (!message.trim()) nextErrors.message = "Description is required.";
+    if (Object.keys(nextErrors).length > 0) {
+      setErrors(nextErrors);
       return;
     }
+    setErrors({});
     onSubmit({ title, mention, message, priority, postType, attachment });
   };
 
   return (
-    <div className="fixed inset-0 z-[100] flex items-center justify-center p-4 transition-opacity">
-      <div className="absolute inset-0 bg-slate-900/40 backdrop-blur-sm" onClick={onClose}></div>
-      <div className="relative w-full max-w-md rounded-2xl bg-white shadow-2xl overflow-hidden flex flex-col animate-in fade-in zoom-in-95 duration-200">
-        <button onClick={onClose} className="absolute top-4 right-4 text-slate-400 hover:text-slate-600 transition-colors">
-          <X className="w-5 h-5" />
-        </button>
-        <div className="px-6 pt-6 pb-4 max-h-[85vh] overflow-y-auto">
-          <h2 className="text-2xl font-serif text-slate-800 text-center mb-6">Create Post</h2>
+    <div className="fixed inset-0 z-[100] flex items-center justify-center p-4 sm:p-6">
+      <div className="absolute inset-0 bg-slate-900/30 backdrop-blur-[1px]" onClick={onClose} />
+      <section className="relative z-10 flex w-full max-w-3xl flex-col rounded-2xl border border-slate-200 bg-white/95 shadow-2xl">
+        <div className="flex items-center justify-between border-b border-slate-200 px-5 py-4 sm:px-6">
+          <h2 className="text-2xl font-semibold tracking-tight text-slate-900">Create Post</h2>
+          <button type="button" onClick={onClose} className="ui-icon-button h-8 w-8">
+            <X className="h-4 w-4" />
+          </button>
+        </div>
 
-          <div className="space-y-4">
-            <div>
-              <label className="block text-[13px] text-slate-700 mb-1 font-medium ml-1">Post Title *</label>
-              <input
-                type="text"
-                value={title}
-                onChange={(e) => setTitle(e.target.value)}
-                className="w-full rounded-full border border-slate-400 px-3 py-1.5 text-sm focus:border-slate-800 focus:outline-none"
-              />
+        <div className="max-h-[72vh] space-y-4 overflow-y-auto px-5 py-4 sm:px-6">
+          <div>
+            <label className="mb-1 block text-sm font-semibold text-slate-700">Post Title *</label>
+            <input
+              type="text"
+              value={title}
+              onChange={(e) => setTitle(e.target.value)}
+              className={`w-full rounded-lg border bg-white px-3 py-2 text-sm text-slate-900 outline-none focus:ring-2 focus:ring-blue-500/25 ${
+                errors.title ? "border-red-300 focus:border-red-400" : "border-slate-300 focus:border-blue-500"
+              }`}
+              placeholder="Enter post title"
+            />
+            {errors.title ? <p className="mt-1 text-xs text-red-600">{errors.title}</p> : null}
+          </div>
+
+          <div>
+            <label className="mb-2 block text-sm font-semibold text-slate-700">Post Type</label>
+            <div className="grid grid-cols-1 gap-2 sm:grid-cols-3">
+              {["Posts", "Private", "Task Updates"].map((type) => (
+                <button
+                  key={type}
+                  type="button"
+                  onClick={() => setPostType(type)}
+                  className={`rounded-lg border px-3 py-2 text-sm font-medium transition-colors ${
+                    postType === type
+                      ? "border-blue-300 bg-blue-50 text-blue-700 shadow-sm"
+                      : "border-slate-200 bg-white text-slate-600 hover:bg-slate-50 hover:text-slate-800"
+                  }`}
+                >
+                  {type}
+                </button>
+              ))}
             </div>
+          </div>
 
-            <div>
-              <label className="block text-[13px] text-slate-700 mb-1 font-medium ml-1">Post Type</label>
-              <div className="flex gap-2 bg-slate-100 p-1 rounded-full">
-                {["Posts", "Private", "Task Updates"].map((type) => (
-                  <button
-                    key={type}
-                    onClick={() => setPostType(type)}
-                    className={`flex-1 rounded-full px-3 py-1.5 text-xs font-semibold transition-colors ${
-                      postType === type
-                        ? "bg-white text-slate-800 shadow-sm"
-                        : "text-slate-500 hover:text-slate-700"
-                    }`}
-                  >
-                    {type}
-                  </button>
-                ))}
-              </div>
-            </div>
-
+          <div>
+            <label className="mb-1 block text-sm font-semibold text-slate-700">Mention User</label>
             <div className="relative">
-              <label className="block text-[13px] text-slate-700 mb-1 font-medium ml-1">Mentioned</label>
               <input
                 type="text"
                 value={mention}
                 onChange={handleMentionChange}
                 placeholder="@username"
-                className="w-full rounded-full border border-slate-400 px-3 py-1.5 text-sm focus:border-slate-800 focus:outline-none"
+                className="w-full rounded-lg border border-slate-300 bg-white px-3 py-2 text-sm text-slate-900 outline-none focus:border-blue-500 focus:ring-2 focus:ring-blue-500/25"
               />
               {showMentions && (
-                <ul className="absolute z-10 w-full mt-1 bg-white border border-slate-200 rounded-lg shadow-lg overflow-hidden max-h-32 overflow-y-auto">
-                  {mentionList.filter(m => m.toLowerCase().includes(mention.toLowerCase())).map(m => (
-                    <li key={m} onClick={() => selectMention(m)} className="px-3 py-2 text-sm text-slate-700 hover:bg-slate-100 cursor-pointer">
-                      {m}
-                    </li>
-                  ))}
+                <ul className="ui-popover-panel absolute z-20 mt-1 max-h-36 w-full overflow-y-auto">
+                  {mentionList
+                    .filter((m) => m.toLowerCase().includes(mention.toLowerCase()))
+                    .map((m) => (
+                      <li key={m}>
+                        <button
+                          type="button"
+                          onClick={() => selectMention(m)}
+                          className="w-full px-3 py-2 text-left text-sm text-slate-700 hover:bg-slate-50"
+                        >
+                          {m}
+                        </button>
+                      </li>
+                    ))}
                 </ul>
               )}
             </div>
+          </div>
 
-            <div>
-              <div className="flex justify-between mb-1 ml-1">
-                <label className="block text-[13px] text-slate-700 font-medium">Description *</label>
-                <span className="text-xs text-slate-400">{message.length}/500</span>
-              </div>
-              <textarea
-                value={message}
-                maxLength={500}
-                onChange={(e) => setMessage(e.target.value)}
-                className="w-full rounded-xl border border-slate-400 px-3 py-2 text-sm min-h-[90px] resize-none focus:border-slate-800 focus:outline-none"
-              ></textarea>
+          <div>
+            <div className="mb-1 flex items-center justify-between">
+              <label className="text-sm font-semibold text-slate-700">Description *</label>
+              <span className="text-xs text-slate-500">{message.length}/500</span>
             </div>
+            <textarea
+              value={message}
+              maxLength={500}
+              onChange={(e) => setMessage(e.target.value)}
+              className={`min-h-[140px] w-full resize-y rounded-lg border bg-white px-3 py-2 text-sm text-slate-900 outline-none focus:ring-2 focus:ring-blue-500/25 ${
+                errors.message ? "border-red-300 focus:border-red-400" : "border-slate-300 focus:border-blue-500"
+              }`}
+              placeholder="Write your post details..."
+            />
+            {errors.message ? <p className="mt-1 text-xs text-red-600">{errors.message}</p> : null}
+          </div>
 
-            <div>
-              <label className="block text-[13px] text-slate-700 mb-1 font-medium ml-1">Attachment</label>
-              <div
-                className="rounded-xl border border-slate-400 border-dashed p-4 text-center cursor-pointer hover:bg-slate-50 transition-colors"
-                onClick={() => document.getElementById("post-attachment").click()}
-                onDragOver={handleDragOver}
-                onDrop={handleDrop}
-              >
-                <input
-                  type="file"
-                  id="post-attachment"
-                  className="hidden"
-                  onChange={(e) => { if(e.target.files.length) setAttachment(e.target.files[0]) }}
-                />
-                {attachment ? (
-                  <p className="text-sm font-medium text-emerald-600 truncate">{attachment.name}</p>
-                ) : (
-                  <p className="text-xs text-slate-500">Click to upload or drag and drop</p>
-                )}
-              </div>
+          <div>
+            <label className="mb-2 block text-sm font-semibold text-slate-700">Attachment Upload</label>
+            <div
+              className="rounded-xl border border-dashed border-slate-300 bg-slate-50 px-4 py-8 text-center transition-colors hover:bg-slate-100"
+              onClick={() => document.getElementById("post-attachment").click()}
+              onDragOver={handleDragOver}
+              onDrop={handleDrop}
+            >
+              <input
+                type="file"
+                id="post-attachment"
+                className="hidden"
+                onChange={(e) => {
+                  if (e.target.files.length) setAttachment(e.target.files[0]);
+                }}
+              />
+              {attachment ? (
+                <p className="text-sm font-medium text-emerald-600">{attachment.name}</p>
+              ) : (
+                <p className="text-sm text-slate-500">Click to upload or drag and drop</p>
+              )}
             </div>
+          </div>
 
-            <div>
-              <label className="block text-[13px] text-slate-700 mb-1 font-medium ml-1">priority Level</label>
-              <div className="flex gap-3">
+          <div>
+            <label className="mb-2 block text-sm font-semibold text-slate-700">Priority Level</label>
+            <div className="grid grid-cols-3 gap-2">
+              {["High", "Medium", "Low"].map((level) => (
                 <button
-                  onClick={() => setPriority("High")}
-                  className={`flex-1 rounded-full py-1.5 text-xs font-semibold transition-all ${
-                    priority === "High" ? "bg-red-500 text-white shadow-md" : "bg-red-100 text-red-700 hover:bg-red-200"
+                  key={level}
+                  type="button"
+                  onClick={() => setPriority(level)}
+                  className={`rounded-lg border px-3 py-2 text-sm font-semibold transition-colors ${
+                    priority === level
+                      ? level === "High"
+                        ? "border-red-500 bg-red-500 text-white"
+                        : level === "Medium"
+                          ? "border-amber-400 bg-amber-400 text-white"
+                          : "border-emerald-500 bg-emerald-500 text-white"
+                      : level === "High"
+                        ? "border-red-200 bg-red-50 text-red-700 hover:bg-red-100"
+                        : level === "Medium"
+                          ? "border-amber-200 bg-amber-50 text-amber-700 hover:bg-amber-100"
+                          : "border-emerald-200 bg-emerald-50 text-emerald-700 hover:bg-emerald-100"
                   }`}
                 >
-                  High
+                  {level}
                 </button>
-                <button
-                  onClick={() => setPriority("Medium")}
-                  className={`flex-1 rounded-full py-1.5 text-xs font-semibold transition-all ${
-                    priority === "Medium" ? "bg-amber-400 text-white shadow-md" : "bg-amber-100 text-amber-700 hover:bg-amber-200"
-                  }`}
-                >
-                  Medium
-                </button>
-                <button
-                  onClick={() => setPriority("Low")}
-                  className={`flex-1 rounded-full py-1.5 text-xs font-semibold transition-all ${
-                    priority === "Low" ? "bg-emerald-500 text-white shadow-md" : "bg-emerald-100 text-emerald-700 hover:bg-emerald-200"
-                  }`}
-                >
-                  Low
-                </button>
-              </div>
+              ))}
             </div>
           </div>
         </div>
 
-        <div className="px-6 py-4 flex items-center justify-center mt-2 pb-6">
+        <div className="flex items-center justify-end gap-2 border-t border-slate-200 px-5 py-4 sm:px-6">
+          <button type="button" onClick={onClose} className="ui-chip-button px-4 py-2">
+            Cancel
+          </button>
           <button
+            type="button"
             onClick={handleSubmit}
             disabled={isSubmitting}
-            className="rounded-full bg-slate-400 px-8 py-2 text-sm font-semibold text-white hover:bg-slate-500 transition-colors flex items-center gap-2 shadow-sm"
+            className="inline-flex items-center gap-2 rounded-lg bg-blue-600 px-5 py-2 text-sm font-semibold text-white shadow-sm transition hover:bg-blue-700 disabled:cursor-not-allowed disabled:opacity-60"
           >
             {isSubmitting ? (
               <span className="inline-block h-4 w-4 animate-spin rounded-full border-2 border-white border-t-transparent"></span>
@@ -481,7 +510,7 @@ function CreatePostModal({ isOpen, onClose, onSubmit, isSubmitting }) {
             Post
           </button>
         </div>
-      </div>
+      </section>
     </div>
   );
 }
@@ -614,7 +643,7 @@ export function ChatterScreen() {
   const [openTaskId, setOpenTaskId] = useState(null);
   const [currentDate, setCurrentDate] = useState(new Date(2026, 2, 3));
   
-  const [isCreateModalOpen, setIsCreateModalOpen] = useState(false);
+  const [isCreatePostOpen, setIsCreatePostOpen] = useState(false);
   const [isSubmitting, setIsSubmitting] = useState(false);
   const [toastMessage, setToastMessage] = useState(null);
 
@@ -782,7 +811,7 @@ export function ChatterScreen() {
 
     setPosts((prev) => [newPost, ...prev]);
     setIsSubmitting(false);
-    setIsCreateModalOpen(false);
+    setIsCreatePostOpen(false);
     setActiveTab("posts");
 
     setToastMessage("Post created successfully!");
@@ -840,7 +869,7 @@ export function ChatterScreen() {
             </button>
             <button
               type="button"
-              onClick={() => setIsCreateModalOpen(true)}
+              onClick={() => setIsCreatePostOpen(true)}
               className="flex h-8 items-center gap-1.5 rounded-md bg-blue-600 px-3 text-sm font-medium text-white shadow-sm transition hover:bg-blue-700"
               aria-label="Create new chatter post"
             >
@@ -942,12 +971,13 @@ export function ChatterScreen() {
           </section>
         ) : null}
 
-        <CreatePostModal 
-          isOpen={isCreateModalOpen} 
-          onClose={() => setIsCreateModalOpen(false)} 
-          onSubmit={handleCreatePost} 
-          isSubmitting={isSubmitting} 
+        <CreatePostModal
+          isOpen={isCreatePostOpen}
+          onClose={() => setIsCreatePostOpen(false)}
+          onSubmit={handleCreatePost}
+          isSubmitting={isSubmitting}
         />
+
         <Toast message={toastMessage} onClose={() => setToastMessage(null)} />
       </main>
     </div>

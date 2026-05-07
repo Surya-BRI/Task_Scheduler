@@ -18,12 +18,11 @@ import {
 import { useDesignListStore } from "@/state/DesignListContext";
 import { Navbar } from "@/components/Navbar";
 import { ProjectTaskTimer } from "@/components/ProjectTaskTimer";
+import { getSession } from "@/lib/mock-auth";
 import {
   SCHEDULER_DASHBOARD_SYNC_EVENT,
   SCHEDULER_DASHBOARD_SYNC_KEY,
 } from "@/features/scheduler/utils/designerDashboardSync";
-
-const ALEX_DESIGNER_ID = "d1";
 
 const getStatusColor = (status) => {
   switch (status) {
@@ -60,14 +59,14 @@ const getStatusDot = (status) => {
 };
 
 function recordQuery(extra = {}) {
-  return new URLSearchParams({ from: "alex-design-list", ...extra }).toString();
+  return new URLSearchParams({ from: "designer-queue", ...extra }).toString();
 }
 
-function recordDetailPath(id, extra = {}) {
+function taskDetailPath(id, extra = {}) {
   return `/design-list/record/${id}?${recordQuery(extra)}`;
 }
 
-const Toolbar = ({ viewMode, setViewMode, filters, setFilters, salesPersons }) => {
+const Toolbar = ({ viewMode, setViewMode, filters, setFilters, salesPersons, designerName }) => {
   const [showFilters, setShowFilters] = useState(false);
   const activeCount = [
     filters.type,
@@ -80,7 +79,7 @@ const Toolbar = ({ viewMode, setViewMode, filters, setFilters, salesPersons }) =
 
   return (
     <div className="mb-4 mt-4 flex flex-col gap-4 px-4 sm:px-6 md:flex-row md:items-center md:justify-between">
-      <h1 className="text-2xl font-semibold tracking-tight text-slate-900 leading-none shrink-0">Alex Johnson Design List</h1>
+      <h1 className="text-2xl font-semibold tracking-tight text-slate-900 leading-none shrink-0">{designerName} Design List</h1>
 
       <div className="relative flex flex-wrap items-center justify-end gap-2 sm:gap-3 md:ml-auto">
         <div className="relative mr-2 hidden md:block">
@@ -290,7 +289,7 @@ const Table = ({ data }) => {
                 <td className="px-2 py-1">
                   <button
                     type="button"
-                    onClick={() => router.push(recordDetailPath(row.id))}
+                    onClick={() => router.push(taskDetailPath(row.id))}
                     className="text-left text-blue-600 cursor-pointer hover:underline font-medium"
                   >
                     {row.opNo}
@@ -299,7 +298,7 @@ const Table = ({ data }) => {
                 <td className="px-2 py-1">
                   <button
                     type="button"
-                    onClick={() => router.push(recordDetailPath(row.id))}
+                    onClick={() => router.push(taskDetailPath(row.id))}
                     className="text-left text-blue-600 cursor-pointer hover:underline font-medium"
                   >
                     {row.projectNo}
@@ -310,7 +309,7 @@ const Table = ({ data }) => {
                 <td className="px-2 py-1">
                   <button
                     type="button"
-                    onClick={() => router.push(recordDetailPath(row.id))}
+                    onClick={() => router.push(taskDetailPath(row.id))}
                     className="text-left text-slate-900 font-medium whitespace-nowrap hover:text-blue-600 hover:underline"
                   >
                     {row.name}
@@ -373,7 +372,7 @@ const Board = ({ data }) => {
               .map((item) => (
                 <div
                   key={item.__rowKey ?? item.id}
-                  onClick={() => router.push(recordDetailPath(item.id))}
+                  onClick={() => router.push(taskDetailPath(item.id))}
                   className={`p-2.5 min-h-[84px] rounded-lg border flex flex-col cursor-pointer hover:ring-1 hover:ring-blue-300/60 ${
                     getStatusColor(item.status).replace("text-", "text-slate-900 border-").split(" ")[0]
                   } bg-opacity-50`}
@@ -399,7 +398,7 @@ const Board = ({ data }) => {
                     <div className="flex items-center gap-0.5 shrink-0" onClick={(e) => e.stopPropagation()}>
                       <button
                         type="button"
-                        onClick={() => router.push(recordDetailPath(item.id, { autostart: "1" }))}
+                        onClick={() => router.push(taskDetailPath(item.id, { autostart: "1" }))}
                         className="grid h-6 w-6 place-items-center rounded-full bg-white/90 text-emerald-600 ring-1 ring-slate-200 hover:bg-emerald-50"
                         title="Start timer"
                       >
@@ -407,7 +406,7 @@ const Board = ({ data }) => {
                       </button>
                       <button
                         type="button"
-                        onClick={() => router.push(recordDetailPath(item.id, { openPause: "1" }))}
+                        onClick={() => router.push(taskDetailPath(item.id, { openPause: "1" }))}
                         className="grid h-6 w-6 place-items-center rounded-full bg-white/90 text-amber-500 ring-1 ring-slate-200 hover:bg-amber-50"
                         title="Pause timer"
                       >
@@ -415,7 +414,7 @@ const Board = ({ data }) => {
                       </button>
                       <button
                         type="button"
-                        onClick={() => router.push(recordDetailPath(item.id, { openComplete: "1" }))}
+                        onClick={() => router.push(taskDetailPath(item.id, { openComplete: "1" }))}
                         className="grid h-6 w-6 place-items-center rounded-full bg-white/90 text-red-600 ring-1 ring-slate-200 hover:bg-red-50"
                         title="Stop and submit"
                       >
@@ -435,6 +434,7 @@ const Board = ({ data }) => {
 export function DesignerDesignListScreen() {
   const { records } = useDesignListStore();
   const [assignedRecordIds, setAssignedRecordIds] = useState([]);
+  const [designerIdentity, setDesignerIdentity] = useState({ id: "", name: "Designer" });
   const [viewMode, setViewMode] = useState("list");
   const [filters, setFilters] = useState({
     type: "",
@@ -446,7 +446,23 @@ export function DesignerDesignListScreen() {
   });
 
   useEffect(() => {
+    const session = getSession();
+    if (session?.role === "DESIGNER" && session?.designerId) {
+      setDesignerIdentity({
+        id: session.designerId,
+        name: session.name || "Designer",
+      });
+      return;
+    }
+    setDesignerIdentity({ id: "", name: "Designer" });
+  }, []);
+
+  useEffect(() => {
     if (typeof window === "undefined") return undefined;
+    if (!designerIdentity.id) {
+      setAssignedRecordIds([]);
+      return undefined;
+    }
 
     const applySnapshot = () => {
       try {
@@ -456,9 +472,9 @@ export function DesignerDesignListScreen() {
           return;
         }
         const parsed = JSON.parse(raw);
-        const schedule = parsed?.designers?.[ALEX_DESIGNER_ID]?.schedule ?? {};
-        const dayTaskRecordIds = parsed?.designers?.[ALEX_DESIGNER_ID]?.dayTaskRecordIds ?? {};
-        const assignedRecordIds = parsed?.designers?.[ALEX_DESIGNER_ID]?.assignedRecordIds ?? [];
+        const schedule = parsed?.designers?.[designerIdentity.id]?.schedule ?? {};
+        const dayTaskRecordIds = parsed?.designers?.[designerIdentity.id]?.dayTaskRecordIds ?? {};
+        const assignedRecordIds = parsed?.designers?.[designerIdentity.id]?.assignedRecordIds ?? [];
         const orderedDayNames = ["Monday", "Tuesday", "Wednesday", "Thursday", "Friday", "Saturday", "Sunday"];
         const ids = [];
 
@@ -514,7 +530,7 @@ export function DesignerDesignListScreen() {
       window.removeEventListener(SCHEDULER_DASHBOARD_SYNC_EVENT, applySnapshot);
       window.removeEventListener("storage", applySnapshot);
     };
-  }, []);
+  }, [designerIdentity.id]);
 
   const designs = useMemo(() => {
     if (assignedRecordIds.length < 1) return [];
@@ -575,11 +591,12 @@ export function DesignerDesignListScreen() {
             filters={filters}
             setFilters={setFilters}
             salesPersons={uniqueSalesPersons}
+            designerName={designerIdentity.name}
           />
         </div>
         {filteredDesigns.length < 1 ? (
           <div className="flex flex-1 items-center justify-center px-6 py-10 text-sm text-slate-500">
-            No projects are assigned to Alex Johnson in Scheduler yet.
+            No projects are assigned to {designerIdentity.name} in Scheduler yet.
           </div>
         ) : viewMode === "list" ? (
           <Table data={filteredDesigns} />
