@@ -20,11 +20,13 @@ export default function DesignerDashboard({ designer }) {
   const fromHome = searchParams?.get("from") === "home";
 
   const [isDesignerMode, setIsDesignerMode] = useState(false);
+  const [isHOD, setIsHOD] = useState(false);
 
   useEffect(() => {
     const session = getSession();
     // isDesignerMode: true only when the logged-in user is a DESIGNER viewing their OWN dashboard
     setIsDesignerMode(!fromHome && session?.role === "DESIGNER");
+    setIsHOD(session?.role === "HOD");
   }, [fromHome]);
 
   const [activePanel, setActivePanel] = useState(null); // "onHold" | "completed" | null
@@ -137,7 +139,7 @@ export default function DesignerDashboard({ designer }) {
       </div>
       
       {/* Stats Bar */}
-      <StatsBar stats={displayStats} isDesignerMode={isDesignerMode} />
+      <StatsBar stats={displayStats} isDesignerMode={isDesignerMode} isHOD={isHOD} />
 
       {/* Main content */}
       <div className="flex min-w-0 flex-1 gap-6 px-4 py-5 sm:px-6 sm:py-6">
@@ -170,7 +172,7 @@ export default function DesignerDashboard({ designer }) {
             >
               Completed Tasks
             </button>
-            {isDesignerMode && (
+            {(isDesignerMode || isHOD) && (
               <div className="ml-auto flex gap-3">
                 <button
                   type="button"

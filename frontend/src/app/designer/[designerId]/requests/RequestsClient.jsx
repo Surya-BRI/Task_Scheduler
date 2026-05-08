@@ -1,6 +1,6 @@
 "use client";
 
-import { useState } from "react";
+import { useState, useEffect } from "react";
 import { useRouter } from "next/navigation";
 import { Navbar } from "@/components/Navbar";
 import StatsBar from "../components/StatsBar";
@@ -22,6 +22,14 @@ export default function RequestsClient({ designer }) {
   ];
   
   const [stats, setStats] = useState(designer.stats);
+  const [isHOD, setIsHOD] = useState(false);
+
+  useEffect(() => {
+    import("@/lib/mock-auth").then(({ getSession }) => {
+      const session = getSession();
+      if (session?.role === "HOD") setIsHOD(true);
+    });
+  }, []);
 
   // --- Idle Time Regularization State ---
   const [idleRequests, setIdleRequests] = useState([
@@ -40,9 +48,19 @@ export default function RequestsClient({ designer }) {
       alert("Please fill in the Date and Reason (Required).");
       return;
     }
-    setIdleRequests(prev => prev.map(r => r.id === id ? { ...r, status: "Pending" } : r));
+    setIdleRequests(prev => prev.map(r => r.id === id ? { ...r, status: "Pending", createdBy: isHOD ? "HOD" : "Designer" } : r));
     setStats(prev => ({ ...prev, pendingRegularization: Math.max(0, prev.pendingRegularization - 1) }));
     showToast("Regularization request submitted!");
+  };
+
+  const handleApproveIdle = (id) => {
+    setIdleRequests(prev => prev.map(r => r.id === id ? { ...r, status: "Approved" } : r));
+    showToast("Regularization request approved!");
+  };
+
+  const handleRejectIdle = (id) => {
+    setIdleRequests(prev => prev.map(r => r.id === id ? { ...r, status: "Rejected" } : r));
+    showToast("Regularization request rejected!");
   };
 
   const handleRequestAllRegularization = () => {
@@ -51,7 +69,7 @@ export default function RequestsClient({ designer }) {
       alert("Please fill in Date and Reason for all pending idle times.");
       return;
     }
-    setIdleRequests(prev => prev.map(r => r.status === "unsubmitted" ? { ...r, status: "Pending" } : r));
+    setIdleRequests(prev => prev.map(r => r.status === "unsubmitted" ? { ...r, status: "Pending", createdBy: isHOD ? "HOD" : "Designer" } : r));
     setStats(prev => ({ ...prev, pendingRegularization: 0 }));
     showToast("All regularization requests submitted!");
   };
@@ -91,11 +109,22 @@ export default function RequestsClient({ designer }) {
       taskName: otForm.taskName,
       requested: otForm.requestedHours,
       status: "Pending Approval",
-      approved: "-"
+      approved: "-",
+      createdBy: isHOD ? "HOD" : "Designer"
     };
 
     setPreviousOtRequests([newReq, ...previousOtRequests]);
     showToast("Overtime request submitted successfully!");
+  };
+
+  const handleApproveOt = (id) => {
+    setPreviousOtRequests(prev => prev.map(r => r.id === id ? { ...r, status: "Approved", approved: r.requested } : r));
+    showToast("Overtime request approved!");
+  };
+
+  const handleRejectOt = (id) => {
+    setPreviousOtRequests(prev => prev.map(r => r.id === id ? { ...r, status: "Rejected", approved: "0 hours" } : r));
+    showToast("Overtime request rejected!");
   };
 
   // --- Toast ---
@@ -132,7 +161,7 @@ export default function RequestsClient({ designer }) {
       <Navbar dateRangeText={designer.dateRange} />
       
       <div className="flex shrink-0 items-center border-b border-slate-200 bg-white px-6 py-2 text-sm font-medium text-slate-700">
-        <div className="flex w-64 items-center gap-3 border-r border-slate-200 pr-4">
+        <div className="flex w-auto items-center gap-3 border-r border-slate-200 pr-6">
           <div className="w-8 h-8 rounded-full bg-slate-800 text-white flex items-center justify-center text-xs font-bold leading-none shrink-0 shadow-sm">
             {designer.avatar ? (
               <img src={designer.avatar} alt={designer.name} className="h-full w-full object-cover rounded-full" />
@@ -140,10 +169,25 @@ export default function RequestsClient({ designer }) {
               <span>{designer.name.split(" ").map(n => n[0]).join("").slice(0, 2)}</span>
             )}
           </div>
-          <div className="flex flex-col">
-            <span className="text-xs font-bold leading-tight text-slate-900">{designer.name}</span>
-            <span className="text-[10px] leading-tight text-slate-500">{designer.designation}</span>
-          </div>
+          {isHOD ? (
+            <div className="flex flex-col">
+              <span className="text-xs font-bold leading-tight text-slate-500 mb-1">Creating Request For:</span>
+              <select 
+                className="text-sm font-semibold bg-slate-100 border border-slate-200 rounded px-2 py-1 outline-none focus:ring-2 focus:ring-[#5d5baf]/20 cursor-pointer"
+                value={designer.id}
+                onChange={(e) => router.push(`/designer/${e.target.value}/requests`)}
+              >
+                <option value="d1">Alex Johnson</option>
+                <option value="d2">Alexander Allen</option>
+                <option value="d3">Benjamin Harris</option>
+              </select>
+            </div>
+          ) : (
+            <div className="flex flex-col">
+              <span className="text-xs font-bold leading-tight text-slate-900">{designer.name}</span>
+              <span className="text-[10px] leading-tight text-slate-500">{designer.designation}</span>
+            </div>
+          )}
         </div>
         <div className="flex-1 flex px-6 items-center">
           <span className="font-bold text-slate-900">{designer.currentDay}</span>
@@ -191,6 +235,7 @@ export default function RequestsClient({ designer }) {
                     <th className="px-4 py-3">Reason (Required)</th>
                     <th className="px-4 py-3">Optional Notes</th>
                     <th className="px-4 py-3 text-center">Status</th>
+                    {isHOD && <th className="px-4 py-3 text-center">Created By</th>}
                   </tr>
                 </thead>
                 <tbody className="divide-y divide-slate-100 bg-white">
@@ -260,10 +305,20 @@ export default function RequestsClient({ designer }) {
                           >
                             Submit Request
                           </button>
+                        ) : isHOD && req.status === "Pending" ? (
+                          <div className="flex justify-center gap-2">
+                            <button onClick={() => handleApproveIdle(req.id)} className="bg-emerald-500 text-white px-3 py-1.5 rounded-full text-xs font-semibold shadow-sm hover:bg-emerald-600 transition-colors">Approve</button>
+                            <button onClick={() => handleRejectIdle(req.id)} className="bg-red-500 text-white px-3 py-1.5 rounded-full text-xs font-semibold shadow-sm hover:bg-red-600 transition-colors">Reject</button>
+                          </div>
                         ) : (
                           getStatusBadge(req.status)
                         )}
                       </td>
+                      {isHOD && (
+                        <td className="px-4 py-3 text-center">
+                          <span className="text-[10px] font-bold text-slate-500 uppercase">{req.createdBy || "Designer"}</span>
+                        </td>
+                      )}
                     </tr>
                   ))}
                 </tbody>
@@ -277,49 +332,35 @@ export default function RequestsClient({ designer }) {
                 <Clock3 className="h-4 w-4 text-slate-500" />
                 Overtime Request
               </h2>
-              <span className="rounded-full bg-amber-100 px-3 py-1 text-xs font-semibold text-amber-800">Pending Approval</span>
             </div>
 
             <form onSubmit={handleOtSubmit} className="space-y-5 p-4 sm:p-5">
-              <div className="grid grid-cols-1 gap-4 md:grid-cols-2 xl:grid-cols-4">
-                <div>
-                  <label className="mb-1.5 block text-sm font-medium text-slate-700">Task Name</label>
-                  <select value={otForm.taskName} onChange={(e) => setOtForm({ ...otForm, taskName: e.target.value })} className={inputClass}>
-                    {overtimeTasks.map((t) => (
-                      <option key={t} value={t}>
-                        {t}
-                      </option>
-                    ))}
-                  </select>
-                </div>
-                <div>
-                  <label className="mb-1.5 block text-sm font-medium text-slate-700">Date</label>
-                  <input type="date" value={otForm.date} onChange={(e) => setOtForm({ ...otForm, date: e.target.value })} className={inputClass} required />
-                </div>
-                <div>
-                  <label className="mb-1.5 block text-sm font-medium text-slate-700">Estimated Remaining Work</label>
-                  <select value={otForm.estimatedRemaining} onChange={(e) => setOtForm({ ...otForm, estimatedRemaining: e.target.value })} className={inputClass}>
-                    <option>2 hours</option>
-                    <option>4 hours</option>
-                    <option>6 hours</option>
-                    <option>8 hours</option>
-                  </select>
-                </div>
-                <div>
-                  <label className="mb-1.5 block text-sm font-medium text-slate-700">Requested Extra Hours</label>
-                  <select value={otForm.requestedHours} onChange={(e) => setOtForm({ ...otForm, requestedHours: e.target.value })} className={inputClass}>
-                    <option>1 hour</option>
-                    <option>2 hours</option>
-                    <option>3 hours</option>
-                    <option>4 hours</option>
-                  </select>
-                </div>
-              </div>
-
-              <div className="grid grid-cols-1 gap-4 xl:grid-cols-[1fr_auto] xl:items-end">
-                <div className="grid grid-cols-1 gap-4 md:grid-cols-2">
+                <div className="grid grid-cols-1 gap-4 md:grid-cols-2 xl:grid-cols-4">
                   <div>
-                    <label className="mb-1.5 block text-sm font-medium text-slate-700">Requested Overtime Hours</label>
+                    <label className="mb-1.5 block text-sm font-medium text-slate-700">Task Name</label>
+                    <select value={otForm.taskName} onChange={(e) => setOtForm({ ...otForm, taskName: e.target.value })} className={inputClass}>
+                      {overtimeTasks.map((t) => (
+                        <option key={t} value={t}>
+                          {t}
+                        </option>
+                      ))}
+                    </select>
+                  </div>
+                  <div>
+                    <label className="mb-1.5 block text-sm font-medium text-slate-700">Date</label>
+                    <input type="date" value={otForm.date} onChange={(e) => setOtForm({ ...otForm, date: e.target.value })} className={inputClass} required />
+                  </div>
+                  <div>
+                    <label className="mb-1.5 block text-sm font-medium text-slate-700">Estimated Remaining Work</label>
+                    <select value={otForm.estimatedRemaining} onChange={(e) => setOtForm({ ...otForm, estimatedRemaining: e.target.value })} className={inputClass}>
+                      <option>2 hours</option>
+                      <option>4 hours</option>
+                      <option>6 hours</option>
+                      <option>8 hours</option>
+                    </select>
+                  </div>
+                  <div>
+                    <label className="mb-1.5 block text-sm font-medium text-slate-700">Requested Extra Hours</label>
                     <select value={otForm.requestedHours} onChange={(e) => setOtForm({ ...otForm, requestedHours: e.target.value })} className={inputClass}>
                       <option>1 hour</option>
                       <option>2 hours</option>
@@ -327,24 +368,37 @@ export default function RequestsClient({ designer }) {
                       <option>4 hours</option>
                     </select>
                   </div>
-                  <div>
-                    <label className="mb-1.5 block text-sm font-medium text-slate-700">Reason for Overtime</label>
-                    <select value={otForm.reason} onChange={(e) => setOtForm({ ...otForm, reason: e.target.value })} className={inputClass}>
-                      <option>Unexpected scope change for animations</option>
-                      <option>Client requested urgent revisions</option>
-                      <option>Technical delays</option>
-                      <option>Other</option>
-                    </select>
-                  </div>
                 </div>
-                <button
-                  type="submit"
-                  className="rounded-lg bg-[#5d5baf] px-5 py-2.5 text-sm font-semibold text-white shadow-sm transition-colors hover:bg-[#4b4991]"
-                >
-                  Submit Overtime Request
-                </button>
-              </div>
-            </form>
+
+                <div className="grid grid-cols-1 gap-4 xl:grid-cols-[1fr_auto] xl:items-end">
+                  <div className="grid grid-cols-1 gap-4 md:grid-cols-2">
+                    <div>
+                      <label className="mb-1.5 block text-sm font-medium text-slate-700">Requested Overtime Hours</label>
+                      <select value={otForm.requestedHours} onChange={(e) => setOtForm({ ...otForm, requestedHours: e.target.value })} className={inputClass}>
+                        <option>1 hour</option>
+                        <option>2 hours</option>
+                        <option>3 hours</option>
+                        <option>4 hours</option>
+                      </select>
+                    </div>
+                    <div>
+                      <label className="mb-1.5 block text-sm font-medium text-slate-700">Reason for Overtime</label>
+                      <select value={otForm.reason} onChange={(e) => setOtForm({ ...otForm, reason: e.target.value })} className={inputClass}>
+                        <option>Unexpected scope change for animations</option>
+                        <option>Client requested urgent revisions</option>
+                        <option>Technical delays</option>
+                        <option>Other</option>
+                      </select>
+                    </div>
+                  </div>
+                  <button
+                    type="submit"
+                    className="rounded-lg bg-[#5d5baf] px-5 py-2.5 text-sm font-semibold text-white shadow-sm transition-colors hover:bg-[#4b4991]"
+                  >
+                    Submit Overtime Request
+                  </button>
+                </div>
+              </form>
           </section>
 
           <section className="ui-surface overflow-hidden">
@@ -361,6 +415,7 @@ export default function RequestsClient({ designer }) {
                     <th className="px-4 py-3">Requested Hours</th>
                     <th className="px-4 py-3">Approved Hours</th>
                     <th className="px-4 py-3 text-center">Status</th>
+                    {isHOD && <th className="px-4 py-3 text-center">Created By</th>}
                   </tr>
                 </thead>
                 <tbody className="divide-y divide-slate-100 bg-white">
@@ -371,8 +426,20 @@ export default function RequestsClient({ designer }) {
                       <td className="px-4 py-3 text-slate-700">{req.requested}</td>
                       <td className="px-4 py-3 text-slate-700">{req.approved}</td>
                       <td className="px-4 py-3 text-center">
-                        <span className={`rounded-full px-3 py-1.5 text-xs font-bold uppercase tracking-wide ${getStatusColorTable(req.status)}`}>{req.status}</span>
+                        {isHOD && (req.status === "Pending Approval" || req.status === "Pending") ? (
+                          <div className="flex justify-center gap-2">
+                            <button onClick={() => handleApproveOt(req.id)} className="bg-emerald-500 text-white px-3 py-1.5 rounded-full text-xs font-semibold shadow-sm hover:bg-emerald-600 transition-colors">Approve</button>
+                            <button onClick={() => handleRejectOt(req.id)} className="bg-red-500 text-white px-3 py-1.5 rounded-full text-xs font-semibold shadow-sm hover:bg-red-600 transition-colors">Reject</button>
+                          </div>
+                        ) : (
+                          <span className={`inline-block w-24 rounded-full px-3 py-1.5 text-xs font-semibold text-center tracking-wide shadow-sm ${getStatusColorTable(req.status)}`}>{req.status}</span>
+                        )}
                       </td>
+                      {isHOD && (
+                        <td className="px-4 py-3 text-center">
+                          <span className="text-[10px] font-bold text-slate-500 uppercase">{req.createdBy || "Designer"}</span>
+                        </td>
+                      )}
                     </tr>
                   ))}
                 </tbody>
