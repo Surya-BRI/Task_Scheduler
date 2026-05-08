@@ -153,7 +153,7 @@ export default function RequestsClient({ designer }) {
       <StatsBar stats={stats} />
 
       <div className="flex-1 overflow-auto px-4 py-5 sm:px-6 sm:py-6">
-        <div className="mx-auto w-full max-w-7xl space-y-6">
+        <div className="w-full space-y-6">
           <div className="flex flex-wrap items-center justify-between gap-3">
             <div>
               <h1 className="text-2xl font-semibold tracking-tight text-slate-900">Regularization & Overtime</h1>
