@@ -20,7 +20,17 @@ export default function LeavePlannerClient({ designer }) {
   
   // Modal state
   const [isModalOpen, setIsModalOpen] = useState(false);
+  const [isHODModalOpen, setIsHODModalOpen] = useState(false);
+  const [selectedLeave, setSelectedLeave] = useState(null);
   const [selectedDate, setSelectedDate] = useState("");
+  const [isHOD, setIsHOD] = useState(false);
+
+  useEffect(() => {
+    import("@/lib/mock-auth").then(({ getSession }) => {
+      const session = getSession();
+      if (session?.role === "HOD") setIsHOD(true);
+    });
+  }, []);
   const [formData, setFormData] = useState({
     reason: "",
     fromDate: "",
@@ -47,6 +57,31 @@ export default function LeavePlannerClient({ designer }) {
     
     // Format YYYY-MM-DD
     const dateStr = `${YEAR}-${String(monthIndex + 1).padStart(2, '0')}-${String(day).padStart(2, '0')}`;
+    const leaveStatus = getLeaveStatusForDate(dateStr);
+
+    if (isHOD) {
+      if (leaveStatus === "PENDING") {
+        const leave = leaves.find(l => {
+          const fromTime = new Date(l.fromDate).getTime();
+          const toTime = new Date(l.toDate).getTime();
+          const targetTime = new Date(dateStr).getTime();
+          return targetTime >= fromTime && targetTime <= toTime;
+        });
+        if (leave) {
+          setSelectedLeave(leave);
+          setIsHODModalOpen(true);
+        }
+      } else {
+        setFormData({
+          reason: "",
+          fromDate: dateStr,
+          toDate: dateStr
+        });
+        setSelectedDate(dateStr);
+        setIsModalOpen(true);
+      }
+      return;
+    }
     
     setFormData({
       reason: "",
@@ -55,6 +90,16 @@ export default function LeavePlannerClient({ designer }) {
     });
     setSelectedDate(dateStr);
     setIsModalOpen(true);
+  };
+
+  const handleApproveLeave = (id) => {
+    setLeaves(prev => prev.map(l => l.id === id ? { ...l, status: "APPROVED" } : l));
+    setIsHODModalOpen(false);
+  };
+
+  const handleRejectLeave = (id) => {
+    setLeaves(prev => prev.map(l => l.id === id ? { ...l, status: "REJECTED" } : l));
+    setIsHODModalOpen(false);
   };
 
   const handleModalSubmit = (e) => {
@@ -70,7 +115,8 @@ export default function LeavePlannerClient({ designer }) {
       reason: formData.reason,
       fromDate: formData.fromDate,
       toDate: formData.toDate,
-      status: "PENDING"
+      status: "PENDING",
+      createdBy: isHOD ? "HOD" : "Designer"
     };
     
     setLeaves([...leaves, newRequest]);
@@ -116,7 +162,7 @@ export default function LeavePlannerClient({ designer }) {
       
       {/* Top Header matching other pages */}
       <div className="flex shrink-0 items-center border-b border-slate-200 bg-white px-6 py-2 text-sm font-medium text-slate-700">
-        <div className="flex w-64 items-center gap-3 border-r border-slate-200 pr-4">
+        <div className="flex w-auto items-center gap-3 border-r border-slate-200 pr-6">
           <div className="w-8 h-8 rounded-full bg-slate-800 text-white flex items-center justify-center text-xs font-bold leading-none shrink-0 shadow-sm">
             {designer.avatar ? (
               <img src={designer.avatar} alt={designer.name} className="h-full w-full object-cover rounded-full" />
@@ -124,10 +170,25 @@ export default function LeavePlannerClient({ designer }) {
               <span>{designer.name.split(" ").map(n => n[0]).join("").slice(0, 2)}</span>
             )}
           </div>
-          <div className="flex flex-col">
-            <span className="text-xs font-bold leading-tight text-slate-900">{designer.name}</span>
-            <span className="text-[10px] leading-tight text-slate-500">{designer.designation}</span>
-          </div>
+          {isHOD ? (
+            <div className="flex flex-col">
+              <span className="text-xs font-bold leading-tight text-slate-500 mb-1">Creating Request For:</span>
+              <select 
+                className="text-sm font-semibold bg-slate-100 border border-slate-200 rounded px-2 py-1 outline-none focus:ring-2 focus:ring-[#5d5baf]/20 cursor-pointer"
+                value={designer.id}
+                onChange={(e) => router.push(`/designer/${e.target.value}/leave-planner`)}
+              >
+                <option value="d1">Alex Johnson</option>
+                <option value="d2">Alexander Allen</option>
+                <option value="d3">Benjamin Harris</option>
+              </select>
+            </div>
+          ) : (
+            <div className="flex flex-col">
+              <span className="text-xs font-bold leading-tight text-slate-900">{designer.name}</span>
+              <span className="text-[10px] leading-tight text-slate-500">{designer.designation}</span>
+            </div>
+          )}
         </div>
       </div>
 
@@ -278,6 +339,68 @@ export default function LeavePlannerClient({ designer }) {
                 </button>
               </div>
             </form>
+          </div>
+        </div>
+      )}
+
+      {isHODModalOpen && selectedLeave && (
+        <div className="fixed inset-0 z-50 flex items-center justify-center bg-slate-900/40 backdrop-blur-sm p-4 animate-in fade-in duration-200">
+          <div className="bg-white rounded-2xl shadow-2xl w-full max-w-md overflow-hidden transform transition-all scale-100">
+            <div className="flex items-center justify-between px-6 py-5 border-b border-slate-100 bg-gradient-to-r from-slate-50 to-white">
+              <h2 className="text-lg font-semibold text-slate-900 flex items-center gap-2.5">
+                <div className="p-2 bg-[#f0f1fa] rounded-lg">
+                  <CalendarIcon className="w-5 h-5 text-[#5d5baf]" />
+                </div>
+                Review Leave Request
+              </h2>
+              <button 
+                onClick={() => setIsHODModalOpen(false)}
+                className="p-2 text-slate-400 hover:text-slate-600 hover:bg-slate-100 rounded-full transition-colors"
+              >
+                <X className="w-5 h-5" />
+              </button>
+            </div>
+            
+            <div className="p-6 space-y-4">
+              <div>
+                <p className="text-sm text-slate-500 font-medium mb-1">Reason</p>
+                <p className="text-slate-900 bg-slate-50 p-3 rounded-lg border border-slate-100">{selectedLeave.reason}</p>
+              </div>
+              <div className="grid grid-cols-2 gap-4 mt-4 pt-4 border-t border-slate-100">
+                <div>
+                  <p className="text-sm text-slate-500 font-medium mb-1">From</p>
+                  <p className="text-slate-900 font-semibold">{selectedLeave.fromDate}</p>
+                </div>
+                <div>
+                  <p className="text-sm text-slate-500 font-medium mb-1">To</p>
+                  <p className="text-slate-900 font-semibold">{selectedLeave.toDate}</p>
+                </div>
+              </div>
+              {selectedLeave.createdBy && (
+                <div className="mt-4">
+                  <span className="inline-block px-2.5 py-1 rounded bg-slate-100 text-[10px] font-bold text-slate-600 uppercase tracking-wide">
+                    Created By: {selectedLeave.createdBy}
+                  </span>
+                </div>
+              )}
+            </div>
+
+            <div className="px-6 py-4 bg-slate-50 border-t border-slate-100 flex justify-end gap-3">
+              <button
+                type="button"
+                onClick={() => handleRejectLeave(selectedLeave.id)}
+                className="px-5 py-2.5 text-sm font-medium text-red-600 bg-white border border-red-200 rounded-xl hover:bg-red-50 transition-colors"
+              >
+                Reject
+              </button>
+              <button
+                type="button"
+                onClick={() => handleApproveLeave(selectedLeave.id)}
+                className="px-6 py-2.5 text-sm font-medium text-white bg-emerald-500 rounded-xl hover:bg-emerald-600 shadow-md shadow-emerald-500/20 transition-all active:scale-[0.98]"
+              >
+                Approve Leave
+              </button>
+            </div>
           </div>
         </div>
       )}
