@@ -236,6 +236,8 @@ export function Navbar({ currentDate, onCalendarChange, dateRangeText }) {
               </button>
             )}
 
+
+
             {/* Chatter */}
             <button
               type="button"
