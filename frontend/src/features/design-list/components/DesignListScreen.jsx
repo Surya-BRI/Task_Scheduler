@@ -17,6 +17,7 @@ import {
 } from "lucide-react";
 import { useDesignListStore } from "@/state/DesignListContext";
 import { Navbar } from "@/components/Navbar";
+import { parseDesignListDate } from "@/lib/design-list-date";
 
 const getStatusColor = (status) => {
   switch (status) {
@@ -472,18 +473,17 @@ export function DesignListScreen() {
     if (filters.salesPerson && d.salesPerson !== filters.salesPerson) return false;
 
     if (filters.startDate || filters.endDate) {
-      const parts = d.created.split("/");
-      if (parts.length === 3) {
-        const designDate = new Date(`${parts[2]}-${parts[1]}-${parts[0]}T00:00:00`).getTime();
+      const parsed = parseDesignListDate(d.created);
+      if (!parsed) return false;
+      const designDate = parsed.getTime();
 
-        if (filters.startDate) {
-          const start = new Date(`${filters.startDate}T00:00:00`).getTime();
-          if (designDate < start) return false;
-        }
-        if (filters.endDate) {
-          const end = new Date(`${filters.endDate}T23:59:59`).getTime();
-          if (designDate > end) return false;
-        }
+      if (filters.startDate) {
+        const start = new Date(`${filters.startDate}T00:00:00`).getTime();
+        if (designDate < start) return false;
+      }
+      if (filters.endDate) {
+        const end = new Date(`${filters.endDate}T23:59:59`).getTime();
+        if (designDate > end) return false;
       }
     }
     return true;
