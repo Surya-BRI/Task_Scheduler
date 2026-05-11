@@ -1,16 +1,14 @@
 import { createContext, useContext, useMemo, useState } from 'react'
-import { DESIGN_RECORDS } from '../data/designs.js'
+import { useEffect } from 'react'
+import { parseDesignListDate } from '@/lib/design-list-date'
+import { apiClient } from '@/lib/api-client'
 
 const DesignListContext = createContext(null)
 
 const STATUS_ORDER = ['WIP', 'Pending', 'Revision', 'Approved', 'Completed']
 
 function parseRecordDate(value) {
-  if (!value) return null
-  const [month, day, year] = value.split('/').map(Number)
-  if (!month || !day || !year) return null
-  const parsed = new Date(year, month - 1, day)
-  return Number.isNaN(parsed.getTime()) ? null : parsed
+  return parseDesignListDate(value)
 }
 
 function nextStatus(current) {
@@ -20,7 +18,7 @@ function nextStatus(current) {
 }
 
 export function DesignListProvider({ children }) {
-  const [records, setRecords] = useState(DESIGN_RECORDS)
+  const [records, setRecords] = useState([])
   const [query, setQuery] = useState('')
   const [status, setStatus] = useState('All')
   const [typeFilters, setTypeFilters] = useState([])
@@ -29,6 +27,24 @@ export function DesignListProvider({ children }) {
     startDate: '',
     endDate: '',
   })
+
+  useEffect(() => {
+    let mounted = true
+    apiClient
+      .get('/design-list')
+      .then((data) => {
+        if (!mounted || !Array.isArray(data)) return
+        setRecords(data)
+      })
+      .catch(() => {
+        if (!mounted) return
+        setRecords([])
+      })
+
+    return () => {
+      mounted = false
+    }
+  }, [])
 
   const statusOptions = useMemo(() => {
     const uniq = Array.from(new Set(records.map((r) => r.status)))
