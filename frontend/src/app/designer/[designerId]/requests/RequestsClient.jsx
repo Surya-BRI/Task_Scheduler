@@ -5,6 +5,7 @@ import { useRouter } from "next/navigation";
 import { Navbar } from "@/components/Navbar";
 import StatsBar from "../components/StatsBar";
 import { Clock3, FileClock, TimerReset, X } from "lucide-react";
+import { formatDate, formatDateForInput } from "@/lib/utils";
 
 export default function RequestsClient({ designer }) {
   const router = useRouter();
@@ -105,7 +106,8 @@ export default function RequestsClient({ designer }) {
     
     const newReq = {
       id: Date.now(),
-      date: otForm.date || new Date().toISOString().split('T')[0],
+      // Store as YYYY-MM-DD string for input compatibility; display via formatDate
+      date: otForm.date || formatDateForInput(new Date()),
       taskName: otForm.taskName,
       requested: otForm.requestedHours,
       status: "Pending Approval",
@@ -252,7 +254,7 @@ export default function RequestsClient({ designer }) {
                           />
                         ) : (
                           <span className="inline-block rounded-md bg-slate-100 px-3 py-1.5 text-xs text-slate-700">
-                            {req.date || "dd-mm-yyyy"}
+                            {req.date ? formatDate(req.date) : "dd MMM yyyy"}
                           </span>
                         )}
                       </td>
@@ -421,7 +423,7 @@ export default function RequestsClient({ designer }) {
                 <tbody className="divide-y divide-slate-100 bg-white">
                   {previousOtRequests.map((req) => (
                     <tr key={req.id} className="transition-colors hover:bg-slate-50">
-                      <td className="px-4 py-3 font-medium text-slate-500">{req.date}</td>
+                      <td className="px-4 py-3 font-medium text-slate-500">{formatDate(req.date)}</td>
                       <td className="px-4 py-3 font-semibold text-slate-800">{req.taskName}</td>
                       <td className="px-4 py-3 text-slate-700">{req.requested}</td>
                       <td className="px-4 py-3 text-slate-700">{req.approved}</td>

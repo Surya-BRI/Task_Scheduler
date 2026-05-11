@@ -265,7 +265,8 @@ export function DesignSchedulerScreen() {
         let assignedIdx = 27;
         const addSchedule = (d, day, count) => {
             for (let i = 0; i < count && assignedIdx < 100; i++) {
-                schedulesObj[d][day].push(records[assignedIdx++].id);
+                const record = records[assignedIdx++];
+                if (record) schedulesObj[d][day].push(record.id);
             }
         };
 
@@ -277,7 +278,8 @@ export function DesignSchedulerScreen() {
         let d = 5;
         let day = 0;
         while (assignedIdx < 100) {
-            schedulesObj[`d${d}`][`${day}`].push(records[assignedIdx++].id);
+            const record = records[assignedIdx++];
+            if (record) schedulesObj[`d${d}`][`${day}`].push(record.id);
             day++;
             if (day > 4) {
                 day = 0;
@@ -287,9 +289,10 @@ export function DesignSchedulerScreen() {
         }
 
         schedulesObj["d1"]["0"] = [];
-        assignedIdx = 27; 
+        assignedIdx = 27;
         for (let i = 0; i < 8 && assignedIdx < 100; i++) {
             const r = records[assignedIdx++];
+            if (!r || !tasksObj[r.id]) continue;
             tasksObj[r.id].estimatedHours = 1;
             tasksObj[r.id].tag = "Alex Monday";
             schedulesObj["d1"]["0"].push(r.id);
