@@ -4,6 +4,7 @@ import { useState, useEffect } from "react";
 import { useRouter } from "next/navigation";
 import { Navbar } from "@/components/Navbar";
 import { X, Calendar as CalendarIcon, CheckCircle } from "lucide-react";
+import { formatDate } from "@/lib/utils";
 
 const MONTHS = [
   "January", "February", "March", "April", "May", "June",
@@ -366,14 +367,14 @@ export default function LeavePlannerClient({ designer }) {
                 <p className="text-sm text-slate-500 font-medium mb-1">Reason</p>
                 <p className="text-slate-900 bg-slate-50 p-3 rounded-lg border border-slate-100">{selectedLeave.reason}</p>
               </div>
-              <div className="grid grid-cols-2 gap-4 mt-4 pt-4 border-t border-slate-100">
+                <div className="grid grid-cols-2 gap-4 mt-4 pt-4 border-t border-slate-100">
                 <div>
                   <p className="text-sm text-slate-500 font-medium mb-1">From</p>
-                  <p className="text-slate-900 font-semibold">{selectedLeave.fromDate}</p>
+                  <p className="text-slate-900 font-semibold">{formatDate(selectedLeave.fromDate)}</p>
                 </div>
                 <div>
                   <p className="text-sm text-slate-500 font-medium mb-1">To</p>
-                  <p className="text-slate-900 font-semibold">{selectedLeave.toDate}</p>
+                  <p className="text-slate-900 font-semibold">{formatDate(selectedLeave.toDate)}</p>
                 </div>
               </div>
               {selectedLeave.createdBy && (

@@ -1,5 +1,6 @@
 import { clearAccessToken, getAccessToken } from './auth-token';
 import { env } from './env';
+import { dateReviver } from './utils';
 
 async function request<T>(path: string, init?: RequestInit): Promise<T> {
   const token = getAccessToken();
@@ -25,7 +26,10 @@ async function request<T>(path: string, init?: RequestInit): Promise<T> {
     throw new Error(errorBody || 'API request failed');
   }
 
-  return response.json() as Promise<T>;
+  // Use a date-aware reviver so ISO strings are automatically parsed into
+  // Date objects — this keeps all date fields as Date throughout the app.
+  const text = await response.text();
+  return JSON.parse(text, dateReviver) as T;
 }
 
 export const apiClient = {
@@ -39,3 +43,4 @@ export const apiClient = {
     return request(path, { method: 'PATCH', body: JSON.stringify(body) });
   },
 };
+
