@@ -5,6 +5,9 @@ export interface TaskItem {
   status: 'PENDING' | 'WIP' | 'COMPLETED';
   projectId: string;
   assigneeId?: string | null;
-  dueDate?: string | null;
-  createdAt: string;
+  /** Parsed from ISO string by the API client's date reviver */
+  dueDate?: Date | null;
+  /** Parsed from ISO string by the API client's date reviver */
+  createdAt: Date;
 }
+

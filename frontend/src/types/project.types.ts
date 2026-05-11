@@ -3,5 +3,7 @@ export interface ProjectItem {
   name: string;
   description?: string;
   isActive: boolean;
-  createdAt: string;
+  /** Parsed from ISO string by the API client's date reviver */
+  createdAt: Date;
 }
+
