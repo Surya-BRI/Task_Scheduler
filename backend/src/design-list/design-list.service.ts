@@ -40,7 +40,7 @@ export class DesignListService {
       ORDER BY created DESC, id ASC
     `;
 
-    return rows.map((row) => ({
+    return rows.map((row: DesignListRow) => ({
       id: row.id,
       opNo: row.opNo,
       projectNo: row.projectNo,
@@ -60,4 +60,3 @@ export class DesignListService {
     }));
   }
 }
-
