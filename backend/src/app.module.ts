@@ -6,6 +6,7 @@ import { AuthModule } from './auth/auth.module';
 import { UsersModule } from './users/users.module';
 import { ProjectsModule } from './projects/projects.module';
 import { TasksModule } from './tasks/tasks.module';
+import { DesignListModule } from './design-list/design-list.module';
 import configuration from './config/configuration';
 import { envValidationSchema } from './config/env.validation';
 
@@ -22,6 +23,7 @@ import { envValidationSchema } from './config/env.validation';
     UsersModule,
     ProjectsModule,
     TasksModule,
+    DesignListModule,
   ],
 })
 export class AppModule {}
