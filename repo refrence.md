@@ -211,6 +211,9 @@ From `frontend/src/app/**/page.jsx`:
 - API client exists and is ready for real backend wiring, but some flows bypass it.
 - Data models differ between backend Task/Project entities and rich frontend design/scheduler records.
 - Database table creation rule (from now on):
+  - New mandatory naming convention: any new table created from this codebase must use `ErpS...` prefix (insert `S` immediately after `Erp`).
+    - Example: `ErpDesignTask` -> `ErpSDesignTask` for new scheduler-owned tables.
+  - This applies to new table creation only; do not rename existing legacy `Erp...` tables unless explicitly requested.
   - Before creating any new table, check whether a similarly named table already exists.
   - If a similar name exists and it is not an intentional extension of that table, create a non-conflicting table name using an `ErpSdlr...` prefix/suffix pattern.
   - Do not rename or alter legacy/existing tables unless explicitly requested.
@@ -250,3 +253,29 @@ From `frontend/src/app/**/page.jsx`:
 - Unify auth: connect `login-form.jsx` to `auth.api.js` + JWT token storage.
 - Add shared API contracts between backend DTO/Prisma types and frontend types.
 - Add tests for scheduler split/overtime algorithm and role-based route guards.
+
+## 9) API Rules (Project/Design List) - Team Reference
+These rules are mandatory for future AI/dev updates unless explicitly overridden.
+
+- Data source for Project Design list:
+  - Use live ERP query (Prisma + SQL Server), not dummy project data.
+  - Query ordering must be latest first: `ORDER BY mp.createdOn DESC`.
+
+- Project list endpoint behavior:
+  - Use backend pagination for `/design-list/projects-list`.
+  - Default page size: `100`.
+  - Current limit guard: max `200`.
+  - Frontend `/projects-list` must request paged data from backend, not fetch full list then paginate locally.
+
+- Null handling policy (important):
+  - If source value is `NULL`, keep it as `null` in API response for projects-list payload.
+  - Do not auto-replace `null` with fallback business text like `Unassigned`/`-` for projects-list fields.
+  - Frontend may render missing values as literal `"null"` for visibility, but backend should preserve nulls.
+
+- Naming/UI terminology:
+  - Show `Project Code` in UI (not `Project ID`) for projects list display/search semantics.
+
+- Design type/category mapping:
+  - Derive `designType` from `businessUnitCode` mapping.
+  - Unknown/unmapped business units fallback to `Project`.
+  - Log unknown BU mapping events for follow-up mapping updates.
