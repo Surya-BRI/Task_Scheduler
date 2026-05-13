@@ -1,75 +1,52 @@
 "use client";
 
 import Link from "next/link";
-import { useState } from "react";
+import { useEffect, useState } from "react";
 import { Search } from "lucide-react";
-import { useDesignListStore } from "@/state/DesignListContext";
-import { dummyProjects } from "../data/dummy-projects";
+import { apiClient } from "@/lib/api-client";
 import { Navbar } from "@/components/Navbar";
-
-function resolveTaskIdForProjectRow(row, records) {
-  const pool = records.filter(
-    (r) => String(r.designType).toLowerCase() === row.category.toLowerCase(),
-  );
-  if (pool.length === 0) return null;
-  const pid = row.projectId.trim().toLowerCase();
-  const match =
-    pool.find((r) => (r.projectNo || "").trim().toLowerCase() === pid) ??
-    pool.find((r) => (r.projectCode || "").trim().toLowerCase() === pid);
-  if (match) return match.id;
-  const n = parseInt(row.id, 10);
-  const idx = Number.isFinite(n) ? n % pool.length : 0;
-  return pool[idx]?.id ?? null;
-}
 
 function projectListTaskHref(taskId) {
   return `/design-list/task/${encodeURIComponent(taskId)}?from=projects-list`;
 }
 
-function retailProjectHref(projectRowId) {
-  return `/retail/${encodeURIComponent(projectRowId)}`;
-}
+const renderCell = (value) => (value == null || value === "" ? "null" : String(value));
 
 const getCategoryColor = (category) =>
   category === "Retail" ? "text-blue-600" : "text-orange-500";
 
-function ProjectTable({ data, records }) {
+function ProjectTable({ data }) {
   return (
     <div className="flex min-h-0 flex-1 flex-col px-4 pb-6 sm:px-6">
       <div className="ui-surface h-full overflow-auto">
         <table className="w-full text-sm text-left relative">
           <thead className="ui-table-header sticky top-0 z-10 border-b border-slate-200">
             <tr>
-              <th className="px-2 py-1.5 whitespace-nowrap">Project ID</th>
+              <th className="px-2 py-1.5 whitespace-nowrap">Project Code</th>
               <th className="px-2 py-1.5 whitespace-nowrap">Project Name</th>
               <th className="px-2 py-1.5 whitespace-nowrap">Sales Person</th>
               <th className="px-2 py-1.5 whitespace-nowrap">Category</th>
             </tr>
           </thead>
           <tbody className="divide-y divide-slate-100">
-            {data.map((row) => {
-              const isRetail = row.category === "Retail";
-              const retailHref = retailProjectHref(row.id);
-              const taskId = !isRetail ? resolveTaskIdForProjectRow(row, records) : null;
-              const projectHref = isRetail
-                ? retailHref
-                : taskId
-                  ? projectListTaskHref(taskId)
-                  : null;
+            {data.map((row, idx) => {
+              if (!row) return null;
+              const projectHref = row.id ? projectListTaskHref(row.id) : null;
+              const rowKey = `${row.id ?? row.projectCode ?? "row"}-${idx}`;
 
               return (
-                <tr key={row.id} className="hover:bg-slate-50 transition-colors">
+                <tr key={rowKey} className="hover:bg-slate-50 transition-colors">
                   <td className="px-2 py-1 whitespace-nowrap text-xs">
                     {projectHref ? (
                       <Link href={projectHref} className="font-medium text-blue-600 hover:underline">
-                        {row.projectId}
+                        {renderCell(row.projectCode)}
                       </Link>
                     ) : (
-                      <span className="font-medium text-slate-400">{row.projectId}</span>
+                      <span className="font-medium text-slate-400">{renderCell(row.projectCode)}</span>
                     )}
                   </td>
-                  <td className="px-2 py-1 text-slate-700 text-xs leading-tight">{row.projectName}</td>
-                  <td className="px-2 py-1 text-slate-700 whitespace-nowrap text-xs">{row.salesPerson}</td>
+                  <td className="px-2 py-1 text-slate-700 text-xs leading-tight">{renderCell(row.projectName)}</td>
+                  <td className="px-2 py-1 text-slate-700 whitespace-nowrap text-xs">{renderCell(row.salesPerson)}</td>
                   <td className="px-2 py-1 whitespace-nowrap text-xs">
                     {projectHref ? (
                       <Link
@@ -95,20 +72,51 @@ function ProjectTable({ data, records }) {
 }
 
 export function ProjectScreen() {
-  const { records } = useDesignListStore();
-  const designRecords = records;
-  const [projects] = useState(dummyProjects);
+  const PAGE_SIZE = 100;
   const [searchQuery, setSearchQuery] = useState("");
+  const [page, setPage] = useState(1);
+  const [projects, setProjects] = useState([]);
+  const [total, setTotal] = useState(0);
+  const [totalPages, setTotalPages] = useState(1);
 
-  const filtered = projects.filter((p) => {
-    if (!searchQuery) return true;
-    const q = searchQuery.toLowerCase();
-    return (
-      p.projectId.toLowerCase().includes(q) ||
-      p.projectName.toLowerCase().includes(q) ||
-      p.salesPerson.toLowerCase().includes(q)
-    );
-  });
+  useEffect(() => {
+    let mounted = true;
+    const q = searchQuery.trim();
+    apiClient
+      .get(
+        `/design-list/projects-list?page=${page}&limit=${PAGE_SIZE}&q=${encodeURIComponent(q)}`,
+      )
+      .then((res) => {
+        if (!mounted) return;
+        const data = Array.isArray(res?.data) ? res.data : [];
+        setProjects(
+          data.map((r) => ({
+            id: r.id,
+            projectCode: r.projectCode ?? r.projectNo ?? null,
+            projectName: r.projectName ?? r.name ?? null,
+            salesPerson: r.salesPerson ?? null,
+            category: r.designType || "Project",
+          })),
+        );
+        setTotal(Number(res?.total || 0));
+        setTotalPages(Math.max(1, Number(res?.totalPages || 1)));
+      })
+      .catch(() => {
+        if (!mounted) return;
+        setProjects([]);
+        setTotal(0);
+        setTotalPages(1);
+      });
+
+    return () => {
+      mounted = false;
+    };
+  }, [page, searchQuery]);
+
+  useEffect(() => {
+    setPage(1);
+  }, [searchQuery]);
+  const currentPage = Math.min(page, totalPages);
 
   return (
     <div className="app-shell h-screen flex flex-col overflow-hidden font-sans">
@@ -124,13 +132,40 @@ export function ProjectScreen() {
               type="text"
               value={searchQuery}
               onChange={(e) => setSearchQuery(e.target.value)}
-              placeholder="Search by Project ID..."
+              placeholder="Search by Project Code..."
               className="pl-9 pr-4 py-1.5 border border-slate-300 rounded-md text-sm w-60 focus:outline-none focus:ring-2 focus:ring-blue-500/25 focus:border-blue-500 bg-white text-slate-900"
             />
           </div>
         </div>
 
-        <ProjectTable data={filtered} records={designRecords} />
+        <ProjectTable data={projects} />
+        <div className="shrink-0 flex items-center justify-between px-4 pb-4 pt-2 sm:px-6 text-xs text-slate-600">
+          <span>
+            Showing {total === 0 ? 0 : (currentPage - 1) * PAGE_SIZE + 1}-
+            {Math.min(currentPage * PAGE_SIZE, total)} of {total}
+          </span>
+          <div className="flex items-center gap-2">
+            <button
+              type="button"
+              onClick={() => setPage((p) => Math.max(1, p - 1))}
+              disabled={currentPage === 1}
+              className="px-2.5 py-1 border border-slate-300 rounded disabled:opacity-50 disabled:cursor-not-allowed hover:bg-slate-50"
+            >
+              Prev
+            </button>
+            <span>
+              Page {currentPage} / {totalPages}
+            </span>
+            <button
+              type="button"
+              onClick={() => setPage((p) => Math.min(totalPages, p + 1))}
+              disabled={currentPage === totalPages}
+              className="px-2.5 py-1 border border-slate-300 rounded disabled:opacity-50 disabled:cursor-not-allowed hover:bg-slate-50"
+            >
+              Next
+            </button>
+          </div>
+        </div>
       </div>
     </div>
   );

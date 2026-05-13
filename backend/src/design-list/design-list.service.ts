@@ -1,23 +1,26 @@
-import { Injectable } from '@nestjs/common';
+import { Injectable, Logger } from '@nestjs/common';
 import { PrismaService } from '../prisma/prisma.service';
 
 type DesignListRow = {
-  id: string;
-  opNo: string;
-  projectNo: string;
+  projectId: number;
   projectCode: string | null;
-  designType: 'Retail' | 'Project';
-  businessUnit: string;
-  name: string;
-  status: 'WIP' | 'Completed' | 'Pending' | 'Revision' | 'Approved';
-  salesPerson: string;
-  created: Date;
-  deadline: Date;
-  agingDays: number;
-  agingLabel: string | null;
-  clientName: string | null;
+  salesForceCode: string | null;
   projectName: string | null;
-  assigneeName: string | null;
+  clientName: string | null;
+  businessUnitCode: string | null;
+  status: string | null;
+  salesPerson: string | null;
+  projectManager: string | null;
+  projectOwner: string | null;
+  createdOn: Date;
+};
+
+type ProjectListPageResult = {
+  data: Array<ReturnType<DesignListService['mapRow']>>;
+  page: number;
+  limit: number;
+  total: number;
+  totalPages: number;
 };
 
 function toDdMmYyyy(value: Date): string {
@@ -27,37 +30,158 @@ function toDdMmYyyy(value: Date): string {
   return `${day}/${month}/${year}`;
 }
 
+const RETAIL_UNIT_CODES = new Set<string>(['retail', 'rtl', 'r']);
+
 @Injectable()
 export class DesignListService {
+  private readonly logger = new Logger(DesignListService.name);
+
   constructor(private readonly prisma: PrismaService) {}
+
+  private resolveDesignType(businessUnitCode: string | null): 'Retail' | 'Project' {
+    const normalized = (businessUnitCode ?? '').trim().toLowerCase();
+    if (RETAIL_UNIT_CODES.has(normalized)) return 'Retail';
+
+    if (normalized.length > 0 && normalized !== 'project') {
+      this.logger.warn(
+        JSON.stringify({
+          event: 'unknown_business_unit_mapping',
+          businessUnitCode,
+          fallback: 'Project',
+        }),
+      );
+    }
+
+    return 'Project';
+  }
+
+  private mapRow(row: DesignListRow, preserveNulls = false) {
+    const createdIso = new Date(row.createdOn).toISOString();
+    const id = `${row.projectId}:${row.salesForceCode ?? 'no-op'}:${createdIso}`;
+    const projectCode = row.projectCode ?? null;
+    const salesForceCode = row.salesForceCode ?? null;
+    const projectName = row.projectName ?? null;
+    const salesPerson = row.salesPerson ?? null;
+    const projectManager = row.projectManager ?? null;
+    const projectOwner = row.projectOwner ?? null;
+    const customerName = row.clientName ?? null;
+
+    return {
+      id,
+      opNo: preserveNulls ? salesForceCode : salesForceCode ?? projectCode ?? id,
+      projectNo: preserveNulls ? projectCode : projectCode ?? id,
+      projectCode: preserveNulls ? projectCode : projectCode ?? undefined,
+      designType: this.resolveDesignType(row.businessUnitCode),
+      businessUnit: row.businessUnitCode ?? 'Project',
+      name: preserveNulls ? projectName : projectName ?? projectCode ?? id,
+      status: (row.status as 'WIP' | 'Completed' | 'Pending' | 'Revision' | 'Approved') ?? 'Pending',
+      salesPerson: preserveNulls ? salesPerson : salesPerson ?? 'Unassigned',
+      created: toDdMmYyyy(new Date(row.createdOn)),
+      deadline: toDdMmYyyy(new Date(row.createdOn)),
+      agingDays: Math.max(0, Math.floor((Date.now() - new Date(row.createdOn).getTime()) / 86400000)),
+      agingLabel: undefined,
+      clientName: preserveNulls ? customerName : customerName ?? undefined,
+      projectName: preserveNulls ? projectName : projectName ?? undefined,
+      assignee: projectManager ? { name: projectManager } : undefined,
+      salesForceCode: preserveNulls ? salesForceCode : salesForceCode ?? undefined,
+      customerName: preserveNulls ? customerName : customerName ?? undefined,
+      projectManager: preserveNulls ? projectManager : projectManager ?? undefined,
+      projectOwner: preserveNulls ? projectOwner : projectOwner ?? undefined,
+    };
+  }
+
+  private buildBaseQuery(whereSearchClause: string) {
+    return `
+      SELECT
+        mp.projectid AS projectId,
+        mp.projectCode,
+        mo.salesForceCode,
+        mp.projectName,
+        mc.customerName AS clientName,
+        mb.businessUnitCode,
+        mt.taxnomycode AS status,
+        me.firstName + '' + me.lastName AS salesPerson,
+        mee.firstName + '' + mee.lastName AS projectManager,
+        meee.firstName + '' + meee.lastName AS projectOwner,
+        mp.createdOn
+      FROM ErpMasterProject mp
+      LEFT JOIN ErpMasterOpportunity mo ON mo.projectid = mp.projectid
+      LEFT JOIN ErpMastercustomer mc ON mc.custId = mp.clientIId
+      LEFT JOIN ErpMasterBusinessUnit mb ON mb.businessUnitId = mp.businessUnitId
+      LEFT JOIN ErpMasterTaxnomy mt ON mt.taxnomyId = mp.statusId
+      LEFT JOIN ErpMasterEmployee me ON me.employeeId = mo.salesRepId
+      LEFT JOIN ErpMasterEmployee mee ON mee.employeeId = mp.projectManagerId
+      LEFT JOIN ErpMasterEmployee meee ON meee.employeeId = mp.projectOwnerId
+      WHERE mp.isActive = 1
+      ${whereSearchClause}
+    `;
+  }
 
   async findAll() {
     const rows = await this.prisma.$queryRaw<DesignListRow[]>`
       SELECT
-        id, opNo, projectNo, projectCode, designType, businessUnit, [name], [status],
-        salesPerson, created, deadline, agingDays, agingLabel, clientName, projectName, assigneeName
-      FROM dbo.ErpDesignList
-      ORDER BY created DESC, id ASC
+        mp.projectid AS projectId,
+        mp.projectCode,
+        mo.salesForceCode,
+        mp.projectName,
+        mc.customerName AS clientName,
+        mb.businessUnitCode,
+        mt.taxnomycode AS status,
+        me.firstName + '' + me.lastName AS salesPerson,
+        mee.firstName + '' + mee.lastName AS projectManager,
+        meee.firstName + '' + meee.lastName AS projectOwner,
+        mp.createdOn
+      FROM ErpMasterProject mp
+      LEFT JOIN ErpMasterOpportunity mo ON mo.projectid = mp.projectid
+      LEFT JOIN ErpMastercustomer mc ON mc.custId = mp.clientIId
+      LEFT JOIN ErpMasterBusinessUnit mb ON mb.businessUnitId = mp.businessUnitId
+      LEFT JOIN ErpMasterTaxnomy mt ON mt.taxnomyId = mp.statusId
+      LEFT JOIN ErpMasterEmployee me ON me.employeeId = mo.salesRepId
+      LEFT JOIN ErpMasterEmployee mee ON mee.employeeId = mp.projectManagerId
+      LEFT JOIN ErpMasterEmployee meee ON meee.employeeId = mp.projectOwnerId
+      WHERE mp.isActive = 1
+      ORDER BY mp.createdOn DESC
     `;
 
-    return rows.map((row) => ({
-      id: row.id,
-      opNo: row.opNo,
-      projectNo: row.projectNo,
-      projectCode: row.projectCode ?? undefined,
-      designType: row.designType,
-      businessUnit: row.businessUnit,
-      name: row.name,
-      status: row.status,
-      salesPerson: row.salesPerson,
-      created: toDdMmYyyy(new Date(row.created)),
-      deadline: toDdMmYyyy(new Date(row.deadline)),
-      agingDays: row.agingDays,
-      agingLabel: row.agingLabel ?? undefined,
-      clientName: row.clientName ?? undefined,
-      projectName: row.projectName ?? undefined,
-      assignee: row.assigneeName ? { name: row.assigneeName } : undefined,
-    }));
+    return rows.map((row: DesignListRow) => this.mapRow(row));
+  }
+
+  async findProjectsListPage(page: number, limit: number, q: string): Promise<ProjectListPageResult> {
+    const safePage = Math.max(1, page);
+    const safeLimit = Math.min(200, Math.max(1, limit));
+    const offset = (safePage - 1) * safeLimit;
+    const search = q.trim();
+    const hasSearch = search.length > 0;
+    const escapedSearch = search.replace(/'/g, "''");
+    const whereSearchClause = hasSearch
+      ? `
+      AND (
+        mp.projectCode LIKE '%${escapedSearch}%'
+        OR mp.projectName LIKE '%${escapedSearch}%'
+        OR (me.firstName + '' + me.lastName) LIKE '%${escapedSearch}%'
+      )`
+      : '';
+
+    const baseQuery = this.buildBaseQuery(whereSearchClause);
+    const rows = await this.prisma.$queryRawUnsafe<DesignListRow[]>(`
+      ${baseQuery}
+      ORDER BY mp.createdOn DESC
+      OFFSET ${offset} ROWS
+      FETCH NEXT ${safeLimit} ROWS ONLY
+    `);
+
+    const totalRows = await this.prisma.$queryRawUnsafe<Array<{ total: number }>>(`
+      SELECT COUNT(*) AS total
+      FROM (${baseQuery}) AS q
+    `);
+    const total = Number(totalRows[0]?.total ?? 0);
+
+    return {
+      data: rows.map((row) => this.mapRow(row, true)),
+      page: safePage,
+      limit: safeLimit,
+      total,
+      totalPages: Math.max(1, Math.ceil(total / safeLimit)),
+    };
   }
 }
-
