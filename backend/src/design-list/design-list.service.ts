@@ -64,6 +64,15 @@ export class DesignListService {
     return 'Project';
   }
 
+  /** Join fan-out (e.g. multiple opportunities per project) can yield identical mapped `id`s; keep the first row per id. */
+  private dedupeMappedRows<T extends { id: string }>(rows: T[]): T[] {
+    const byId = new Map<string, T>();
+    for (const row of rows) {
+      if (!byId.has(row.id)) byId.set(row.id, row);
+    }
+    return [...byId.values()];
+  }
+
   private mapRow(row: DesignListRow, preserveNulls = false) {
     const createdIso = new Date(row.createdOn).toISOString();
     const id = `${row.projectId}:${row.salesForceCode ?? 'no-op'}:${createdIso}`;
@@ -205,7 +214,7 @@ export class DesignListService {
       ORDER BY mp.createdOn DESC
     `;
 
-    return rows.map((row: DesignListRow) => this.mapRow(row));
+    return this.dedupeMappedRows(rows.map((row: DesignListRow) => this.mapRow(row)));
   }
 
   async findProjectsListPage(page: number, limit: number, q: string): Promise<ProjectListPageResult> {
@@ -239,7 +248,7 @@ export class DesignListService {
     const total = Number(totalRows[0]?.total ?? 0);
 
     return {
-      data: rows.map((row) => this.mapRow(row, true)),
+      data: this.dedupeMappedRows(rows.map((row) => this.mapRow(row, true))),
       page: safePage,
       limit: safeLimit,
       total,
