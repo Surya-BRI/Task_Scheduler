@@ -1,6 +1,6 @@
 "use client";
 
-import { useState } from "react";
+import { useEffect, useMemo, useState } from "react";
 import { useRouter } from "next/navigation";
 import {
   Calendar,
@@ -279,8 +279,11 @@ const Table = ({ data }) => {
             </tr>
           </thead>
           <tbody className="divide-y divide-slate-100">
-            {data.map((row) => (
-              <tr key={row.id} className="hover:bg-slate-50 transition-colors">
+            {data.map((row, index) => (
+              <tr
+                key={`${row?.id || "unknown"}-${row?.orderNo || row?.opNo || "na"}-${row?.createdAt || row?.created || "date"}-${index}`}
+                className="hover:bg-slate-50 transition-colors"
+              >
                 <td className="px-2 py-1">
                   <button
                     type="button"
@@ -387,9 +390,9 @@ const Board = ({ data }) => {
           <div className="flex flex-col gap-3">
             {data
               .filter((d) => d.status === col.status)
-              .map((item) => (
+              .map((item, index) => (
                 <div
-                  key={item.id}
+                  key={`${item?.id || "unknown"}-${item?.orderNo || item?.opNo || "na"}-${item?.createdAt || item?.created || "date"}-${index}`}
                   onClick={() => router.push(recordDetailPath(item.id))}
                   className={`p-2.5 min-h-[84px] rounded-lg border flex flex-col cursor-pointer hover:ring-1 hover:ring-blue-300/60 ${
                     getStatusColor(item.status).replace("text-", "text-slate-900 border-").split(" ")[0]
@@ -456,38 +459,60 @@ export function DesignListScreen() {
 
   const uniqueSalesPersons = Array.from(new Set(designs.map((d) => d.salesPerson))).sort();
 
-  const filteredDesigns = designs.filter((d) => {
-    if (filters.searchQuery) {
-      const q = filters.searchQuery.toLowerCase();
-      if (
-        !d.opNo.toLowerCase().includes(q) &&
-        !d.projectNo.toLowerCase().includes(q) &&
-        !d.name.toLowerCase().includes(q)
-      ) {
-        return false;
-      }
-    }
+  const filteredDesigns = useMemo(
+    () =>
+      designs.filter((d) => {
+        if (filters.searchQuery) {
+          const q = filters.searchQuery.toLowerCase();
+          if (
+            !d.opNo.toLowerCase().includes(q) &&
+            !d.projectNo.toLowerCase().includes(q) &&
+            !d.name.toLowerCase().includes(q)
+          ) {
+            return false;
+          }
+        }
 
-    if (filters.type && d.designType !== filters.type) return false;
-    if (filters.status && d.status !== filters.status) return false;
-    if (filters.salesPerson && d.salesPerson !== filters.salesPerson) return false;
+        if (filters.type && d.designType !== filters.type) return false;
+        if (filters.status && d.status !== filters.status) return false;
+        if (filters.salesPerson && d.salesPerson !== filters.salesPerson) return false;
 
-    if (filters.startDate || filters.endDate) {
-      const parsed = parseDesignListDate(d.created);
-      if (!parsed) return false;
-      const designDate = parsed.getTime();
+        if (filters.startDate || filters.endDate) {
+          const parsed = parseDesignListDate(d.created);
+          if (!parsed) return false;
+          const designDate = parsed.getTime();
 
-      if (filters.startDate) {
-        const start = new Date(`${filters.startDate}T00:00:00`).getTime();
-        if (designDate < start) return false;
-      }
-      if (filters.endDate) {
-        const end = new Date(`${filters.endDate}T23:59:59`).getTime();
-        if (designDate > end) return false;
-      }
-    }
-    return true;
-  });
+          if (filters.startDate) {
+            const start = new Date(`${filters.startDate}T00:00:00`).getTime();
+            if (designDate < start) return false;
+          }
+          if (filters.endDate) {
+            const end = new Date(`${filters.endDate}T23:59:59`).getTime();
+            if (designDate > end) return false;
+          }
+        }
+        return true;
+      }),
+    [designs, filters],
+  );
+
+  const uniqueDesigns = useMemo(
+    () =>
+      Array.from(
+        new Map(
+          filteredDesigns.map((item) => [
+            `${item?.id ?? "unknown"}-${item?.orderNo ?? item?.opNo ?? "na"}-${item?.createdAt ?? item?.created ?? "date"}`,
+            item,
+          ]),
+        ).values(),
+      ),
+    [filteredDesigns],
+  );
+
+  useEffect(() => {
+    console.log("filteredDesigns", filteredDesigns);
+    console.log("uniqueDesigns", uniqueDesigns);
+  }, [filteredDesigns, uniqueDesigns]);
 
   return (
     <div className="app-shell h-screen flex flex-col overflow-hidden font-sans">
@@ -502,7 +527,7 @@ export function DesignListScreen() {
             salesPersons={uniqueSalesPersons}
           />
         </div>
-        {viewMode === "list" ? <Table data={filteredDesigns} /> : <Board data={filteredDesigns} />}
+        {viewMode === "list" ? <Table data={uniqueDesigns} /> : <Board data={uniqueDesigns} />}
       </div>
     </div>
   );

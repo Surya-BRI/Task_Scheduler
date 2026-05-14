@@ -284,8 +284,11 @@ const Table = ({ data }) => {
             </tr>
           </thead>
           <tbody className="divide-y divide-slate-100">
-            {data.map((row) => (
-              <tr key={row.__rowKey ?? row.id} className="hover:bg-slate-50 transition-colors">
+            {data.map((row, index) => (
+              <tr
+                key={`${row?.id || "unknown"}-${row?.orderNo || row?.opNo || "na"}-${row?.createdAt || row?.created || "date"}-${index}`}
+                className="hover:bg-slate-50 transition-colors"
+              >
                 <td className="px-2 py-1">
                   <button
                     type="button"
@@ -369,9 +372,9 @@ const Board = ({ data }) => {
           <div className="flex flex-col gap-3">
             {data
               .filter((d) => d.status === col.status)
-              .map((item) => (
+              .map((item, index) => (
                 <div
-                  key={item.__rowKey ?? item.id}
+                  key={`${item?.id || "unknown"}-${item?.orderNo || item?.opNo || "na"}-${item?.createdAt || item?.created || "date"}-${index}`}
                   onClick={() => router.push(taskDetailPath(item.id))}
                   className={`p-2.5 min-h-[84px] rounded-lg border flex flex-col cursor-pointer hover:ring-1 hover:ring-blue-300/60 ${
                     getStatusColor(item.status).replace("text-", "text-slate-900 border-").split(" ")[0]
@@ -534,51 +537,74 @@ export function DesignerDesignListScreen() {
 
   const designs = useMemo(() => {
     if (assignedRecordIds.length < 1) return [];
+    const uniqueAssignedIds = [...new Set(assignedRecordIds)];
     const recordById = new Map(records.map((record) => [record.id, record]));
-    return assignedRecordIds
-      .map((id, index) => {
+    return uniqueAssignedIds
+      .map((id) => {
         const record = recordById.get(id);
         if (!record) return null;
-        return { ...record, __rowKey: `${id}-${index}` };
+        return record;
       })
       .filter(Boolean);
   }, [assignedRecordIds, records]);
 
   const uniqueSalesPersons = Array.from(new Set(designs.map((d) => d.salesPerson))).sort();
 
-  const filteredDesigns = designs.filter((d) => {
-    if (filters.searchQuery) {
-      const q = filters.searchQuery.toLowerCase();
-      if (
-        !d.opNo.toLowerCase().includes(q) &&
-        !d.projectNo.toLowerCase().includes(q) &&
-        !d.name.toLowerCase().includes(q)
-      ) {
-        return false;
-      }
-    }
-
-    if (filters.type && d.designType !== filters.type) return false;
-    if (filters.status && d.status !== filters.status) return false;
-    if (filters.salesPerson && d.salesPerson !== filters.salesPerson) return false;
-
-    if (filters.startDate || filters.endDate) {
-      const parts = d.created.split("/");
-      if (parts.length === 3) {
-        const designDate = new Date(`${parts[2]}-${parts[1]}-${parts[0]}T00:00:00`).getTime();
-
-        if (filters.startDate) {
-          const start = new Date(`${filters.startDate}T00:00:00`).getTime();
-          if (designDate < start) return false;
+  const filteredDesigns = useMemo(
+    () =>
+      designs.filter((d) => {
+        if (filters.searchQuery) {
+          const q = filters.searchQuery.toLowerCase();
+          if (
+            !d.opNo.toLowerCase().includes(q) &&
+            !d.projectNo.toLowerCase().includes(q) &&
+            !d.name.toLowerCase().includes(q)
+          ) {
+            return false;
+          }
         }
-        if (filters.endDate) {
-          const end = new Date(`${filters.endDate}T23:59:59`).getTime();
-          if (designDate > end) return false;
+
+        if (filters.type && d.designType !== filters.type) return false;
+        if (filters.status && d.status !== filters.status) return false;
+        if (filters.salesPerson && d.salesPerson !== filters.salesPerson) return false;
+
+        if (filters.startDate || filters.endDate) {
+          const parts = d.created.split("/");
+          if (parts.length === 3) {
+            const designDate = new Date(`${parts[2]}-${parts[1]}-${parts[0]}T00:00:00`).getTime();
+
+            if (filters.startDate) {
+              const start = new Date(`${filters.startDate}T00:00:00`).getTime();
+              if (designDate < start) return false;
+            }
+            if (filters.endDate) {
+              const end = new Date(`${filters.endDate}T23:59:59`).getTime();
+              if (designDate > end) return false;
+            }
+          }
         }
-      }
-    }
-    return true;
-  });
+        return true;
+      }),
+    [designs, filters],
+  );
+
+  const uniqueDesigns = useMemo(
+    () =>
+      Array.from(
+        new Map(
+          filteredDesigns.map((item) => [
+            `${item?.id ?? "unknown"}-${item?.orderNo ?? item?.opNo ?? "na"}-${item?.createdAt ?? item?.created ?? "date"}`,
+            item,
+          ]),
+        ).values(),
+      ),
+    [filteredDesigns],
+  );
+
+  useEffect(() => {
+    console.log("filteredDesigns", filteredDesigns);
+    console.log("uniqueDesigns", uniqueDesigns);
+  }, [filteredDesigns, uniqueDesigns]);
 
   return (
     <div className="app-shell h-screen flex flex-col overflow-hidden font-sans">
@@ -599,9 +625,9 @@ export function DesignerDesignListScreen() {
             No projects are assigned to {designerIdentity.name} in Scheduler yet.
           </div>
         ) : viewMode === "list" ? (
-          <Table data={filteredDesigns} />
+          <Table data={uniqueDesigns} />
         ) : (
-          <Board data={filteredDesigns} />
+          <Board data={uniqueDesigns} />
         )}
       </div>
     </div>

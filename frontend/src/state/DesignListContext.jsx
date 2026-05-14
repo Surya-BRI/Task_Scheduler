@@ -5,6 +5,18 @@ import { apiClient } from '@/lib/api-client'
 
 const DesignListContext = createContext(null)
 
+function dedupeDesignRecords(items) {
+  const merged = Array.isArray(items) ? items : []
+  return Array.from(
+    new Map(
+      merged.map((item) => [
+        `${item?.id ?? 'unknown'}-${item?.orderNo ?? item?.opNo ?? 'na'}-${item?.createdAt ?? item?.created ?? 'date'}`,
+        item,
+      ]),
+    ).values(),
+  )
+}
+
 const STATUS_ORDER = ['WIP', 'Pending', 'Revision', 'Approved', 'Completed']
 
 function parseRecordDate(value) {
@@ -34,7 +46,8 @@ export function DesignListProvider({ children }) {
       .get('/design-list')
       .then((data) => {
         if (!mounted || !Array.isArray(data)) return
-        setRecords(data)
+        const deduped = dedupeDesignRecords(data)
+        setRecords(deduped)
       })
       .catch(() => {
         if (!mounted) return
