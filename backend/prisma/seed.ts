@@ -19,38 +19,30 @@ async function main(): Promise<void> {
     throw new Error('Required roles were not found after seeding roles');
   }
 
-  const hodPasswordHash = await bcrypt.hash('Secret123!', 10);
-  const designerPasswordHash = await bcrypt.hash('Secret123!', 10);
+  const demoAccounts = [
+    { fullName: 'Sarah Mitchell', email: 'sarah.mitchell@bluerhine.com', password: 'hod123', role: hodRole },
+    { fullName: 'Alex Johnson', email: 'alex.johnson@bluerhine.com', password: 'alex123', role: designerRole },
+    { fullName: 'Alexander Allen', email: 'alexander.allen@bluerhine.com', password: 'alex123', role: designerRole },
+    { fullName: 'Benjamin Harris', email: 'benjamin.harris@bluerhine.com', password: 'ben123', role: designerRole },
+  ];
 
-  await prisma.user.upsert({
-    where: { email: 'hod@company.com' },
-    update: {
-      fullName: 'HOD User',
-      roleId: hodRole.id,
-      passwordHash: hodPasswordHash,
-    },
-    create: {
-      email: 'hod@company.com',
-      fullName: 'HOD User',
-      roleId: hodRole.id,
-      passwordHash: hodPasswordHash,
-    },
-  });
-
-  await prisma.user.upsert({
-    where: { email: 'designer@company.com' },
-    update: {
-      fullName: 'Designer User',
-      roleId: designerRole.id,
-      passwordHash: designerPasswordHash,
-    },
-    create: {
-      email: 'designer@company.com',
-      fullName: 'Designer User',
-      roleId: designerRole.id,
-      passwordHash: designerPasswordHash,
-    },
-  });
+  for (const acc of demoAccounts) {
+    const passwordHash = await bcrypt.hash(acc.password, 10);
+    await prisma.user.upsert({
+      where: { email: acc.email },
+      update: {
+        fullName: acc.fullName,
+        roleId: acc.role.id,
+        passwordHash,
+      },
+      create: {
+        email: acc.email,
+        fullName: acc.fullName,
+        roleId: acc.role.id,
+        passwordHash,
+      },
+    });
+  }
 }
 
 main()

@@ -123,3 +123,19 @@ export function listChatterPosts(params?: { limit?: number; taskId?: string }) {
   const suffix = qs.toString() ? `?${qs.toString()}` : '';
   return apiClient.get<ChatterPostDto[]>(`/chatter-posts${suffix}`);
 }
+
+export function createChatterPost(data: Partial<ChatterPostDto>, files?: File[]) {
+  if (files && files.length > 0) {
+    const formData = new FormData();
+    Object.entries(data).forEach(([key, value]) => {
+      if (value !== undefined && value !== null) {
+        formData.append(key, String(value));
+      }
+    });
+    files.forEach(file => {
+      formData.append('files', file);
+    });
+    return apiClient.post<ChatterPostDto>('/chatter-posts', formData);
+  }
+  return apiClient.post<ChatterPostDto>('/chatter-posts', data);
+}

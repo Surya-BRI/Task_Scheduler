@@ -3,7 +3,7 @@
 import { useMemo, useState, useEffect } from "react";
 import { CalendarDays, Link2, MessageCircle, MessageSquareText, PlusSquare, Search, ThumbsUp, X } from "lucide-react";
 import { Navbar } from "@/components/Navbar";
-import { listChatterPosts, mapChatterPostDtoToFeedPost } from "@/features/chatter/services/chatter-posts.api";
+import { createChatterPost, listChatterPosts, mapChatterPostDtoToFeedPost } from "@/features/chatter/services/chatter-posts.api";
 import {
   createLinkAttachment,
   isValidExternalUrl,
@@ -654,17 +654,27 @@ export function ChatterScreen() {
   const [isCreatePostOpen, setIsCreatePostOpen] = useState(false);
   const [isSubmitting, setIsSubmitting] = useState(false);
   const [toastMessage, setToastMessage] = useState(null);
+  const [postsLoadError, setPostsLoadError] = useState(null);
 
   useEffect(() => {
     let cancelled = false;
     listChatterPosts({ limit: 500 })
       .then((rows) => {
-        if (cancelled || !Array.isArray(rows)) return;
+        if (cancelled) return;
+        if (!Array.isArray(rows)) {
+          setPosts([]);
+          setPostsLoadError(
+            `Unexpected response: expected a JSON array, received ${rows === null || rows === undefined ? String(rows) : typeof rows}`,
+          );
+          return;
+        }
+        setPostsLoadError(null);
         setPosts(rows.map((row) => mapChatterPostDtoToFeedPost(row)));
       })
-      .catch(() => {
+      .catch((err) => {
         if (cancelled) return;
         setPosts([]);
+        setPostsLoadError(err instanceof Error ? err.message : String(err));
       });
     return () => {
       cancelled = true;
@@ -814,33 +824,28 @@ export function ChatterScreen() {
 
   const handleCreatePost = async (postData) => {
     setIsSubmitting(true);
-    await new Promise((resolve) => setTimeout(resolve, 800));
+    try {
+      const createdDto = await createChatterPost({
+        title: postData.title,
+        message: postData.message,
+        postType: postData.postType,
+        priority: postData.priority,
+        mentionUserId: postData.mention?.replace("@", "").trim() || null,
+        // authorId: ... (should be from auth context if available)
+      }, postData.fileAttachments);
 
-    const newPost = {
-      id: `new-${Date.now()}`,
-      title: postData.title,
-      author: CURRENT_USER,
-      time: "just now",
-      mention: postData.mention,
-      message: postData.message,
-      projectName: postData.title,
-      responsibleUser: CURRENT_USER,
-      priority: postData.priority.toLowerCase(),
-      seenBy: 0,
-      comments: [],
-      updatedAt: new Date().toISOString(),
-      postType: postData.postType,
-      fileAttachments: postData.fileAttachments,
-      linkAttachments: postData.linkAttachments,
-    };
-
-    setPosts((prev) => [newPost, ...prev]);
-    setIsSubmitting(false);
-    setIsCreatePostOpen(false);
-    setActiveTab("posts");
-
-    setToastMessage("Post created successfully!");
-    setTimeout(() => setToastMessage(null), 3000);
+      const newFeedPost = mapChatterPostDtoToFeedPost(createdDto);
+      setPosts((prev) => [newFeedPost, ...prev]);
+      setIsCreatePostOpen(false);
+      setActiveTab("posts");
+      setToastMessage("Post created successfully!");
+    } catch (err) {
+      console.error("Failed to create post:", err);
+      setToastMessage("Error: Could not save post to database.");
+    } finally {
+      setIsSubmitting(false);
+      setTimeout(() => setToastMessage(null), 3000);
+    }
   };
 
   return (
@@ -907,9 +912,19 @@ export function ChatterScreen() {
         {activeTab === "posts" ? (
           <section className="mt-3 space-y-2.5">
             {sortedPosts.length === 0 ? (
-              <p className="rounded-lg border border-slate-200 bg-slate-50 px-4 py-8 text-center text-sm text-slate-600">
-                No chatter posts loaded. Ensure the API is running and <code className="rounded bg-slate-200 px-1">ErpTSChatterPost</code> has rows, or check the browser network tab for errors.
-              </p>
+              <div className="rounded-lg border border-slate-200 bg-slate-50 px-4 py-8 text-center text-sm text-slate-600">
+                <p>
+                  No chatter posts loaded. Ensure the backend is running,{" "}
+                  <code className="rounded bg-slate-200 px-1">NEXT_PUBLIC_API_BASE_URL</code> points at it (not an older
+                  deploy missing <code className="rounded bg-slate-200 px-1">/chatter-posts</code>), the chatter table
+                  has rows, or check the browser network tab for errors.
+                </p>
+                {postsLoadError ? (
+                  <pre className="mt-3 max-h-48 overflow-auto text-left font-mono text-[11px] leading-snug text-red-700 whitespace-pre-wrap break-words">
+                    {postsLoadError}
+                  </pre>
+                ) : null}
+              </div>
             ) : null}
             {sortedPosts.map((post, postIndex) => (
               <ChatterCard

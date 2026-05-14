@@ -5,7 +5,11 @@ import { dateReviver } from './utils';
 async function request<T>(path: string, init?: RequestInit): Promise<T> {
   const token = getAccessToken();
   const headers = new Headers(init?.headers);
-  headers.set('Content-Type', 'application/json');
+  if (!(init?.body instanceof FormData)) {
+    headers.set('Content-Type', 'application/json');
+  } else {
+    headers.delete('Content-Type');
+  }
 
   if (token) {
     headers.set('Authorization', `Bearer ${token}`);
@@ -37,10 +41,12 @@ export const apiClient = {
     return request(path);
   },
   post<T>(path: string, body: unknown): Promise<T> {
-    return request(path, { method: 'POST', body: JSON.stringify(body) });
+    const isFormData = body instanceof FormData;
+    return request(path, { method: 'POST', body: isFormData ? body : JSON.stringify(body) });
   },
   patch<T>(path: string, body: unknown): Promise<T> {
-    return request(path, { method: 'PATCH', body: JSON.stringify(body) });
+    const isFormData = body instanceof FormData;
+    return request(path, { method: 'PATCH', body: isFormData ? body : JSON.stringify(body) });
   },
 };
 
