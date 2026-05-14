@@ -23,6 +23,15 @@ type ProjectListPageResult = {
   totalPages: number;
 };
 
+type DesignListPageFilters = {
+  q: string;
+  type: string;
+  status: string;
+  salesPerson: string;
+  startDate: string;
+  endDate: string;
+};
+
 function toDdMmYyyy(value: Date): string {
   const day = String(value.getUTCDate()).padStart(2, '0');
   const month = String(value.getUTCMonth() + 1).padStart(2, '0');
@@ -126,6 +135,59 @@ export class DesignListService {
     `;
   }
 
+  private escapeSqlLike(value: string): string {
+    return value.replace(/'/g, "''");
+  }
+
+  private buildDesignListWhereClause(filters: DesignListPageFilters): string {
+    const clauses: string[] = [];
+
+    const search = filters.q.trim();
+    if (search.length > 0) {
+      const escaped = this.escapeSqlLike(search);
+      clauses.push(`(
+        mp.projectCode LIKE '%${escaped}%'
+        OR mo.salesForceCode LIKE '%${escaped}%'
+        OR mp.projectName LIKE '%${escaped}%'
+      )`);
+    }
+
+    const type = filters.type.trim().toLowerCase();
+    if (type === 'retail') {
+      clauses.push(`LOWER(LTRIM(RTRIM(COALESCE(mb.businessUnitCode, '')))) IN ('retail', 'rtl', 'r')`);
+    } else if (type === 'project') {
+      clauses.push(
+        `LOWER(LTRIM(RTRIM(COALESCE(mb.businessUnitCode, '')))) NOT IN ('retail', 'rtl', 'r')`,
+      );
+    }
+
+    const status = filters.status.trim();
+    if (status.length > 0) {
+      const escaped = this.escapeSqlLike(status);
+      clauses.push(`COALESCE(mt.taxnomycode, 'Pending') = '${escaped}'`);
+    }
+
+    const salesPerson = filters.salesPerson.trim();
+    if (salesPerson.length > 0) {
+      const escaped = this.escapeSqlLike(salesPerson);
+      clauses.push(`COALESCE(me.firstName + '' + me.lastName, 'Unassigned') = '${escaped}'`);
+    }
+
+    const startDate = filters.startDate.trim();
+    if (startDate.length > 0) {
+      const escaped = this.escapeSqlLike(startDate);
+      clauses.push(`CAST(mp.createdOn AS DATE) >= CAST('${escaped}' AS DATE)`);
+    }
+
+    const endDate = filters.endDate.trim();
+    if (endDate.length > 0) {
+      const escaped = this.escapeSqlLike(endDate);
+      clauses.push(`CAST(mp.createdOn AS DATE) <= CAST('${escaped}' AS DATE)`);
+    }
+
+    return clauses.length > 0 ? ` AND ${clauses.join('\n      AND ')}` : '';
+  }
+
   async findAll() {
     const rows = await this.prisma.$queryRaw<DesignListRow[]>`
       SELECT
@@ -187,6 +249,40 @@ export class DesignListService {
 
     return {
       data: this.dedupeMappedRows(rows.map((row) => this.mapRow(row, true))),
+      page: safePage,
+      limit: safeLimit,
+      total,
+      totalPages: Math.max(1, Math.ceil(total / safeLimit)),
+    };
+  }
+
+  async findDesignListPage(
+    page: number,
+    limit: number,
+    filters: DesignListPageFilters,
+  ): Promise<ProjectListPageResult> {
+    const safePage = Math.max(1, page);
+    const safeLimit = Math.min(200, Math.max(1, limit));
+    const offset = (safePage - 1) * safeLimit;
+
+    const whereClause = this.buildDesignListWhereClause(filters);
+    const baseQuery = this.buildBaseQuery(whereClause);
+
+    const rows = await this.prisma.$queryRawUnsafe<DesignListRow[]>(`
+      ${baseQuery}
+      ORDER BY mp.createdOn DESC
+      OFFSET ${offset} ROWS
+      FETCH NEXT ${safeLimit} ROWS ONLY
+    `);
+
+    const totalRows = await this.prisma.$queryRawUnsafe<Array<{ total: number }>>(`
+      SELECT COUNT(*) AS total
+      FROM (${baseQuery}) AS q
+    `);
+    const total = Number(totalRows[0]?.total ?? 0);
+
+    return {
+      data: rows.map((row) => this.mapRow(row)),
       page: safePage,
       limit: safeLimit,
       total,
