@@ -11,12 +11,14 @@ import {
     buildDesignerSnapshot,
     buildSchedulerSnapshot
 } from "../utils/designerDashboardSync";
+import { listSchedulerAssignmentsForWeek } from "../services/scheduler-assignments.api";
 import {
     DEFAULT_SCHEDULER_REFERENCE_DATE,
     formatSchedulerDateRangeText,
     getCurrentDayIndex,
     getWeekDays,
 } from "../utils/schedulerWeek";
+import { FROM_DESIGN_SCHEDULER, taskSummaryPath } from "@/lib/design-list-routes";
 const DUMMY_DESIGNERS = [
     { id: "d1", name: "Alex Johnson", initials: "AJ" },
     { id: "d2", name: "Alexander Allen", initials: "AA" },
@@ -420,6 +422,41 @@ export function DesignSchedulerScreen() {
     
     // Custom Date selection state
     const [currentDate, setCurrentDate] = useState(DEFAULT_SCHEDULER_REFERENCE_DATE);
+
+    useEffect(() => {
+        let cancelled = false;
+        const weekDatesLocal = getWeekDays(currentDate);
+        const weekStartStr = formatLocalYyyyMmDd(weekDatesLocal[0]);
+        listSchedulerAssignmentsForWeek(weekStartStr)
+            .then((rows) => {
+                if (cancelled)
+                    return;
+                if (Array.isArray(rows) && rows.length > 0) {
+                    const next = buildSchedulerStateFromErpAssignments(records, rows);
+                    setTasks(next.tasksObj);
+                    setSchedules(next.schedulesObj);
+                    setLoadedFromErp(true);
+                }
+                else {
+                    const mock = buildMockSchedulerState(records);
+                    setTasks(mock.tasksObj);
+                    setSchedules(mock.schedulesObj);
+                    setLoadedFromErp(false);
+                }
+            })
+            .catch(() => {
+                if (cancelled)
+                    return;
+                const mock = buildMockSchedulerState(records);
+                setTasks(mock.tasksObj);
+                setSchedules(mock.schedulesObj);
+                setLoadedFromErp(false);
+            });
+        return () => {
+            cancelled = true;
+        };
+    }, [currentDate, records]);
+
     const [overtimePrompt, setOvertimePrompt] = useState({
         open: false,
         pendingFull: null,
@@ -754,7 +791,7 @@ export function DesignSchedulerScreen() {
              </div>
 
              <div className="flex-1 overflow-y-auto space-y-1.5 pr-1 pb-4 custom-scrollbar">
-                {onHoldTasks.map(task => (<div key={task.id} draggable onDragStart={(e) => handleDragStart(e, task.id, "on-hold")} onDragEnd={() => setDropIndicator(null)} onClick={() => router.push(`/design-list/record/${encodeURIComponent(getDesignListRoutingTaskId(task))}?from=design-scheduler`)} className={`p-2 rounded cursor-grab active:cursor-grabbing flex flex-col relative bg-white shadow-sm hover:shadow-md transition-shadow ${task.colorClass}`}>
+                {onHoldTasks.map(task => (<div key={task.id} draggable onDragStart={(e) => handleDragStart(e, task.id, "on-hold")} onDragEnd={() => setDropIndicator(null)} onClick={() => router.push(taskSummaryPath(getDesignListRoutingTaskId(task), { from: FROM_DESIGN_SCHEDULER }))} className={`p-2 rounded cursor-grab active:cursor-grabbing flex flex-col relative bg-white shadow-sm hover:shadow-md transition-shadow ${task.colorClass}`}>
                     <div className="flex justify-between items-start">
                       <span className="font-semibold text-[11px] leading-tight pr-5">{getTaskLabel(task)}</span>
                       <button className="bg-slate-200 hover:bg-slate-300 rounded-full p-0.5 text-slate-600 transition-colors absolute right-1.5 top-1.5">
@@ -765,7 +802,7 @@ export function DesignSchedulerScreen() {
                     <div className="text-[9px] font-bold mt-1.5 bg-slate-100 text-slate-600 inline-block px-1.5 py-0.5 rounded uppercase self-start">Hold: {task.holdTime}</div>
                   </div>))}
 
-                {unassignedTasks.map(task => (<div key={task.id} draggable onDragStart={(e) => handleDragStart(e, task.id, "unassigned")} onDragEnd={() => setDropIndicator(null)} onClick={() => router.push(`/design-list/record/${encodeURIComponent(getDesignListRoutingTaskId(task))}?from=design-scheduler`)} className={`p-2 rounded cursor-grab active:cursor-grabbing flex flex-col relative group bg-white shadow-sm hover:shadow-md transition-shadow ${task.colorClass}`}>
+                {unassignedTasks.map(task => (<div key={task.id} draggable onDragStart={(e) => handleDragStart(e, task.id, "unassigned")} onDragEnd={() => setDropIndicator(null)} onClick={() => router.push(taskSummaryPath(getDesignListRoutingTaskId(task), { from: FROM_DESIGN_SCHEDULER }))} className={`p-2 rounded cursor-grab active:cursor-grabbing flex flex-col relative group bg-white shadow-sm hover:shadow-md transition-shadow ${task.colorClass}`}>
                     <div className="flex justify-between items-start">
                       <span className="font-semibold text-[11px] leading-tight pr-5">{getTaskLabel(task)}</span>
                       <button className="bg-blue-50 hover:bg-blue-100 text-blue-600 rounded-full p-0.5 absolute right-1.5 top-1.5 opacity-0 group-hover:opacity-100 transition-opacity">
@@ -872,7 +909,7 @@ export function DesignSchedulerScreen() {
                                         handleDropToDay(e, designer.id, dayIndex, idx, getDropPosition(e, e.currentTarget));
                                     }} onClick={(e) => {
                                         e.stopPropagation();
-                                        router.push(`/design-list/record/${encodeURIComponent(getDesignListRoutingTaskId(taskInfo))}?from=design-scheduler`);
+                                        router.push(taskSummaryPath(getDesignListRoutingTaskId(taskInfo), { from: FROM_DESIGN_SCHEDULER }));
                                     }} className={`h-[24px] min-w-0 rounded flex items-center justify-between px-1.5 cursor-grab active:cursor-grabbing shadow-sm hover:shadow transition-shadow ${dropIndicator &&
                                         dropIndicator.designerId === designer.id &&
                                         dropIndicator.dayIndex === dayIndex &&

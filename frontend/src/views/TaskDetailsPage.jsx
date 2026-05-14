@@ -195,9 +195,10 @@ export function TaskDetailsPage() {
   const router = useRouter()
   const pathname = usePathname()
   const searchParams = useSearchParams()
-  const { taskId } = useParams()
+  const params = useParams()
+  const recordId = params?.taskId ?? params?.id
   const { records } = useDesignListStore()
-  const record = records.find((item) => item.id === taskId)
+  const record = records.find((item) => item.id === recordId)
   const [createModalOpen, setCreateModalOpen] = useState(false)
   const [projectCreateModalOpen, setProjectCreateModalOpen] = useState(false)
   const [chatterMessage, setChatterMessage] = useState('')
