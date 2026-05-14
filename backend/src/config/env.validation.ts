@@ -39,6 +39,10 @@ export const envValidationSchema = Joi.object({
     }),
   LOG_LEVEL: Joi.string().default('debug'),
   ERP_SQL_CATALOG: Joi.string().max(128).optional(),
+  /** dbo table name only — bracketed as [dbo].[name] in SQL */
+  ERP_CHATTER_POST_TABLE: Joi.string().max(128).pattern(/^[\w-]+$/).optional(),
+  /** Full FROM object (e.g. `[MyDb].[dbo].[TSChatterPost]`). Disallows SQL metacharacters. */
+  ERP_CHATTER_POST_SQL_OBJECT: Joi.string().max(280).pattern(/^[\s\[\]a-zA-Z0-9_.-]*$/).optional(),
 }).custom((value, helpers) => {
   const hasDatabaseUrl = !!value.DATABASE_URL;
   const hasDbParts =
