@@ -1,5 +1,5 @@
 "use client";
-import { useState, useEffect } from "react";
+import { useState, useEffect, useMemo } from "react";
 import { useRouter, useSearchParams } from "next/navigation";
 import { Navbar } from "@/components/Navbar";
 import StatsBar from "./components/StatsBar";
@@ -12,6 +12,11 @@ import {
   SCHEDULER_DASHBOARD_SYNC_KEY,
   buildDesignerSnapshot,
 } from "@/features/scheduler/utils/designerDashboardSync";
+import {
+  DEFAULT_SCHEDULER_REFERENCE_DATE,
+  formatSchedulerDateRangeText,
+  getWeekDays,
+} from "@/features/scheduler/utils/schedulerWeek";
 import { getSession } from "@/lib/mock-auth";
 
 export default function DesignerDashboard({ designer }) {
@@ -30,6 +35,9 @@ export default function DesignerDashboard({ designer }) {
   }, [fromHome]);
 
   const [activePanel, setActivePanel] = useState(null); // "onHold" | "completed" | null
+  const [currentDate, setCurrentDate] = useState(DEFAULT_SCHEDULER_REFERENCE_DATE);
+  const weekDates = useMemo(() => getWeekDays(currentDate), [currentDate]);
+  const dateRangeText = useMemo(() => formatSchedulerDateRangeText(weekDates), [weekDates]);
 
   const [scheduleData, setScheduleData] = useState(() => {
     const initial = {};
@@ -116,7 +124,11 @@ export default function DesignerDashboard({ designer }) {
 
   return (
     <div className="app-shell flex flex-col font-sans">
-      <Navbar dateRangeText={designer.dateRange} />
+      <Navbar
+        currentDate={currentDate}
+        onCalendarChange={setCurrentDate}
+        dateRangeText={dateRangeText}
+      />
       
       {/* Profile Bar matching Scheduler Subheader */}
       <div className="flex shrink-0 items-center border-b border-slate-200 bg-white px-6 py-2 text-sm font-medium text-slate-700">
@@ -133,9 +145,6 @@ export default function DesignerDashboard({ designer }) {
             <span className="text-[10px] leading-tight text-slate-500">{designer.designation}</span>
           </div>
         </div>
-        <div className="flex-1 flex px-6 items-center">
-          <span className="font-bold text-slate-900">{designer.currentDay}</span>
-        </div>
       </div>
       
       {/* Stats Bar */}
@@ -146,7 +155,7 @@ export default function DesignerDashboard({ designer }) {
         {/* Left Column: Scheduler + tables */}
         <div className="flex-1 flex flex-col gap-3 min-w-0">
           {/* Scheduler Grid */}
-          <SchedulerGrid schedule={scheduleData} />
+          <SchedulerGrid schedule={scheduleData} weekDates={weekDates} />
 
           {/* Action Buttons */}
           <div className="mt-1 flex gap-3">

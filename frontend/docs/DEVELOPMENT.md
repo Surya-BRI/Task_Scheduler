@@ -7,7 +7,7 @@ Next.js (App Router) + TypeScript + Tailwind. Dev server listens on **port 5000*
 | Item | Value |
 |------|--------|
 | Dev URL | http://localhost:5000 |
-| Default API | `NEXT_PUBLIC_API_BASE_URL` → `http://localhost:4000/api/v1` |
+| Default API | `NEXT_PUBLIC_API_BASE_URL` → must match Nest `PORT` in `backend/.env` (this repo’s `frontend/.env` uses `http://localhost:7000/api/v1`). |
 
 ## Environment variables
 

@@ -48,11 +48,17 @@ You can either use **Prisma migrations** or **manual SQL** (common when attachin
 copy frontend\.env.example frontend\.env.local
 ```
 
-Adjust `NEXT_PUBLIC_API_BASE_URL` if the API is not on `http://localhost:4000/api/v1`.
+Adjust `NEXT_PUBLIC_API_BASE_URL` so its host and port match Nest’s `PORT` in `backend/.env` (the committed `frontend/.env` uses `http://localhost:7000/api/v1` when `PORT=7000`).
 
 ### 4. Run in development
 
-Use **two terminals** from the repo root:
+From the repo root, either run **API and UI together**:
+
+```bash
+npm run dev
+```
+
+or use **two terminals**:
 
 ```bash
 npm run dev:backend
@@ -65,13 +71,14 @@ npm run dev:frontend
 | Service | URL |
 |---------|-----|
 | Frontend | http://localhost:5000 |
-| Backend API | http://localhost:4000/api/v1 |
-| Health check | http://localhost:4000/api/v1/health |
+| Backend API | `http://localhost:<PORT>/api/v1` where `<PORT>` is `PORT` in `backend/.env` (e.g. **7000**) |
+| Health check | `http://localhost:<PORT>/api/v1/health` (same `<PORT>`) |
 
 ## Root npm scripts
 
 | Script | Purpose |
 |--------|---------|
+| `npm run dev` | NestJS + Next.js in one terminal (`concurrently`) |
 | `npm run dev:backend` | NestJS watch mode |
 | `npm run dev:frontend` | Next.js dev server (port 5000) |
 | `npm run build` | Build backend then frontend |

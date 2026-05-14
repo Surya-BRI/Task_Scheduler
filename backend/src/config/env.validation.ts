@@ -38,6 +38,7 @@ export const envValidationSchema = Joi.object({
       return value;
     }),
   LOG_LEVEL: Joi.string().default('debug'),
+  ERP_SQL_CATALOG: Joi.string().max(128).optional(),
 }).custom((value, helpers) => {
   const hasDatabaseUrl = !!value.DATABASE_URL;
   const hasDbParts =

@@ -1,6 +1,6 @@
 "use client";
 
-import { useState } from "react";
+import { useEffect, useState } from "react";
 import { useRouter } from "next/navigation";
 import {
   Calendar,
@@ -15,9 +15,9 @@ import {
   UserRoundPlus,
   Users,
 } from "lucide-react";
-import { useDesignListStore } from "@/state/DesignListContext";
 import { Navbar } from "@/components/Navbar";
-import { parseDesignListDate } from "@/lib/design-list-date";
+import { apiClient } from "@/lib/api-client";
+import { taskSummaryPath } from "@/lib/design-list-routes";
 
 const getStatusColor = (status) => {
   switch (status) {
@@ -54,11 +54,11 @@ const getStatusDot = (status) => {
 };
 
 function recordDetailPath(id) {
-  return `/design-list/record/${id}`;
+  return taskSummaryPath(id);
 }
 
 function recordTabPath(id, tab) {
-  return `${recordDetailPath(id)}?tab=${tab}`;
+  return taskSummaryPath(id, { tab });
 }
 
 const Toolbar = ({ viewMode, setViewMode, filters, setFilters, salesPersons }) => {
@@ -279,8 +279,8 @@ const Table = ({ data }) => {
             </tr>
           </thead>
           <tbody className="divide-y divide-slate-100">
-            {data.map((row) => (
-              <tr key={row.id} className="hover:bg-slate-50 transition-colors">
+            {data.map((row, rowIndex) => (
+              <tr key={`${row.id}-${rowIndex}`} className="hover:bg-slate-50 transition-colors">
                 <td className="px-2 py-1">
                   <button
                     type="button"
@@ -387,9 +387,9 @@ const Board = ({ data }) => {
           <div className="flex flex-col gap-3">
             {data
               .filter((d) => d.status === col.status)
-              .map((item) => (
+              .map((item, itemIndex) => (
                 <div
-                  key={item.id}
+                  key={`${col.status}-${item.id}-${itemIndex}`}
                   onClick={() => router.push(recordDetailPath(item.id))}
                   className={`p-2.5 min-h-[84px] rounded-lg border flex flex-col cursor-pointer hover:ring-1 hover:ring-blue-300/60 ${
                     getStatusColor(item.status).replace("text-", "text-slate-900 border-").split(" ")[0]
@@ -442,9 +442,12 @@ const Board = ({ data }) => {
 };
 
 export function DesignListScreen() {
-  const { records } = useDesignListStore();
-  const designs = records;
+  const PAGE_SIZE = 100;
+  const [designs, setDesigns] = useState([]);
+  const [total, setTotal] = useState(0);
+  const [totalPages, setTotalPages] = useState(1);
   const [viewMode, setViewMode] = useState("list");
+  const [page, setPage] = useState(1);
   const [filters, setFilters] = useState({
     type: "",
     status: "",
@@ -454,40 +457,51 @@ export function DesignListScreen() {
     searchQuery: "",
   });
 
-  const uniqueSalesPersons = Array.from(new Set(designs.map((d) => d.salesPerson))).sort();
+  const uniqueSalesPersons = Array.from(new Set(designs.map((d) => d.salesPerson).filter(Boolean))).sort();
+  const currentPage = Math.min(page, totalPages);
 
-  const filteredDesigns = designs.filter((d) => {
-    if (filters.searchQuery) {
-      const q = filters.searchQuery.toLowerCase();
-      if (
-        !d.opNo.toLowerCase().includes(q) &&
-        !d.projectNo.toLowerCase().includes(q) &&
-        !d.name.toLowerCase().includes(q)
-      ) {
-        return false;
-      }
+  useEffect(() => {
+    setPage(1);
+  }, [filters, viewMode]);
+
+  useEffect(() => {
+    let mounted = true;
+    const params = new URLSearchParams();
+    params.set("page", String(page));
+    params.set("limit", String(PAGE_SIZE));
+    if (filters.searchQuery.trim()) params.set("q", filters.searchQuery.trim());
+    if (filters.type) params.set("type", filters.type);
+    if (filters.status) params.set("status", filters.status);
+    if (filters.salesPerson) params.set("salesPerson", filters.salesPerson);
+    if (filters.startDate) params.set("startDate", filters.startDate);
+    if (filters.endDate) params.set("endDate", filters.endDate);
+
+    apiClient
+      .get(`/design-list?${params.toString()}`)
+      .then((res) => {
+        if (!mounted) return;
+        const data = Array.isArray(res?.data) ? res.data : [];
+        setDesigns(data);
+        setTotal(Number(res?.total || 0));
+        setTotalPages(Math.max(1, Number(res?.totalPages || 1)));
+      })
+      .catch(() => {
+        if (!mounted) return;
+        setDesigns([]);
+        setTotal(0);
+        setTotalPages(1);
+      });
+
+    return () => {
+      mounted = false;
+    };
+  }, [page, filters]);
+
+  useEffect(() => {
+    if (page > totalPages) {
+      setPage(totalPages);
     }
-
-    if (filters.type && d.designType !== filters.type) return false;
-    if (filters.status && d.status !== filters.status) return false;
-    if (filters.salesPerson && d.salesPerson !== filters.salesPerson) return false;
-
-    if (filters.startDate || filters.endDate) {
-      const parsed = parseDesignListDate(d.created);
-      if (!parsed) return false;
-      const designDate = parsed.getTime();
-
-      if (filters.startDate) {
-        const start = new Date(`${filters.startDate}T00:00:00`).getTime();
-        if (designDate < start) return false;
-      }
-      if (filters.endDate) {
-        const end = new Date(`${filters.endDate}T23:59:59`).getTime();
-        if (designDate > end) return false;
-      }
-    }
-    return true;
-  });
+  }, [page, totalPages]);
 
   return (
     <div className="app-shell h-screen flex flex-col overflow-hidden font-sans">
@@ -502,7 +516,34 @@ export function DesignListScreen() {
             salesPersons={uniqueSalesPersons}
           />
         </div>
-        {viewMode === "list" ? <Table data={filteredDesigns} /> : <Board data={filteredDesigns} />}
+        {viewMode === "list" ? <Table data={designs} /> : <Board data={designs} />}
+        <div className="shrink-0 flex items-center justify-between px-4 pb-4 pt-2 sm:px-6 text-xs text-slate-600">
+          <span>
+            Showing {total === 0 ? 0 : (currentPage - 1) * PAGE_SIZE + 1}-
+            {Math.min(currentPage * PAGE_SIZE, total)} of {total}
+          </span>
+          <div className="flex items-center gap-2">
+            <button
+              type="button"
+              onClick={() => setPage((p) => Math.max(1, p - 1))}
+              disabled={currentPage === 1}
+              className="px-2.5 py-1 border border-slate-300 rounded disabled:opacity-50 disabled:cursor-not-allowed hover:bg-slate-50"
+            >
+              Prev
+            </button>
+            <span>
+              Page {currentPage} / {totalPages}
+            </span>
+            <button
+              type="button"
+              onClick={() => setPage((p) => Math.min(totalPages, p + 1))}
+              disabled={currentPage === totalPages}
+              className="px-2.5 py-1 border border-slate-300 rounded disabled:opacity-50 disabled:cursor-not-allowed hover:bg-slate-50"
+            >
+              Next
+            </button>
+          </div>
+        </div>
       </div>
     </div>
   );

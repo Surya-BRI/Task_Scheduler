@@ -32,8 +32,11 @@ function TaskBlock({ task }) {
   );
 }
 
-function SchedulerRow({ day, daySlot }) {
+function SchedulerRow({ day, daySlot, dayDate }) {
   const isWeekend = day === "Saturday" || day === "Sunday";
+  const dayLabel = dayDate
+    ? `${dayDate.toLocaleDateString("en-US", { weekday: "short" })} ${dayDate.getDate()}`
+    : day;
   const tasks = daySlot?.tasks || [];
   const assignedStartHr = daySlot?.assignedStartHr ?? 0;
   const assignedEndHr = daySlot?.assignedEndHr ?? TOTAL_COLS;
@@ -53,7 +56,7 @@ function SchedulerRow({ day, daySlot }) {
       <div
         className={`w-[180px] shrink-0 py-1.5 px-4 flex items-center border-r border-slate-200 z-10 transition-colors group-hover:bg-slate-50 ${isWeekend ? 'bg-slate-50' : 'bg-white'}`}
       >
-        <span className={`text-[11px] font-semibold truncate tracking-tight ${isWeekend ? 'text-slate-400' : 'text-slate-900'}`}>{day}</span>
+        <span className={`text-[11px] font-semibold truncate tracking-tight ${isWeekend ? 'text-slate-400' : 'text-slate-900'}`}>{dayLabel}</span>
       </div>
 
       {/* Time grid with exact hour-based positioning */}
@@ -108,7 +111,7 @@ function SchedulerRow({ day, daySlot }) {
   );
 }
 
-export default function SchedulerGrid({ schedule }) {
+export default function SchedulerGrid({ schedule, weekDates = [] }) {
   return (
     <div className="border border-slate-300 rounded-sm overflow-hidden text-xs">
       {/* Header row */}
@@ -137,8 +140,13 @@ export default function SchedulerGrid({ schedule }) {
       </div>
 
       {/* Day rows */}
-      {DAYS.map((day) => (
-        <SchedulerRow key={day} day={day} daySlot={schedule[day] || { tasks: [], assignedStartHr: 0, assignedEndHr: 0 }} />
+      {DAYS.map((day, index) => (
+        <SchedulerRow
+          key={day}
+          day={day}
+          dayDate={weekDates[index]}
+          daySlot={schedule[day] || { tasks: [], assignedStartHr: 0, assignedEndHr: 0 }}
+        />
       ))}
     </div>
   );

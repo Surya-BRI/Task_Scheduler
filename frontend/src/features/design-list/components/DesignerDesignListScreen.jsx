@@ -23,6 +23,7 @@ import {
   SCHEDULER_DASHBOARD_SYNC_EVENT,
   SCHEDULER_DASHBOARD_SYNC_KEY,
 } from "@/features/scheduler/utils/designerDashboardSync";
+import { FROM_DESIGNER_QUEUE, taskSummaryPath } from "@/lib/design-list-routes";
 
 const getStatusColor = (status) => {
   switch (status) {
@@ -58,12 +59,8 @@ const getStatusDot = (status) => {
   }
 };
 
-function recordQuery(extra = {}) {
-  return new URLSearchParams({ from: "designer-queue", ...extra }).toString();
-}
-
 function taskDetailPath(id, extra = {}) {
-  return `/design-list/record/${id}?${recordQuery(extra)}`;
+  return taskSummaryPath(id, { from: FROM_DESIGNER_QUEUE, ...extra });
 }
 
 const Toolbar = ({ viewMode, setViewMode, filters, setFilters, salesPersons, designerName }) => {

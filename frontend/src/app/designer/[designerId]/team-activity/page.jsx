@@ -12,7 +12,7 @@ function TeamActivityFallback() {
 export default function DesignerTeamActivityPage() {
   return (
     <Suspense fallback={<TeamActivityFallback />}>
-      <TeamActivityFeedScreenInner designerMode />
+      <TeamActivityFeedScreenInner />
     </Suspense>
   );
 }
