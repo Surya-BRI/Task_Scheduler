@@ -15,9 +15,8 @@ import {
   UserRoundPlus,
   Users,
 } from "lucide-react";
-import { useDesignListStore } from "@/state/DesignListContext";
 import { Navbar } from "@/components/Navbar";
-import { parseDesignListDate } from "@/lib/design-list-date";
+import { apiClient } from "@/lib/api-client";
 import { taskSummaryPath } from "@/lib/design-list-routes";
 
 const getStatusColor = (status) => {
@@ -446,9 +445,12 @@ const Board = ({ data }) => {
 };
 
 export function DesignListScreen() {
-  const { records } = useDesignListStore();
-  const designs = records;
+  const PAGE_SIZE = 100;
+  const [designs, setDesigns] = useState([]);
+  const [total, setTotal] = useState(0);
+  const [totalPages, setTotalPages] = useState(1);
   const [viewMode, setViewMode] = useState("list");
+  const [page, setPage] = useState(1);
   const [filters, setFilters] = useState({
     type: "",
     status: "",
@@ -458,7 +460,8 @@ export function DesignListScreen() {
     searchQuery: "",
   });
 
-  const uniqueSalesPersons = Array.from(new Set(designs.map((d) => d.salesPerson))).sort();
+  const uniqueSalesPersons = Array.from(new Set(designs.map((d) => d.salesPerson).filter(Boolean))).sort();
+  const currentPage = Math.min(page, totalPages);
 
   const filteredDesigns = useMemo(
     () =>
