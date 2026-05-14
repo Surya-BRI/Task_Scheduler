@@ -12,7 +12,7 @@ function buildDatabaseUrlFromParts(): string | undefined {
   const encrypt = process.env.DB_ENCRYPT ?? 'true';
   const trustServerCertificate = process.env.DB_TRUST_SERVER_CERTIFICATE ?? 'true';
 
-  return `sqlserver://${server}:${port};database=${database};user=${encodeURIComponent(user)};password=${encodeURIComponent(password)};encrypt=${encrypt};trustServerCertificate=${trustServerCertificate}`;
+  return `sqlserver://${server}:${port};database=${database};user=${user};password=${password};encrypt=${encrypt};trustServerCertificate=${trustServerCertificate}`;
 }
 
 export default () => ({
@@ -29,5 +29,9 @@ export default () => ({
   },
   database: {
     url: process.env.DATABASE_URL ?? buildDatabaseUrlFromParts(),
+  },
+  /** When set, use [catalog].[dbo].…; otherwise use the DB from DATABASE_URL (current catalog). */
+  erp: {
+    sqlCatalog: process.env.ERP_SQL_CATALOG ?? '',
   },
 });

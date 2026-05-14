@@ -279,8 +279,8 @@ const Table = ({ data }) => {
             </tr>
           </thead>
           <tbody className="divide-y divide-slate-100">
-            {data.map((row) => (
-              <tr key={row.id} className="hover:bg-slate-50 transition-colors">
+            {data.map((row, rowIndex) => (
+              <tr key={`${row.id}-${rowIndex}`} className="hover:bg-slate-50 transition-colors">
                 <td className="px-2 py-1">
                   <button
                     type="button"
@@ -387,9 +387,9 @@ const Board = ({ data }) => {
           <div className="flex flex-col gap-3">
             {data
               .filter((d) => d.status === col.status)
-              .map((item) => (
+              .map((item, itemIndex) => (
                 <div
-                  key={item.id}
+                  key={`${col.status}-${item.id}-${itemIndex}`}
                   onClick={() => router.push(recordDetailPath(item.id))}
                   className={`p-2.5 min-h-[84px] rounded-lg border flex flex-col cursor-pointer hover:ring-1 hover:ring-blue-300/60 ${
                     getStatusColor(item.status).replace("text-", "text-slate-900 border-").split(" ")[0]

@@ -805,7 +805,7 @@ function ChatterCard({
 }
 
 export function ChatterScreen() {
-  const [posts, setPosts] = useState(CHATTER_POSTS);
+  const [posts, setPosts] = useState([]);
   const [openComposerPostId, setOpenComposerPostId] = useState(null);
   const [draftByPostId, setDraftByPostId] = useState({});
   const [activeTab, setActiveTab] = useState("posts");
@@ -815,6 +815,22 @@ export function ChatterScreen() {
   const [isCreatePostOpen, setIsCreatePostOpen] = useState(false);
   const [isSubmitting, setIsSubmitting] = useState(false);
   const [toastMessage, setToastMessage] = useState(null);
+
+  useEffect(() => {
+    let cancelled = false;
+    listChatterPosts({ limit: 500 })
+      .then((rows) => {
+        if (cancelled || !Array.isArray(rows)) return;
+        setPosts(rows.map((row) => mapChatterPostDtoToFeedPost(row)));
+      })
+      .catch(() => {
+        if (cancelled) return;
+        setPosts([]);
+      });
+    return () => {
+      cancelled = true;
+    };
+  }, []);
 
   const weekLabel = useMemo(() => {
     const start = new Date(currentDate);
@@ -1051,9 +1067,14 @@ export function ChatterScreen() {
 
         {activeTab === "posts" ? (
           <section className="mt-3 space-y-2.5">
-            {sortedPosts.map((post) => (
+            {sortedPosts.length === 0 ? (
+              <p className="rounded-lg border border-slate-200 bg-slate-50 px-4 py-8 text-center text-sm text-slate-600">
+                No chatter posts loaded. Ensure the API is running and <code className="rounded bg-slate-200 px-1">ErpTSChatterPost</code> has rows, or check the browser network tab for errors.
+              </p>
+            ) : null}
+            {sortedPosts.map((post, postIndex) => (
               <ChatterCard
-                key={post.id}
+                key={`${post.id}-${postIndex}`}
                 post={post}
                 isComposerOpen={openComposerPostId === post.id}
                 draftComment={draftByPostId[post.id] ?? ""}
