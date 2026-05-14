@@ -2,7 +2,7 @@ import { NestFactory } from '@nestjs/core';
 import { AppModule } from './app.module';
 import helmet from 'helmet';
 import compression from 'compression';
-import { ValidationPipe } from '@nestjs/common';
+import { Logger, ValidationPipe } from '@nestjs/common';
 import { HttpExceptionFilter } from './common/filters/http-exception.filter';
 import { LoggingInterceptor } from './common/interceptors/logging.interceptor';
 import { ConfigService } from '@nestjs/config';
@@ -33,5 +33,10 @@ async function bootstrap() {
   app.useGlobalInterceptors(new LoggingInterceptor());
 
   await app.listen(port);
+
+  const baseUrl = `http://localhost:${port}/${prefix}`;
+  const logger = new Logger('Bootstrap');
+  logger.log(`API ready at ${baseUrl}`);
+  logger.log(`Health check: ${baseUrl}/health`);
 }
 bootstrap();

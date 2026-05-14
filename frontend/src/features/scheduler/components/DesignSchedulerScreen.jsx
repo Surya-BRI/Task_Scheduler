@@ -223,79 +223,193 @@ const TASK_COLORS = [
     "bg-sky-100 border border-sky-300 text-sky-800"
 ];
 
+function formatLocalYyyyMmDd(date) {
+    const y = date.getFullYear();
+    const m = String(date.getMonth() + 1).padStart(2, "0");
+    const d = String(date.getDate()).padStart(2, "0");
+    return `${y}-${m}-${d}`;
+}
+
+function normalizeParentIdFromErp(value) {
+    if (value == null)
+        return undefined;
+    const t = String(value).trim();
+    if (!t || /^0{8}-0{4}-0{4}-0{4}-0{12}$/i.test(t))
+        return undefined;
+    return t;
+}
+
+/** Same distribution as the original in-memory demo (used when ERP has no rows for that week). */
+function buildMockSchedulerState(records) {
+    const tasksObj = {};
+    const schedulesObj = {};
+    for (let i = 1; i <= 20; i++) {
+        schedulesObj[`d${i}`] = { "0": [], "1": [], "2": [], "3": [], "4": [] };
+    }
+    records.slice(0, 100).forEach((record, idx) => {
+        let status = "unassigned";
+        if (idx < 8)
+            status = "on-hold";
+        else if (idx < 27)
+            status = "unassigned";
+        else
+            status = "assigned";
+        tasksObj[record.id] = {
+            id: record.id,
+            name: record.name,
+            tag: record.designType,
+            estimatedHours: (idx % 3) + 2,
+            status,
+            colorClass: status === "on-hold" || status === "unassigned" && idx % 3 === 0
+                ? "bg-slate-50 border border-slate-200 text-slate-700"
+                : TASK_COLORS[idx % TASK_COLORS.length],
+            baseName: record.name,
+            holdTime: idx < 8 ? "2 Days" : undefined
+        };
+    });
+    let assignedIdx = 27;
+    const addSchedule = (d, day, count) => {
+        for (let i = 0; i < count && assignedIdx < 100; i++) {
+            const record = records[assignedIdx++];
+            if (record)
+                schedulesObj[d][day].push(record.id);
+        }
+    };
+    addSchedule("d1", "0", 2);
+    addSchedule("d1", "1", 2);
+    addSchedule("d1", "2", 1);
+    addSchedule("d2", "0", 1);
+    addSchedule("d2", "1", 2);
+    addSchedule("d2", "3", 1);
+    addSchedule("d3", "2", 2);
+    addSchedule("d3", "4", 1);
+    addSchedule("d4", "0", 1);
+    addSchedule("d4", "1", 1);
+    addSchedule("d4", "2", 1);
+    addSchedule("d4", "3", 1);
+    let d = 5;
+    let day = 0;
+    while (assignedIdx < 100) {
+        const record = records[assignedIdx++];
+        if (record)
+            schedulesObj[`d${d}`][`${day}`].push(record.id);
+        day++;
+        if (day > 4) {
+            day = 0;
+            d++;
+            if (d > 20)
+                d = 5;
+        }
+    }
+    schedulesObj["d1"]["0"] = [];
+    assignedIdx = 27;
+    for (let i = 0; i < 8 && assignedIdx < 100; i++) {
+        const r = records[assignedIdx++];
+        if (!r || !tasksObj[r.id])
+            continue;
+        tasksObj[r.id].estimatedHours = 1;
+        tasksObj[r.id].tag = "Alex Monday";
+        schedulesObj["d1"]["0"].push(r.id);
+    }
+    return { tasksObj, schedulesObj };
+}
+
+function buildSchedulerStateFromErpAssignments(records, rows) {
+    const schedulesObj = {};
+    for (let i = 1; i <= 20; i++) {
+        schedulesObj[`d${i}`] = { "0": [], "1": [], "2": [], "3": [], "4": [] };
+    }
+    const recordById = {};
+    records.forEach((r) => {
+        recordById[r.id] = r;
+    });
+    const tasksObj = {};
+    records.forEach((record, idx) => {
+        tasksObj[record.id] = {
+            id: record.id,
+            name: record.name,
+            tag: record.designType,
+            estimatedHours: (idx % 3) + 2,
+            status: "unassigned",
+            colorClass: TASK_COLORS[idx % TASK_COLORS.length],
+            baseName: record.name,
+        };
+    });
+    const assignedIds = new Set();
+    for (const row of rows) {
+        const designerId = String(row.designerId ?? "").trim();
+        if (!designerId)
+            continue;
+        const dayIdx = Number(row.dayIndex);
+        if (!Number.isFinite(dayIdx) || dayIdx < 0 || dayIdx > 6)
+            continue;
+        if (!schedulesObj[designerId]) {
+            schedulesObj[designerId] = {
+                "0": [],
+                "1": [],
+                "2": [],
+                "3": [],
+                "4": [],
+                "5": [],
+                "6": [],
+            };
+        }
+        const dayStr = String(dayIdx);
+        if (!schedulesObj[designerId][dayStr])
+            schedulesObj[designerId][dayStr] = [];
+        const taskId = String(row.taskId ?? "").trim();
+        if (!taskId)
+            continue;
+        if (!schedulesObj[designerId][dayStr].includes(taskId))
+            schedulesObj[designerId][dayStr].push(taskId);
+        assignedIds.add(taskId);
+        const baseRecord = recordById[taskId];
+        const parentIdNorm = normalizeParentIdFromErp(row.parentId);
+        const totalPartsNum = row.totalParts != null ? Number(row.totalParts) : 0;
+        const splitTotal = totalPartsNum > 1;
+        const prev = tasksObj[taskId];
+        let colorIdx = 0;
+        for (let i = 0; i < taskId.length; i++)
+            colorIdx += taskId.charCodeAt(i);
+        const baseFromRecord = baseRecord
+            ? {
+                id: taskId,
+                name: baseRecord.name,
+                tag: baseRecord.designType,
+                baseName: baseRecord.name,
+                colorClass: prev?.colorClass ?? TASK_COLORS[colorIdx % TASK_COLORS.length],
+            }
+            : {
+                id: taskId,
+                name: `Design task (${taskId.slice(0, 24)}${taskId.length > 24 ? "…" : ""})`,
+                tag: "ERP",
+                baseName: "Design task",
+                colorClass: "bg-slate-100 border border-slate-200 text-slate-700",
+            };
+        tasksObj[taskId] = {
+            ...baseFromRecord,
+            estimatedHours: Number(row.assignedHours) || 0,
+            status: "assigned",
+            parentId: parentIdNorm,
+            splitIndex: splitTotal && row.splitIndex != null ? Number(row.splitIndex) : undefined,
+            totalParts: splitTotal ? totalPartsNum : undefined,
+        };
+    }
+    for (const id of Object.keys(tasksObj)) {
+        if (!assignedIds.has(id))
+            tasksObj[id] = { ...tasksObj[id], status: "unassigned" };
+    }
+    return { tasksObj, schedulesObj };
+}
+
 export function DesignSchedulerScreen() {
     const router = useRouter();
     const { records } = useDesignListStore();
 
-    const initialData = useMemo(() => {
-        const tasksObj = {};
-        const schedulesObj = {};
-        
-        for (let i = 1; i <= 20; i++) {
-            schedulesObj[`d${i}`] = { "0": [], "1": [], "2": [], "3": [], "4": [] };
-        }
+    const [tasks, setTasks] = useState({});
+    const [schedules, setSchedules] = useState({});
+    const [loadedFromErp, setLoadedFromErp] = useState(false);
 
-        records.slice(0, 100).forEach((record, idx) => {
-            let status = "unassigned";
-            if (idx < 8) status = "on-hold";
-            else if (idx < 27) status = "unassigned";
-            else status = "assigned";
-
-            tasksObj[record.id] = {
-                id: record.id,
-                name: record.name,
-                tag: record.designType,
-                estimatedHours: (idx % 3) + 2,
-                status,
-                colorClass: status === "on-hold" || status === "unassigned" && idx % 3 === 0
-                    ? "bg-slate-50 border border-slate-200 text-slate-700"
-                    : TASK_COLORS[idx % TASK_COLORS.length],
-                baseName: record.name,
-                holdTime: idx < 8 ? "2 Days" : undefined
-            };
-        });
-
-        let assignedIdx = 27;
-        const addSchedule = (d, day, count) => {
-            for (let i = 0; i < count && assignedIdx < 100; i++) {
-                const record = records[assignedIdx++];
-                if (record) schedulesObj[d][day].push(record.id);
-            }
-        };
-
-        addSchedule("d1", "0", 2); addSchedule("d1", "1", 2); addSchedule("d1", "2", 1);
-        addSchedule("d2", "0", 1); addSchedule("d2", "1", 2); addSchedule("d2", "3", 1);
-        addSchedule("d3", "2", 2); addSchedule("d3", "4", 1);
-        addSchedule("d4", "0", 1); addSchedule("d4", "1", 1); addSchedule("d4", "2", 1); addSchedule("d4", "3", 1);
-        
-        let d = 5;
-        let day = 0;
-        while (assignedIdx < 100) {
-            const record = records[assignedIdx++];
-            if (record) schedulesObj[`d${d}`][`${day}`].push(record.id);
-            day++;
-            if (day > 4) {
-                day = 0;
-                d++;
-                if (d > 20) d = 5;
-            }
-        }
-
-        schedulesObj["d1"]["0"] = [];
-        assignedIdx = 27;
-        for (let i = 0; i < 8 && assignedIdx < 100; i++) {
-            const r = records[assignedIdx++];
-            if (!r || !tasksObj[r.id]) continue;
-            tasksObj[r.id].estimatedHours = 1;
-            tasksObj[r.id].tag = "Alex Monday";
-            schedulesObj["d1"]["0"].push(r.id);
-        }
-
-        return { tasksObj, schedulesObj };
-    }, [records]);
-
-    const [tasks, setTasks] = useState(initialData.tasksObj);
-    const [schedules, setSchedules] = useState(initialData.schedulesObj);
     const [searchQuery, setSearchQuery] = useState("");
     const splitIdCounterRef = useRef(0);
     const cancelOvertimeButtonRef = useRef(null);
@@ -383,6 +497,7 @@ export function DesignSchedulerScreen() {
     const applyPreparedAssignment = (preparedAssignment) => {
         if (!preparedAssignment)
             return;
+        setLoadedFromErp(false);
         setSchedules(preparedAssignment.updatedSchedules);
         setTasks(preparedAssignment.updatedTasks);
         setCurrentDay(preparedAssignment.targetDayIndex);
@@ -461,6 +576,7 @@ export function DesignSchedulerScreen() {
         const sourceDay = e.dataTransfer.getData("sourceDay");
         if (!taskId)
             return;
+        setLoadedFromErp(false);
         setSchedules(prev => {
             if (sourceId === 'unassigned' || sourceId === 'on-hold')
                 return prev;
@@ -528,13 +644,15 @@ export function DesignSchedulerScreen() {
         }
         return { optimized: newSchedules, changed };
     };
-    // Automatically optimize schedule whenever it changes
+    // Automatically optimize schedule whenever it changes (skip when showing ERP snapshot)
     useEffect(() => {
+        if (loadedFromErp)
+            return;
         const { optimized, changed } = getOptimizedSchedule(schedules, tasks);
         if (changed) {
             setSchedules(optimized);
         }
-    }, [schedules, tasks]);
+    }, [schedules, tasks, loadedFromErp]);
     useEffect(() => {
         const snapshot = buildSchedulerSnapshot(tasks, schedules);
         try {
@@ -718,9 +836,7 @@ export function DesignSchedulerScreen() {
                 }}>
                         {visibleDays.map(dayIndex => {
                     const rawTasksInDay = designerDays[dayIndex.toString()] || [];
-                    const tasksInDay = designer.id === "d1" && dayIndex === 0
-                        ? rawTasksInDay.slice(0, 8)
-                        : rawTasksInDay;
+                    const tasksInDay = rawTasksInDay;
                     const isWeekend = dayIndex >= 5;
                     const dayHours = getDayHours(designer.id, dayIndex);
                     const isDayOverloaded = dayHours > DAILY_CAPACITY;
