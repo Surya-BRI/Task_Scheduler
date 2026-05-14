@@ -12,6 +12,12 @@ import {
     buildSchedulerSnapshot
 } from "../utils/designerDashboardSync";
 import { listSchedulerAssignmentsForWeek } from "../services/scheduler-assignments.api";
+import {
+    DEFAULT_SCHEDULER_REFERENCE_DATE,
+    formatSchedulerDateRangeText,
+    getCurrentDayIndex,
+    getWeekDays,
+} from "../utils/schedulerWeek";
 const DUMMY_DESIGNERS = [
     { id: "d1", name: "Alex Johnson", initials: "AJ" },
     { id: "d2", name: "Alexander Allen", initials: "AA" },
@@ -42,19 +48,6 @@ const WEEKDAY_INDICES = [0, 1, 2, 3, 4];
 const ALL_DAY_INDICES = [0, 1, 2, 3, 4, 5, 6];
 const isWeekdayIndex = (dayIndex) => WEEKDAY_INDICES.includes(dayIndex);
 const cloneState = (value) => JSON.parse(JSON.stringify(value));
-const getCurrentDayIndex = (date) => (date.getDay() + 6) % 7; // Mon=0 ... Sun=6
-const getWeekDays = (baseDate) => {
-    const dates = [];
-    const currentDay = baseDate.getDay() === 0 ? 7 : baseDate.getDay();
-    const monday = new Date(baseDate);
-    monday.setDate(baseDate.getDate() - currentDay + 1);
-    for (let i = 0; i < 7; i++) {
-        const d = new Date(monday);
-        d.setDate(monday.getDate() + i);
-        dates.push(d);
-    }
-    return dates;
-};
 const sumTaskHours = (taskMap, taskIds) => taskIds.reduce((acc, taskId) => acc + (taskMap[taskId]?.estimatedHours || 0), 0);
 
 const nextVisibleWeekdayAfter = (dayIndex, candidateDays) => candidateDays.find((idx) => idx > dayIndex);
@@ -427,7 +420,7 @@ export function DesignSchedulerScreen() {
     const [dropIndicator, setDropIndicator] = useState(null);
     
     // Custom Date selection state
-    const [currentDate, setCurrentDate] = useState(new Date(2026, 2, 3));
+    const [currentDate, setCurrentDate] = useState(DEFAULT_SCHEDULER_REFERENCE_DATE);
 
     useEffect(() => {
         let cancelled = false;
@@ -474,12 +467,7 @@ export function DesignSchedulerScreen() {
         splitIdCounterAfterSplit: 0,
     });
     const weekDates = useMemo(() => getWeekDays(currentDate), [currentDate]);
-    const dateRangeText = useMemo(() => {
-        if (!weekDates || weekDates.length === 0) return "";
-        const start = weekDates[0];
-        const end = weekDates[6] || weekDates[weekDates.length - 1];
-        return `${start.toLocaleDateString("en-US", { month: "short", day: "numeric" })} - ${end.toLocaleDateString("en-US", { month: "short", day: "numeric", year: "numeric" })}`;
-    }, [weekDates]);
+    const dateRangeText = useMemo(() => formatSchedulerDateRangeText(weekDates), [weekDates]);
     const customVisibleDays = useMemo(() => {
         const filtered = [...new Set(selectedDays.filter(isWeekdayIndex))].sort((a, b) => a - b);
         if (filtered.length > 0)

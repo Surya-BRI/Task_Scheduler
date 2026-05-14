@@ -47,11 +47,10 @@ export function TeamActivityFilters({
       <div className="flex min-w-0 flex-1 flex-wrap items-end justify-evenly gap-x-2 gap-y-2 lg:flex-nowrap lg:gap-x-2.5">
         {showTeammateFilter ? (
           <TogglePillGroup
-            label="Designer"
             value={teammateMode}
             onChange={onTeammateMode}
             options={[
-              { label: "All", value: "all" },
+              { label: "Team", value: "all" },
               { label: "Individuals", value: "individuals" },
             ]}
             className="shrink-0"
