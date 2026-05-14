@@ -15,7 +15,7 @@ function MessageBody({ segments }) {
               href={seg.href}
               className="font-medium text-blue-600 underline-offset-2 hover:text-blue-700 hover:underline"
               target="_blank"
-              rel="noreferrer"
+              rel="noopener noreferrer"
             >
               {seg.label}
             </a>

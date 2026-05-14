@@ -1,5 +1,7 @@
 "use client";
 
+import { useState } from "react";
+import { ChevronLeft } from "lucide-react";
 import { ActivityFeedItem } from "./ActivityFeedItem";
 
 const SECTION = {
@@ -7,13 +9,34 @@ const SECTION = {
   project_milestone: "Project Milestone",
 };
 
-export function ActivityFeedList({ items, likes, onToggleLike, activityKind }) {
-  const title = SECTION[activityKind];
-  const nowMs = Date.now();
+export function ActivityFeedList({
+  items,
+  likes,
+  onToggleLike,
+  activityKind,
+  heading,
+  onBack,
+}) {
+  const title = heading ?? SECTION[activityKind];
+  const [nowMs] = useState(() => Date.now());
 
   return (
     <section className="ui-surface flex min-h-[220px] flex-1 flex-col overflow-hidden p-3 sm:min-h-[min(520px,calc(100dvh-10rem))] sm:p-4">
-      {title ? <h2 className="mb-1.5 text-base font-semibold tracking-tight text-slate-900 sm:text-lg">{title}</h2> : null}
+      {title ? (
+        <div className="mb-1.5 flex items-center gap-2">
+          {onBack ? (
+            <button
+              type="button"
+              onClick={onBack}
+              className="ui-icon-button h-8 w-8 text-slate-600"
+              aria-label="Back to individuals"
+            >
+              <ChevronLeft className="h-5 w-5" aria-hidden />
+            </button>
+          ) : null}
+          <h2 className="text-base font-semibold tracking-tight text-slate-900 sm:text-lg">{title}</h2>
+        </div>
+      ) : null}
       {items.length === 0 ? (
         <p className="flex flex-1 items-center justify-center py-16 text-center text-sm text-slate-500">
           No activity matches your filters.
