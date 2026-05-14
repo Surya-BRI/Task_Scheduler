@@ -1,11 +1,177 @@
 "use client";
 
 import { useMemo, useState, useEffect } from "react";
-import { CalendarDays, MessageSquareText, PlusSquare, Search, ThumbsUp, MessageCircle, X } from "lucide-react";
+import { CalendarDays, Link2, MessageCircle, MessageSquareText, PlusSquare, Search, ThumbsUp, X } from "lucide-react";
 import { Navbar } from "@/components/Navbar";
-import { listChatterPosts, mapChatterPostDtoToFeedPost } from "@/features/chatter/services/chatter-posts.api";
+import {
+  createLinkAttachment,
+  isValidExternalUrl,
+  normalizeExternalUrl,
+} from "../utils/chatterLinkAttachments";
 
 const CURRENT_USER = "Delbin Delbin";
+
+const CHATTER_POSTS = [
+  {
+    id: "p1",
+    title: "RAMADA SIGNAGE FOR WORD OF ART @ JADDAF",
+    author: "Aneesh Raghu",
+    time: "6m ago",
+    mention: "@Delbin Delbin",
+    message: "Please find the attached BRI design and prepare the quote.",
+    projectName: "Ramada Signage",
+    responsibleUser: "Aneesh Raghu",
+    priority: "medium",
+    seenBy: 3,
+    comments: [],
+  },
+  {
+    id: "p2",
+    title: "SIGNAGE (REIGATE GRAMMAR SCHOOL) FOR ARADA @ SHJ",
+    author: "Aneesh Raghu",
+    time: "1h ago",
+    mention: "@Anju Krishna",
+    message: "Please provide best price.",
+    projectName: "Reigate Grammar School",
+    responsibleUser: "Anju Krishna",
+    priority: "low",
+    seenBy: 3,
+    comments: [],
+  },
+  {
+    id: "p3",
+    title: "EYE ZONE REVOLI SIGNAGE @ DUBAI MALL",
+    author: "Fahad Quazi",
+    time: "03 Mar 2026 at 13:23",
+    mention: "@Delbin Delbin",
+    message: "Please share quotation at the earliest.",
+    projectName: "Eye Zone Revoli",
+    responsibleUser: "Fahad Quazi",
+    priority: "high",
+    seenBy: 3,
+    comments: [],
+  },
+  {
+    id: "p4",
+    title: "DUBAI HILLS KIOSK SIGNAGE UPDATE",
+    author: "Rahul Menon",
+    time: "2h ago",
+    mention: "@Delbin Delbin",
+    message: "Client requested revised finish sample. Share options by EOD.",
+    projectName: "Dubai Hills Kiosk",
+    responsibleUser: "Rahul Menon",
+    priority: "medium",
+    seenBy: 5,
+    comments: [],
+  },
+  {
+    id: "p5",
+    title: "SHARJAH MALL WAYFINDING PANEL",
+    author: "Anju Krishna",
+    time: "3h ago",
+    mention: "@Delbin Delbin",
+    message: "Artwork is approved, please initiate print-ready handoff.",
+    projectName: "Sharjah Mall",
+    responsibleUser: "Anju Krishna",
+    priority: "low",
+    seenBy: 4,
+    comments: [],
+  },
+  {
+    id: "p6",
+    title: "MARINA DIGITAL SCREEN CONTENT",
+    author: "Delbin Delbin",
+    time: "5h ago",
+    mention: "@Delbin Delbin",
+    message: "Need final copy lock before publishing animation sequence.",
+    projectName: "Marina Digital Screen",
+    responsibleUser: "Delbin Delbin",
+    priority: "high",
+    seenBy: 6,
+    comments: [],
+  },
+  {
+    id: "p7",
+    title: "ABU DHABI OFFICE BRANDING",
+    author: "Aneesh Raghu",
+    time: "Yesterday",
+    mention: "@Delbin Delbin",
+    message: "Please confirm site dimensions shared by sales team.",
+    projectName: "AD Office Branding",
+    responsibleUser: "Rahul Menon",
+    priority: "medium",
+    seenBy: 2,
+    comments: [],
+  },
+  {
+    id: "p8",
+    title: "AL AIN RETAIL WINDOW GRAPHICS",
+    author: "Fahad Quazi",
+    time: "Yesterday",
+    mention: "@Delbin Delbin",
+    message: "Client asked for festive variant. Duplicate current layout.",
+    projectName: "Al Ain Retail",
+    responsibleUser: "Fahad Quazi",
+    priority: "low",
+    seenBy: 3,
+    comments: [],
+  },
+  {
+    id: "p9",
+    title: "JLT SHOWROOM SIGNAGE REWORK",
+    author: "Rahul Menon",
+    time: "Yesterday",
+    mention: "@Anju Krishna",
+    message: "Please update font hierarchy as per latest review notes.",
+    projectName: "JLT Showroom",
+    responsibleUser: "Rahul Menon",
+    priority: "high",
+    seenBy: 7,
+    comments: [],
+  },
+  {
+    id: "p10",
+    title: "BUS SHELTER CAMPAIGN - PHASE 2",
+    author: "Anju Krishna",
+    time: "2 days ago",
+    mention: "@Delbin Delbin",
+    message: "Media file package uploaded. Awaiting final QA check.",
+    projectName: "Bus Shelter Campaign",
+    responsibleUser: "Anju Krishna",
+    priority: "medium",
+    seenBy: 4,
+    comments: [],
+    linkAttachments: [
+      createLinkAttachment("https://contoso.sharepoint.com/sites/design/Shared%20Documents/Bus%20Shelter%20Campaign.zip", "seed-link-p10"),
+    ],
+  },
+  {
+    id: "p11",
+    title: "MIRDIF STORE FACADE LETTERING",
+    author: "Delbin Delbin",
+    time: "2 days ago",
+    mention: "@Fahad Quazi",
+    message: "Need confirmation on acrylic thickness before vendor PO.",
+    projectName: "Mirdif Store Facade",
+    responsibleUser: "Delbin Delbin",
+    priority: "high",
+    seenBy: 8,
+    comments: [],
+  },
+  {
+    id: "p12",
+    title: "JEBEL ALI YARD SAFETY BOARD",
+    author: "Aneesh Raghu",
+    time: "2 days ago",
+    mention: "@Delbin Delbin",
+    message: "Please replace icons with approved HSE set from library.",
+    projectName: "Jebel Ali Yard",
+    responsibleUser: "Aneesh Raghu",
+    priority: "low",
+    seenBy: 3,
+    comments: [],
+  },
+];
 
 const PRIORITY_STYLES = {
   low: "bg-emerald-500",
@@ -132,13 +298,78 @@ function Toast({ message, onClose }) {
   );
 }
 
+function LinkAttachmentPreview({ link }) {
+  return (
+    <a
+      href={link.url}
+      target="_blank"
+      rel="noopener noreferrer"
+      className="flex w-full max-w-md items-start gap-3 rounded-lg border border-slate-200 bg-slate-50 p-3 transition-colors hover:border-blue-200 hover:bg-blue-50/40"
+    >
+      <span
+        className={`inline-flex h-10 w-10 shrink-0 items-center justify-center rounded-md border text-xs font-bold ${link.platformBadgeClass}`}
+        aria-hidden
+      >
+        {link.platformIcon}
+      </span>
+      <span className="min-w-0 flex-1">
+        <span className="block text-[11px] font-semibold uppercase tracking-wide text-slate-500">{link.platformLabel}</span>
+        <span className="mt-0.5 block truncate text-sm font-semibold text-slate-900">{link.name}</span>
+        <span className="mt-0.5 block truncate text-xs text-blue-600">{link.url}</span>
+      </span>
+    </a>
+  );
+}
+
+function ChatterPostAttachments({ post }) {
+  const fileAttachments = post.fileAttachments?.length
+    ? post.fileAttachments
+    : post.attachment
+      ? [post.attachment]
+      : [];
+  const linkAttachments = post.linkAttachments ?? [];
+
+  if (fileAttachments.length === 0 && linkAttachments.length === 0) return null;
+
+  return (
+    <div className="mt-3 space-y-2">
+      {fileAttachments.map((file, index) => (
+        <div key={`${file.name}-${index}`}>
+          {file.type?.startsWith("image/") ? (
+            <img
+              src={URL.createObjectURL(file)}
+              alt={file.name}
+              className="max-h-48 rounded-md border border-slate-200 object-contain"
+            />
+          ) : (
+            <div className="inline-flex w-full max-w-sm items-center gap-3 rounded-md border border-slate-200 bg-slate-50 p-2">
+              <div className="flex h-10 w-10 items-center justify-center rounded border border-slate-200 bg-white text-lg">
+                📄
+              </div>
+              <div className="min-w-0 flex-1">
+                <p className="truncate text-sm font-medium text-slate-700">{file.name}</p>
+                <p className="text-xs text-slate-500">{(file.size / 1024).toFixed(1)} KB</p>
+              </div>
+            </div>
+          )}
+        </div>
+      ))}
+      {linkAttachments.map((link) => (
+        <LinkAttachmentPreview key={link.id} link={link} />
+      ))}
+    </div>
+  );
+}
+
 function CreatePostModal({ isOpen, onClose, onSubmit, isSubmitting }) {
   const [title, setTitle] = useState("");
   const [mention, setMention] = useState("");
   const [message, setMessage] = useState("");
   const [priority, setPriority] = useState("Medium");
   const [postType, setPostType] = useState("Posts");
-  const [attachment, setAttachment] = useState(null);
+  const [fileAttachments, setFileAttachments] = useState([]);
+  const [linkAttachments, setLinkAttachments] = useState([]);
+  const [linkInput, setLinkInput] = useState("");
   const [showMentions, setShowMentions] = useState(false);
   const [errors, setErrors] = useState({});
   const mentionList = ["@Aneesh Raghu", "@Delbin Delbin", "@Anju Krishna", "@Fahad Quazi", "@Rahul Menon"];
@@ -159,8 +390,40 @@ function CreatePostModal({ isOpen, onClose, onSubmit, isSubmitting }) {
   const handleDrop = (e) => {
     e.preventDefault();
     if (e.dataTransfer.files && e.dataTransfer.files.length > 0) {
-      setAttachment(e.dataTransfer.files[0]);
+      setFileAttachments((prev) => [...prev, ...Array.from(e.dataTransfer.files)]);
     }
+  };
+
+  const addFiles = (fileList) => {
+    if (!fileList?.length) return;
+    setFileAttachments((prev) => [...prev, ...Array.from(fileList)]);
+  };
+
+  const removeFileAttachment = (index) => {
+    setFileAttachments((prev) => prev.filter((_, fileIndex) => fileIndex !== index));
+  };
+
+  const addLinkAttachment = () => {
+    const normalized = normalizeExternalUrl(linkInput);
+    if (!isValidExternalUrl(normalized)) {
+      setErrors((prev) => ({ ...prev, link: "Enter a valid http or https URL." }));
+      return;
+    }
+    if (linkAttachments.some((link) => link.url === normalized)) {
+      setErrors((prev) => ({ ...prev, link: "This link is already attached." }));
+      return;
+    }
+    setLinkAttachments((prev) => [...prev, createLinkAttachment(normalized)]);
+    setLinkInput("");
+    setErrors((prev) => {
+      const next = { ...prev };
+      delete next.link;
+      return next;
+    });
+  };
+
+  const removeLinkAttachment = (linkId) => {
+    setLinkAttachments((prev) => prev.filter((link) => link.id !== linkId));
   };
 
   useEffect(() => {
@@ -170,7 +433,9 @@ function CreatePostModal({ isOpen, onClose, onSubmit, isSubmitting }) {
       setMessage("");
       setPriority("Medium");
       setPostType("Posts");
-      setAttachment(null);
+      setFileAttachments([]);
+      setLinkAttachments([]);
+      setLinkInput("");
       setShowMentions(false);
       setErrors({});
     }
@@ -187,7 +452,7 @@ function CreatePostModal({ isOpen, onClose, onSubmit, isSubmitting }) {
       return;
     }
     setErrors({});
-    onSubmit({ title, mention, message, priority, postType, attachment });
+    onSubmit({ title, mention, message, priority, postType, fileAttachments, linkAttachments });
   };
 
   return (
@@ -284,7 +549,7 @@ function CreatePostModal({ isOpen, onClose, onSubmit, isSubmitting }) {
           </div>
 
           <div>
-            <label className="mb-2 block text-sm font-semibold text-slate-700">Attachment Upload</label>
+            <label className="mb-2 block text-sm font-semibold text-slate-700">File attachments</label>
             <div
               className="rounded-xl border border-dashed border-slate-300 bg-slate-50 px-4 py-8 text-center transition-colors hover:bg-slate-100"
               onClick={() => document.getElementById("post-attachment").click()}
@@ -295,16 +560,94 @@ function CreatePostModal({ isOpen, onClose, onSubmit, isSubmitting }) {
                 type="file"
                 id="post-attachment"
                 className="hidden"
+                multiple
                 onChange={(e) => {
-                  if (e.target.files.length) setAttachment(e.target.files[0]);
+                  addFiles(e.target.files);
+                  e.target.value = "";
                 }}
               />
-              {attachment ? (
-                <p className="text-sm font-medium text-emerald-600">{attachment.name}</p>
-              ) : (
-                <p className="text-sm text-slate-500">Click to upload or drag and drop</p>
-              )}
+              <p className="text-sm text-slate-500">Click to upload or drag and drop one or more files</p>
             </div>
+            {fileAttachments.length > 0 ? (
+              <ul className="mt-3 space-y-2">
+                {fileAttachments.map((file, index) => (
+                  <li
+                    key={`${file.name}-${index}`}
+                    className="flex items-center justify-between rounded-lg border border-slate-200 bg-white px-3 py-2 text-sm"
+                  >
+                    <span className="truncate font-medium text-slate-700">{file.name}</span>
+                    <button
+                      type="button"
+                      onClick={() => removeFileAttachment(index)}
+                      className="ui-icon-button h-7 w-7 text-slate-500"
+                      aria-label={`Remove ${file.name}`}
+                    >
+                      <X className="h-4 w-4" />
+                    </button>
+                  </li>
+                ))}
+              </ul>
+            ) : null}
+          </div>
+
+          <div>
+            <label className="mb-2 block text-sm font-semibold text-slate-700">External link attachments</label>
+            <div className="flex flex-col gap-2 sm:flex-row">
+              <div className="relative min-w-0 flex-1">
+                <Link2 className="pointer-events-none absolute left-3 top-1/2 h-4 w-4 -translate-y-1/2 text-slate-400" />
+                <input
+                  type="url"
+                  value={linkInput}
+                  onChange={(e) => {
+                    setLinkInput(e.target.value);
+                    if (errors.link) {
+                      setErrors((prev) => {
+                        const next = { ...prev };
+                        delete next.link;
+                        return next;
+                      });
+                    }
+                  }}
+                  onKeyDown={(e) => {
+                    if (e.key === "Enter") {
+                      e.preventDefault();
+                      addLinkAttachment();
+                    }
+                  }}
+                  placeholder="Paste OneDrive, Google Drive, SharePoint, Dropbox, or document URL"
+                  className={`w-full rounded-lg border bg-white py-2 pl-9 pr-3 text-sm text-slate-900 outline-none focus:ring-2 focus:ring-blue-500/25 ${
+                    errors.link ? "border-red-300 focus:border-red-400" : "border-slate-300 focus:border-blue-500"
+                  }`}
+                />
+              </div>
+              <button
+                type="button"
+                onClick={addLinkAttachment}
+                className="ui-chip-button shrink-0 px-4 py-2"
+              >
+                Add link
+              </button>
+            </div>
+            {errors.link ? <p className="mt-1 text-xs text-red-600">{errors.link}</p> : null}
+            {linkAttachments.length > 0 ? (
+              <div className="mt-3 space-y-2">
+                {linkAttachments.map((link) => (
+                  <div key={link.id} className="flex items-start gap-2">
+                    <div className="min-w-0 flex-1">
+                      <LinkAttachmentPreview link={link} />
+                    </div>
+                    <button
+                      type="button"
+                      onClick={() => removeLinkAttachment(link.id)}
+                      className="ui-icon-button mt-2 h-8 w-8 shrink-0 text-slate-500"
+                      aria-label={`Remove ${link.name}`}
+                    >
+                      <X className="h-4 w-4" />
+                    </button>
+                  </div>
+                ))}
+              </div>
+            ) : null}
           </div>
 
           <div>
@@ -394,23 +737,7 @@ function ChatterCard({
                 <p className="text-sm font-medium text-blue-600 mb-1">{post.mention}</p>
                 <p className="text-sm text-slate-800 leading-relaxed whitespace-pre-wrap">{post.message}</p>
                 
-                {post.attachment && (
-                  <div className="mt-3">
-                    {post.attachment.type?.startsWith('image/') ? (
-                      <img src={URL.createObjectURL(post.attachment)} alt="attachment preview" className="rounded-md border border-slate-200 max-h-48 object-contain" />
-                    ) : (
-                      <div className="inline-flex items-center gap-3 p-2 border border-slate-200 rounded-md bg-slate-50 w-full max-w-sm">
-                        <div className="w-10 h-10 bg-white border border-slate-200 rounded flex items-center justify-center text-lg">
-                          📄
-                        </div>
-                        <div className="flex-1 min-w-0">
-                          <p className="text-sm font-medium text-slate-700 truncate">{post.attachment.name}</p>
-                          <p className="text-xs text-slate-500">{(post.attachment.size / 1024).toFixed(1)} KB</p>
-                        </div>
-                      </div>
-                    )}
-                  </div>
-                )}
+                <ChatterPostAttachments post={post} />
 
                 <div className="mt-4 flex items-center gap-4 text-xs font-semibold text-slate-500">
                   <button type="button" className="flex items-center gap-1.5 hover:text-slate-800 transition-colors">
@@ -664,7 +991,8 @@ export function ChatterScreen() {
       comments: [],
       updatedAt: new Date().toISOString(),
       postType: postData.postType,
-      attachment: postData.attachment,
+      fileAttachments: postData.fileAttachments,
+      linkAttachments: postData.linkAttachments,
     };
 
     setPosts((prev) => [newPost, ...prev]);
