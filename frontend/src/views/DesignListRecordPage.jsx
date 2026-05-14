@@ -83,9 +83,10 @@ export function DesignListRecordPage() {
   const pathname = usePathname()
   const searchParams = useSearchParams()
   const fileInputRef = useRef(null)
-  const { taskId } = useParams()
+  const params = useParams()
+  const recordKey = params?.taskId ?? params?.id
   const { records } = useDesignListStore()
-  const record = records.find((item) => item.id === taskId)
+  const record = records.find((item) => item.id === recordKey)
   const [providedFile, setProvidedFile] = useState('Design.ZIP')
   const rawTab = searchParams.get('tab')
   const activeTab = RECORD_TAB_IDS.includes(rawTab) ? rawTab : 'details'
@@ -253,7 +254,7 @@ export function DesignListRecordPage() {
 
                   {showTimerForSource ? (
                     <ProjectTaskTimer
-                      taskId={String(taskId)}
+                      taskId={String(recordKey)}
                       launchAutostart={launchAutostart}
                       launchPauseModal={launchPauseModal}
                       launchCompleteModal={launchCompleteModal}

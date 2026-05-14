@@ -5,15 +5,16 @@ import { useMemo, useState } from "react";
 import { Search } from "lucide-react";
 import { useDesignListStore } from "@/state/DesignListContext";
 import { Navbar } from "@/components/Navbar";
+import {
+  FROM_PROJECT_DESIGN,
+  taskCreationPathForRecord,
+} from "@/lib/design-list-routes";
 
-const FROM = "project-design";
-
-function hubTaskUrl(recordId, opts) {
-  const sp = new URLSearchParams();
-  sp.set("from", FROM);
-  if (opts?.tab) sp.set("tab", opts.tab);
-  if (opts?.create) sp.set("create", "1");
-  return `/design-list/task/${encodeURIComponent(recordId)}?${sp.toString()}`;
+function hubTaskHref(row, opts) {
+  const q = { from: FROM_PROJECT_DESIGN };
+  if (opts?.tab) q.tab = opts.tab;
+  if (opts?.create) q.create = "1";
+  return taskCreationPathForRecord(row, q);
 }
 
 function ActionLink({ href, label }) {
@@ -53,7 +54,7 @@ function DesignTypeTable({ rows, variant }) {
                 <tr key={row.id} className="hover:bg-slate-50 transition-colors">
                   <td className="px-2 py-1">
                     <Link
-                      href={hubTaskUrl(row.id)}
+                      href={hubTaskHref(row)}
                       className="font-medium text-blue-600 hover:underline whitespace-nowrap"
                     >
                       {row.opNo}
@@ -61,27 +62,27 @@ function DesignTypeTable({ rows, variant }) {
                   </td>
                   <td className="px-2 py-1">
                     <Link
-                      href={hubTaskUrl(row.id)}
+                      href={hubTaskHref(row)}
                       className="text-blue-600 hover:underline whitespace-nowrap"
                     >
                       {row.projectNo}
                     </Link>
                   </td>
                   <td className="px-2 py-1 text-slate-900">
-                    <Link href={hubTaskUrl(row.id)} className="hover:text-blue-700 hover:underline">
+                    <Link href={hubTaskHref(row)} className="hover:text-blue-700 hover:underline">
                       {row.name}
                     </Link>
                   </td>
                   <td className="px-2 py-1 text-slate-600">{row.status}</td>
                   <td className="px-2 py-1">
                     <div className="flex flex-wrap items-center justify-center gap-1.5">
-                      <ActionLink href={hubTaskUrl(row.id)} label="Details" />
-                      <ActionLink href={hubTaskUrl(row.id, { tab: "activity" })} label="Activity" />
-                      <ActionLink href={hubTaskUrl(row.id, { tab: "chatter" })} label="Chatter" />
+                      <ActionLink href={hubTaskHref(row)} label="Details" />
+                      <ActionLink href={hubTaskHref(row, { tab: "activity" })} label="Activity" />
+                      <ActionLink href={hubTaskHref(row, { tab: "chatter" })} label="Chatter" />
                       {variant === "project" ? (
-                        <ActionLink href={hubTaskUrl(row.id, { tab: "team" })} label="Team" />
+                        <ActionLink href={hubTaskHref(row, { tab: "team" })} label="Team" />
                       ) : null}
-                      <ActionLink href={hubTaskUrl(row.id, { create: true })} label="Create" />
+                      <ActionLink href={hubTaskHref(row, { create: true })} label="Create" />
                     </div>
                   </td>
                 </tr>
@@ -109,21 +110,18 @@ export function ProjectDesignHub() {
     };
     const retail = list.filter((r) => String(r.designType).toLowerCase() === "retail" && match(r));
     const project = list.filter((r) => String(r.designType).toLowerCase() === "project" && match(r));
+    const mapRow = (r) => ({
+      id: r.id,
+      designType: r.designType,
+      category: r.designType,
+      opNo: r.opNo,
+      projectNo: r.projectNo,
+      name: r.name,
+      status: r.status,
+    });
     return {
-      retailRows: retail.map((r) => ({
-        id: r.id,
-        opNo: r.opNo,
-        projectNo: r.projectNo,
-        name: r.name,
-        status: r.status,
-      })),
-      projectRows: project.map((r) => ({
-        id: r.id,
-        opNo: r.opNo,
-        projectNo: r.projectNo,
-        name: r.name,
-        status: r.status,
-      })),
+      retailRows: retail.map(mapRow),
+      projectRows: project.map(mapRow),
     };
   }, [list, searchQuery]);
 
