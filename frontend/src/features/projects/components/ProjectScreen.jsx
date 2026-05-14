@@ -5,9 +5,14 @@ import { useEffect, useState } from "react";
 import { Search } from "lucide-react";
 import { apiClient } from "@/lib/api-client";
 import { Navbar } from "@/components/Navbar";
+import { FROM_PROJECTS_LIST, taskCreationPathForRecord } from "@/lib/design-list-routes";
 
-function projectListTaskHref(taskId) {
-  return `/design-list/task/${encodeURIComponent(taskId)}?from=projects-list`;
+function projectListTaskHref(row) {
+  if (!row?.id) return null;
+  return taskCreationPathForRecord(
+    { id: row.id, designType: row.category, category: row.category },
+    { from: FROM_PROJECTS_LIST },
+  );
 }
 
 const renderCell = (value) => (value == null || value === "" ? "null" : String(value));
@@ -31,7 +36,7 @@ function ProjectTable({ data }) {
           <tbody className="divide-y divide-slate-100">
             {data.map((row, idx) => {
               if (!row) return null;
-              const projectHref = row.id ? projectListTaskHref(row.id) : null;
+              const projectHref = row.id ? projectListTaskHref(row) : null;
               const rowKey = `${row.id ?? row.projectCode ?? "row"}-${idx}`;
 
               return (

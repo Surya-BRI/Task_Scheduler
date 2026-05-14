@@ -17,6 +17,7 @@ import {
 } from "lucide-react";
 import { Navbar } from "@/components/Navbar";
 import { apiClient } from "@/lib/api-client";
+import { taskSummaryPath } from "@/lib/design-list-routes";
 
 const getStatusColor = (status) => {
   switch (status) {
@@ -53,11 +54,11 @@ const getStatusDot = (status) => {
 };
 
 function recordDetailPath(id) {
-  return `/design-list/record/${id}`;
+  return taskSummaryPath(id);
 }
 
 function recordTabPath(id, tab) {
-  return `${recordDetailPath(id)}?tab=${tab}`;
+  return taskSummaryPath(id, { tab });
 }
 
 const Toolbar = ({ viewMode, setViewMode, filters, setFilters, salesPersons }) => {
