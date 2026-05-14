@@ -6,6 +6,13 @@ import { Navbar } from "@/components/Navbar";
 import StatsBar from "../components/StatsBar";
 import { Clock3, FileClock, TimerReset, X } from "lucide-react";
 import { formatDate, formatDateForInput } from "@/lib/utils";
+import { apiClient } from "@/lib/api-client";
+
+const UUID_RE = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
+
+function isUuidString(value) {
+  return UUID_RE.test(String(value ?? "").trim());
+}
 
 export default function RequestsClient({ designer }) {
   const router = useRouter();
@@ -21,9 +28,14 @@ export default function RequestsClient({ designer }) {
     "Power Cut",
     "Other",
   ];
-  
+
   const [stats, setStats] = useState(designer.stats);
   const [isHOD, setIsHOD] = useState(false);
+  const [toastMessage, setToastMessage] = useState(null);
+  const showToast = (msg) => {
+    setToastMessage(msg);
+    setTimeout(() => setToastMessage(null), 3000);
+  };
 
   useEffect(() => {
     import("@/lib/mock-auth").then(({ getSession }) => {
@@ -32,108 +44,243 @@ export default function RequestsClient({ designer }) {
     });
   }, []);
 
-  // --- Idle Time Regularization State ---
-  const [idleRequests, setIdleRequests] = useState([
-    { id: 1, taskName: "Social Media Kit", date: "", duration: "25 mins", reason: "", notes: "", status: "unsubmitted" },
-    { id: 2, taskName: "Product Launch Graphics", date: "2026-03-02", duration: "45 mins", reason: "Client Call", notes: "Client delay on copy", status: "Pending" },
-    { id: 3, taskName: "Mobile App Mockups", date: "2026-03-01", duration: "30 mins", reason: "System Issue", notes: "Server issues confirmed by IT", status: "Approved" },
-  ]);
+  const erpDesignerIdRaw = designer?.erpDesignerId != null ? String(designer.erpDesignerId).trim() : "";
+  const erpDesignerId = isUuidString(erpDesignerIdRaw) ? erpDesignerIdRaw : null;
 
-  const handleIdleChange = (id, field, value) => {
-    setIdleRequests(prev => prev.map(req => req.id === id ? { ...req, [field]: value } : req));
+  const [idleRequests, setIdleRequests] = useState([]);
+  const [regularizationError, setRegularizationError] = useState(null);
+  const [regularizationLoading, setRegularizationLoading] = useState(false);
+
+  const [previousOtRequests, setPreviousOtRequests] = useState([]);
+  const [overtimeError, setOvertimeError] = useState(null);
+  const [overtimeLoading, setOvertimeLoading] = useState(false);
+
+  const loadRegularization = async () => {
+    if (erpDesignerId == null) {
+      setIdleRequests([]);
+      setRegularizationError(
+        "Set erpDesignerId to the designer’s SQL uniqueidentifier (UUID string) in designer JSON or the requests page fallback — it must match ErpTSRegularizationRequest.designerId.",
+      );
+      return;
+    }
+    setRegularizationLoading(true);
+    setRegularizationError(null);
+    try {
+      const rows = await apiClient.get(`/regularization-requests?designerId=${erpDesignerId}`);
+      const list = Array.isArray(rows) ? rows : [];
+      setIdleRequests(list);
+      const pending = list.filter((r) => r.status === "Pending").length;
+      setStats((prev) => ({ ...prev, pendingRegularization: pending }));
+    } catch (e) {
+      setIdleRequests([]);
+      setRegularizationError(e?.message || "Could not load regularization requests.");
+    } finally {
+      setRegularizationLoading(false);
+    }
   };
 
-  const handleSubmitIdleRow = (id) => {
-    const req = idleRequests.find(r => r.id === id);
-    if (!req.date || !req.reason || (req.reason === "Other" && !req.notes.trim())) {
+  const loadOvertime = async () => {
+    if (erpDesignerId == null) {
+      setPreviousOtRequests([]);
+      return;
+    }
+    setOvertimeLoading(true);
+    setOvertimeError(null);
+    try {
+      const rows = await apiClient.get(`/overtime-requests?designerId=${encodeURIComponent(erpDesignerId)}`);
+      setPreviousOtRequests(Array.isArray(rows) ? rows : []);
+    } catch (e) {
+      setPreviousOtRequests([]);
+      setOvertimeError(e?.message || "Could not load overtime requests.");
+    } finally {
+      setOvertimeLoading(false);
+    }
+  };
+
+  useEffect(() => {
+    void loadRegularization();
+    void loadOvertime();
+    // eslint-disable-next-line react-hooks/exhaustive-deps -- reload when ERP designer id changes
+  }, [erpDesignerId]);
+
+  const addIdleDraftRow = () => {
+    setIdleRequests((prev) => [
+      ...prev,
+      {
+        id: `local-${Date.now()}`,
+        localDraft: true,
+        taskId: "",
+        taskName: "",
+        date: "",
+        duration: "30 mins",
+        reason: "",
+        notes: "",
+        status: "unsubmitted",
+      },
+    ]);
+  };
+
+  const handleIdleChange = (id, field, value) => {
+    setIdleRequests((prev) => prev.map((req) => (req.id === id ? { ...req, [field]: value } : req)));
+  };
+
+  const handleSubmitIdleRow = async (id) => {
+    const req = idleRequests.find((r) => r.id === id);
+    if (!req || erpDesignerId == null) return;
+    if (!req.date || !req.reason || (req.reason === "Other" && !String(req.notes ?? "").trim())) {
       alert("Please fill in the Date and Reason (Required).");
       return;
     }
-    setIdleRequests(prev => prev.map(r => r.id === id ? { ...r, status: "Pending", createdBy: isHOD ? "HOD" : "Designer" } : r));
-    setStats(prev => ({ ...prev, pendingRegularization: Math.max(0, prev.pendingRegularization - 1) }));
-    showToast("Regularization request submitted!");
-  };
-
-  const handleApproveIdle = (id) => {
-    setIdleRequests(prev => prev.map(r => r.id === id ? { ...r, status: "Approved" } : r));
-    showToast("Regularization request approved!");
-  };
-
-  const handleRejectIdle = (id) => {
-    setIdleRequests(prev => prev.map(r => r.id === id ? { ...r, status: "Rejected" } : r));
-    showToast("Regularization request rejected!");
-  };
-
-  const handleRequestAllRegularization = () => {
-    const unsubmitted = idleRequests.filter(r => r.status === "unsubmitted");
-    if (unsubmitted.some(r => !r.date || !r.reason)) {
-      alert("Please fill in Date and Reason for all pending idle times.");
+    const taskId = String(req.taskId ?? "").trim();
+    if (!isUuidString(taskId)) {
+      alert("Please enter a valid Task UUID (same type as ErpTSRegularizationRequest.taskId).");
       return;
     }
-    setIdleRequests(prev => prev.map(r => r.status === "unsubmitted" ? { ...r, status: "Pending", createdBy: isHOD ? "HOD" : "Designer" } : r));
-    setStats(prev => ({ ...prev, pendingRegularization: 0 }));
-    showToast("All regularization requests submitted!");
+    try {
+      await apiClient.post("/regularization-requests", {
+        designerId: erpDesignerId,
+        taskId,
+        date: req.date,
+        duration: req.duration,
+        reason: req.reason,
+        notes: req.notes?.trim() || undefined,
+        status: "Pending",
+      });
+      await loadRegularization();
+      showToast("Regularization request submitted!");
+    } catch (e) {
+      alert(e?.message || "Submit failed");
+    }
+  };
+
+  const handleApproveIdle = async (id) => {
+    try {
+      const approverId = process.env.NEXT_PUBLIC_REGULARIZATION_APPROVER_ID?.trim();
+      const body = {
+        status: "Approved",
+        ...(approverId && isUuidString(approverId) ? { approverId } : {}),
+      };
+      await apiClient.patch(`/regularization-requests/${encodeURIComponent(id)}`, body);
+      await loadRegularization();
+      showToast("Regularization request approved!");
+    } catch (e) {
+      alert(e?.message || "Approve failed");
+    }
+  };
+
+  const handleRejectIdle = async (id) => {
+    try {
+      await apiClient.patch(`/regularization-requests/${encodeURIComponent(id)}`, { status: "Rejected" });
+      await loadRegularization();
+      showToast("Regularization request rejected!");
+    } catch (e) {
+      alert(e?.message || "Reject failed");
+    }
+  };
+
+  const handleRequestAllRegularization = async () => {
+    const drafts = idleRequests.filter((r) => r.status === "unsubmitted" && r.localDraft);
+    if (drafts.length === 0) {
+      showToast("No draft regularization rows to submit. Use Add row first.");
+      return;
+    }
+    if (drafts.some((r) => !r.date || !r.reason || (r.reason === "Other" && !String(r.notes ?? "").trim()))) {
+      alert("Please fill in Date and Reason for all draft rows.");
+      return;
+    }
+    if (drafts.some((r) => !isUuidString(String(r.taskId ?? "").trim()))) {
+      alert("Please enter a valid Task UUID for every draft row.");
+      return;
+    }
+    if (erpDesignerId == null) return;
+    try {
+      for (const r of drafts) {
+        const taskId = String(r.taskId).trim();
+        await apiClient.post("/regularization-requests", {
+          designerId: erpDesignerId,
+          taskId,
+          date: r.date,
+          duration: r.duration,
+          reason: r.reason,
+          notes: r.notes?.trim() || undefined,
+          status: "Pending",
+        });
+      }
+      await loadRegularization();
+      showToast("All regularization requests submitted!");
+    } catch (e) {
+      alert(e?.message || "Bulk submit failed");
+    }
   };
 
   // --- Overtime Request State ---
-  const overtimeTasks = [
-    "Webpage Layout Refinement",
-    "Social Media Kit",
-    "Product Launch Graphics",
-    "Mobile App Mockups"
-  ];
-
   const [otForm, setOtForm] = useState({
-    taskName: overtimeTasks[0],
+    taskId: "",
     date: "",
     estimatedRemaining: "4 hours",
     requestedHours: "2 hours",
     reason: "Unexpected scope change for animations",
-    notes: ""
   });
 
-  const [previousOtRequests, setPreviousOtRequests] = useState([
-    { id: 1, date: "2026-03-01", taskName: "Social Media Kit", requested: "2 hours", status: "Approved", approved: "2 hours" },
-    { id: 2, date: "2026-03-02", taskName: "Product Launch Graphics", requested: "3 hours", status: "Pending", approved: "-" },
-  ]);
-
-  const handleOtSubmit = (e) => {
+  const handleOtSubmit = async (e) => {
     e.preventDefault();
-    if (parseInt(otForm.requestedHours) > 4) {
-       alert("Cannot exceed 4 hours allowed limit.");
-       return;
+    if (erpDesignerId == null) {
+      alert("Designer UUID is not configured.");
+      return;
     }
-    
-    const newReq = {
-      id: Date.now(),
-      // Store as YYYY-MM-DD string for input compatibility; display via formatDate
-      date: otForm.date || formatDateForInput(new Date()),
-      taskName: otForm.taskName,
-      requested: otForm.requestedHours,
-      status: "Pending Approval",
-      approved: "-",
-      createdBy: isHOD ? "HOD" : "Designer"
-    };
-
-    setPreviousOtRequests([newReq, ...previousOtRequests]);
-    showToast("Overtime request submitted successfully!");
+    if (!isUuidString(String(otForm.taskId ?? "").trim())) {
+      alert("Please enter a valid Task UUID (ErpTSOvertimeRequest.taskId).");
+      return;
+    }
+    const m = /^(\d+)/.exec(otForm.requestedHours);
+    if (m && Number(m[1]) > 4) {
+      alert("Cannot exceed 4 hours allowed limit.");
+      return;
+    }
+    if (!otForm.date) {
+      alert("Please select a date.");
+      return;
+    }
+    try {
+      await apiClient.post("/overtime-requests", {
+        designerId: erpDesignerId,
+        taskId: String(otForm.taskId).trim(),
+        date: otForm.date,
+        estimatedRemaining: otForm.estimatedRemaining,
+        requestedHours: otForm.requestedHours,
+        reason: otForm.reason,
+        status: "Pending",
+      });
+      await loadOvertime();
+      showToast("Overtime request submitted successfully!");
+      setOtForm((f) => ({ ...f, taskId: "", date: "" }));
+    } catch (err) {
+      alert(err?.message || "Submit failed");
+    }
   };
 
-  const handleApproveOt = (id) => {
-    setPreviousOtRequests(prev => prev.map(r => r.id === id ? { ...r, status: "Approved", approved: r.requested } : r));
-    showToast("Overtime request approved!");
+  const handleApproveOt = async (id) => {
+    const row = previousOtRequests.find((r) => r.id === id);
+    try {
+      await apiClient.patch(`/overtime-requests/${encodeURIComponent(id)}`, {
+        status: "Approved",
+        approvedHours: row?.requested ?? "0 hours",
+      });
+      await loadOvertime();
+      showToast("Overtime request approved!");
+    } catch (e) {
+      alert(e?.message || "Approve failed");
+    }
   };
 
-  const handleRejectOt = (id) => {
-    setPreviousOtRequests(prev => prev.map(r => r.id === id ? { ...r, status: "Rejected", approved: "0 hours" } : r));
-    showToast("Overtime request rejected!");
-  };
-
-  // --- Toast ---
-  const [toastMessage, setToastMessage] = useState(null);
-  const showToast = (msg) => {
-    setToastMessage(msg);
-    setTimeout(() => setToastMessage(null), 3000);
+  const handleRejectOt = async (id) => {
+    try {
+      await apiClient.patch(`/overtime-requests/${encodeURIComponent(id)}`, { status: "Rejected" });
+      await loadOvertime();
+      showToast("Overtime request rejected!");
+    } catch (e) {
+      alert(e?.message || "Reject failed");
+    }
   };
 
   const getStatusBadge = (status) => {
@@ -219,13 +366,30 @@ export default function RequestsClient({ designer }) {
                 <TimerReset className="h-4 w-4 text-slate-500" />
                 Idle Time Regularization
               </h2>
-              <button
-                onClick={handleRequestAllRegularization}
-                className="rounded-lg bg-[#5d5baf] px-4 py-2 text-sm font-semibold text-white shadow-sm transition-colors hover:bg-[#4b4991]"
-              >
-                Request Regularization
-              </button>
+              <div className="flex flex-wrap items-center gap-2">
+                <button
+                  type="button"
+                  onClick={addIdleDraftRow}
+                  disabled={erpDesignerId == null}
+                  className="rounded-lg border border-slate-300 bg-white px-4 py-2 text-sm font-semibold text-slate-800 shadow-sm transition-colors hover:bg-slate-50 disabled:cursor-not-allowed disabled:opacity-50"
+                >
+                  Add row
+                </button>
+                <button
+                  type="button"
+                  onClick={() => void handleRequestAllRegularization()}
+                  className="rounded-lg bg-[#5d5baf] px-4 py-2 text-sm font-semibold text-white shadow-sm transition-colors hover:bg-[#4b4991]"
+                >
+                  Request Regularization
+                </button>
+              </div>
             </div>
+            {regularizationError ? (
+              <div className="border-b border-amber-200 bg-amber-50 px-4 py-3 text-sm text-amber-950 sm:px-5">{regularizationError}</div>
+            ) : null}
+            {regularizationLoading ? (
+              <div className="border-b border-slate-100 px-4 py-2 text-sm text-slate-500 sm:px-5">Loading regularization…</div>
+            ) : null}
 
             <div className="overflow-x-auto">
               <table className="w-full min-w-[980px] text-sm text-left">
@@ -241,9 +405,34 @@ export default function RequestsClient({ designer }) {
                   </tr>
                 </thead>
                 <tbody className="divide-y divide-slate-100 bg-white">
+                  {idleRequests.length === 0 && !regularizationLoading ? (
+                    <tr>
+                      <td colSpan={isHOD ? 7 : 6} className="px-4 py-8 text-center text-sm text-slate-500">
+                        No regularization requests yet. Use Add row to create a draft, or load data from ERP when rows exist for this designer.
+                      </td>
+                    </tr>
+                  ) : null}
                   {idleRequests.map((req) => (
                     <tr key={req.id} className="transition-colors hover:bg-slate-50">
-                      <td className="px-4 py-3 font-medium text-slate-800">{req.taskName}</td>
+                      <td className="px-4 py-3 font-medium text-slate-800">
+                        {req.status === "unsubmitted" ? (
+                          <div className="flex max-w-[220px] flex-col gap-1">
+                            <label className="text-[10px] font-semibold uppercase text-slate-500">Task UUID (ERP)</label>
+                            <input
+                              type="text"
+                              placeholder="xxxxxxxx-xxxx-xxxx-xxxx-xxxxxxxxxxxx"
+                              value={req.taskId === "" || req.taskId == null ? "" : req.taskId}
+                              onChange={(e) => handleIdleChange(req.id, "taskId", e.target.value)}
+                              className="w-full rounded-lg border border-slate-300 bg-white px-2 py-1.5 text-xs text-slate-800 outline-none focus:border-blue-500 focus:ring-2 focus:ring-blue-500/25"
+                            />
+                            <span className="text-xs font-normal text-slate-500">
+                              {req.taskName || (req.taskId ? `Task #${req.taskId}` : "Shown after save")}
+                            </span>
+                          </div>
+                        ) : (
+                          req.taskName || `Task #${req.taskId}`
+                        )}
+                      </td>
                       <td className="px-4 py-3 text-center">
                         {req.status === "unsubmitted" ? (
                           <input
@@ -259,15 +448,24 @@ export default function RequestsClient({ designer }) {
                         )}
                       </td>
                       <td className="px-4 py-3 text-center">
-                        <div className="inline-flex items-center gap-2">
-                          <span className="font-medium text-slate-800">{req.duration}</span>
-                          <span className="rounded bg-[#5d5baf] px-2 py-1 text-[10px] font-bold text-white">T - A</span>
-                        </div>
+                        {req.status === "unsubmitted" ? (
+                          <input
+                            type="text"
+                            value={req.duration ?? ""}
+                            onChange={(e) => handleIdleChange(req.id, "duration", e.target.value)}
+                            className="w-full max-w-[120px] rounded-lg border border-slate-300 bg-white px-2 py-1.5 text-center text-xs text-slate-800 outline-none focus:border-blue-500 focus:ring-2 focus:ring-blue-500/25"
+                          />
+                        ) : (
+                          <div className="inline-flex items-center gap-2">
+                            <span className="font-medium text-slate-800">{req.duration}</span>
+                            <span className="rounded bg-[#5d5baf] px-2 py-1 text-[10px] font-bold text-white">T - A</span>
+                          </div>
+                        )}
                       </td>
                       <td className="px-4 py-3">
                         {req.status === "unsubmitted" ? (
                           <select
-                            value={req.reason}
+                            value={req.reason ?? ""}
                             onChange={(e) => handleIdleChange(req.id, "reason", e.target.value)}
                             className={inputClass}
                           >
@@ -291,7 +489,7 @@ export default function RequestsClient({ designer }) {
                           <input
                             type="text"
                             placeholder={req.reason === "Other" ? "Required when reason is Other" : "Optional notes"}
-                            value={req.notes}
+                            value={req.notes ?? ""}
                             onChange={(e) => handleIdleChange(req.id, "notes", e.target.value)}
                             className={`${inputClass} ${req.reason === "Other" ? "border-amber-300 bg-amber-50/60" : ""}`}
                           />
@@ -302,15 +500,28 @@ export default function RequestsClient({ designer }) {
                       <td className="px-4 py-3 text-center">
                         {req.status === "unsubmitted" ? (
                           <button
-                            onClick={() => handleSubmitIdleRow(req.id)}
+                            type="button"
+                            onClick={() => void handleSubmitIdleRow(req.id)}
                             className="rounded-lg bg-blue-600 px-3 py-2 text-xs font-semibold text-white shadow-sm transition-colors hover:bg-blue-700"
                           >
                             Submit Request
                           </button>
                         ) : isHOD && req.status === "Pending" ? (
                           <div className="flex justify-center gap-2">
-                            <button onClick={() => handleApproveIdle(req.id)} className="bg-emerald-500 text-white px-3 py-1.5 rounded-full text-xs font-semibold shadow-sm hover:bg-emerald-600 transition-colors">Approve</button>
-                            <button onClick={() => handleRejectIdle(req.id)} className="bg-red-500 text-white px-3 py-1.5 rounded-full text-xs font-semibold shadow-sm hover:bg-red-600 transition-colors">Reject</button>
+                            <button
+                              type="button"
+                              onClick={() => void handleApproveIdle(req.id)}
+                              className="bg-emerald-500 text-white px-3 py-1.5 rounded-full text-xs font-semibold shadow-sm hover:bg-emerald-600 transition-colors"
+                            >
+                              Approve
+                            </button>
+                            <button
+                              type="button"
+                              onClick={() => void handleRejectIdle(req.id)}
+                              className="bg-red-500 text-white px-3 py-1.5 rounded-full text-xs font-semibold shadow-sm hover:bg-red-600 transition-colors"
+                            >
+                              Reject
+                            </button>
                           </div>
                         ) : (
                           getStatusBadge(req.status)
@@ -318,7 +529,9 @@ export default function RequestsClient({ designer }) {
                       </td>
                       {isHOD && (
                         <td className="px-4 py-3 text-center">
-                          <span className="text-[10px] font-bold text-slate-500 uppercase">{req.createdBy || "Designer"}</span>
+                          <span className="text-[10px] font-bold text-slate-500 uppercase">
+                            {req.localDraft ? (isHOD ? "HOD" : "Designer") : "ERP"}
+                          </span>
                         </td>
                       )}
                     </tr>
@@ -335,18 +548,26 @@ export default function RequestsClient({ designer }) {
                 Overtime Request
               </h2>
             </div>
+            {overtimeError ? (
+              <div className="border-b border-amber-200 bg-amber-50 px-4 py-3 text-sm text-amber-950 sm:px-5">{overtimeError}</div>
+            ) : null}
+            {overtimeLoading ? (
+              <div className="border-b border-slate-100 px-4 py-2 text-sm text-slate-500 sm:px-5">Loading overtime…</div>
+            ) : null}
 
-            <form onSubmit={handleOtSubmit} className="space-y-5 p-4 sm:p-5">
+            <form onSubmit={(e) => void handleOtSubmit(e)} className="space-y-5 p-4 sm:p-5">
                 <div className="grid grid-cols-1 gap-4 md:grid-cols-2 xl:grid-cols-4">
-                  <div>
-                    <label className="mb-1.5 block text-sm font-medium text-slate-700">Task Name</label>
-                    <select value={otForm.taskName} onChange={(e) => setOtForm({ ...otForm, taskName: e.target.value })} className={inputClass}>
-                      {overtimeTasks.map((t) => (
-                        <option key={t} value={t}>
-                          {t}
-                        </option>
-                      ))}
-                    </select>
+                  <div className="md:col-span-2">
+                    <label className="mb-1.5 block text-sm font-medium text-slate-700">Task UUID (ERP)</label>
+                    <input
+                      type="text"
+                      placeholder="xxxxxxxx-xxxx-xxxx-xxxx-xxxxxxxxxxxx"
+                      value={otForm.taskId}
+                      onChange={(e) => setOtForm({ ...otForm, taskId: e.target.value })}
+                      className={inputClass}
+                      required
+                    />
+                    <p className="mt-1 text-xs text-slate-500">Must match ErpTSOvertimeRequest.taskId (uniqueidentifier).</p>
                   </div>
                   <div>
                     <label className="mb-1.5 block text-sm font-medium text-slate-700">Date</label>
@@ -373,29 +594,19 @@ export default function RequestsClient({ designer }) {
                 </div>
 
                 <div className="grid grid-cols-1 gap-4 xl:grid-cols-[1fr_auto] xl:items-end">
-                  <div className="grid grid-cols-1 gap-4 md:grid-cols-2">
-                    <div>
-                      <label className="mb-1.5 block text-sm font-medium text-slate-700">Requested Overtime Hours</label>
-                      <select value={otForm.requestedHours} onChange={(e) => setOtForm({ ...otForm, requestedHours: e.target.value })} className={inputClass}>
-                        <option>1 hour</option>
-                        <option>2 hours</option>
-                        <option>3 hours</option>
-                        <option>4 hours</option>
-                      </select>
-                    </div>
-                    <div>
-                      <label className="mb-1.5 block text-sm font-medium text-slate-700">Reason for Overtime</label>
-                      <select value={otForm.reason} onChange={(e) => setOtForm({ ...otForm, reason: e.target.value })} className={inputClass}>
-                        <option>Unexpected scope change for animations</option>
-                        <option>Client requested urgent revisions</option>
-                        <option>Technical delays</option>
-                        <option>Other</option>
-                      </select>
-                    </div>
+                  <div>
+                    <label className="mb-1.5 block text-sm font-medium text-slate-700">Reason for Overtime</label>
+                    <select value={otForm.reason} onChange={(e) => setOtForm({ ...otForm, reason: e.target.value })} className={inputClass}>
+                      <option>Unexpected scope change for animations</option>
+                      <option>Client requested urgent revisions</option>
+                      <option>Technical delays</option>
+                      <option>Other</option>
+                    </select>
                   </div>
                   <button
                     type="submit"
-                    className="rounded-lg bg-[#5d5baf] px-5 py-2.5 text-sm font-semibold text-white shadow-sm transition-colors hover:bg-[#4b4991]"
+                    disabled={erpDesignerId == null}
+                    className="rounded-lg bg-[#5d5baf] px-5 py-2.5 text-sm font-semibold text-white shadow-sm transition-colors hover:bg-[#4b4991] disabled:cursor-not-allowed disabled:opacity-50"
                   >
                     Submit Overtime Request
                   </button>
@@ -413,7 +624,7 @@ export default function RequestsClient({ designer }) {
                 <thead className="ui-table-header">
                   <tr>
                     <th className="px-4 py-3">Request Date</th>
-                    <th className="px-4 py-3">Task Name</th>
+                    <th className="px-4 py-3">Task</th>
                     <th className="px-4 py-3">Requested Hours</th>
                     <th className="px-4 py-3">Approved Hours</th>
                     <th className="px-4 py-3 text-center">Status</th>
@@ -421,6 +632,13 @@ export default function RequestsClient({ designer }) {
                   </tr>
                 </thead>
                 <tbody className="divide-y divide-slate-100 bg-white">
+                  {previousOtRequests.length === 0 && !overtimeLoading ? (
+                    <tr>
+                      <td colSpan={isHOD ? 6 : 5} className="px-4 py-8 text-center text-sm text-slate-500">
+                        No overtime requests loaded. Submit above or ensure rows exist for this designer in ErpTSOvertimeRequest.
+                      </td>
+                    </tr>
+                  ) : null}
                   {previousOtRequests.map((req) => (
                     <tr key={req.id} className="transition-colors hover:bg-slate-50">
                       <td className="px-4 py-3 font-medium text-slate-500">{formatDate(req.date)}</td>
@@ -430,8 +648,20 @@ export default function RequestsClient({ designer }) {
                       <td className="px-4 py-3 text-center">
                         {isHOD && (req.status === "Pending Approval" || req.status === "Pending") ? (
                           <div className="flex justify-center gap-2">
-                            <button onClick={() => handleApproveOt(req.id)} className="bg-emerald-500 text-white px-3 py-1.5 rounded-full text-xs font-semibold shadow-sm hover:bg-emerald-600 transition-colors">Approve</button>
-                            <button onClick={() => handleRejectOt(req.id)} className="bg-red-500 text-white px-3 py-1.5 rounded-full text-xs font-semibold shadow-sm hover:bg-red-600 transition-colors">Reject</button>
+                            <button
+                              type="button"
+                              onClick={() => void handleApproveOt(req.id)}
+                              className="bg-emerald-500 text-white px-3 py-1.5 rounded-full text-xs font-semibold shadow-sm hover:bg-emerald-600 transition-colors"
+                            >
+                              Approve
+                            </button>
+                            <button
+                              type="button"
+                              onClick={() => void handleRejectOt(req.id)}
+                              className="bg-red-500 text-white px-3 py-1.5 rounded-full text-xs font-semibold shadow-sm hover:bg-red-600 transition-colors"
+                            >
+                              Reject
+                            </button>
                           </div>
                         ) : (
                           <span className={`inline-block w-24 rounded-full px-3 py-1.5 text-xs font-semibold text-center tracking-wide shadow-sm ${getStatusColorTable(req.status)}`}>{req.status}</span>
@@ -439,7 +669,7 @@ export default function RequestsClient({ designer }) {
                       </td>
                       {isHOD && (
                         <td className="px-4 py-3 text-center">
-                          <span className="text-[10px] font-bold text-slate-500 uppercase">{req.createdBy || "Designer"}</span>
+                          <span className="text-[10px] font-bold text-slate-500 uppercase">ERP</span>
                         </td>
                       )}
                     </tr>
