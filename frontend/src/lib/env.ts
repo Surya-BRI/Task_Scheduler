@@ -1,4 +1,10 @@
+import { config } from '../config/config';
+
 export const env = {
-  apiBaseUrl: process.env.NEXT_PUBLIC_API_BASE_URL ?? 'http://localhost:7000/api/v1',
+  apiBaseUrl: config.apiBaseUrl,
   appName: process.env.NEXT_PUBLIC_APP_NAME ?? 'TaskScheduler',
 };
+
+if (typeof window !== 'undefined') {
+  console.info('[TaskScheduler] Active backend:', env.apiBaseUrl);
+}
