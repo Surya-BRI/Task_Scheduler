@@ -1,20 +1,97 @@
-import { Injectable } from '@nestjs/common';
+import { Injectable, Logger, UnauthorizedException } from '@nestjs/common';
 import { ConfigService } from '@nestjs/config';
 import { PassportStrategy } from '@nestjs/passport';
 import { ExtractJwt, Strategy } from 'passport-jwt';
 import type { JwtPayload } from '../common/types/jwt-payload.type';
+import type { UserRole } from '../common/constants/roles.enum';
 
+/**
+ * JWT Strategy — supports two auth modes:
+ *
+ *  MODE: "demo"     (AUTH_MODE=demo | default)
+ *  ─────────────────────────────────────────────────────
+ *  Validates tokens signed by this app's own JWT_ACCESS_SECRET.
+ *  Payload: { sub, email, role }
+ *
+ *  MODE: "external" (AUTH_MODE=external)
+ *  ─────────────────────────────────────────────────────
+ *  Validates tokens signed by the pre-existing ERP website using EXTERNAL_JWT_SECRET.
+ *  The external payload format may differ — we normalise it here via normalisePayload().
+ *  Map EXTERNAL_ROLE_FIELD / EXTERNAL_SUB_FIELD / EXTERNAL_EMAIL_FIELD to customise
+ *  which JWT claims map to our internal fields.
+ */
 @Injectable()
 export class JwtStrategy extends PassportStrategy(Strategy) {
-  constructor(configService: ConfigService) {
+  private readonly logger = new Logger(JwtStrategy.name);
+  private readonly authMode: string;
+  private readonly subField: string;
+  private readonly emailField: string;
+  private readonly roleField: string;
+
+  constructor(private readonly configService: ConfigService) {
+    const authMode = (configService.get<string>('auth.mode') ?? 'demo').toLowerCase();
+
+    const secret =
+      authMode === 'external'
+        ? (configService.get<string>('auth.externalJwtSecret') ?? configService.get<string>('jwt.accessSecret') ?? 'change_me')
+        : (configService.get<string>('jwt.accessSecret') ?? 'change_me');
+
     super({
       jwtFromRequest: ExtractJwt.fromAuthHeaderAsBearerToken(),
       ignoreExpiration: false,
-      secretOrKey: configService.get<string>('jwt.accessSecret') ?? 'change_me',
+      secretOrKey: secret,
     });
+
+    this.authMode = authMode;
+    this.subField   = configService.get<string>('auth.externalSubField')   ?? 'sub';
+    this.emailField = configService.get<string>('auth.externalEmailField') ?? 'email';
+    this.roleField  = configService.get<string>('auth.externalRoleField')  ?? 'role';
   }
 
-  validate(payload: JwtPayload): JwtPayload {
-    return payload;
+  validate(rawPayload: Record<string, unknown>): JwtPayload {
+    if (this.authMode === 'external') {
+      return this.normaliseExternalPayload(rawPayload);
+    }
+    // Demo / internal mode — our own format: { sub, email, role }
+    const { sub, email, role } = rawPayload as unknown as JwtPayload;
+    if (!sub || !email || !role) {
+      throw new UnauthorizedException('Invalid token payload');
+    }
+    return { sub, email, role };
+  }
+
+  /**
+   * Map the external ERP website's JWT payload to our internal JwtPayload shape.
+   * Configured entirely through environment variables — no code changes needed
+   * when the external site payload format changes.
+   */
+  private normaliseExternalPayload(payload: Record<string, unknown>): JwtPayload {
+    const sub   = String(payload[this.subField]   ?? '').trim();
+    const email = String(payload[this.emailField] ?? '').trim();
+    const rawRole = String(payload[this.roleField] ?? '').trim().toUpperCase();
+
+    if (!sub) {
+      this.logger.warn('External JWT missing sub field; using email as sub');
+    }
+
+    // Map external role labels to our internal UserRole enum values
+    const roleMap = this.buildExternalRoleMap();
+    const role = (roleMap[rawRole] ?? rawRole) as UserRole;
+
+    return { sub: sub || email, email, role };
+  }
+
+  /**
+   * Reads EXTERNAL_ROLE_MAP as a JSON string like:
+   *   '{"Hod":"HOD","Designer":"DESIGNER","ProjectManager":"PROJECT_MANAGER"}'
+   * Falls back to identity mapping.
+   */
+  private buildExternalRoleMap(): Record<string, string> {
+    try {
+      const raw = this.configService.get<string>('auth.externalRoleMap') ?? '{}';
+      return JSON.parse(raw) as Record<string, string>;
+    } catch {
+      return {};
+    }
   }
 }

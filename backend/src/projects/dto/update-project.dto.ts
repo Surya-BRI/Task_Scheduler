@@ -1,4 +1,4 @@
-import { IsBoolean, IsOptional, IsString, MinLength } from 'class-validator';
+import { IsIn, IsOptional, IsString, MinLength } from 'class-validator';
 
 export class UpdateProjectDto {
   @IsOptional()
@@ -11,6 +11,20 @@ export class UpdateProjectDto {
   description?: string;
 
   @IsOptional()
-  @IsBoolean()
-  isActive?: boolean;
+  @IsString()
+  @IsIn(['Retail', 'Project'])
+  category?: string;
+
+  @IsOptional()
+  @IsString()
+  businessUnit?: string;
+
+  @IsOptional()
+  @IsString()
+  @IsIn(['ACTIVE', 'COMPLETED', 'ON_HOLD'])
+  status?: string;
+
+  @IsOptional()
+  @IsString()
+  salesPerson?: string;
 }

@@ -4,6 +4,7 @@ import { PrismaModule } from './prisma/prisma.module';
 import { HealthModule } from './health/health.module';
 import { AuthModule } from './auth/auth.module';
 import { UsersModule } from './users/users.module';
+import { DepartmentsModule } from './departments/departments.module';
 import { ProjectsModule } from './projects/projects.module';
 import { TasksModule } from './tasks/tasks.module';
 import { DesignListModule } from './design-list/design-list.module';
@@ -27,6 +28,7 @@ import { resolveEnvFilePaths } from './config/resolve-env-file';
     HealthModule,
     AuthModule,
     UsersModule,
+    DepartmentsModule,
     ProjectsModule,
     TasksModule,
     DesignListModule,
