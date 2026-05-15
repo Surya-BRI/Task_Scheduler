@@ -6,6 +6,7 @@ import { Search } from "lucide-react";
 import { apiClient } from "@/lib/api-client";
 import { Navbar } from "@/components/Navbar";
 import { FROM_PROJECTS_LIST, taskCreationPathForRecord } from "@/lib/design-list-routes";
+import { useDesignListStore } from "@/state/DesignListContext";
 
 function projectListTaskHref(row) {
   if (!row?.id) return null;
@@ -20,7 +21,7 @@ const renderCell = (value) => (value == null || value === "" ? "null" : String(v
 const getCategoryColor = (category) =>
   category === "Retail" ? "text-blue-600" : "text-orange-500";
 
-function ProjectTable({ data }) {
+function ProjectTable({ data, onProjectOpen }) {
   return (
     <div className="flex min-h-0 flex-1 flex-col px-4 pb-6 sm:px-6">
       <div className="ui-surface h-full overflow-auto">
@@ -43,7 +44,11 @@ function ProjectTable({ data }) {
                 <tr key={rowKey} className="hover:bg-slate-50 transition-colors">
                   <td className="px-2 py-1 whitespace-nowrap text-xs">
                     {projectHref ? (
-                      <Link href={projectHref} className="font-medium text-blue-600 hover:underline">
+                      <Link
+                        href={projectHref}
+                        onClick={() => onProjectOpen?.(row)}
+                        className="font-medium text-blue-600 hover:underline"
+                      >
                         {renderCell(row.projectCode)}
                       </Link>
                     ) : (
@@ -56,6 +61,7 @@ function ProjectTable({ data }) {
                     {projectHref ? (
                       <Link
                         href={projectHref}
+                        onClick={() => onProjectOpen?.(row)}
                         className={`font-semibold hover:underline ${getCategoryColor(row.category)}`}
                       >
                         {row.category}
@@ -78,6 +84,7 @@ function ProjectTable({ data }) {
 
 export function ProjectScreen() {
   const PAGE_SIZE = 100;
+  const { setRecords } = useDesignListStore();
   const [searchQuery, setSearchQuery] = useState("");
   const [page, setPage] = useState(1);
   const [projects, setProjects] = useState([]);
@@ -98,9 +105,13 @@ export function ProjectScreen() {
           data.map((r) => ({
             id: r.id,
             projectCode: r.projectCode ?? r.projectNo ?? null,
+            salesForceCode: r.salesForceCode ?? r.opNo ?? null,
             projectName: r.projectName ?? r.name ?? null,
+            clientName: r.clientName ?? r.customerName ?? null,
             salesPerson: r.salesPerson ?? null,
             category: r.designType || "Project",
+            created: r.created ?? null,
+            deadline: r.deadline ?? null,
           })),
         );
         setTotal(Number(res?.total || 0));
@@ -123,6 +134,36 @@ export function ProjectScreen() {
   }, [searchQuery]);
   const currentPage = Math.min(page, totalPages);
 
+  const primeRecordForDetails = (row) => {
+    if (!row?.id) return;
+    setRecords((prev) => {
+      if (prev.some((item) => item.id === row.id)) return prev;
+      const now = new Date();
+      const created = now.toLocaleDateString("en-GB");
+      return [
+        {
+          id: row.id,
+          opNo: row.salesForceCode ?? row.id,
+          projectNo: row.projectCode ?? row.id,
+          projectCode: row.projectCode ?? undefined,
+          salesForceCode: row.salesForceCode ?? undefined,
+          designType: row.category || "Project",
+          businessUnit: row.category || "Project",
+          name: row.projectName ?? row.projectCode ?? row.id,
+          status: "Pending",
+          salesPerson: row.salesPerson ?? "Unassigned",
+          created: row.created ?? created,
+          deadline: row.deadline ?? row.created ?? created,
+          agingDays: 0,
+          clientName: row.clientName ?? undefined,
+          client: row.clientName ?? undefined,
+          projectName: row.projectName ?? undefined,
+        },
+        ...prev,
+      ];
+    });
+  };
+
   return (
     <div className="app-shell h-screen flex flex-col overflow-hidden font-sans">
       <Navbar />
@@ -143,7 +184,7 @@ export function ProjectScreen() {
           </div>
         </div>
 
-        <ProjectTable data={projects} />
+        <ProjectTable data={projects} onProjectOpen={primeRecordForDetails} />
         <div className="shrink-0 flex items-center justify-between px-4 pb-4 pt-2 sm:px-6 text-xs text-slate-600">
           <span>
             Showing {total === 0 ? 0 : (currentPage - 1) * PAGE_SIZE + 1}-
