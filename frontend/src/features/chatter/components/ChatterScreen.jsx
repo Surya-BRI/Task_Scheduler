@@ -4,11 +4,14 @@ import { useMemo, useState, useEffect } from "react";
 import { CalendarDays, Link2, MessageCircle, PlusSquare, Search, ThumbsUp, X } from "lucide-react";
 import { Navbar } from "@/components/Navbar";
 import {
+  createChatterComment,
   createChatterPost,
   listChatterMentionUsers,
   listChatterPosts,
   mapChatterPostDtoToFeedPost,
+  mapCommentDtoToFeedComment,
 } from "@/features/chatter/services/chatter-posts.api";
+import { getSession } from "@/lib/mock-auth";
 import {
   createLinkAttachment,
   isValidExternalUrl,
@@ -574,6 +577,7 @@ function ChatterCard({
   post,
   isComposerOpen,
   draftComment,
+  isSubmittingComment,
   onOpenComposer,
   onDraftChange,
   onSubmitComment,
@@ -642,6 +646,16 @@ function ChatterCard({
           </aside>
         ) : null}
       </div>
+      {hasComments ? (
+        <ul className="mt-1 space-y-2 border-t border-slate-100 pt-3">
+          {(post.comments ?? []).map((comment) => (
+            <li key={comment.id} className="rounded-md bg-slate-50 px-3 py-2 text-sm">
+              <p className="font-semibold text-slate-800">{comment.author}</p>
+              <p className="mt-0.5 whitespace-pre-wrap text-slate-700">{comment.message}</p>
+            </li>
+          ))}
+        </ul>
+      ) : null}
       {isComposerOpen ? (
         <div className="mt-2 rounded-lg border border-slate-200 bg-slate-50 p-3">
           <textarea
@@ -662,10 +676,10 @@ function ChatterCard({
             <button
               type="button"
               onClick={onSubmitComment}
-              disabled={!draftComment.trim()}
+              disabled={!draftComment.trim() || isSubmittingComment}
               className="rounded-md bg-blue-600 px-4 py-1.5 text-sm font-semibold text-white hover:bg-blue-700 disabled:cursor-not-allowed disabled:opacity-50 transition-colors"
             >
-              Comment
+              {isSubmittingComment ? "Saving…" : "Comment"}
             </button>
           </div>
         </div>
@@ -686,6 +700,9 @@ export function ChatterScreen() {
   const [isSubmitting, setIsSubmitting] = useState(false);
   const [toastMessage, setToastMessage] = useState(null);
   const [postsLoadError, setPostsLoadError] = useState(null);
+  const [submittingCommentPostId, setSubmittingCommentPostId] = useState(null);
+
+  const currentUserId = useMemo(() => getSession()?.id ?? null, []);
 
   useEffect(() => {
     let cancelled = false;
@@ -700,7 +717,8 @@ export function ChatterScreen() {
           return;
         }
         setPostsLoadError(null);
-        setPosts(rows.map((row) => mapChatterPostDtoToFeedPost(row)));
+        const userId = getSession()?.id ?? null;
+        setPosts(rows.map((row) => mapChatterPostDtoToFeedPost(row, userId)));
       })
       .catch((err) => {
         if (cancelled) return;
@@ -804,53 +822,35 @@ export function ChatterScreen() {
     setCurrentDate(new Date(Number(yyyy), Number(mm) - 1, Number(dd)));
   };
 
-  const submitComment = (postId) => {
+  const submitComment = async (postId) => {
     const content = (draftByPostId[postId] ?? "").trim();
-    if (!content) return;
+    if (!content || submittingCommentPostId) return;
 
-    const now = new Date().toISOString();
-    setPosts((prev) => {
-      const sourcePost = prev.find((post) => post.id === postId);
-      if (!sourcePost) return prev;
-
-      const updatedExisting = prev.map((post) =>
-        post.id === postId
-          ? {
-              ...post,
-              time: "just now",
-              updatedAt: now,
-              comments: [
-                {
-                  id: `${postId}-comment-${Date.now()}`,
-                  message: content,
-                  author: "You",
-                  createdAt: now,
-                },
-                ...(post.comments ?? []),
-              ],
-            }
-          : post,
+    setSubmittingCommentPostId(postId);
+    try {
+      const created = await createChatterComment(postId, content);
+      const feedComment = mapCommentDtoToFeedComment(created, currentUserId);
+      const now = new Date().toISOString();
+      setPosts((prev) =>
+        prev.map((post) =>
+          post.id === postId
+            ? {
+                ...post,
+                updatedAt: now,
+                comments: [feedComment, ...(post.comments ?? [])],
+              }
+            : post,
+        ),
       );
-
-      const commentRecord = {
-        id: `c-${postId}-${Date.now()}`,
-        title: `COMMENT UPDATE - ${sourcePost.title}`,
-        author: "You",
-        time: "just now",
-        mention: sourcePost.mention,
-        message: content,
-        projectName: sourcePost.projectName,
-        responsibleUser: sourcePost.responsibleUser,
-        priority: sourcePost.priority,
-        seenBy: 1,
-        comments: [],
-        updatedAt: now,
-      };
-
-      return [commentRecord, ...updatedExisting];
-    });
-    setDraftByPostId((prev) => ({ ...prev, [postId]: "" }));
-    setOpenComposerPostId(null);
+      setDraftByPostId((prev) => ({ ...prev, [postId]: "" }));
+      setOpenComposerPostId(null);
+    } catch (err) {
+      console.error("Failed to save comment:", err);
+      setToastMessage("Error: Could not save comment to database.");
+      setTimeout(() => setToastMessage(null), 3000);
+    } finally {
+      setSubmittingCommentPostId(null);
+    }
   };
 
   const handleCreatePost = async (postData) => {
@@ -865,7 +865,7 @@ export function ChatterScreen() {
         // authorId: ... (should be from auth context if available)
       }, postData.fileAttachments);
 
-      const newFeedPost = mapChatterPostDtoToFeedPost(createdDto);
+      const newFeedPost = mapChatterPostDtoToFeedPost(createdDto, currentUserId);
       if (postData.mention?.trim()) {
         newFeedPost.mention = postData.mention.trim().startsWith("@")
           ? postData.mention.trim()
@@ -968,6 +968,7 @@ export function ChatterScreen() {
                 post={post}
                 isComposerOpen={openComposerPostId === post.id}
                 draftComment={draftByPostId[post.id] ?? ""}
+                isSubmittingComment={submittingCommentPostId === post.id}
                 onOpenComposer={() => openComposer(post.id)}
                 onDraftChange={(value) => changeDraft(post.id, value)}
                 onSubmitComment={() => submitComment(post.id)}

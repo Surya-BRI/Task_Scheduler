@@ -1,6 +1,8 @@
-import { Injectable, Logger } from '@nestjs/common';
+import { BadRequestException, Injectable, Logger, NotFoundException } from '@nestjs/common';
+import { Prisma } from '@prisma/client';
 import { PrismaService } from '../prisma/prisma.service';
 import { UsersService } from '../users/users.service';
+import { CreateChatterCommentDto } from './dto/create-chatter-comment.dto';
 import { CreateChatterPostDto } from './dto/create-chatter-post.dto';
 
 const UUID_RE =
@@ -11,6 +13,14 @@ function optionalUuid(value?: string | null): string | null {
   const trimmed = value.trim();
   return UUID_RE.test(trimmed) ? trimmed : null;
 }
+
+export type ChatterCommentDto = {
+  id: string;
+  postId: string | null;
+  authorId: string | null;
+  message: string;
+  createdAt: string;
+};
 
 export type ChatterPostDto = {
   id: string;
@@ -28,6 +38,7 @@ export type ChatterPostDto = {
   visibility: string | null;
   createdAt: string;
   updatedAt: string;
+  comments: ChatterCommentDto[];
 };
 
 @Injectable()
@@ -47,7 +58,47 @@ export class ChatterPostsService {
     }));
   }
 
-  private mapRow(row: any): ChatterPostDto {
+  private mapCommentRow(row: Record<string, unknown>): ChatterCommentDto {
+    const createdAt =
+      row.createdAt instanceof Date ? row.createdAt : new Date(row.createdAt as string | number | Date);
+    return {
+      id: String(row.id),
+      postId: row.postId != null ? String(row.postId) : null,
+      authorId: row.authorId != null ? String(row.authorId) : null,
+      message: String(row.message ?? ''),
+      createdAt: createdAt.toISOString(),
+    };
+  }
+
+  private async findCommentsByPostIds(postIds: string[]): Promise<ChatterCommentDto[]> {
+    const ids = [...new Set(postIds.map((id) => id.trim()).filter(Boolean))];
+    if (ids.length === 0) return [];
+
+    const rows = await this.prisma.$queryRaw<Array<Record<string, unknown>>>`
+      SELECT id, postId, authorId, message, createdAt
+      FROM ErpTSChatterComment
+      WHERE postId IN (${Prisma.join(ids)})
+      ORDER BY createdAt DESC`;
+
+    return rows.map((row) => this.mapCommentRow(row));
+  }
+
+  private attachComments(posts: ChatterPostDto[], comments: ChatterCommentDto[]): ChatterPostDto[] {
+    const byPostId = new Map<string, ChatterCommentDto[]>();
+    for (const comment of comments) {
+      const key = comment.postId ?? '';
+      if (!key) continue;
+      const bucket = byPostId.get(key) ?? [];
+      bucket.push(comment);
+      byPostId.set(key, bucket);
+    }
+    return posts.map((post) => ({
+      ...post,
+      comments: byPostId.get(post.id) ?? [],
+    }));
+  }
+
+  private mapRow(row: any): Omit<ChatterPostDto, 'comments'> {
     const createdAt = row.createdAt instanceof Date ? row.createdAt : new Date(row.createdAt);
     const updatedAt = row.updatedAt instanceof Date ? row.updatedAt : new Date(row.updatedAt);
     const editedAtRaw = row.editedAt;
@@ -101,7 +152,57 @@ export class ChatterPostsService {
           FROM ErpTSChatterPost
           ORDER BY updatedAt DESC, createdAt DESC`;
 
-    return rows.map((r) => this.mapRow(r));
+    const posts = rows.map((r) => ({ ...this.mapRow(r), comments: [] as ChatterCommentDto[] }));
+    const comments = await this.findCommentsByPostIds(posts.map((p) => p.id));
+    return this.attachComments(posts, comments);
+  }
+
+  async findCommentsForPost(postId: string): Promise<ChatterCommentDto[]> {
+    const id = postId.trim();
+    if (!optionalUuid(id)) {
+      throw new BadRequestException('postId must be a valid UUID');
+    }
+    return this.findCommentsByPostIds([id]);
+  }
+
+  async createComment(
+    postId: string,
+    dto: CreateChatterCommentDto,
+    authorId: string,
+  ): Promise<ChatterCommentDto> {
+    const normalizedPostId = postId.trim();
+    if (!optionalUuid(normalizedPostId)) {
+      throw new BadRequestException('postId must be a valid UUID');
+    }
+
+    const postExists = await this.prisma.$queryRaw<Array<{ id: string }>>`
+      SELECT TOP 1 id FROM ErpTSChatterPost WHERE id = ${normalizedPostId}`;
+    if (!postExists.length) {
+      throw new NotFoundException('Chatter post not found');
+    }
+
+    const created = await this.prisma.chatterComment.create({
+      data: {
+        postId: normalizedPostId,
+        authorId,
+        message: dto.message.trim(),
+      },
+    });
+
+    try {
+      await this.prisma.activityLog.create({
+        data: {
+          action: 'CREATED_CHATTER_COMMENT',
+          details: JSON.stringify({ postId: normalizedPostId }),
+          userId: authorId,
+          taskId: null,
+        },
+      });
+    } catch (e) {
+      this.logger.error('Failed to create activity log for chatter comment', e);
+    }
+
+    return this.mapCommentRow(created as unknown as Record<string, unknown>);
   }
 
   async create(dto: CreateChatterPostDto, authorId: string, files?: Express.Multer.File[]): Promise<ChatterPostDto> {
@@ -145,6 +246,6 @@ export class ChatterPostsService {
       this.logger.error('Failed to create activity log for chatter post', e);
     }
 
-    return this.mapRow(newPost);
+    return { ...this.mapRow(newPost), comments: [] };
   }
 }
