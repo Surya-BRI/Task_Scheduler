@@ -40,6 +40,8 @@ model User {
   projects     Project[]     @relation("ProjectCreator")
   chatterPosts ChatterPost[] @relation("PostAuthor")
   activities   ActivityLog[]
+  leaveRequests LeaveRequest[]
+  notifications Notification[]
   createdAt    DateTime      @default(now())
   updatedAt    DateTime      @updatedAt
 }
@@ -157,6 +159,38 @@ model ActivityLog {
   
   taskId          String?
   task            Task?    @relation(fields: [taskId], references: [id], onDelete: NoAction, onUpdate: NoAction)
+  
+  createdAt       DateTime @default(now())
+}
+
+// ---------------------------------------------------------
+// LEAVE & REGULARIZATION REQUESTS
+// ---------------------------------------------------------
+model LeaveRequest {
+  id              String   @id @default(uuid())
+  userId          String
+  user            User     @relation(fields: [userId], references: [id], onDelete: NoAction, onUpdate: NoAction)
+  type            String   // "Leave", "Half Day", "Regularization"
+  status          String   @default("Pending") // Approved, Rejected, Pending
+  startDate       DateTime
+  endDate         DateTime?
+  reason          String?
+  
+  createdAt       DateTime @default(now())
+  updatedAt       DateTime @updatedAt
+}
+
+// ---------------------------------------------------------
+// NOTIFICATIONS
+// ---------------------------------------------------------
+model Notification {
+  id              String   @id @default(uuid())
+  userId          String
+  user            User     @relation(fields: [userId], references: [id], onDelete: Cascade)
+  title           String
+  message         String
+  isRead          Boolean  @default(false)
+  linkUrl         String?
   
   createdAt       DateTime @default(now())
 }
