@@ -1,10 +1,13 @@
-import { Body, Controller, Get, Post, Query, UploadedFiles, UseInterceptors } from '@nestjs/common';
+import { Body, Controller, Get, Post, Query, UploadedFiles, UseGuards, UseInterceptors } from '@nestjs/common';
 import { FilesInterceptor } from '@nestjs/platform-express';
 import { diskStorage } from 'multer';
 import { extname } from 'path';
 import { CreateChatterPostDto } from './dto/create-chatter-post.dto';
 import { ChatterPostsService } from './chatter-posts.service';
+import { JwtAuthGuard } from '../common/guards/jwt-auth.guard';
+import { CurrentUser } from '../common/decorators/current-user.decorator';
 
+@UseGuards(JwtAuthGuard)
 @Controller('chatter-posts')
 export class ChatterPostsController {
   constructor(private readonly chatterPostsService: ChatterPostsService) {}
@@ -26,8 +29,9 @@ export class ChatterPostsController {
   }))
   create(
     @Body() createChatterPostDto: CreateChatterPostDto,
+    @CurrentUser() user: any,
     @UploadedFiles() files?: Express.Multer.File[]
   ) {
-    return this.chatterPostsService.create(createChatterPostDto, files);
+    return this.chatterPostsService.create(createChatterPostDto, user.sub, files);
   }
 }
