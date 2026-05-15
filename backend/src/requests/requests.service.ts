@@ -62,7 +62,7 @@ export class RequestsService {
         startDate: new Date(dto.startDate),
         endDate: dto.endDate ? new Date(dto.endDate) : new Date(dto.startDate),
         reason: dto.reason,
-        status: 'PENDING'
+        status: 'Pending',
       },
       include: {
         user: { select: { id: true, fullName: true, role: { select: { name: true } } } }

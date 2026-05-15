@@ -20,7 +20,7 @@ export function parseApiErrorMessage(body: string, status?: number): string {
     const msg = data.message;
     if (typeof msg === 'string') {
       if (msg === 'Internal server error' && status === 500) {
-        return 'The server encountered an error. Ensure the backend is running, the database is reachable, and required tables exist (run npm run prisma:ensure-tables --workspace backend).';
+        return 'The server encountered an error. Ensure the backend is running, the database is reachable, and schema is applied (run npm run prisma:setup from the repo root).';
       }
       if (msg === 'Invalid credentials' || msg.toLowerCase().includes('unauthorized')) {
         return 'Invalid email or password.';
@@ -39,6 +39,12 @@ export function parseApiErrorMessage(body: string, status?: number): string {
   }
 
   if (status === 401) return 'Invalid email or password.';
+  if (status === 404) {
+    return 'The requested resource was not found. If you are developing locally, ensure the backend is running and includes the latest API routes.';
+  }
+  if (status === 503) {
+    return 'The service is temporarily unavailable. Check that the database is reachable and migrations have been applied.';
+  }
   if (status === 500) {
     return 'The server encountered an error. Try again later or use the local API for development.';
   }

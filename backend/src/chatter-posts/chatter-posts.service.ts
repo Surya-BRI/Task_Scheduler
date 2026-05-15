@@ -116,12 +116,11 @@ export class ChatterPostsService {
         authorId: authorId,
         mentionUserId: optionalUuid(dto.mentionUserId),
         attachments: files && files.length > 0 ? {
-          create: files.map(f => ({
+          create: files.map((f) => ({
             fileName: f.originalname,
             filePath: f.path.replace(/\\/g, '/'),
             mimeType: f.mimetype,
-            sizeBytes: f.size,
-            uploadedById: authorId,
+            sizeBytes: BigInt(f.size),
           }))
         } : undefined,
       },

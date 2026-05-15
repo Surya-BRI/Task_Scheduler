@@ -40,7 +40,14 @@ Set at least:
 
 ### 2. Database schema and users
 
-You can either use **Prisma migrations** or **manual SQL** (common when attaching to an existing ERP database). Details and password-hash notes are in [backend/docs/DEVELOPMENT.md](backend/docs/DEVELOPMENT.md).
+Apply Prisma client, activity-log table, and ErpTS foreign keys (safe to re-run):
+
+```bash
+npm run prisma:setup
+npm run prisma:seed
+```
+
+You can also use **Prisma migrations** or **manual SQL** when attaching to an existing ERP database. Details and password-hash notes are in [backend/docs/DEVELOPMENT.md](backend/docs/DEVELOPMENT.md).
 
 ### 3. Frontend environment
 
@@ -84,6 +91,8 @@ npm run dev:frontend
 | `npm run build` | Build backend then frontend |
 | `npm run lint` | Lint both workspaces |
 | `npm run typecheck` | TypeScript check both workspaces |
+| `npm run prisma:setup` | Generate Prisma client + ensure tables and foreign keys |
+| `npm run prisma:audit-schema` | Report ErpTS tables, FKs, and orphan rows |
 
 ## Repository layout
 

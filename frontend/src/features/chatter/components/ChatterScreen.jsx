@@ -1,7 +1,7 @@
 "use client";
 
 import { useMemo, useState, useEffect } from "react";
-import { CalendarDays, Link2, MessageCircle, MessageSquareText, PlusSquare, Search, ThumbsUp, X } from "lucide-react";
+import { CalendarDays, Link2, MessageCircle, PlusSquare, Search, ThumbsUp, X } from "lucide-react";
 import { Navbar } from "@/components/Navbar";
 import {
   createChatterPost,
