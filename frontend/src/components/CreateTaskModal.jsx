@@ -7,8 +7,15 @@ const DESIGN_OPTIONS = [
   { id: 'client', label: 'Client Submission' },
   { id: 'technical', label: 'Technical Drawing' },
 ]
+const PRIORITY_OPTIONS = ['Low', 'Medium', 'High']
 
-export function CreateTaskModal({ open, onClose }) {
+function getPriorityClasses(level) {
+  if (level === 'High') return 'text-red-700 font-semibold'
+  if (level === 'Medium') return 'text-orange-600 font-semibold'
+  return 'text-emerald-700 font-semibold'
+}
+
+export function CreateTaskModal({ open, onClose, submissionDate }) {
   const titleId = useId()
   const fileInputRef = useRef(null)
   const [providedFile, setProvidedFile] = useState('')
@@ -19,7 +26,8 @@ export function CreateTaskModal({ open, onClose }) {
     client: false,
     technical: false,
   }))
-  const [deadline, setDeadline] = useState('')
+  const [priorityLevel, setPriorityLevel] = useState('Medium')
+  const [hoursRequired, setHoursRequired] = useState('')
   const [comment, setComment] = useState('')
 
   useEffect(() => {
@@ -36,6 +44,19 @@ export function CreateTaskModal({ open, onClose }) {
   }, [open, onClose])
 
   if (!open) return null
+
+  const startOfToday = new Date()
+  startOfToday.setHours(0, 0, 0, 0)
+  const validSubmissionDate =
+    submissionDate instanceof Date && !Number.isNaN(submissionDate.getTime()) ? submissionDate : null
+  const startOfDeadline = validSubmissionDate ? new Date(validSubmissionDate) : null
+  if (startOfDeadline) startOfDeadline.setHours(0, 0, 0, 0)
+  const daysFromToday =
+    startOfDeadline ? Math.max(0, Math.ceil((startOfDeadline.getTime() - startOfToday.getTime()) / 86400000)) : null
+  const formattedDeadline =
+    validSubmissionDate
+      ? validSubmissionDate.toLocaleDateString('en-GB')
+      : ''
 
   function toggleDesign(id) {
     setDesigns((prev) => ({ ...prev, [id]: !prev[id] }))
@@ -148,21 +169,53 @@ export function CreateTaskModal({ open, onClose }) {
             </div>
           </fieldset>
 
+          <div className="grid gap-3 sm:grid-cols-2">
+            <div>
+              <label className="text-xs font-semibold text-slate-600" htmlFor="create-priority">
+                Priority Level
+              </label>
+              <select
+                id="create-priority"
+                value={priorityLevel}
+                onChange={(e) => setPriorityLevel(e.target.value)}
+                className={`mt-1.5 w-full rounded-md border border-slate-300 bg-white px-3 py-2 text-sm outline-none transition-colors focus:border-blue-500 focus:ring-2 focus:ring-blue-500/20 ${getPriorityClasses(priorityLevel)}`}
+              >
+                {PRIORITY_OPTIONS.map((option) => (
+                  <option key={option} value={option}>
+                    {option}
+                  </option>
+                ))}
+              </select>
+            </div>
+            <div>
+              <label className="text-xs font-semibold text-slate-600" htmlFor="create-hours">
+                Hours Required
+              </label>
+              <input
+                id="create-hours"
+                type="number"
+                min={0}
+                value={hoursRequired}
+                onChange={(e) => setHoursRequired(e.target.value)}
+                placeholder="0"
+                className="mt-1.5 w-full rounded-md border border-slate-300 bg-white px-3 py-2 text-sm text-slate-900 outline-none transition-colors focus:border-blue-500 focus:ring-2 focus:ring-blue-500/20"
+              />
+            </div>
+          </div>
+
           <div>
             <label className="text-xs font-semibold text-slate-600" htmlFor="create-deadline">
               Deadline for Task Submission
             </label>
-            <select
+            <input
               id="create-deadline"
-              value={deadline}
-              onChange={(e) => setDeadline(e.target.value)}
-              className="mt-1.5 w-full rounded-md border border-slate-300 bg-white px-3 py-2 text-sm text-slate-900 outline-none transition-colors focus:border-blue-500 focus:ring-2 focus:ring-blue-500/20"
-            >
-              <option value="">Select</option>
-              <option value="3d">3 days</option>
-              <option value="1w">1 week</option>
-              <option value="2w">2 weeks</option>
-            </select>
+              value={formattedDeadline}
+              readOnly
+              className="mt-1.5 w-full rounded-md border border-slate-300 bg-slate-50 px-3 py-2 text-sm font-semibold text-slate-900 outline-none"
+            />
+            <p className="mt-1 text-xs text-slate-500">
+              {daysFromToday == null ? 'Select Date of Submission on details page' : `${daysFromToday} day(s) from today`}
+            </p>
           </div>
 
           <div>

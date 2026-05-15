@@ -3,6 +3,13 @@ import { ChevronDown, ChevronRight, Pencil, X } from 'lucide-react'
 
 const AREA_OPTIONS = ['Area A', 'Area B', 'Area C', 'Area D']
 const LEVEL_OPTIONS = ['Level 1', 'Level 2', 'Level 3', 'Level 4']
+const PRIORITY_OPTIONS = ['Low', 'Medium', 'High']
+
+function getPriorityClasses(level) {
+  if (level === 'High') return 'text-red-700 font-semibold'
+  if (level === 'Medium') return 'text-orange-600 font-semibold'
+  return 'text-emerald-700 font-semibold'
+}
 
 const SIGN_TYPE_ROWS = [
   {
@@ -195,7 +202,7 @@ function TickBox({ checked, onChange }) {
   )
 }
 
-export function ProjectCreateTaskModal({ open, onClose }) {
+export function ProjectCreateTaskModal({ open, onClose, submissionDate }) {
   const titleId = useId()
   const [rows, setRows] = useState(() => structuredClone(SIGN_TYPE_ROWS))
   const [expanded, setExpanded] = useState(() => new Set())
@@ -203,6 +210,21 @@ export function ProjectCreateTaskModal({ open, onClose }) {
   const [selectedArea, setSelectedArea] = useState('')
   const [selectedLevel, setSelectedLevel] = useState('')
   const [planCode, setPlanCode] = useState('')
+  const [priorityLevel, setPriorityLevel] = useState('Medium')
+  const [hoursRequired, setHoursRequired] = useState('')
+  const startOfToday = new Date()
+  startOfToday.setHours(0, 0, 0, 0)
+  const startOfDeadline =
+    submissionDate instanceof Date && !Number.isNaN(submissionDate.getTime())
+      ? new Date(submissionDate)
+      : null
+  if (startOfDeadline) startOfDeadline.setHours(0, 0, 0, 0)
+  const daysFromToday =
+    startOfDeadline ? Math.max(0, Math.ceil((startOfDeadline.getTime() - startOfToday.getTime()) / 86400000)) : null
+  const formattedDeadline =
+    submissionDate instanceof Date && !Number.isNaN(submissionDate.getTime())
+      ? submissionDate.toLocaleDateString('en-GB')
+      : ''
 
   useEffect(() => {
     if (!open) return undefined
@@ -319,6 +341,42 @@ export function ProjectCreateTaskModal({ open, onClose }) {
         </div>
 
         <div className="space-y-3 p-4">
+          <div className="rounded-md border border-slate-200 bg-slate-50 px-3 py-2 text-sm text-slate-700">
+            <span className="font-semibold">Deadline for Task Submission:</span>{' '}
+            {formattedDeadline || '-'}
+            <span className="ml-2 text-slate-500">
+              ({daysFromToday == null ? 'set Date of Submission on details page' : `${daysFromToday} day(s) from today`})
+            </span>
+          </div>
+
+          <div className="grid grid-cols-2 gap-4">
+            <div>
+              <label className="mb-1 block text-xs font-semibold text-slate-600">Priority Level</label>
+              <select
+                value={priorityLevel}
+                onChange={(event) => setPriorityLevel(event.target.value)}
+                className={`h-10 w-full rounded-md border border-slate-300 bg-white px-3 text-sm outline-none transition-colors focus:border-blue-500 focus:ring-2 focus:ring-blue-500/20 ${getPriorityClasses(priorityLevel)}`}
+              >
+                {PRIORITY_OPTIONS.map((option) => (
+                  <option key={option} value={option}>
+                    {option}
+                  </option>
+                ))}
+              </select>
+            </div>
+            <div>
+              <label className="mb-1 block text-xs font-semibold text-slate-600">Hours Required</label>
+              <input
+                type="number"
+                min={0}
+                value={hoursRequired}
+                onChange={(event) => setHoursRequired(event.target.value)}
+                placeholder="0"
+                className="h-10 w-full rounded-md border border-slate-300 px-3 text-sm outline-none transition-colors focus:border-blue-500 focus:ring-2 focus:ring-blue-500/20"
+              />
+            </div>
+          </div>
+
           <div className="grid grid-cols-[1fr_1fr_1fr_1fr_auto_auto] gap-4">
             <select
               value={selectedSignType}

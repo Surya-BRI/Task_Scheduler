@@ -1,6 +1,8 @@
 import { useCallback, useEffect, useRef, useState } from 'react'
 import { ChevronLeft, CircleCheck, Clock3, Flag, Hourglass, Info, Pencil, Shield, Upload } from 'lucide-react'
 import { useParams, usePathname, useRouter, useSearchParams } from 'next/navigation'
+import DatePicker from 'react-datepicker'
+import { FaRegCalendarAlt } from 'react-icons/fa'
 import { CreateTaskModal } from '../components/CreateTaskModal'
 import { ProjectCreateTaskModal } from '../components/ProjectCreateTaskModal'
 import { Navbar } from '../components/Navbar'
@@ -93,7 +95,7 @@ function TabButton({ active, onClick, label }) {
   )
 }
 
-function FormFieldWithPencil({ id, label, value, onChange, placeholder }) {
+function FormFieldWithPencil({ id, label, value, onChange, placeholder, type = 'text', min, icon: Icon = Pencil }) {
   return (
     <div>
       <label className="text-[11px] font-semibold text-slate-600" htmlFor={id}>
@@ -102,13 +104,44 @@ function FormFieldWithPencil({ id, label, value, onChange, placeholder }) {
       <div className="relative mt-1">
         <input
           id={id}
+          type={type}
+          min={min}
           value={value}
           onChange={(e) => onChange(e.target.value)}
           placeholder={placeholder}
           className="w-full rounded-md border border-slate-300 bg-white py-1.5 pl-2.5 pr-9 text-[13px] text-slate-900 outline-none focus:border-blue-500 focus:ring-2 focus:ring-blue-500/25"
         />
         <span className="pointer-events-none absolute inset-y-0 right-0 flex items-center pr-3 text-slate-400" aria-hidden>
-          <Pencil className="h-3.5 w-3.5" />
+          <Icon className="h-3.5 w-3.5" />
+        </span>
+      </div>
+    </div>
+  )
+}
+
+function DatePickerField({ id, label, selected, onChange, minDate }) {
+  return (
+    <div>
+      <label className="text-[11px] font-semibold text-slate-600" htmlFor={id}>
+        {label}
+      </label>
+      <div className="relative mt-1">
+        <DatePicker
+          id={id}
+          selected={selected}
+          onChange={onChange}
+          minDate={minDate}
+          dateFormat="dd/MM/yyyy"
+          showMonthDropdown
+          showYearDropdown
+          dropdownMode="select"
+          popperPlacement="bottom-start"
+          calendarClassName="task-date-picker-calendar"
+          wrapperClassName="task-date-picker-wrapper"
+          className="w-full rounded-md border border-slate-300 bg-white py-1.5 pl-2.5 pr-9 text-[13px] text-slate-900 outline-none focus:border-blue-500 focus:ring-2 focus:ring-blue-500/25"
+        />
+        <span className="pointer-events-none absolute inset-y-0 right-0 flex items-center pr-3 text-slate-400" aria-hidden>
+          <FaRegCalendarAlt className="h-3.5 w-3.5" />
         </span>
       </div>
     </div>
@@ -190,7 +223,6 @@ function ProjectDetailsTable() {
 }
 
 const TASK_TAB_IDS = ['details', 'activity', 'chatter', 'team']
-
 export function TaskDetailsPage() {
   const router = useRouter()
   const pathname = usePathname()
@@ -203,20 +235,15 @@ export function TaskDetailsPage() {
   const [projectCreateModalOpen, setProjectCreateModalOpen] = useState(false)
   const [chatterMessage, setChatterMessage] = useState('')
   const [chatterEntries, setChatterEntries] = useState([])
-  const [priorityLevel, setPriorityLevel] = useState('')
-  const [hoursRequired, setHoursRequired] = useState('')
-  const [dateIssued, setDateIssued] = useState('')
-  const [dateSubmission, setDateSubmission] = useState('')
+  const today = new Date()
+  const tomorrow = new Date()
+  tomorrow.setDate(tomorrow.getDate() + 1)
+  const [dateIssued, setDateIssued] = useState(today)
+  const [dateSubmission, setDateSubmission] = useState(tomorrow)
   const [technicalHead, setTechnicalHead] = useState('')
   const [teamLead, setTeamLead] = useState('')
   const [subTeamLead, setSubTeamLead] = useState('')
   const [designers, setDesigners] = useState('')
-
-  useEffect(() => {
-    if (!record) {
-      router.replace('/design-list')
-    }
-  }, [record, router])
 
   const isCreateRequested = searchParams.get('create') === '1'
 
@@ -265,7 +292,9 @@ export function TaskDetailsPage() {
           : from === 'designer-queue' || from === 'designer-design-list'
             ? '/design-list/my-work'
           : '/design-list'
-  const pageTitle = `${record.name.toUpperCase()} — ${record.clientName ?? record.businessUnit} @ ${record.businessUnit.toUpperCase()}`
+  const resolvedProjectName = record.projectName ?? record.name
+  const resolvedClientName = record.client ?? record.clientName
+  const pageTitle = `${resolvedProjectName.toUpperCase()} @ ${record.businessUnit.toUpperCase()}`
   const canPostChatter = chatterMessage.trim().length > 0
 
   function handlePostChatter() {
@@ -314,54 +343,42 @@ export function TaskDetailsPage() {
                     />
                   ))}
                 </div>
-                <p className="text-[11px] text-slate-500">OP NO: {record.opNo.replace('OP- ', 'OP-')}</p>
+                <p className="text-[11px] text-slate-500">OP NO: {record.opNo}</p>
               </div>
 
               {activeTab === 'details' ? (
                 <>
                   <div className="mt-2.5 grid gap-3 lg:grid-cols-2">
                     <div className="space-y-0.5">
-                      <DetailRow label="Project Name" value={`${record.name} — ${record.clientName ?? record.businessUnit}`} />
-                      <DetailRow label="OP No" value={record.opNo.replace(/^OP-\s*/, 'OP')} />
+                      <DetailRow label="Project Name" value={resolvedProjectName} />
+                      <DetailRow label="Client" value={resolvedClientName ?? '-'} />
+                      <DetailRow label="OP No" value={record.opNo} />
                       <DetailRow label="Project No" value={record.projectNo} />
                     </div>
                     <div className="space-y-0.5">
                       <DetailRow label="Project Location" value={`${record.businessUnit.toUpperCase()} — main site`} />
                       <DetailRow label="Business Unit" value={record.businessUnit} />
                       <DetailRow label="Sales Person" value={record.salesPerson} />
+                      <DetailRow label="Created On" value={record.created ?? '-'} />
                     </div>
                   </div>
 
                   {isRetail ? (
                     <div className="mt-3 border-t border-slate-200 pt-3">
                       <div className="grid gap-2.5 sm:grid-cols-2">
-                        <FormFieldWithPencil
-                          id="retail-priority"
-                          label="Priority Level"
-                          value={priorityLevel}
-                          onChange={setPriorityLevel}
-                          placeholder=""
-                        />
-                        <FormFieldWithPencil
-                          id="retail-hours"
-                          label="Hours Required"
-                          value={hoursRequired}
-                          onChange={setHoursRequired}
-                          placeholder=""
-                        />
-                        <FormFieldWithPencil
+                        <DatePickerField
                           id="retail-issued"
                           label="Date of Issued"
-                          value={dateIssued}
+                          selected={dateIssued}
                           onChange={setDateIssued}
-                          placeholder=""
+                          minDate={today}
                         />
-                        <FormFieldWithPencil
+                        <DatePickerField
                           id="retail-submission"
                           label="Date of Submission"
-                          value={dateSubmission}
+                          selected={dateSubmission}
                           onChange={setDateSubmission}
-                          placeholder=""
+                          minDate={dateIssued && dateIssued > tomorrow ? dateIssued : tomorrow}
                         />
                       </div>
                       <div className="mt-2.5 flex justify-end">
@@ -377,10 +394,14 @@ export function TaskDetailsPage() {
                   ) : (
                     <div className="mt-3 border-t border-slate-200 pt-3">
                       <div className="grid gap-2.5 sm:grid-cols-2">
-                        <FormFieldWithPencil id="project-priority" label="Priority Level" value={priorityLevel} onChange={setPriorityLevel} placeholder="" />
-                        <FormFieldWithPencil id="project-hours" label="Hours Required" value={hoursRequired} onChange={setHoursRequired} placeholder="" />
-                        <FormFieldWithPencil id="project-issued" label="Date of Issued" value={dateIssued} onChange={setDateIssued} placeholder="" />
-                        <FormFieldWithPencil id="project-submission" label="Date of Submission" value={dateSubmission} onChange={setDateSubmission} placeholder="" />
+                        <DatePickerField id="project-issued" label="Date of Issued" selected={dateIssued} onChange={setDateIssued} minDate={today} />
+                        <DatePickerField
+                          id="project-submission"
+                          label="Date of Submission"
+                          selected={dateSubmission}
+                          onChange={setDateSubmission}
+                          minDate={dateIssued && dateIssued > tomorrow ? dateIssued : tomorrow}
+                        />
                       </div>
                       <ProjectDetailsTable />
                       <div className="mt-2.5 flex justify-end">
@@ -516,10 +537,12 @@ export function TaskDetailsPage() {
       <CreateTaskModal
         open={createModalOpen || (isCreateRequested && isRetail)}
         onClose={() => setCreateModalOpen(false)}
+        submissionDate={dateSubmission}
       />
       <ProjectCreateTaskModal
         open={projectCreateModalOpen || (isCreateRequested && !isRetail)}
         onClose={() => setProjectCreateModalOpen(false)}
+        submissionDate={dateSubmission}
       />
     </div>
   )
