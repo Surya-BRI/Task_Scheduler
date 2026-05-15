@@ -7,7 +7,6 @@ export class ActivitiesService {
 
   async findAll(limitParam: number = 50) {
     // Fetch latest activities from the Prisma ActivityLog model
-    // @ts-ignore: IDE cache issue, the property exists and typecheck passes
     const activities = await this.prisma.activityLog.findMany({
       take: limitParam,
       orderBy: { createdAt: 'desc' },
@@ -25,7 +24,9 @@ export class ActivitiesService {
       let detailsObj: any = {};
       try {
         if (act.details) detailsObj = JSON.parse(act.details);
-      } catch (e) {}
+      } catch {
+        detailsObj = {};
+      }
 
       // Map to frontend expected shape somewhat
       return {

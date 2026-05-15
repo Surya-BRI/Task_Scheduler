@@ -14,6 +14,7 @@ import {
   List,
   Search,
   UserRound,
+  UserRoundPlus,
   Users,
 } from "lucide-react";
 import { Navbar } from "@/components/Navbar";

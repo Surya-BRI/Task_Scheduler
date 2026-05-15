@@ -131,7 +131,6 @@ export class TasksService {
     });
 
     try {
-      // @ts-ignore: IDE cache issue
       await this.prisma.activityLog.create({
         data: {
           action: 'ASSIGNED_TASK',
@@ -140,7 +139,9 @@ export class TasksService {
           taskId: id,
         }
       });
-    } catch (e) { }
+    } catch {
+      // Activity logging is best-effort
+    }
 
     return updatedTask;
   }
@@ -165,7 +166,6 @@ export class TasksService {
     });
 
     try {
-      // @ts-ignore: IDE cache issue
       await this.prisma.activityLog.create({
         data: {
           action: 'STATUS_CHANGED',
@@ -174,7 +174,9 @@ export class TasksService {
           taskId: id,
         }
       });
-    } catch (e) { }
+    } catch {
+      // Activity logging is best-effort
+    }
 
     return updatedTask;
   }

@@ -12,6 +12,11 @@ import { CurrentUser } from '../common/decorators/current-user.decorator';
 export class ChatterPostsController {
   constructor(private readonly chatterPostsService: ChatterPostsService) {}
 
+  @Get('mention-users')
+  listMentionUsers() {
+    return this.chatterPostsService.listMentionUsers();
+  }
+
   @Get()
   findAll(@Query('limit') limit?: string, @Query('taskId') taskId?: string) {
     return this.chatterPostsService.findAll(limit, taskId);

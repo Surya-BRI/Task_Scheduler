@@ -1,3 +1,4 @@
+import { randomUUID } from 'crypto';
 import { ConflictException, Injectable, NotFoundException } from '@nestjs/common';
 import { PrismaService } from '../prisma/prisma.service';
 import { CreateDepartmentDto } from './dto/create-department.dto';
@@ -10,7 +11,7 @@ export class DepartmentsService {
     const existing = await this.prisma.department.findUnique({ where: { name: dto.name } });
     if (existing) throw new ConflictException('Department already exists');
     return this.prisma.department.create({
-      data: { name: dto.name },
+      data: { id: randomUUID(), name: dto.name },
     });
   }
 

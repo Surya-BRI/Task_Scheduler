@@ -18,7 +18,7 @@ export class CreateChatterPostDto {
   postType?: string;
 
   @IsOptional()
-  @IsString()
+  @IsUUID()
   mentionUserId?: string;
 
   @IsOptional()

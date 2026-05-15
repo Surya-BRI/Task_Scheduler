@@ -116,6 +116,15 @@ export function mapChatterPostDtoToFeedPost(dto: ChatterPostDto): ChatterFeedPos
   return base;
 }
 
+export type ChatterMentionUser = {
+  id: string;
+  fullName: string;
+};
+
+export function listChatterMentionUsers() {
+  return apiClient.get<ChatterMentionUser[]>('/chatter-posts/mention-users');
+}
+
 export function listChatterPosts(params?: { limit?: number; taskId?: string }) {
   const qs = new URLSearchParams();
   if (params?.limit != null) qs.set('limit', String(params.limit));

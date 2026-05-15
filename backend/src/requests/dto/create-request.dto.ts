@@ -1,8 +1,8 @@
-import { IsNotEmpty, IsOptional, IsString, IsDateString, IsUUID } from 'class-validator';
+import { IsNotEmpty, IsOptional, IsString, IsDateString } from 'class-validator';
 
 export class CreateLeaveRequestDto {
   @IsNotEmpty()
-  @IsUUID()
+  @IsString()
   userId: string; // The user the request is for (designerId in frontend)
 
   @IsNotEmpty()

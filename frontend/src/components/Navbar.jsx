@@ -125,7 +125,7 @@ export function Navbar({ currentDate, onCalendarChange, dateRangeText }) {
 
   // Logo click: HOD → design-list, Designer → their design list (my-work)
   const handleLogoClick = () => {
-    if (isDesigner && session.designerId) {
+    if (isDesigner) {
       router.push(`/design-list/my-work`)
     } else {
       router.push('/design-list')
@@ -134,9 +134,9 @@ export function Navbar({ currentDate, onCalendarChange, dateRangeText }) {
 
   // Scheduler icon behaviour differs by role
   const handleSchedulerClick = () => {
-    if (isDesigner && session?.designerId) {
-      // Designer → always their own dashboard
-      router.push(`/designer/${session.designerId}`)
+    if (isDesigner) {
+      const slug = session?.designerId || session?.id
+      if (slug) router.push(`/designer/${slug}`)
     } else {
       // HOD / guest → master scheduler
       router.push('/design-scheduler')
@@ -253,8 +253,9 @@ export function Navbar({ currentDate, onCalendarChange, dateRangeText }) {
             <button
               type="button"
               onClick={() => {
-                if (isDesigner && session?.designerId) {
-                  router.push(`/designer/${session.designerId}/team-activity`)
+                if (isDesigner) {
+                  const slug = session?.designerId || session?.id
+                  if (slug) router.push(`/designer/${slug}/team-activity`)
                   return
                 }
                 router.push('/team-activity')

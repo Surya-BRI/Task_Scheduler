@@ -13,7 +13,3 @@ export interface LoginResponse {
 export function loginApi(email: string, password: string): Promise<LoginResponse> {
   return apiClient.post<LoginResponse>('/auth/login', { email, password });
 }
-
-export function getMeApi(): Promise<LoginResponse['user']> {
-  return apiClient.get<LoginResponse['user']>('/auth/me');
-}

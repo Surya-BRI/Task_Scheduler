@@ -8,7 +8,6 @@ const HOUR_COLS = [
 const DAYS = ["Monday", "Tuesday", "Wednesday", "Thursday", "Friday", "Saturday", "Sunday"];
 // Normal hours: 0-8 (columns 0-7), Overtime: 8-12 (columns 8-11)
 const NORMAL_COL_COUNT = 8;
-const OVERTIME_COL_COUNT = 4;
 const TOTAL_COLS = HOUR_COLS.length; // 12
 
 const TASK_BG = {

@@ -65,10 +65,19 @@ export class JwtStrategy extends PassportStrategy(Strategy) {
    * Configured entirely through environment variables — no code changes needed
    * when the external site payload format changes.
    */
+  private readClaim(payload: Record<string, unknown>, field: string): string {
+    const value = payload[field];
+    if (value == null) return '';
+    if (typeof value === 'string' || typeof value === 'number' || typeof value === 'boolean') {
+      return String(value).trim();
+    }
+    return '';
+  }
+
   private normaliseExternalPayload(payload: Record<string, unknown>): JwtPayload {
-    const sub   = String(payload[this.subField]   ?? '').trim();
-    const email = String(payload[this.emailField] ?? '').trim();
-    const rawRole = String(payload[this.roleField] ?? '').trim().toUpperCase();
+    const sub = this.readClaim(payload, this.subField);
+    const email = this.readClaim(payload, this.emailField);
+    const rawRole = this.readClaim(payload, this.roleField).toUpperCase();
 
     if (!sub) {
       this.logger.warn('External JWT missing sub field; using email as sub');

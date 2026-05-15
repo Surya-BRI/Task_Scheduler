@@ -33,11 +33,22 @@ Create `backend/.env` and set at minimum:
 
 ### 2) Prepare Prisma + DB
 
+Greenfield (migrations):
+
 ```bash
 npm run prisma:generate
 npm run prisma:migrate
 npm run prisma:seed
 ```
+
+Existing ERP database — apply client, activity-log table, and ErpTS foreign keys (safe to re-run):
+
+```bash
+npm run prisma:setup
+npm run prisma:seed
+```
+
+You can also use **manual SQL** when attaching to an existing ERP database. Details and password-hash notes are in [backend/docs/DEVELOPMENT.md](backend/docs/DEVELOPMENT.md).
 
 ### 3) Configure frontend
 
@@ -67,15 +78,19 @@ npm run dev:frontend
 
 ## Root Scripts
 
-- `npm run dev`
-- `npm run dev:backend`
-- `npm run dev:frontend`
-- `npm run prisma:generate`
-- `npm run prisma:migrate`
-- `npm run prisma:seed`
-- `npm run build`
-- `npm run lint`
-- `npm run typecheck`
+| Script | Purpose |
+|--------|---------|
+| `npm run dev` | NestJS + Next.js in one terminal (`concurrently`) |
+| `npm run dev:backend` | NestJS watch mode |
+| `npm run dev:frontend` | Next.js dev server (port 5000) |
+| `npm run prisma:generate` | Generate Prisma client |
+| `npm run prisma:migrate` | Apply Prisma migrations |
+| `npm run prisma:seed` | Seed roles and demo users |
+| `npm run prisma:setup` | Generate client + ensure tables and foreign keys |
+| `npm run prisma:audit-schema` | Report ErpTS tables, FKs, and orphan rows |
+| `npm run build` | Build backend then frontend |
+| `npm run lint` | Lint both workspaces |
+| `npm run typecheck` | TypeScript check both workspaces |
 
 ## Prisma Notes (Important)
 
