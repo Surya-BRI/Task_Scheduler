@@ -1,8 +1,16 @@
 import { Injectable, Logger } from '@nestjs/common';
 import { PrismaService } from '../prisma/prisma.service';
+import { UsersService } from '../users/users.service';
 import { CreateChatterPostDto } from './dto/create-chatter-post.dto';
-import * as fs from 'fs';
-import * as path from 'path';
+
+const UUID_RE =
+  /^[0-9a-f]{8}-[0-9a-f]{4}-[1-5][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i;
+
+function optionalUuid(value?: string | null): string | null {
+  if (!value?.trim()) return null;
+  const trimmed = value.trim();
+  return UUID_RE.test(trimmed) ? trimmed : null;
+}
 
 export type ChatterPostDto = {
   id: string;
@@ -26,56 +34,77 @@ export type ChatterPostDto = {
 export class ChatterPostsService {
   private readonly logger = new Logger(ChatterPostsService.name);
 
-  constructor(private readonly prisma: PrismaService) {}
+  constructor(
+    private readonly prisma: PrismaService,
+    private readonly usersService: UsersService,
+  ) {}
+
+  async listMentionUsers() {
+    const users = await this.usersService.findAll();
+    return users.map((user) => ({
+      id: user.id,
+      fullName: user.fullName,
+    }));
+  }
 
   private mapRow(row: any): ChatterPostDto {
+    const createdAt = row.createdAt instanceof Date ? row.createdAt : new Date(row.createdAt);
+    const updatedAt = row.updatedAt instanceof Date ? row.updatedAt : new Date(row.updatedAt);
+    const editedAtRaw = row.editedAt;
+    const editedAt =
+      editedAtRaw instanceof Date
+        ? editedAtRaw.toISOString()
+        : editedAtRaw
+          ? new Date(editedAtRaw).toISOString()
+          : null;
+
     return {
-      id: row.id,
-      taskId: row.taskId,
-      authorId: row.authorId,
+      id: String(row.id),
+      taskId: row.taskId != null ? String(row.taskId) : null,
+      authorId: row.authorId != null ? String(row.authorId) : null,
       title: row.title,
       message: row.message,
-      postType: row.postType,
-      mentionUserId: row.mentionUserId,
-      priority: row.priority,
-      seenByCount: row.seenByCount,
-      attachmentCount: row._count?.attachments || 0,
-      isPinned: row.isPinned,
-      editedAt: null, // we don't have editedAt in our schema yet, return null
-      visibility: row.visibility,
-      createdAt: row.createdAt.toISOString(),
-      updatedAt: row.updatedAt.toISOString(),
+      postType: row.postType ?? null,
+      mentionUserId: row.mentionUserId != null ? String(row.mentionUserId) : null,
+      priority: row.priority ?? null,
+      seenByCount: Number(row.seenByCount ?? 0),
+      attachmentCount: Number(row.attachmentCount ?? row._count?.attachments ?? 0),
+      isPinned: Boolean(row.isPinned),
+      editedAt,
+      visibility: row.visibility ?? null,
+      createdAt: createdAt.toISOString(),
+      updatedAt: updatedAt.toISOString(),
     };
   }
 
   async findAll(limitParam?: string, taskIdFilter?: string): Promise<ChatterPostDto[]> {
     const limit = Math.min(1000, Math.max(1, Number.parseInt(limitParam ?? '500', 10) || 500));
-    
-    const where: any = {};
-    if (taskIdFilter?.trim()) {
-      where.taskId = taskIdFilter.trim();
-    }
+    const taskId = taskIdFilter?.trim() || null;
 
-    // @ts-ignore: IDE cache issue, the property exists and typecheck passes
-    const rows = await this.prisma.chatterPost.findMany({
-      where,
-      take: limit,
-      orderBy: [
-        { updatedAt: 'desc' },
-        { createdAt: 'desc' },
-      ],
-      include: {
-        _count: {
-          select: { attachments: true },
-        },
-      },
-    });
+    // Raw query: ERP rows may have NULL authorId; Prisma client rejects those until regenerated.
+    const rows = taskId
+      ? await this.prisma.$queryRaw<
+          Array<Record<string, unknown>>
+        >`
+          SELECT TOP (${limit})
+            id, taskId, authorId, title, message, postType, mentionUserId, priority,
+            seenByCount, attachmentCount, isPinned, editedAt, visibility, createdAt, updatedAt
+          FROM ErpTSChatterPost
+          WHERE taskId = ${taskId}
+          ORDER BY updatedAt DESC, createdAt DESC`
+      : await this.prisma.$queryRaw<
+          Array<Record<string, unknown>>
+        >`
+          SELECT TOP (${limit})
+            id, taskId, authorId, title, message, postType, mentionUserId, priority,
+            seenByCount, attachmentCount, isPinned, editedAt, visibility, createdAt, updatedAt
+          FROM ErpTSChatterPost
+          ORDER BY updatedAt DESC, createdAt DESC`;
 
-    return rows.map((r: any) => this.mapRow(r));
+    return rows.map((r) => this.mapRow(r));
   }
 
   async create(dto: CreateChatterPostDto, authorId: string, files?: Express.Multer.File[]): Promise<ChatterPostDto> {
-    // @ts-ignore: IDE cache issue, the property exists and typecheck passes
     const newPost = await this.prisma.chatterPost.create({
       data: {
         title: dto.title,
@@ -85,7 +114,7 @@ export class ChatterPostsService {
         visibility: dto.visibility || null,
         taskId: dto.taskId || null,
         authorId: authorId,
-        mentionUserId: dto.mentionUserId || null,
+        mentionUserId: optionalUuid(dto.mentionUserId),
         attachments: files && files.length > 0 ? {
           create: files.map(f => ({
             fileName: f.originalname,
@@ -105,7 +134,6 @@ export class ChatterPostsService {
 
     // Also log this as an activity
     try {
-      // @ts-ignore: IDE cache issue, the property exists and typecheck passes
       await this.prisma.activityLog.create({
         data: {
           action: 'CREATED_CHATTER_POST',

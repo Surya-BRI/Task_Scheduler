@@ -3,7 +3,12 @@
 import { useMemo, useState, useEffect } from "react";
 import { CalendarDays, Link2, MessageCircle, MessageSquareText, PlusSquare, Search, ThumbsUp, X } from "lucide-react";
 import { Navbar } from "@/components/Navbar";
-import { createChatterPost, listChatterPosts, mapChatterPostDtoToFeedPost } from "@/features/chatter/services/chatter-posts.api";
+import {
+  createChatterPost,
+  listChatterMentionUsers,
+  listChatterPosts,
+  mapChatterPostDtoToFeedPost,
+} from "@/features/chatter/services/chatter-posts.api";
 import {
   createLinkAttachment,
   isValidExternalUrl,
@@ -203,6 +208,8 @@ function ChatterPostAttachments({ post }) {
 function CreatePostModal({ isOpen, onClose, onSubmit, isSubmitting }) {
   const [title, setTitle] = useState("");
   const [mention, setMention] = useState("");
+  const [mentionUserId, setMentionUserId] = useState(null);
+  const [mentionUsers, setMentionUsers] = useState([]);
   const [message, setMessage] = useState("");
   const [priority, setPriority] = useState("Medium");
   const [postType, setPostType] = useState("Posts");
@@ -211,17 +218,18 @@ function CreatePostModal({ isOpen, onClose, onSubmit, isSubmitting }) {
   const [linkInput, setLinkInput] = useState("");
   const [showMentions, setShowMentions] = useState(false);
   const [errors, setErrors] = useState({});
-  const mentionList = ["@Aneesh Raghu", "@Delbin Delbin", "@Anju Krishna", "@Fahad Quazi", "@Rahul Menon"];
 
   const handleMentionChange = (e) => {
     const val = e.target.value;
     setMention(val);
+    setMentionUserId(null);
     if (val.includes("@")) setShowMentions(true);
     else setShowMentions(false);
   };
 
-  const selectMention = (m) => {
-    setMention(m);
+  const selectMention = (user) => {
+    setMention(`@${user.fullName}`);
+    setMentionUserId(user.id);
     setShowMentions(false);
   };
 
@@ -266,18 +274,30 @@ function CreatePostModal({ isOpen, onClose, onSubmit, isSubmitting }) {
   };
 
   useEffect(() => {
-    if (isOpen) {
-      setTitle("");
-      setMention("");
-      setMessage("");
-      setPriority("Medium");
-      setPostType("Posts");
-      setFileAttachments([]);
-      setLinkAttachments([]);
-      setLinkInput("");
-      setShowMentions(false);
-      setErrors({});
-    }
+    if (!isOpen) return;
+    setTitle("");
+    setMention("");
+    setMentionUserId(null);
+    setMessage("");
+    setPriority("Medium");
+    setPostType("Posts");
+    setFileAttachments([]);
+    setLinkAttachments([]);
+    setLinkInput("");
+    setShowMentions(false);
+    setErrors({});
+
+    let cancelled = false;
+    listChatterMentionUsers()
+      .then((users) => {
+        if (!cancelled && Array.isArray(users)) setMentionUsers(users);
+      })
+      .catch(() => {
+        if (!cancelled) setMentionUsers([]);
+      });
+    return () => {
+      cancelled = true;
+    };
   }, [isOpen]);
 
   if (!isOpen) return null;
@@ -291,7 +311,16 @@ function CreatePostModal({ isOpen, onClose, onSubmit, isSubmitting }) {
       return;
     }
     setErrors({});
-    onSubmit({ title, mention, message, priority, postType, fileAttachments, linkAttachments });
+    onSubmit({
+      title,
+      mention,
+      mentionUserId,
+      message,
+      priority,
+      postType,
+      fileAttachments,
+      linkAttachments,
+    });
   };
 
   return (
@@ -350,23 +379,25 @@ function CreatePostModal({ isOpen, onClose, onSubmit, isSubmitting }) {
                 placeholder="@username"
                 className="w-full rounded-lg border border-slate-300 bg-white px-3 py-2 text-sm text-slate-900 outline-none focus:border-blue-500 focus:ring-2 focus:ring-blue-500/25"
               />
-              {showMentions && (
+              {showMentions && mentionUsers.length > 0 ? (
                 <ul className="ui-popover-panel absolute z-20 mt-1 max-h-36 w-full overflow-y-auto">
-                  {mentionList
-                    .filter((m) => m.toLowerCase().includes(mention.toLowerCase()))
-                    .map((m) => (
-                      <li key={m}>
+                  {mentionUsers
+                    .filter((user) =>
+                      `@${user.fullName}`.toLowerCase().includes(mention.toLowerCase()),
+                    )
+                    .map((user) => (
+                      <li key={user.id}>
                         <button
                           type="button"
-                          onClick={() => selectMention(m)}
+                          onClick={() => selectMention(user)}
                           className="w-full px-3 py-2 text-left text-sm text-slate-700 hover:bg-slate-50"
                         >
-                          {m}
+                          @{user.fullName}
                         </button>
                       </li>
                     ))}
                 </ul>
-              )}
+              ) : null}
             </div>
           </div>
 
@@ -830,11 +861,16 @@ export function ChatterScreen() {
         message: postData.message,
         postType: postData.postType,
         priority: postData.priority,
-        mentionUserId: postData.mention?.replace("@", "").trim() || null,
+        mentionUserId: postData.mentionUserId || null,
         // authorId: ... (should be from auth context if available)
       }, postData.fileAttachments);
 
       const newFeedPost = mapChatterPostDtoToFeedPost(createdDto);
+      if (postData.mention?.trim()) {
+        newFeedPost.mention = postData.mention.trim().startsWith("@")
+          ? postData.mention.trim()
+          : `@${postData.mention.trim()}`;
+      }
       setPosts((prev) => [newFeedPost, ...prev]);
       setIsCreatePostOpen(false);
       setActiveTab("posts");

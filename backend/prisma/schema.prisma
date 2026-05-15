@@ -17,6 +17,8 @@ model Role {
   users       User[]
   createdAt   DateTime @default(now())
   updatedAt   DateTime @updatedAt
+
+  @@map("ErpTSRole")
 }
 
 model Department {
@@ -25,6 +27,8 @@ model Department {
   users     User[]
   createdAt DateTime @default(now())
   updatedAt DateTime @updatedAt
+
+  @@map("ErpTSDepartment")
 }
 
 model User {
@@ -44,6 +48,8 @@ model User {
   notifications Notification[]
   createdAt    DateTime      @default(now())
   updatedAt    DateTime      @updatedAt
+
+  @@map("ErpTSUser")
 }
 
 // ---------------------------------------------------------
@@ -65,6 +71,7 @@ model Project {
   updatedAt    DateTime @updatedAt
 
   @@index([createdById])
+  @@map("ErpTSProject")
 }
 
 // ---------------------------------------------------------
@@ -91,6 +98,7 @@ model Task {
 
   @@index([projectId])
   @@index([assigneeId])
+  @@map("ErpTSTask")
 }
 
 // ---------------------------------------------------------
@@ -109,8 +117,8 @@ model ChatterPost {
   taskId          String?
   task            Task?            @relation(fields: [taskId], references: [id], onDelete: NoAction, onUpdate: NoAction)
   
-  authorId        String
-  author          User             @relation("PostAuthor", fields: [authorId], references: [id], onDelete: NoAction, onUpdate: NoAction)
+  authorId        String?
+  author          User?            @relation("PostAuthor", fields: [authorId], references: [id], onDelete: NoAction, onUpdate: NoAction)
   mentionUserId   String?          // Can be linked to User table later
   
   attachments     Attachment[]
@@ -118,6 +126,8 @@ model ChatterPost {
   
   createdAt       DateTime         @default(now())
   updatedAt       DateTime         @updatedAt
+
+  @@map("ErpTSChatterPost")
 }
 
 model Attachment {
@@ -132,6 +142,8 @@ model Attachment {
   
   uploadedById    String?
   createdAt       DateTime     @default(now())
+
+  @@map("ErpTSChatterPostAttachment")
 }
 
 model LinkAttachment {
@@ -144,6 +156,8 @@ model LinkAttachment {
   chatterPost     ChatterPost @relation(fields: [chatterPostId], references: [id], onDelete: Cascade)
   
   createdAt       DateTime    @default(now())
+
+  @@map("ErpTSLinkAttachment")
 }
 
 // ---------------------------------------------------------
@@ -161,6 +175,8 @@ model ActivityLog {
   task            Task?    @relation(fields: [taskId], references: [id], onDelete: NoAction, onUpdate: NoAction)
   
   createdAt       DateTime @default(now())
+
+  @@map("ErpTSActivityLog")
 }
 
 // ---------------------------------------------------------
@@ -178,6 +194,8 @@ model LeaveRequest {
   
   createdAt       DateTime @default(now())
   updatedAt       DateTime @updatedAt
+
+  @@map("ErpTSLeaveRequest")
 }
 
 // ---------------------------------------------------------
@@ -193,4 +211,6 @@ model Notification {
   linkUrl         String?
   
   createdAt       DateTime @default(now())
+
+  @@map("ErpTSNotification")
 }

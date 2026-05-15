@@ -1,13 +1,13 @@
-'use client';
-import { Suspense } from 'react';
-import { TaskDetailsPage } from '@/views/TaskDetailsPage';
-function TaskDetailsFallback() {
-    return (<div className="flex min-h-[50vh] items-center justify-center bg-slate-50 text-sm text-slate-600">
-      Loading task…
-    </div>);
-}
-export default function TaskDetailsRoutePage() {
-    return (<Suspense fallback={<TaskDetailsFallback />}>
-      <TaskDetailsPage />
-    </Suspense>);
+import { redirect } from 'next/navigation';
+
+export default async function LegacyDesignListTaskRedirect({ params, searchParams }) {
+  const { taskId } = await params;
+  const query = await searchParams;
+  const qs = new URLSearchParams(
+    Object.fromEntries(
+      Object.entries(query ?? {}).filter(([, v]) => v != null && v !== ''),
+    ),
+  ).toString();
+  const suffix = qs ? `?${qs}` : '';
+  redirect(`/project-task-creation/${encodeURIComponent(String(taskId))}${suffix}`);
 }

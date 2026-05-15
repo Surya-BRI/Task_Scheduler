@@ -23,6 +23,7 @@
     "prisma:generate": "prisma generate",
     "prisma:migrate": "prisma migrate dev",
     "prisma:seed": "tsx prisma/seed.ts",
+    "prisma:ensure-tables": "tsx prisma/ensure-activity-log-table.ts",
     "typecheck": "tsc --noEmit"
   },
   "dependencies": {
@@ -37,7 +38,6 @@
     "class-transformer": "^0.5.1",
     "class-validator": "^0.15.1",
     "compression": "^1.8.1",
-    "fast-check": "^3.23.2",
     "helmet": "^8.1.0",
     "joi": "^18.1.2",
     "multer": "^2.1.1",

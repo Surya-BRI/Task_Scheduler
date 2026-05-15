@@ -1,5 +1,5 @@
 "use client";
-/* eslint-disable react-hooks/set-state-in-effect */
+
 import { useState, useEffect, useRef, useMemo } from "react";
 import { Search, Plus, PauseCircle, AlertTriangle } from "lucide-react";
 import { useRouter } from "next/navigation";

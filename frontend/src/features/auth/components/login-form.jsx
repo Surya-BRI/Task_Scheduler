@@ -4,6 +4,7 @@ import { useState } from 'react';
 import { useRouter } from 'next/navigation';
 import { Eye, EyeOff, Lock, Mail, ShieldCheck } from 'lucide-react';
 import { getHomeRoute } from '@/lib/mock-auth';
+import { buildSessionForUser } from '@/lib/designers';
 import { loginApi } from '@/features/auth/services/auth.api';
 import { setAccessToken } from '@/lib/auth-token';
 
@@ -34,13 +35,7 @@ export function LoginForm() {
       // Persist JWT for API calls
       setAccessToken(response.accessToken);
       // Persist session profile to localStorage so mock-auth helpers still work
-      const session = {
-        id: response.user.id,
-        email: response.user.email,
-        name: response.user.fullName,
-        role: response.user.role, // 'HOD' or 'DESIGNER'
-        initials: response.user.fullName.split(' ').map((n) => n[0]).join('').slice(0, 2).toUpperCase(),
-      };
+      const session = buildSessionForUser(response.user);
       if (typeof window !== 'undefined') {
         localStorage.setItem('br_session', JSON.stringify(session));
       }

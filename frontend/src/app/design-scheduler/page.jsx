@@ -17,7 +17,7 @@ export default function DesignSchedulerPage() {
     }
     if (session.role === 'DESIGNER') {
       // Designers land on their own dashboard instead
-      router.replace(`/designer/${session.designerId}`)
+      router.replace(`/designer/${session.designerId || session.id}`)
       return
     }
     setAllowed(true)

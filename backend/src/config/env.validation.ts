@@ -42,7 +42,7 @@ export const envValidationSchema = Joi.object({
   /** dbo table name only — bracketed as [dbo].[name] in SQL */
   ERP_CHATTER_POST_TABLE: Joi.string().max(128).pattern(/^[\w-]+$/).optional(),
   /** Full FROM object (e.g. `[MyDb].[dbo].[TSChatterPost]`). Disallows SQL metacharacters. */
-  ERP_CHATTER_POST_SQL_OBJECT: Joi.string().max(280).pattern(/^[\s\[\]a-zA-Z0-9_.-]*$/).optional(),
+  ERP_CHATTER_POST_SQL_OBJECT: Joi.string().max(280).pattern(/^[\s[\]a-zA-Z0-9_.-]*$/).optional(),
   // ─── Authentication mode ─────────────────────────────────────────────────────
   /** 'demo' = internal JWT (default). 'external' = validate tokens from ERP site. */
   AUTH_MODE: Joi.string().valid('demo', 'external').default('demo'),

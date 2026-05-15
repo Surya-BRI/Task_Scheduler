@@ -3,7 +3,7 @@
 import { useState, useEffect } from "react";
 import { useRouter } from "next/navigation";
 import { Navbar } from "@/components/Navbar";
-import { X, Calendar as CalendarIcon, CheckCircle } from "lucide-react";
+import { X, Calendar as CalendarIcon } from "lucide-react";
 import { formatDate } from "@/lib/utils";
 import { fetchLeaveRequests, createLeaveRequest, updateLeaveRequestStatus } from "@/features/requests/services/requests.api";
 
@@ -24,7 +24,6 @@ export default function LeavePlannerClient({ designer }) {
   const [isModalOpen, setIsModalOpen] = useState(false);
   const [isHODModalOpen, setIsHODModalOpen] = useState(false);
   const [selectedLeave, setSelectedLeave] = useState(null);
-  const [selectedDate, setSelectedDate] = useState("");
   const [isHOD, setIsHOD] = useState(false);
 
   useEffect(() => {
@@ -42,8 +41,11 @@ export default function LeavePlannerClient({ designer }) {
   // Load leaves from API on mount
   useEffect(() => {
     fetchLeaveRequests(designer.id).then(res => {
-      setLeaves(res.data);
-    }).catch(console.error);
+      setLeaves(res || []);
+    }).catch(e => {
+      console.error(e);
+      setLeaves([]);
+    });
   }, [designer.id]);
 
   const handleDayClick = (monthIndex, day) => {
@@ -71,7 +73,6 @@ export default function LeavePlannerClient({ designer }) {
           fromDate: dateStr,
           toDate: dateStr
         });
-        setSelectedDate(dateStr);
         setIsModalOpen(true);
       }
       return;
@@ -82,7 +83,6 @@ export default function LeavePlannerClient({ designer }) {
       fromDate: dateStr,
       toDate: dateStr
     });
-    setSelectedDate(dateStr);
     setIsModalOpen(true);
   };
 
@@ -117,7 +117,7 @@ export default function LeavePlannerClient({ designer }) {
         startDate: formData.fromDate,
         endDate: formData.toDate
       });
-      setLeaves([...leaves, res.data]);
+      setLeaves([...leaves, res]);
       setIsModalOpen(false);
     } catch (error) {
       console.error(error);
@@ -127,6 +127,8 @@ export default function LeavePlannerClient({ designer }) {
 
   const getLeaveStatusForDate = (dateStr) => {
     const targetTime = new Date(dateStr).getTime();
+    if (!Array.isArray(leaves)) return null;
+
     for (const leave of leaves) {
       const fromTime = new Date(leave.fromDate).getTime();
       const toTime = new Date(leave.toDate).getTime();

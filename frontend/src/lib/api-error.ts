@@ -20,7 +20,7 @@ export function parseApiErrorMessage(body: string, status?: number): string {
     const msg = data.message;
     if (typeof msg === 'string') {
       if (msg === 'Internal server error' && status === 500) {
-        return 'The server encountered an error. Check that the API database is configured and demo users are seeded.';
+        return 'The server encountered an error. Ensure the backend is running, the database is reachable, and required tables exist (run npm run prisma:ensure-tables --workspace backend).';
       }
       if (msg === 'Invalid credentials' || msg.toLowerCase().includes('unauthorized')) {
         return 'Invalid email or password.';

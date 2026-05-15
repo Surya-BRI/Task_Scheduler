@@ -18,8 +18,10 @@ async function bootstrap() {
   app.setGlobalPrefix(prefix);
   app.use(helmet());
   app.use(compression());
+  const isDev = configService.get<string>('app.nodeEnv') !== 'production';
+  const corsOriginFn = (_o: string | undefined, cb: (e: Error | null, ok?: boolean) => void): void => cb(null, true);
   app.enableCors({
-    origin: allowedOrigins,
+    origin: isDev ? corsOriginFn : allowedOrigins,
     credentials: true,
   });
   app.useGlobalPipes(
