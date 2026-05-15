@@ -1,7 +1,8 @@
-import { Body, Controller, Get, Post, Query, UploadedFiles, UseGuards, UseInterceptors } from '@nestjs/common';
+import { Body, Controller, Get, Param, Post, Query, UploadedFiles, UseGuards, UseInterceptors } from '@nestjs/common';
 import { FilesInterceptor } from '@nestjs/platform-express';
 import { diskStorage } from 'multer';
 import { extname } from 'path';
+import { CreateChatterCommentDto } from './dto/create-chatter-comment.dto';
 import { CreateChatterPostDto } from './dto/create-chatter-post.dto';
 import { ChatterPostsService } from './chatter-posts.service';
 import { JwtAuthGuard } from '../common/guards/jwt-auth.guard';
@@ -20,6 +21,20 @@ export class ChatterPostsController {
   @Get()
   findAll(@Query('limit') limit?: string, @Query('taskId') taskId?: string) {
     return this.chatterPostsService.findAll(limit, taskId);
+  }
+
+  @Get(':postId/comments')
+  findComments(@Param('postId') postId: string) {
+    return this.chatterPostsService.findCommentsForPost(postId);
+  }
+
+  @Post(':postId/comments')
+  createComment(
+    @Param('postId') postId: string,
+    @Body() dto: CreateChatterCommentDto,
+    @CurrentUser() user: { sub: string },
+  ) {
+    return this.chatterPostsService.createComment(postId, dto, user.sub);
   }
 
   @Post()
