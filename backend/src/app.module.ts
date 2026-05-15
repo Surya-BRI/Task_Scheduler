@@ -16,6 +16,8 @@ import configuration from './config/configuration';
 import { envValidationSchema } from './config/env.validation';
 import { resolveEnvFilePaths } from './config/resolve-env-file';
 import { ActivitiesModule } from './activities/activities.module';
+import { RequestsModule } from './requests/requests.module';
+import { DashboardModule } from './dashboard/dashboard.module';
 
 @Module({
   imports: [
@@ -38,6 +40,8 @@ import { ActivitiesModule } from './activities/activities.module';
     SchedulerAssignmentsModule,
     ChatterPostsModule,
     ActivitiesModule,
+    RequestsModule,
+    DashboardModule,
   ],
 })
 export class AppModule {}
