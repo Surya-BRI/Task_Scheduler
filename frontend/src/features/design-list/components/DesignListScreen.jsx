@@ -10,9 +10,10 @@ import {
   GalleryVerticalEnd,
   History,
   LayoutGrid,
+  Link2,
   List,
   Search,
-  UserRoundPlus,
+  UserRound,
   Users,
 } from "lucide-react";
 import { Navbar } from "@/components/Navbar";
@@ -26,9 +27,9 @@ const getStatusColor = (status) => {
     case "Completed":
       return "bg-green-100 text-green-700 border-green-200";
     case "Pending":
-      return "bg-yellow-100 text-yellow-700 border-yellow-200";
+      return "bg-amber-50 text-amber-700 border-amber-200";
     case "Revision":
-      return "bg-orange-100 text-orange-700 border-orange-200";
+      return "bg-red-100 text-red-700 border-red-200";
     case "Approved":
       return "bg-purple-100 text-purple-700 border-purple-200";
     default:
@@ -256,112 +257,139 @@ const Toolbar = ({ viewMode, setViewMode, filters, setFilters, salesPersons }) =
   );
 };
 
+const TABLE_TH =
+  "px-2 py-1.5 text-left text-[9px] font-semibold uppercase tracking-wider text-slate-600 whitespace-nowrap";
+
+const TABLE_TD = "px-2 py-1.5 align-middle text-[11px]";
+
 const Table = ({ data }) => {
   const router = useRouter();
 
   return (
-    <div className="flex min-h-0 flex-1 flex-col px-4 pb-6 sm:px-6">
-      <div className="ui-surface h-full overflow-auto">
-        <table className="w-full text-xs text-left leading-tight">
-          <thead className="ui-table-header sticky top-0 z-10 border-b border-slate-200">
-            <tr>
-              <th className="px-2 py-1.5">OP No</th>
-              <th className="px-2 py-1.5">Project No</th>
-              <th className="px-2 py-1.5">Design Type</th>
-              <th className="px-2 py-1.5">Business Unit</th>
-              <th className="px-2 py-1.5">Name</th>
-              <th className="px-2 py-1.5">Status</th>
-              <th className="px-2 py-1.5">Sales Person</th>
-              <th className="px-2 py-1.5">Created</th>
-              <th className="px-2 py-1.5">Deadline</th>
-              <th className="px-2 py-1.5">Aging</th>
-              <th className="px-2 py-1.5 text-center">Actions</th>
-            </tr>
-          </thead>
+    <div className="flex min-h-0 flex-1 flex-col px-4 pb-4 sm:px-6">
+      <div className="ui-surface flex min-h-0 flex-1 flex-col overflow-hidden">
+        <div className="min-h-0 flex-1 overflow-auto">
+          <table className="w-full min-w-[1000px] border-collapse text-left text-[11px] text-slate-700">
+            <thead className="sticky top-0 z-10 border-b border-slate-200 bg-slate-100">
+              <tr>
+                <th className={TABLE_TH}>OP No</th>
+                <th className={TABLE_TH}>Project No</th>
+                <th className={TABLE_TH}>Design Type</th>
+                <th className={TABLE_TH}>Business Unit</th>
+                <th className={`${TABLE_TH} min-w-[220px]`}>Name</th>
+                <th className={TABLE_TH}>Status</th>
+                <th className={TABLE_TH}>Sales Person</th>
+                <th className={TABLE_TH}>Created</th>
+                <th className={TABLE_TH}>Deadline</th>
+                <th className={`${TABLE_TH} text-right`}>Aging</th>
+                <th className={`${TABLE_TH} text-center`}>Actions</th>
+              </tr>
+            </thead>
           <tbody className="divide-y divide-slate-100">
             {data.map((row, index) => (
               <tr
                 key={`${row?.id || "unknown"}-${row?.orderNo || row?.opNo || "na"}-${row?.createdAt || row?.created || "date"}-${index}`}
-                className="hover:bg-slate-50 transition-colors"
+                className={`transition-colors hover:bg-blue-50/40 ${
+                  index % 2 === 0 ? "bg-white" : "bg-slate-50/60"
+                }`}
               >
-                <td className="px-2 py-1">
+                <td className={TABLE_TD}>
                   <button
                     type="button"
                     onClick={() => router.push(recordDetailPath(row.id))}
-                    className="text-left text-blue-600 cursor-pointer hover:underline font-medium"
+                    className="text-left text-xs font-medium text-blue-600 hover:text-blue-700 hover:underline"
                   >
-                    {row.opNo}
+                    {row.opNo || "—"}
                   </button>
                 </td>
-                <td className="px-2 py-1">
+                <td className={TABLE_TD}>
                   <button
                     type="button"
                     onClick={() => router.push(recordDetailPath(row.id))}
-                    className="text-left text-blue-600 cursor-pointer hover:underline font-medium"
+                    className="text-left text-xs font-medium text-blue-600 hover:text-blue-700 hover:underline"
                   >
-                    {row.projectNo}
+                    {row.projectNo || "—"}
                   </button>
                 </td>
-                <td className="px-2 py-1 text-slate-700">{row.designType}</td>
-                <td className="px-2 py-1 text-slate-700">{row.businessUnit}</td>
-                <td className="px-2 py-1">
+                <td className={`${TABLE_TD} text-slate-700`}>{row.designType || "—"}</td>
+                <td
+                  className={`${TABLE_TD} max-w-[140px] truncate text-slate-700`}
+                  title={row.businessUnit}
+                >
+                  {row.businessUnit || "—"}
+                </td>
+                <td className={`${TABLE_TD} max-w-[280px]`}>
                   <button
                     type="button"
                     onClick={() => router.push(recordDetailPath(row.id))}
-                    className="text-left text-slate-900 font-medium whitespace-nowrap hover:text-blue-600 hover:underline"
+                    className="block max-w-full truncate text-left text-xs font-semibold text-slate-900 hover:text-blue-600 hover:underline"
+                    title={row.name}
                   >
-                    {row.name}
+                    {row.name || "—"}
                   </button>
                 </td>
-                <td className="px-2 py-1">
+                <td className={TABLE_TD}>
                   <span
-                    className={`px-1.5 py-0.5 rounded-full text-[10px] font-medium leading-none inline-block ${getStatusColor(row.status)}`}
+                    className={`inline-flex items-center rounded-full border px-1.5 py-px text-[9px] font-semibold leading-tight ${getStatusColor(row.status)}`}
                   >
-                    {row.status}
+                    {row.status || "Pending"}
                   </span>
                 </td>
-                <td className="px-2 py-1 text-slate-700">{row.salesPerson}</td>
-                <td className="px-2 py-1 text-slate-500 whitespace-nowrap">{row.created}</td>
-                <td className="px-2 py-1 text-slate-500 whitespace-nowrap">{row.deadline}</td>
+                <td className={`${TABLE_TD} text-slate-700`}>{row.salesPerson || "Unassigned"}</td>
+                <td className={`${TABLE_TD} whitespace-nowrap text-slate-600 tabular-nums`}>
+                  {row.created || "—"}
+                </td>
+                <td className={`${TABLE_TD} whitespace-nowrap text-slate-600 tabular-nums`}>
+                  {row.deadline || "—"}
+                </td>
                 <td
-                  className={`px-2 py-1 font-medium whitespace-nowrap ${
-                    row.agingDays > 20 ? "text-red-600" : "text-slate-500"
+                  className={`${TABLE_TD} whitespace-nowrap text-right font-semibold tabular-nums ${
+                    row.agingDays > 20 ? "text-red-600" : "text-slate-600"
                   }`}
                 >
-                  {row.agingDays} d
+                  {row.agingDays != null ? `${row.agingDays} d` : "—"}
                 </td>
-                <td className="px-2 py-1">
+                <td className={TABLE_TD}>
                   <div className="flex items-center justify-center gap-1.5 text-slate-400">
                     <button
                       type="button"
                       onClick={() => router.push(recordDetailPath(row.id))}
-                      className="rounded p-0.5 hover:text-blue-600 transition-colors"
-                      title="Details"
+                      className="rounded p-0.5 transition-colors hover:bg-slate-100 hover:text-blue-600"
+                      title="View details"
                     >
-                      <Eye size={12} />
-                    </button>
-                    <button
-                      type="button"
-                      onClick={() => router.push(recordTabPath(row.id, "activity"))}
-                      className="rounded p-0.5 hover:text-emerald-600 transition-colors"
-                      title="Activity"
-                    >
-                      <History size={12} />
+                      <Eye className="h-3.5 w-3.5" />
                     </button>
                     <button
                       type="button"
                       onClick={() => router.push(recordTabPath(row.id, "chatter"))}
-                      className="rounded p-0.5 hover:text-violet-600 transition-colors"
-                      title="Chatter"
+                      className="rounded p-0.5 transition-colors hover:bg-slate-100 hover:text-slate-600"
+                      title="Links & chatter"
                     >
-                      <UserRoundPlus size={12} />
+                      <Link2 className="h-3.5 w-3.5" />
+                    </button>
+                    <button
+                      type="button"
+                      onClick={() => router.push(recordTabPath(row.id, "activity"))}
+                      className="rounded p-0.5 transition-colors hover:bg-slate-100 hover:text-emerald-600"
+                      title="Activity history"
+                    >
+                      <History className="h-3.5 w-3.5" />
+                    </button>
+                    <button
+                      type="button"
+                      onClick={() => router.push(recordDetailPath(row.id))}
+                      className="rounded p-0.5 transition-colors hover:bg-slate-100 hover:text-violet-600"
+                      title="Assignee"
+                    >
+                      <UserRound className="h-3.5 w-3.5" />
                     </button>
                   </div>
                 </td>
               </tr>
             ))}
           </tbody>
-        </table>
+          </table>
+        </div>
       </div>
     </div>
   );
@@ -520,9 +548,9 @@ export function DesignListScreen() {
           />
         </div>
         {viewMode === "list" ? <Table data={designs} /> : <Board data={designs} />}
-        <div className="shrink-0 flex items-center justify-between px-4 pb-4 pt-2 sm:px-6 text-xs text-slate-600">
-          <span>
-            Showing {total === 0 ? 0 : (currentPage - 1) * PAGE_SIZE + 1}-
+        <div className="shrink-0 flex items-center justify-between border-t border-slate-200 bg-white px-4 py-2.5 sm:px-6 text-xs text-slate-600">
+          <span className="font-medium">
+            Showing {total === 0 ? 0 : (currentPage - 1) * PAGE_SIZE + 1}–
             {Math.min(currentPage * PAGE_SIZE, total)} of {total}
           </span>
           <div className="flex items-center gap-2">
@@ -530,18 +558,18 @@ export function DesignListScreen() {
               type="button"
               onClick={() => setPage((p) => Math.max(1, p - 1))}
               disabled={currentPage === 1}
-              className="px-2.5 py-1 border border-slate-300 rounded disabled:opacity-50 disabled:cursor-not-allowed hover:bg-slate-50"
+              className="rounded-md border border-slate-300 px-2.5 py-1 text-xs font-medium disabled:cursor-not-allowed disabled:opacity-50 hover:bg-slate-50"
             >
               Prev
             </button>
-            <span>
+            <span className="min-w-[7rem] text-center text-xs font-medium text-slate-700">
               Page {currentPage} / {totalPages}
             </span>
             <button
               type="button"
               onClick={() => setPage((p) => Math.min(totalPages, p + 1))}
               disabled={currentPage === totalPages}
-              className="px-2.5 py-1 border border-slate-300 rounded disabled:opacity-50 disabled:cursor-not-allowed hover:bg-slate-50"
+              className="rounded-md border border-slate-300 px-2.5 py-1 text-xs font-medium disabled:cursor-not-allowed disabled:opacity-50 hover:bg-slate-50"
             >
               Next
             </button>
