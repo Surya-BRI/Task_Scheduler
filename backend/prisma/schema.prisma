@@ -36,10 +36,14 @@ model User {
   role         Role        @relation(fields: [roleId], references: [id])
   departmentId String?
   department   Department? @relation(fields: [departmentId], references: [id])
-  tasks        Task[]      @relation("TaskAssignee")
-  projects     Project[]   @relation("ProjectCreator")
-  createdAt    DateTime    @default(now())
-  updatedAt    DateTime    @updatedAt
+  tasks        Task[]        @relation("TaskAssignee")
+  projects     Project[]     @relation("ProjectCreator")
+  chatterPosts ChatterPost[] @relation("PostAuthor")
+  activities   ActivityLog[]
+  leaveRequests LeaveRequest[]
+  notifications Notification[]
+  createdAt    DateTime      @default(now())
+  updatedAt    DateTime      @updatedAt
 }
 
 // ---------------------------------------------------------
@@ -77,12 +81,116 @@ model Task {
   project     Project   @relation(fields: [projectId], references: [id])
   assigneeId  String?
   assignee    User?     @relation("TaskAssignee", fields: [assigneeId], references: [id], onDelete: NoAction, onUpdate: NoAction)
-  dueDate     DateTime?
-  startedAt   DateTime?
-  completedAt DateTime?
-  createdAt   DateTime  @default(now())
-  updatedAt   DateTime  @updatedAt
+  dueDate      DateTime?
+  startedAt    DateTime?
+  completedAt  DateTime?
+  chatterPosts ChatterPost[]
+  activityLogs ActivityLog[]
+  createdAt    DateTime      @default(now())
+  updatedAt    DateTime      @updatedAt
 
   @@index([projectId])
   @@index([assigneeId])
+}
+
+// ---------------------------------------------------------
+// CHATTER & ATTACHMENTS
+// ---------------------------------------------------------
+model ChatterPost {
+  id              String           @id @default(uuid())
+  title           String
+  message         String
+  postType        String?          // e.g., "General", "Update", "Issue"
+  priority        String?
+  visibility      String?
+  seenByCount     Int              @default(0)
+  isPinned        Boolean          @default(false)
+  
+  taskId          String?
+  task            Task?            @relation(fields: [taskId], references: [id], onDelete: NoAction, onUpdate: NoAction)
+  
+  authorId        String
+  author          User             @relation("PostAuthor", fields: [authorId], references: [id], onDelete: NoAction, onUpdate: NoAction)
+  mentionUserId   String?          // Can be linked to User table later
+  
+  attachments     Attachment[]
+  links           LinkAttachment[]
+  
+  createdAt       DateTime         @default(now())
+  updatedAt       DateTime         @updatedAt
+}
+
+model Attachment {
+  id              String       @id @default(uuid())
+  fileName        String
+  filePath        String
+  mimeType        String?
+  sizeBytes       Int?
+  
+  chatterPostId   String?
+  chatterPost     ChatterPost? @relation(fields: [chatterPostId], references: [id], onDelete: Cascade)
+  
+  uploadedById    String?
+  createdAt       DateTime     @default(now())
+}
+
+model LinkAttachment {
+  id              String      @id @default(uuid())
+  url             String
+  platform        String?     // e.g., "OneDrive", "Google Drive"
+  displayName     String?
+  
+  chatterPostId   String
+  chatterPost     ChatterPost @relation(fields: [chatterPostId], references: [id], onDelete: Cascade)
+  
+  createdAt       DateTime    @default(now())
+}
+
+// ---------------------------------------------------------
+// TEAM ACTIVITY & LOGS
+// ---------------------------------------------------------
+model ActivityLog {
+  id              String   @id @default(uuid())
+  action          String   // e.g., "CREATED_TASK", "STATUS_CHANGED"
+  details         String?  // JSON string for old/new values
+  
+  userId          String
+  user            User     @relation(fields: [userId], references: [id], onDelete: NoAction, onUpdate: NoAction)
+  
+  taskId          String?
+  task            Task?    @relation(fields: [taskId], references: [id], onDelete: NoAction, onUpdate: NoAction)
+  
+  createdAt       DateTime @default(now())
+}
+
+// ---------------------------------------------------------
+// LEAVE & REGULARIZATION REQUESTS
+// ---------------------------------------------------------
+model LeaveRequest {
+  id              String   @id @default(uuid())
+  userId          String
+  user            User     @relation(fields: [userId], references: [id], onDelete: NoAction, onUpdate: NoAction)
+  type            String   // "Leave", "Half Day", "Regularization"
+  status          String   @default("Pending") // Approved, Rejected, Pending
+  startDate       DateTime
+  endDate         DateTime?
+  reason          String?
+  
+  createdAt       DateTime @default(now())
+  updatedAt       DateTime @updatedAt
+}
+
+// ---------------------------------------------------------
+// NOTIFICATIONS
+// ---------------------------------------------------------
+model Notification {
+  id              String   @id @default(uuid())
+  userId          String
+  user            User     @relation(fields: [userId], references: [id], onDelete: Cascade)
+  title           String
+  message         String
+  isRead          Boolean  @default(false)
+  linkUrl         String?
+  
+  createdAt       DateTime @default(now())
 }

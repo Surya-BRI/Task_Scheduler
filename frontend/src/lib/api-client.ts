@@ -1,3 +1,4 @@
+import { parseApiErrorMessage } from './api-error';
 import { clearAccessToken, getAccessToken } from './auth-token';
 import { env } from './env';
 import { dateReviver } from './utils';
@@ -27,7 +28,7 @@ async function request<T>(path: string, init?: RequestInit): Promise<T> {
 
   if (!response.ok) {
     const errorBody = await response.text();
-    throw new Error(errorBody || 'API request failed');
+    throw new Error(parseApiErrorMessage(errorBody, response.status));
   }
 
   // Use a date-aware reviver so ISO strings are automatically parsed into

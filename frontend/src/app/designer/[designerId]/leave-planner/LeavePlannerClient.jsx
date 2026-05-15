@@ -5,6 +5,7 @@ import { useRouter } from "next/navigation";
 import { Navbar } from "@/components/Navbar";
 import { X, Calendar as CalendarIcon, CheckCircle } from "lucide-react";
 import { formatDate } from "@/lib/utils";
+import { fetchLeaveRequests, createLeaveRequest, updateLeaveRequestStatus } from "@/features/requests/services/requests.api";
 
 const MONTHS = [
   "January", "February", "March", "April", "May", "June",
@@ -38,20 +39,12 @@ export default function LeavePlannerClient({ designer }) {
     toDate: ""
   });
 
-  // Load leaves from localStorage on mount
+  // Load leaves from API on mount
   useEffect(() => {
-    const stored = localStorage.getItem(`leave_requests_${designer.id}`);
-    if (stored) {
-      setLeaves(JSON.parse(stored));
-    }
+    fetchLeaveRequests(designer.id).then(res => {
+      setLeaves(res.data);
+    }).catch(console.error);
   }, [designer.id]);
-
-  // Save leaves to localStorage whenever they change
-  useEffect(() => {
-    if (leaves.length > 0) {
-      localStorage.setItem(`leave_requests_${designer.id}`, JSON.stringify(leaves));
-    }
-  }, [leaves, designer.id]);
 
   const handleDayClick = (monthIndex, day) => {
     if (day > DAYS_IN_MONTH[monthIndex]) return;
@@ -93,35 +86,43 @@ export default function LeavePlannerClient({ designer }) {
     setIsModalOpen(true);
   };
 
-  const handleApproveLeave = (id) => {
-    setLeaves(prev => prev.map(l => l.id === id ? { ...l, status: "APPROVED" } : l));
-    setIsHODModalOpen(false);
+  const handleApproveLeave = async (id) => {
+    try {
+      await updateLeaveRequestStatus(id, "APPROVED");
+      setLeaves(prev => prev.map(l => l.id === id ? { ...l, status: "APPROVED" } : l));
+      setIsHODModalOpen(false);
+    } catch (e) { console.error(e); }
   };
 
-  const handleRejectLeave = (id) => {
-    setLeaves(prev => prev.map(l => l.id === id ? { ...l, status: "REJECTED" } : l));
-    setIsHODModalOpen(false);
+  const handleRejectLeave = async (id) => {
+    try {
+      await updateLeaveRequestStatus(id, "REJECTED");
+      setLeaves(prev => prev.map(l => l.id === id ? { ...l, status: "REJECTED" } : l));
+      setIsHODModalOpen(false);
+    } catch (e) { console.error(e); }
   };
 
-  const handleModalSubmit = (e) => {
+  const handleModalSubmit = async (e) => {
     e.preventDefault();
     if (!formData.reason || !formData.fromDate || !formData.toDate) {
       alert("Please fill in all fields.");
       return;
     }
     
-    const newRequest = {
-      id: Date.now(),
-      designerId: designer.id,
-      reason: formData.reason,
-      fromDate: formData.fromDate,
-      toDate: formData.toDate,
-      status: "PENDING",
-      createdBy: isHOD ? "HOD" : "Designer"
-    };
-    
-    setLeaves([...leaves, newRequest]);
-    setIsModalOpen(false);
+    try {
+      const res = await createLeaveRequest({
+        userId: designer.id,
+        type: "Leave",
+        reason: formData.reason,
+        startDate: formData.fromDate,
+        endDate: formData.toDate
+      });
+      setLeaves([...leaves, res.data]);
+      setIsModalOpen(false);
+    } catch (error) {
+      console.error(error);
+      alert("Failed to submit request.");
+    }
   };
 
   const getLeaveStatusForDate = (dateStr) => {
