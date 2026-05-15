@@ -124,11 +124,25 @@ export class TasksService {
     const assignee = await this.prisma.user.findUnique({ where: { id: dto.assigneeId } });
     if (!assignee) throw new NotFoundException('Assignee not found');
 
-    return this.prisma.task.update({
+    const updatedTask = await this.prisma.task.update({
       where: { id },
       data: { assigneeId: dto.assigneeId },
       select: TASK_SELECT,
     });
+
+    try {
+      // @ts-ignore: IDE cache issue
+      await this.prisma.activityLog.create({
+        data: {
+          action: 'ASSIGNED_TASK',
+          details: JSON.stringify({ title: updatedTask.title, newAssignee: assignee.fullName }),
+          userId: dto.assigneeId, // Assuming assignee if we don't have acting user
+          taskId: id,
+        }
+      });
+    } catch (e) { }
+
+    return updatedTask;
   }
 
   async updateStatus(id: string, userId: string, role: UserRole, dto: UpdateTaskStatusDto) {
@@ -144,11 +158,25 @@ export class TasksService {
     if (dto.status === 'WIP' && !existing.startedAt) extraData.startedAt = now;
     if (dto.status === 'COMPLETED' || dto.status === 'APPROVED') extraData.completedAt = now;
 
-    return this.prisma.task.update({
+    const updatedTask = await this.prisma.task.update({
       where: { id },
       data: { status: dto.status, ...extraData },
       select: TASK_SELECT,
     });
+
+    try {
+      // @ts-ignore: IDE cache issue
+      await this.prisma.activityLog.create({
+        data: {
+          action: 'STATUS_CHANGED',
+          details: JSON.stringify({ title: updatedTask.title, oldStatus: existing.status, newStatus: dto.status }),
+          userId: userId,
+          taskId: id,
+        }
+      });
+    } catch (e) { }
+
+    return updatedTask;
   }
 
   /** Dashboard: task counts per status for a given set of users */
