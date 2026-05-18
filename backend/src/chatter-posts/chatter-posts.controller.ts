@@ -19,8 +19,12 @@ export class ChatterPostsController {
   }
 
   @Get()
-  findAll(@Query('limit') limit?: string, @Query('taskId') taskId?: string) {
-    return this.chatterPostsService.findAll(limit, taskId);
+  findAll(
+    @Query('limit') limit?: string,
+    @Query('taskId') taskId?: string,
+    @Query('projectId') projectId?: string,
+  ) {
+    return this.chatterPostsService.findAll(limit, taskId, projectId);
   }
 
   @Get(':postId/comments')

@@ -4,7 +4,6 @@ import { useState, useEffect, useRef, useMemo } from "react";
 import { Search, Plus, PauseCircle, AlertTriangle } from "lucide-react";
 import { useRouter } from "next/navigation";
 import { Navbar } from "@/components/Navbar";
-import { useDesignListStore } from "@/state/DesignListContext";
 import {
     SCHEDULER_DASHBOARD_SYNC_EVENT,
     SCHEDULER_DASHBOARD_SYNC_KEY,
@@ -19,28 +18,8 @@ import {
     getWeekDays,
 } from "../utils/schedulerWeek";
 import { FROM_DESIGN_SCHEDULER, taskSummaryPath } from "@/lib/design-list-routes";
-const DUMMY_DESIGNERS = [
-    { id: "d1", name: "Alex Johnson", initials: "AJ" },
-    { id: "d2", name: "Alexander Allen", initials: "AA" },
-    { id: "d3", name: "Benjamin Harris", initials: "BH" },
-    { id: "d4", name: "Chloe Wright", initials: "CW" },
-    { id: "d5", name: "David Adams", initials: "DA" },
-    { id: "d6", name: "Ella Young", initials: "EY" },
-    { id: "d7", name: "Emily Davis", initials: "ED" },
-    { id: "d8", name: "Ethan Anderson", initials: "EA" },
-    { id: "d9", name: "Grace Green", initials: "GG" },
-    { id: "d10", name: "Hannah Perez", initials: "HP" },
-    { id: "d11", name: "Designer 11", initials: "DX" },
-    { id: "d12", name: "Designer 12", initials: "DX" },
-    { id: "d13", name: "Designer 13", initials: "DX" },
-    { id: "d14", name: "Designer 14", initials: "DX" },
-    { id: "d15", name: "Designer 15", initials: "DX" },
-    { id: "d16", name: "Designer 16", initials: "DX" },
-    { id: "d17", name: "Designer 17", initials: "DX" },
-    { id: "d18", name: "Designer 18", initials: "DX" },
-    { id: "d19", name: "Designer 19", initials: "DX" },
-    { id: "d20", name: "Designer 20", initials: "DX" },
-];
+import { apiClient } from "@/lib/api-client";
+import { mapTaskToDesignRow } from "@/features/design-list/task-view-model";
 // Capacity constants
 const DAILY_CAPACITY = 8; // 8hrs per day = normal capacity (green/blue)
 const MAX_DAILY_HOURS = 12; // absolute max assignable per day
@@ -80,7 +59,7 @@ function buildPreparedDropAssignment({
     if (!updatedSchedules[targetDesignerId][targetDayStr]) {
         updatedSchedules[targetDesignerId][targetDayStr] = [];
     }
-    if (sourceId !== "unassigned" && sourceId !== "on-hold") {
+    if (sourceId !== "unassigned" && sourceId !== "ON_HOLD") {
         if (updatedSchedules[sourceId] && updatedSchedules[sourceId][sourceDay]) {
             updatedSchedules[sourceId][sourceDay] = updatedSchedules[sourceId][sourceDay].filter((id) => id !== taskId);
         }
@@ -241,35 +220,58 @@ function normalizeParentIdFromErp(value) {
     return t;
 }
 
+function isUuid(value) {
+    return /^[0-9a-f]{8}-[0-9a-f]{4}-[1-5][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i.test(String(value ?? "").trim());
+}
+
+function toInitials(fullName) {
+    const parts = String(fullName ?? "").trim().split(/\s+/).filter(Boolean);
+    if (parts.length === 0) return "DX";
+    if (parts.length === 1) return parts[0].slice(0, 2).toUpperCase();
+    return `${parts[0][0] ?? ""}${parts[1][0] ?? ""}`.toUpperCase();
+}
+
+function formatHoldDuration(holdStartedAt) {
+    if (!(holdStartedAt instanceof Date) || Number.isNaN(holdStartedAt.getTime())) {
+        return "Today";
+    }
+    const now = new Date();
+    const start = new Date(holdStartedAt);
+    start.setHours(0, 0, 0, 0);
+    now.setHours(0, 0, 0, 0);
+    const diffDays = Math.max(0, Math.floor((now.getTime() - start.getTime()) / 86400000));
+    if (diffDays === 0) return "Today";
+    if (diffDays === 1) return "1 Day";
+    return `${diffDays} Days`;
+}
+
 /** Same distribution as the original in-memory demo (used when ERP has no rows for that week). */
-function buildMockSchedulerState(records) {
+function buildMockSchedulerState(records, designers) {
     const tasksObj = {};
     const schedulesObj = {};
-    for (let i = 1; i <= 20; i++) {
-        schedulesObj[`d${i}`] = { "0": [], "1": [], "2": [], "3": [], "4": [] };
-    }
+    designers.forEach((designer) => {
+        schedulesObj[designer.id] = { "0": [], "1": [], "2": [], "3": [], "4": [] };
+    });
     records.slice(0, 100).forEach((record, idx) => {
-        let status = "unassigned";
-        if (idx < 8)
-            status = "on-hold";
-        else if (idx < 27)
-            status = "unassigned";
-        else
-            status = "assigned";
+        const sourceStatus = String(record.status ?? "").toUpperCase();
+        const status = sourceStatus === "ON_HOLD" ? "ON_HOLD" : "unassigned";
         tasksObj[record.id] = {
             id: record.id,
             name: record.name,
-            tag: record.designType,
-            estimatedHours: (idx % 3) + 2,
+            tag: record.projectName || "",
+            designType: record.designType || "",
+            estimatedHours: Number(record.estimatedHours) > 0 ? Number(record.estimatedHours) : (idx % 3) + 2,
             status,
-            colorClass: status === "on-hold" || status === "unassigned" && idx % 3 === 0
+            colorClass: status === "ON_HOLD" || status === "unassigned" && idx % 3 === 0
                 ? "bg-slate-50 border border-slate-200 text-slate-700"
                 : TASK_COLORS[idx % TASK_COLORS.length],
             baseName: record.name,
-            holdTime: idx < 8 ? "2 Days" : undefined
+            holdStartedAt: status === "ON_HOLD"
+                ? (record.holdStartedAt instanceof Date ? record.holdStartedAt : record.updatedAt)
+                : undefined,
         };
     });
-    let assignedIdx = 27;
+    let assignedIdx = 0;
     const addSchedule = (d, day, count) => {
         for (let i = 0; i < count && assignedIdx < 100; i++) {
             const record = records[assignedIdx++];
@@ -277,64 +279,33 @@ function buildMockSchedulerState(records) {
                 schedulesObj[d][day].push(record.id);
         }
     };
-    addSchedule("d1", "0", 2);
-    addSchedule("d1", "1", 2);
-    addSchedule("d1", "2", 1);
-    addSchedule("d2", "0", 1);
-    addSchedule("d2", "1", 2);
-    addSchedule("d2", "3", 1);
-    addSchedule("d3", "2", 2);
-    addSchedule("d3", "4", 1);
-    addSchedule("d4", "0", 1);
-    addSchedule("d4", "1", 1);
-    addSchedule("d4", "2", 1);
-    addSchedule("d4", "3", 1);
-    let d = 5;
-    let day = 0;
-    while (assignedIdx < 100) {
-        const record = records[assignedIdx++];
-        if (record)
-            schedulesObj[`d${d}`][`${day}`].push(record.id);
-        day++;
-        if (day > 4) {
-            day = 0;
-            d++;
-            if (d > 20)
-                d = 5;
-        }
-    }
-    schedulesObj["d1"]["0"] = [];
-    assignedIdx = 27;
-    for (let i = 0; i < 8 && assignedIdx < 100; i++) {
-        const r = records[assignedIdx++];
-        if (!r || !tasksObj[r.id])
-            continue;
-        tasksObj[r.id].estimatedHours = 1;
-        tasksObj[r.id].tag = "Alex Monday";
-        schedulesObj["d1"]["0"].push(r.id);
-    }
     return { tasksObj, schedulesObj };
 }
 
-function buildSchedulerStateFromErpAssignments(records, rows) {
+function buildSchedulerStateFromErpAssignments(records, rows, designers) {
     const schedulesObj = {};
-    for (let i = 1; i <= 20; i++) {
-        schedulesObj[`d${i}`] = { "0": [], "1": [], "2": [], "3": [], "4": [] };
-    }
+    designers.forEach((designer) => {
+        schedulesObj[designer.id] = { "0": [], "1": [], "2": [], "3": [], "4": [] };
+    });
     const recordById = {};
     records.forEach((r) => {
         recordById[r.id] = r;
     });
     const tasksObj = {};
     records.forEach((record, idx) => {
+        const sourceStatus = String(record.status ?? "").toUpperCase();
         tasksObj[record.id] = {
             id: record.id,
             name: record.name,
-            tag: record.designType,
-            estimatedHours: (idx % 3) + 2,
-            status: "unassigned",
+            tag: record.projectName || "",
+            designType: record.designType || "",
+            estimatedHours: Number(record.estimatedHours) > 0 ? Number(record.estimatedHours) : (idx % 3) + 2,
+            status: sourceStatus === "ON_HOLD" ? "ON_HOLD" : "unassigned",
             colorClass: TASK_COLORS[idx % TASK_COLORS.length],
             baseName: record.name,
+            holdStartedAt: sourceStatus === "ON_HOLD"
+                ? (record.holdStartedAt instanceof Date ? record.holdStartedAt : record.updatedAt)
+                : undefined,
         };
     });
     const assignedIds = new Set();
@@ -398,15 +369,21 @@ function buildSchedulerStateFromErpAssignments(records, rows) {
         };
     }
     for (const id of Object.keys(tasksObj)) {
-        if (!assignedIds.has(id))
-            tasksObj[id] = { ...tasksObj[id], status: "unassigned" };
+        if (!assignedIds.has(id)) {
+            const sourceStatus = String(recordById[id]?.status ?? "").toUpperCase();
+            tasksObj[id] = {
+                ...tasksObj[id],
+                status: sourceStatus === "ON_HOLD" ? "ON_HOLD" : "unassigned",
+            };
+        }
     }
     return { tasksObj, schedulesObj };
 }
 
 export function DesignSchedulerScreen() {
     const router = useRouter();
-    const { records } = useDesignListStore();
+    const [designers, setDesigners] = useState([]);
+    const [queueRecords, setQueueRecords] = useState([]);
 
     const [tasks, setTasks] = useState({});
     const [schedules, setSchedules] = useState({});
@@ -422,6 +399,58 @@ export function DesignSchedulerScreen() {
     
     // Custom Date selection state
     const [currentDate, setCurrentDate] = useState(DEFAULT_SCHEDULER_REFERENCE_DATE);
+    useEffect(() => {
+        let cancelled = false;
+        apiClient.get("/users?role=DESIGNER")
+            .then((res) => {
+                if (cancelled) return;
+                const rows = Array.isArray(res)
+                    ? res.map((user) => ({
+                        id: String(user?.id ?? "").trim(),
+                        name: String(user?.fullName ?? "Designer"),
+                        initials: toInitials(user?.fullName),
+                    })).filter((d) => d.id)
+                    : [];
+                setDesigners(rows);
+            })
+            .catch(() => {
+                if (cancelled) return;
+                setDesigners([]);
+            });
+        return () => {
+            cancelled = true;
+        };
+    }, []);
+    useEffect(() => {
+        let cancelled = false;
+        apiClient.get("/tasks?page=1&limit=500")
+            .then((res) => {
+                if (cancelled) return;
+                const rows = Array.isArray(res?.data)
+                    ? res.data.map((task) => {
+                        const mapped = mapTaskToDesignRow(task);
+                        return {
+                            id: mapped.id,
+                            name: mapped.name,
+                            designType: mapped.designType,
+                            projectName: task?.project?.name || "",
+                            status: task?.status,
+                            updatedAt: task?.updatedAt,
+                            holdStartedAt: task?.updatedAt,
+                            estimatedHours: Number(task?.hoursRequired ?? task?.estimatedHours ?? 0) || 0,
+                        };
+                    })
+                    : [];
+                setQueueRecords(rows);
+            })
+            .catch(() => {
+                if (cancelled) return;
+                setQueueRecords([]);
+            });
+        return () => {
+            cancelled = true;
+        };
+    }, []);
 
     useEffect(() => {
         let cancelled = false;
@@ -432,13 +461,13 @@ export function DesignSchedulerScreen() {
                 if (cancelled)
                     return;
                 if (Array.isArray(rows) && rows.length > 0) {
-                    const next = buildSchedulerStateFromErpAssignments(records, rows);
+                    const next = buildSchedulerStateFromErpAssignments(queueRecords, rows, designers);
                     setTasks(next.tasksObj);
                     setSchedules(next.schedulesObj);
                     setLoadedFromErp(true);
                 }
                 else {
-                    const mock = buildMockSchedulerState(records);
+                    const mock = buildMockSchedulerState(queueRecords, designers);
                     setTasks(mock.tasksObj);
                     setSchedules(mock.schedulesObj);
                     setLoadedFromErp(false);
@@ -447,7 +476,7 @@ export function DesignSchedulerScreen() {
             .catch(() => {
                 if (cancelled)
                     return;
-                const mock = buildMockSchedulerState(records);
+                const mock = buildMockSchedulerState(queueRecords, designers);
                 setTasks(mock.tasksObj);
                 setSchedules(mock.schedulesObj);
                 setLoadedFromErp(false);
@@ -455,7 +484,7 @@ export function DesignSchedulerScreen() {
         return () => {
             cancelled = true;
         };
-    }, [currentDate, records]);
+    }, [currentDate, queueRecords, designers]);
 
     const [overtimePrompt, setOvertimePrompt] = useState({
         open: false,
@@ -555,7 +584,7 @@ export function DesignSchedulerScreen() {
             return;
         if (sourceDay &&
             sourceId !== "unassigned" &&
-            sourceId !== "on-hold" &&
+            sourceId !== "ON_HOLD" &&
             !visibleDays.includes(Number(sourceDay)))
             return;
         const droppedTask = tasks[taskId];
@@ -615,7 +644,7 @@ export function DesignSchedulerScreen() {
             return;
         setLoadedFromErp(false);
         setSchedules(prev => {
-            if (sourceId === 'unassigned' || sourceId === 'on-hold')
+            if (sourceId === 'unassigned' || sourceId === 'ON_HOLD')
                 return prev;
             const newSchedules = cloneState(prev);
             if (newSchedules[sourceId] && newSchedules[sourceId][sourceDay]) {
@@ -623,19 +652,73 @@ export function DesignSchedulerScreen() {
             }
             return newSchedules;
         });
+        const taskBefore = tasks[taskId];
+        const nextTask = {
+            ...taskBefore,
+            status: newStatus,
+            holdStartedAt: newStatus === "ON_HOLD" ? new Date() : undefined,
+        };
+        const backendStatus = newStatus === "ON_HOLD" ? "ON_HOLD" : "PENDING";
         setTasks(prev => ({
             ...prev,
-            [taskId]: { ...prev[taskId], status: newStatus }
+            [taskId]: nextTask,
         }));
+        setQueueRecords((prev) =>
+            prev.map((row) =>
+                row.id === taskId
+                    ? {
+                        ...row,
+                        status: backendStatus,
+                        updatedAt: new Date(),
+                        holdStartedAt: newStatus === "ON_HOLD" ? new Date() : row.holdStartedAt,
+                    }
+                    : row,
+            ),
+        );
+        if (!isUuid(taskId)) return;
+        apiClient.patch(`/tasks/${taskId}/status`, { status: backendStatus }).catch((error) => {
+            console.warn("Unable to persist task status change", { taskId, backendStatus, error });
+        });
+    };
+    const toggleHoldState = (taskId, shouldHold) => {
+        const taskBefore = tasks[taskId];
+        if (!taskBefore)
+            return;
+        const nextStatus = shouldHold ? "ON_HOLD" : "unassigned";
+        setTasks((prev) => ({
+            ...prev,
+            [taskId]: {
+                ...taskBefore,
+                status: nextStatus,
+                holdStartedAt: shouldHold ? new Date() : undefined,
+            },
+        }));
+        const backendStatus = shouldHold ? "ON_HOLD" : "PENDING";
+        setQueueRecords((prev) =>
+            prev.map((row) =>
+                row.id === taskId
+                    ? {
+                        ...row,
+                        status: backendStatus,
+                        updatedAt: new Date(),
+                        holdStartedAt: shouldHold ? new Date() : undefined,
+                    }
+                    : row,
+            ),
+        );
+        if (!isUuid(taskId)) return;
+        apiClient.patch(`/tasks/${taskId}/status`, { status: backendStatus }).catch((error) => {
+            console.warn("Unable to persist hold toggle", { taskId, backendStatus, error });
+        });
     };
     const lowerSearchQuery = searchQuery.toLowerCase();
     const unassignedTasks = useMemo(() => Object.values(tasks).filter((t) => t.status === "unassigned" && t.name.toLowerCase().includes(lowerSearchQuery)), [tasks, lowerSearchQuery]);
-    const onHoldTasks = useMemo(() => Object.values(tasks).filter((t) => t.status === "on-hold" && t.name.toLowerCase().includes(lowerSearchQuery)), [tasks, lowerSearchQuery]);
+    const onHoldTasks = useMemo(() => Object.values(tasks).filter((t) => t.status === "ON_HOLD" && t.name.toLowerCase().includes(lowerSearchQuery)), [tasks, lowerSearchQuery]);
     // Shift tasks from later weekdays to earlier weekdays up to DAILY_CAPACITY.
     const getOptimizedSchedule = (currentSchedules, currentTasks) => {
         const newSchedules = cloneState(currentSchedules);
         let changed = false;
-        for (const designer of DUMMY_DESIGNERS) {
+        for (const designer of designers) {
             const dId = designer.id;
             if (!newSchedules[dId])
                 continue;
@@ -712,7 +795,7 @@ export function DesignSchedulerScreen() {
     const isDesignerOverloaded = (designerId) => {
         return WEEKDAY_INDICES.some((dayIndex) => getDayHours(designerId, dayIndex) > DAILY_CAPACITY);
     };
-    const totalScheduledHours = useMemo(() => DUMMY_DESIGNERS.reduce((acc, designer) => {
+    const totalScheduledHours = useMemo(() => designers.reduce((acc, designer) => {
         const days = schedules[designer.id] || {};
         const designerTotal = WEEKDAY_INDICES.reduce((dayAcc, dayIdx) => {
             const dayTasks = days[dayIdx.toString()] || [];
@@ -720,8 +803,8 @@ export function DesignSchedulerScreen() {
         }, 0);
         return acc + designerTotal;
     }, 0), [schedules, tasks]);
-    const totalDesignersCount = DUMMY_DESIGNERS.length;
-    const overloadedCount = useMemo(() => DUMMY_DESIGNERS.filter((designer) => WEEKDAY_INDICES.some((dayIndex) => {
+    const totalDesignersCount = designers.length;
+    const overloadedCount = useMemo(() => designers.filter((designer) => WEEKDAY_INDICES.some((dayIndex) => {
         const dayTasks = (schedules[designer.id] || {})[dayIndex.toString()] || [];
         return sumTaskHours(tasks, dayTasks) > DAILY_CAPACITY;
     })).length, [schedules, tasks]);
@@ -791,25 +874,41 @@ export function DesignSchedulerScreen() {
              </div>
 
              <div className="flex-1 overflow-y-auto space-y-1.5 pr-1 pb-4 custom-scrollbar">
-                {onHoldTasks.map(task => (<div key={task.id} draggable onDragStart={(e) => handleDragStart(e, task.id, "on-hold")} onDragEnd={() => setDropIndicator(null)} onClick={() => router.push(taskSummaryPath(getDesignListRoutingTaskId(task), { from: FROM_DESIGN_SCHEDULER }))} className={`p-2 rounded cursor-grab active:cursor-grabbing flex flex-col relative bg-white shadow-sm hover:shadow-md transition-shadow ${task.colorClass}`}>
+                {onHoldTasks.map(task => (<div key={task.id} draggable onDragStart={(e) => handleDragStart(e, task.id, "ON_HOLD")} onDragEnd={() => setDropIndicator(null)} onClick={() => router.push(taskSummaryPath(getDesignListRoutingTaskId(task), { from: FROM_DESIGN_SCHEDULER }))} className={`p-2 rounded cursor-grab active:cursor-grabbing flex flex-col relative bg-white shadow-sm hover:shadow-md transition-shadow ${task.colorClass}`}>
                     <div className="flex justify-between items-start">
                       <span className="font-semibold text-[11px] leading-tight pr-5">{getTaskLabel(task)}</span>
-                      <button className="bg-slate-200 hover:bg-slate-300 rounded-full p-0.5 text-slate-600 transition-colors absolute right-1.5 top-1.5">
+                      <button
+                        type="button"
+                        onClick={(event) => {
+                            event.stopPropagation();
+                            toggleHoldState(task.id, false);
+                        }}
+                        className="bg-slate-200 hover:bg-slate-300 rounded-full p-0.5 text-slate-600 transition-colors absolute right-1.5 top-1.5"
+                      >
                         <PauseCircle size={10}/>
                       </button>
                     </div>
-                    <div className="text-[10px] opacity-70 mt-0.5">{task.tag}</div>
-                    <div className="text-[9px] font-bold mt-1.5 bg-slate-100 text-slate-600 inline-block px-1.5 py-0.5 rounded uppercase self-start">Hold: {task.holdTime}</div>
+                    <div className="text-[10px] opacity-70 mt-0.5">{task.tag || "—"}</div>
+                    <div className="text-[10px] opacity-60 mt-0.5">{task.designType || "—"}</div>
+                    <div className="text-[9px] font-bold mt-1.5 bg-slate-100 text-slate-600 inline-block px-1.5 py-0.5 rounded uppercase self-start">Hold: {formatHoldDuration(task.holdStartedAt)}</div>
                   </div>))}
 
                 {unassignedTasks.map(task => (<div key={task.id} draggable onDragStart={(e) => handleDragStart(e, task.id, "unassigned")} onDragEnd={() => setDropIndicator(null)} onClick={() => router.push(taskSummaryPath(getDesignListRoutingTaskId(task), { from: FROM_DESIGN_SCHEDULER }))} className={`p-2 rounded cursor-grab active:cursor-grabbing flex flex-col relative group bg-white shadow-sm hover:shadow-md transition-shadow ${task.colorClass}`}>
                     <div className="flex justify-between items-start">
                       <span className="font-semibold text-[11px] leading-tight pr-5">{getTaskLabel(task)}</span>
-                      <button className="bg-blue-50 hover:bg-blue-100 text-blue-600 rounded-full p-0.5 absolute right-1.5 top-1.5 opacity-0 group-hover:opacity-100 transition-opacity">
+                      <button
+                        type="button"
+                        onClick={(event) => {
+                            event.stopPropagation();
+                            toggleHoldState(task.id, true);
+                        }}
+                        className="bg-blue-50 hover:bg-blue-100 text-blue-600 rounded-full p-0.5 absolute right-1.5 top-1.5 opacity-0 group-hover:opacity-100 transition-opacity"
+                      >
                         <Plus size={10}/>
                       </button>
                     </div>
-                    <div className="text-[10px] opacity-80 mt-0.5">{task.tag}</div>
+                    <div className="text-[10px] opacity-80 mt-0.5">{task.tag || "—"}</div>
+                    <div className="text-[10px] opacity-70 mt-0.5">{task.designType || "—"}</div>
                   </div>))}
              </div>
           </div>
@@ -840,7 +939,7 @@ export function DesignSchedulerScreen() {
               
               {/* Designers Rows */}
               <div className="flex flex-col">
-                {DUMMY_DESIGNERS.map((designer) => {
+                {designers.map((designer) => {
             const booked = getDesignerBookedHours(designer.id);
             const overloaded = isDesignerOverloaded(designer.id);
             const designerDays = schedules[designer.id] || {};
@@ -1024,3 +1123,9 @@ function ClockIcon() {
       <polyline points="12 6 12 12 16 14"></polyline>
     </svg>);
 }
+
+
+
+
+
+

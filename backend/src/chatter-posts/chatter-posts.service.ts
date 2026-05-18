@@ -1,9 +1,11 @@
-import { BadRequestException, Injectable, Logger, NotFoundException } from '@nestjs/common';
+import { BadRequestException, Injectable, NotFoundException } from '@nestjs/common';
 import { Prisma } from '@prisma/client';
 import { PrismaService } from '../prisma/prisma.service';
 import { UsersService } from '../users/users.service';
 import { CreateChatterCommentDto } from './dto/create-chatter-comment.dto';
 import { CreateChatterPostDto } from './dto/create-chatter-post.dto';
+import { ActivityAction } from '../activities/activity-events';
+import { ActivityLoggerService } from '../activities/activity-logger.service';
 
 const UUID_RE =
   /^[0-9a-f]{8}-[0-9a-f]{4}-[1-5][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i;
@@ -18,6 +20,8 @@ export type ChatterCommentDto = {
   id: string;
   postId: string | null;
   authorId: string | null;
+  authorName: string | null;
+  authorRole: string | null;
   message: string;
   createdAt: string;
 };
@@ -26,6 +30,8 @@ export type ChatterPostDto = {
   id: string;
   taskId: string | null;
   authorId: string | null;
+  authorName: string | null;
+  authorRole: string | null;
   title: string;
   message: string;
   postType: string | null;
@@ -43,11 +49,10 @@ export type ChatterPostDto = {
 
 @Injectable()
 export class ChatterPostsService {
-  private readonly logger = new Logger(ChatterPostsService.name);
-
   constructor(
     private readonly prisma: PrismaService,
     private readonly usersService: UsersService,
+    private readonly activityLogger: ActivityLoggerService,
   ) {}
 
   async listMentionUsers() {
@@ -65,6 +70,8 @@ export class ChatterPostsService {
       id: String(row.id),
       postId: row.postId != null ? String(row.postId) : null,
       authorId: row.authorId != null ? String(row.authorId) : null,
+      authorName: row.authorName != null ? String(row.authorName) : null,
+      authorRole: row.authorRole != null ? String(row.authorRole) : null,
       message: String(row.message ?? ''),
       createdAt: createdAt.toISOString(),
     };
@@ -75,10 +82,19 @@ export class ChatterPostsService {
     if (ids.length === 0) return [];
 
     const rows = await this.prisma.$queryRaw<Array<Record<string, unknown>>>`
-      SELECT id, postId, authorId, message, createdAt
-      FROM ErpTSChatterComment
-      WHERE postId IN (${Prisma.join(ids)})
-      ORDER BY createdAt DESC`;
+      SELECT
+        c.id,
+        c.postId,
+        c.authorId,
+        u.fullName AS authorName,
+        r.name AS authorRole,
+        c.message,
+        c.createdAt
+      FROM ErpTSChatterComment c
+      LEFT JOIN ErpTSUser u ON u.id = c.authorId
+      LEFT JOIN ErpTSRole r ON r.id = u.roleId
+      WHERE c.postId IN (${Prisma.join(ids)})
+      ORDER BY c.createdAt DESC`;
 
     return rows.map((row) => this.mapCommentRow(row));
   }
@@ -113,6 +129,8 @@ export class ChatterPostsService {
       id: String(row.id),
       taskId: row.taskId != null ? String(row.taskId) : null,
       authorId: row.authorId != null ? String(row.authorId) : null,
+      authorName: row.authorName != null ? String(row.authorName) : null,
+      authorRole: row.authorRole != null ? String(row.authorRole) : null,
       title: row.title,
       message: row.message,
       postType: row.postType ?? null,
@@ -128,9 +146,14 @@ export class ChatterPostsService {
     };
   }
 
-  async findAll(limitParam?: string, taskIdFilter?: string): Promise<ChatterPostDto[]> {
+  async findAll(
+    limitParam?: string,
+    taskIdFilter?: string,
+    projectIdFilter?: string,
+  ): Promise<ChatterPostDto[]> {
     const limit = Math.min(1000, Math.max(1, Number.parseInt(limitParam ?? '500', 10) || 500));
     const taskId = taskIdFilter?.trim() || null;
+    const projectId = projectIdFilter?.trim() || null;
 
     // Raw query: ERP rows may have NULL authorId; Prisma client rejects those until regenerated.
     const rows = taskId
@@ -138,19 +161,37 @@ export class ChatterPostsService {
           Array<Record<string, unknown>>
         >`
           SELECT TOP (${limit})
-            id, taskId, authorId, title, message, postType, mentionUserId, priority,
-            seenByCount, attachmentCount, isPinned, editedAt, visibility, createdAt, updatedAt
-          FROM ErpTSChatterPost
-          WHERE taskId = ${taskId}
-          ORDER BY updatedAt DESC, createdAt DESC`
+            p.id, p.taskId, p.authorId, u.fullName AS authorName, r.name AS authorRole, p.title, p.message, p.postType, p.mentionUserId, p.priority,
+            p.seenByCount, p.attachmentCount, p.isPinned, p.editedAt, p.visibility, p.createdAt, p.updatedAt
+          FROM ErpTSChatterPost p
+          LEFT JOIN ErpTSUser u ON u.id = p.authorId
+          LEFT JOIN ErpTSRole r ON r.id = u.roleId
+          WHERE p.taskId = ${taskId}
+          ORDER BY p.updatedAt DESC, p.createdAt DESC`
+      : projectId
+        ? await this.prisma.$queryRaw<
+            Array<Record<string, unknown>>
+          >`
+            SELECT TOP (${limit})
+              p.id, p.taskId, p.authorId, p.title, p.message, p.postType, p.mentionUserId, p.priority,
+              u.fullName AS authorName, r.name AS authorRole,
+              p.seenByCount, p.attachmentCount, p.isPinned, p.editedAt, p.visibility, p.createdAt, p.updatedAt
+            FROM ErpTSChatterPost p
+            JOIN ErpTSTask t ON t.id = p.taskId
+            LEFT JOIN ErpTSUser u ON u.id = p.authorId
+            LEFT JOIN ErpTSRole r ON r.id = u.roleId
+            WHERE t.projectId = ${projectId}
+            ORDER BY p.updatedAt DESC, p.createdAt DESC`
       : await this.prisma.$queryRaw<
           Array<Record<string, unknown>>
         >`
           SELECT TOP (${limit})
-            id, taskId, authorId, title, message, postType, mentionUserId, priority,
-            seenByCount, attachmentCount, isPinned, editedAt, visibility, createdAt, updatedAt
-          FROM ErpTSChatterPost
-          ORDER BY updatedAt DESC, createdAt DESC`;
+            p.id, p.taskId, p.authorId, u.fullName AS authorName, r.name AS authorRole, p.title, p.message, p.postType, p.mentionUserId, p.priority,
+            p.seenByCount, p.attachmentCount, p.isPinned, p.editedAt, p.visibility, p.createdAt, p.updatedAt
+          FROM ErpTSChatterPost p
+          LEFT JOIN ErpTSUser u ON u.id = p.authorId
+          LEFT JOIN ErpTSRole r ON r.id = u.roleId
+          ORDER BY p.updatedAt DESC, p.createdAt DESC`;
 
     const posts = rows.map((r) => ({ ...this.mapRow(r), comments: [] as ChatterCommentDto[] }));
     const comments = await this.findCommentsByPostIds(posts.map((p) => p.id));
@@ -175,8 +216,11 @@ export class ChatterPostsService {
       throw new BadRequestException('postId must be a valid UUID');
     }
 
-    const postExists = await this.prisma.$queryRaw<Array<{ id: string }>>`
-      SELECT TOP 1 id FROM ErpTSChatterPost WHERE id = ${normalizedPostId}`;
+    const postExists = await this.prisma.$queryRaw<Array<{ id: string; taskId: string | null; projectId: string | null }>>`
+      SELECT TOP 1 p.id, p.taskId, t.projectId
+      FROM ErpTSChatterPost p
+      LEFT JOIN ErpTSTask t ON t.id = p.taskId
+      WHERE p.id = ${normalizedPostId}`;
     if (!postExists.length) {
       throw new NotFoundException('Chatter post not found');
     }
@@ -189,18 +233,19 @@ export class ChatterPostsService {
       },
     });
 
-    try {
-      await this.prisma.activityLog.create({
-        data: {
-          action: 'CREATED_CHATTER_COMMENT',
-          details: JSON.stringify({ postId: normalizedPostId }),
-          userId: authorId,
-          taskId: null,
-        },
-      });
-    } catch (e) {
-      this.logger.error('Failed to create activity log for chatter comment', e);
-    }
+    await this.activityLogger.log({
+      action: ActivityAction.CREATED_CHATTER_COMMENT,
+      userId: authorId,
+      taskId: postExists[0].taskId ?? null,
+      details: {
+        event: ActivityAction.CREATED_CHATTER_COMMENT,
+        messageKey: 'chatter_comment_created',
+        taskSnapshot: postExists[0].taskId ? { id: postExists[0].taskId } : undefined,
+        projectSnapshot: postExists[0].projectId ? { id: postExists[0].projectId } : undefined,
+        changes: { postId: normalizedPostId },
+        context: { projectId: postExists[0].projectId ?? null, postId: normalizedPostId },
+      },
+    });
 
     return this.mapCommentRow(created as unknown as Record<string, unknown>);
   }
@@ -208,7 +253,7 @@ export class ChatterPostsService {
   async create(dto: CreateChatterPostDto, authorId: string, files?: Express.Multer.File[]): Promise<ChatterPostDto> {
     const newPost = await this.prisma.chatterPost.create({
       data: {
-        title: dto.title,
+        title: dto.title?.trim() || 'Chatter Post',
         message: dto.message,
         postType: dto.postType || null,
         priority: dto.priority || null,
@@ -232,19 +277,33 @@ export class ChatterPostsService {
       }
     });
 
-    // Also log this as an activity
-    try {
-      await this.prisma.activityLog.create({
-        data: {
-          action: 'CREATED_CHATTER_POST',
-          details: JSON.stringify({ title: dto.title, postType: dto.postType }),
-          userId: authorId,
-          taskId: dto.taskId || null,
-        }
-      });
-    } catch (e) {
-      this.logger.error('Failed to create activity log for chatter post', e);
+    let projectId: string | null = null;
+    if (newPost.taskId) {
+      const taskRow = await this.prisma.$queryRaw<Array<{ projectId: string | null; taskNo: string | null; opNo: string | null }>>`
+        SELECT TOP 1 projectId, taskNo, opNo
+        FROM ErpTSTask
+        WHERE id = ${newPost.taskId}`;
+      projectId = taskRow[0]?.projectId ?? null;
     }
+    await this.activityLogger.log({
+      action: ActivityAction.CREATED_CHATTER_POST,
+      userId: authorId,
+      taskId: newPost.taskId ?? null,
+      details: {
+        event: ActivityAction.CREATED_CHATTER_POST,
+        messageKey: 'chatter_post_created',
+        taskSnapshot: newPost.taskId ? { id: newPost.taskId } : undefined,
+        projectSnapshot: projectId ? { id: projectId } : undefined,
+        changes: {
+          title: dto.title?.trim() || 'Chatter Post',
+          postType: dto.postType ?? null,
+        },
+        context: {
+          projectId,
+          chatterPostId: newPost.id,
+        },
+      },
+    });
 
     return { ...this.mapRow(newPost), comments: [] };
   }

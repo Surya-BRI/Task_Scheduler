@@ -1,54 +1,160 @@
 import { Injectable } from '@nestjs/common';
 import { PrismaService } from '../prisma/prisma.service';
+import { ActivityAction } from './activity-events';
+
+type FindInput = {
+  limit?: number;
+  cursor?: string;
+  taskId?: string;
+  projectId?: string;
+};
 
 @Injectable()
 export class ActivitiesService {
   constructor(private readonly prisma: PrismaService) {}
 
-  async findAll(limitParam: number = 50) {
-    // Fetch latest activities from the Prisma ActivityLog model
-    const activities = await this.prisma.activityLog.findMany({
-      take: limitParam,
+  private formatSummary(action: string, details: any, actorName: string): string {
+    const msg = details?.messageKey;
+    if (msg === 'task_created') return `${actorName} created task ${details?.taskSnapshot?.taskNo ?? ''}`.trim();
+    if (msg === 'task_assigned') return `${actorName} assigned task to ${details?.changes?.newAssigneeName ?? 'assignee'}`;
+    if (msg === 'status_changed') {
+      const oldStatus = details?.changes?.oldStatus ?? '-';
+      const newStatus = details?.changes?.newStatus ?? '-';
+      return `${actorName} changed status ${oldStatus} -> ${newStatus}`;
+    }
+    if (msg === 'project_file_uploaded') return `${actorName} uploaded ${details?.fileMeta?.fileName ?? 'a file'}`;
+    if (msg === 'project_file_deleted') return `${actorName} deleted ${details?.fileMeta?.fileName ?? 'a file'}`;
+    if (msg === 'task_file_uploaded') return `${actorName} uploaded ${details?.fileMeta?.fileName ?? 'a file'} to task files`;
+    if (msg === 'chatter_post_created') return `${actorName} posted in chatter`;
+    if (msg === 'chatter_comment_created') return `${actorName} commented on chatter`;
+    return `${actorName} performed ${action}`;
+  }
+
+  private formatSeverity(action: string): 'info' | 'success' | 'warning' {
+    if (action === ActivityAction.TASK_CREATED) return 'success';
+    if (action === ActivityAction.STATUS_CHANGED || action === ActivityAction.ASSIGNED_TASK) return 'info';
+    if (action === ActivityAction.PROJECT_FILE_DELETED) return 'warning';
+    return 'info';
+  }
+
+  private async queryActivities(input: FindInput) {
+    const limit = Math.min(Math.max(input.limit ?? 30, 1), 100);
+    const cursorDate = input.cursor ? new Date(input.cursor) : null;
+    const where: Record<string, unknown> = {};
+    if (cursorDate && !Number.isNaN(cursorDate.getTime())) {
+      where.createdAt = { lt: cursorDate };
+    }
+    if (input.taskId) {
+      where.taskId = input.taskId;
+    }
+    if (input.projectId) {
+      where.OR = [
+        { task: { projectId: input.projectId } },
+        { details: { contains: input.projectId } },
+      ];
+    }
+
+    const rows = await this.prisma.activityLog.findMany({
+      where,
+      take: limit + 1,
       orderBy: { createdAt: 'desc' },
       include: {
-        user: {
-          select: { id: true, fullName: true }
-        },
+        user: { select: { id: true, fullName: true } },
         task: {
-          select: { id: true, title: true, opNo: true, project: { select: { name: true } } }
-        }
-      }
+          select: {
+            id: true,
+            taskNo: true,
+            opNo: true,
+            title: true,
+            priority: true,
+            dueDate: true,
+            assignee: { select: { id: true, fullName: true } },
+            retailDetails: { select: { hodName: true }, take: 1, orderBy: { createdAt: 'desc' } },
+            project: { select: { id: true, name: true, projectNo: true } },
+          },
+        },
+      },
     });
 
-    return activities.map((act: any) => {
-      let detailsObj: any = {};
-      try {
-        if (act.details) detailsObj = JSON.parse(act.details);
-      } catch {
-        detailsObj = {};
-      }
+    const hasMore = rows.length > limit;
+    const sliced = hasMore ? rows.slice(0, limit) : rows;
 
-      // Map to frontend expected shape somewhat
+    const data = sliced.map((row: any) => {
+      let details: any = {};
+      try {
+        details = row.details ? JSON.parse(row.details) : {};
+      } catch {
+        details = { raw: row.details };
+      }
+      const actorName = row.user?.fullName ?? 'Unknown user';
       return {
-        id: act.id,
-        kind: 'task_update', // Everything is mapped to task_update for now to fit the UI
-        user: { 
-          id: act.user.id, 
-          name: act.user.fullName,
-          avatarUrl: "https://ui-avatars.com/api/?name=" + encodeURIComponent(act.user.fullName) + "&background=random"
+        id: row.id,
+        action: row.action,
+        occurredAt: row.createdAt.toISOString(),
+        actor: {
+          id: row.user?.id ?? '',
+          name: actorName,
+          avatarUrl: `https://ui-avatars.com/api/?name=${encodeURIComponent(actorName)}&background=random`,
         },
-        messageSegments: [
-          { type: 'text', value: `${act.user.fullName} performed ${act.action} ` },
-          ...(act.task ? [{ type: 'link', label: act.task.opNo || 'Task', href: `/tasks/${act.task.id}` }] : []),
-          ...(detailsObj.title ? [{ type: 'text', value: ` on "${detailsObj.title}"` }] : [])
-        ],
-        occurredAt: act.createdAt.toISOString(),
-        liked: false,
-        individualEligible: true,
-        monthIndex: act.createdAt.getMonth(),
-        year: act.createdAt.getFullYear(),
-        priority: "normal"
+        task: row.task
+          ? {
+              id: row.task.id,
+              taskNo: row.task.taskNo,
+              opNo: row.task.opNo,
+              title: row.task.title,
+              priority: row.task.priority,
+              dueDate: row.task.dueDate ? row.task.dueDate.toISOString() : null,
+              assigneeName: row.task.assignee?.fullName ?? null,
+              hodName: row.task.retailDetails?.[0]?.hodName ?? null,
+            }
+          : null,
+        project: row.task?.project
+          ? {
+              id: row.task.project.id,
+              projectNo: row.task.project.projectNo,
+              name: row.task.project.name,
+            }
+          : null,
+        details,
+        summary: this.formatSummary(row.action, details, actorName),
+        severity: this.formatSeverity(row.action),
       };
+    });
+
+    return {
+      data,
+      pageInfo: {
+        hasMore,
+        nextCursor: hasMore ? sliced[sliced.length - 1]?.createdAt?.toISOString() ?? null : null,
+      },
+    };
+  }
+
+  async findAll(input: { limit?: number }) {
+    const result = await this.queryActivities({ limit: input.limit });
+    return result.data.map((item) => ({
+      id: item.id,
+      kind: 'task_update',
+      user: item.actor,
+      messageSegments: [{ type: 'text', value: item.summary }],
+      occurredAt: item.occurredAt,
+      liked: false,
+      individualEligible: true,
+      monthIndex: new Date(item.occurredAt).getMonth(),
+      year: new Date(item.occurredAt).getFullYear(),
+      priority: item.severity === 'warning' ? 'high' : 'normal',
+    }));
+  }
+
+  async findByTask(input: { taskId: string; limit?: number; cursor?: string }) {
+    return this.queryActivities({ taskId: input.taskId, limit: input.limit, cursor: input.cursor });
+  }
+
+  async findByProject(input: { projectId: string; limit?: number; cursor?: string }) {
+    return this.queryActivities({
+      projectId: input.projectId,
+      limit: input.limit,
+      cursor: input.cursor,
     });
   }
 }

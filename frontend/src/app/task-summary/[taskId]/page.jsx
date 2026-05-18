@@ -1,7 +1,7 @@
 "use client";
 
 import { Suspense } from "react";
-import { DesignListRecordPage } from "@/views/DesignListRecordPage";
+import { TaskDetailsPage } from "@/views/TaskDetailsPage";
 
 function Fallback() {
   return (
@@ -14,7 +14,7 @@ function Fallback() {
 export default function TaskSummaryRoutePage() {
   return (
     <Suspense fallback={<Fallback />}>
-      <DesignListRecordPage />
+      <TaskDetailsPage />
     </Suspense>
   );
 }

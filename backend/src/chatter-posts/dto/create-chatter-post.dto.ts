@@ -5,9 +5,9 @@ export class CreateChatterPostDto {
   @IsUUID()
   taskId?: string;
 
-  @IsNotEmpty()
+  @IsOptional()
   @IsString()
-  title: string;
+  title?: string;
 
   @IsNotEmpty()
   @IsString()

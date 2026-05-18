@@ -212,9 +212,13 @@ export function ProjectCreateTaskModal({ open, onClose, submissionDate, record }
   const [selectedLevel, setSelectedLevel] = useState('')
   const [planCode, setPlanCode] = useState('')
   const [priorityLevel, setPriorityLevel] = useState('Medium')
+  const [taskName, setTaskName] = useState('')
   const [hoursRequired, setHoursRequired] = useState('')
   const [submitting, setSubmitting] = useState(false)
   const [error, setError] = useState('')
+  const [fieldErrors, setFieldErrors] = useState({})
+  const [touched, setTouched] = useState({})
+  const [submitAttempted, setSubmitAttempted] = useState(false)
   const startOfToday = new Date()
   startOfToday.setHours(0, 0, 0, 0)
   const startOfDeadline =
@@ -241,6 +245,14 @@ export function ProjectCreateTaskModal({ open, onClose, submissionDate, record }
       document.body.style.overflow = ''
     }
   }, [open, onClose])
+
+  useEffect(() => {
+    if (!open) return
+    setTaskName('')
+    setFieldErrors({})
+    setTouched({})
+    setSubmitAttempted(false)
+  }, [open])
 
   function rowHasSelection(r) {
     const hasFlag =
@@ -338,6 +350,21 @@ export function ProjectCreateTaskModal({ open, onClose, submissionDate, record }
 
   async function handleCreateTasks() {
     if (!record) return
+    setSubmitAttempted(true)
+    const normalizedTaskName = taskName.trim()
+    const nextFieldErrors = {}
+    if (normalizedTaskName.length < 2) {
+      nextFieldErrors.taskName = 'Task Name is required'
+    }
+    if (!(submissionDate instanceof Date) || Number.isNaN(submissionDate.getTime())) {
+      nextFieldErrors.deadline = 'Deadline for Task Submission is required'
+    }
+    if (Object.keys(nextFieldErrors).length > 0) {
+      setFieldErrors(nextFieldErrors)
+      setError('Please fill required fields')
+      return
+    }
+    setFieldErrors({})
     setError('')
     setSubmitting(true)
     try {
@@ -388,7 +415,7 @@ export function ProjectCreateTaskModal({ open, onClose, submissionDate, record }
       const payload = {
         designType: 'Project',
         task: {
-          title: record.name ?? record.projectName ?? `Project Task ${record.id}`,
+          title: normalizedTaskName,
           opNo: record.opNo ?? undefined,
           description: undefined,
           priority: priorityLevel,
@@ -429,12 +456,34 @@ export function ProjectCreateTaskModal({ open, onClose, submissionDate, record }
         </div>
 
         <div className="space-y-3 p-4">
+          <div>
+            <label className="mb-1 block text-xs font-semibold text-slate-600">
+              Task Name <span className="text-red-600">*</span>
+            </label>
+            <input
+              value={taskName}
+              onChange={(event) => {
+                setTaskName(event.target.value)
+                setFieldErrors((prev) => ({ ...prev, taskName: '' }))
+              }}
+              onBlur={() => setTouched((prev) => ({ ...prev, taskName: true }))}
+              placeholder="Enter task name"
+              required
+              className="h-10 w-full rounded-md border border-slate-300 px-3 text-sm outline-none transition-colors focus:border-blue-500 focus:ring-2 focus:ring-blue-500/20"
+            />
+            {((submitAttempted || touched.taskName) && taskName.trim().length < 2) || fieldErrors.taskName ? (
+              <p className="mt-1 text-xs text-red-600">{fieldErrors.taskName || 'Task Name is required'}</p>
+            ) : null}
+          </div>
           <div className="rounded-md border border-slate-200 bg-slate-50 px-3 py-2 text-sm text-slate-700">
-            <span className="font-semibold">Deadline for Task Submission:</span>{' '}
+            <span className="font-semibold">Deadline for Task Submission <span className="text-red-600">*</span>:</span>{' '}
             {formattedDeadline || '-'}
             <span className="ml-2 text-slate-500">
               ({daysFromToday == null ? 'set Date of Submission on details page' : `${daysFromToday} day(s) from today`})
             </span>
+            {(submitAttempted && (!(submissionDate instanceof Date) || Number.isNaN(submissionDate.getTime()))) || fieldErrors.deadline ? (
+              <p className="mt-1 text-xs text-red-600">{fieldErrors.deadline || 'Deadline for Task Submission is required'}</p>
+            ) : null}
           </div>
 
           <div className="grid grid-cols-2 gap-4">
@@ -581,7 +630,7 @@ export function ProjectCreateTaskModal({ open, onClose, submissionDate, record }
               type="button"
               onClick={handleCreateTasks}
               className="rounded-md bg-blue-600 px-8 py-2.5 text-sm font-semibold text-white shadow-sm transition hover:bg-blue-700 focus:outline-none focus-visible:ring-2 focus-visible:ring-blue-500 focus-visible:ring-offset-2 disabled:pointer-events-none disabled:opacity-45"
-              disabled={selectedCount === 0 || submitting}
+              disabled={selectedCount === 0 || submitting || taskName.trim().length < 2 || !(submissionDate instanceof Date) || Number.isNaN(submissionDate.getTime())}
               title={selectedCount === 0 ? 'Select at least one work type or enter hours on a row' : undefined}
             >
               {submitting ? 'Creating...' : 'Create Tasks'}

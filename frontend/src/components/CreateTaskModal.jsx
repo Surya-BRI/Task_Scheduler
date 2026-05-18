@@ -29,10 +29,14 @@ export function CreateTaskModal({ open, onClose, submissionDate, record }) {
     technical: false,
   }))
   const [priorityLevel, setPriorityLevel] = useState('Medium')
+  const [taskName, setTaskName] = useState('')
   const [hoursRequired, setHoursRequired] = useState('')
   const [comment, setComment] = useState('')
   const [submitting, setSubmitting] = useState(false)
   const [error, setError] = useState('')
+  const [fieldErrors, setFieldErrors] = useState({})
+  const [touched, setTouched] = useState({})
+  const [submitAttempted, setSubmitAttempted] = useState(false)
 
   useEffect(() => {
     if (!open) return undefined
@@ -46,6 +50,14 @@ export function CreateTaskModal({ open, onClose, submissionDate, record }) {
       document.body.style.overflow = ''
     }
   }, [open, onClose])
+
+  useEffect(() => {
+    if (!open) return
+    setTaskName('')
+    setFieldErrors({})
+    setTouched({})
+    setSubmitAttempted(false)
+  }, [open])
 
   if (!open) return null
 
@@ -69,6 +81,24 @@ export function CreateTaskModal({ open, onClose, submissionDate, record }) {
   async function handleSubmit(e) {
     e.preventDefault()
     if (!record) return
+    setSubmitAttempted(true)
+    const normalizedTaskName = taskName.trim()
+    const nextFieldErrors = {}
+    if (normalizedTaskName.length < 2) {
+      nextFieldErrors.taskName = 'Task Name is required'
+    }
+    if (!hod.trim()) {
+      nextFieldErrors.hod = 'HOD is required'
+    }
+    if (!validSubmissionDate) {
+      nextFieldErrors.deadline = 'Deadline for Task Submission is required'
+    }
+    if (Object.keys(nextFieldErrors).length > 0) {
+      setFieldErrors(nextFieldErrors)
+      setError('Please fill required fields')
+      return
+    }
+    setFieldErrors({})
     setError('')
     setSubmitting(true)
     try {
@@ -88,7 +118,7 @@ export function CreateTaskModal({ open, onClose, submissionDate, record }) {
       const payload = {
         designType: 'Retail',
         task: {
-          title: record.name ?? record.projectName ?? `Retail Task ${record.id}`,
+          title: normalizedTaskName,
           opNo: record.opNo ?? undefined,
           description: comment || undefined,
           priority: priorityLevel,
@@ -169,6 +199,25 @@ export function CreateTaskModal({ open, onClose, submissionDate, record }) {
 
         <form className="space-y-4 p-5" onSubmit={handleSubmit}>
           <div>
+            <label className="text-xs font-semibold text-slate-600" htmlFor="create-task-name">
+              Task Name <span className="text-red-600">*</span>
+            </label>
+            <input
+              id="create-task-name"
+              value={taskName}
+              onChange={(e) => {
+                setTaskName(e.target.value)
+                setFieldErrors((prev) => ({ ...prev, taskName: '' }))
+              }}
+              onBlur={() => setTouched((prev) => ({ ...prev, taskName: true }))}
+              placeholder="Enter task name"
+              className="mt-1.5 w-full rounded-md border border-slate-300 bg-white px-3 py-2 text-sm text-slate-900 outline-none transition-colors focus:border-blue-500 focus:ring-2 focus:ring-blue-500/20"
+            />
+            {((submitAttempted || touched.taskName) && taskName.trim().length < 2) || fieldErrors.taskName ? (
+              <p className="mt-1 text-xs text-red-600">{fieldErrors.taskName || 'Task Name is required'}</p>
+            ) : null}
+          </div>
+          <div>
             <label className="text-xs font-semibold text-slate-600" htmlFor="create-provided-files">
               Task Files
             </label>
@@ -212,18 +261,26 @@ export function CreateTaskModal({ open, onClose, submissionDate, record }) {
 
           <div>
             <label className="text-xs font-semibold text-slate-600" htmlFor="create-hod">
-              Select HOD
+              Select HOD <span className="text-red-600">*</span>
             </label>
             <select
               id="create-hod"
               value={hod}
-              onChange={(e) => setHod(e.target.value)}
+              onChange={(e) => {
+                setHod(e.target.value)
+                setFieldErrors((prev) => ({ ...prev, hod: '' }))
+              }}
+              onBlur={() => setTouched((prev) => ({ ...prev, hod: true }))}
+              required
               className="mt-1.5 w-full rounded-md border border-slate-300 bg-white px-3 py-2 text-sm text-slate-900 outline-none transition-colors focus:border-blue-500 focus:ring-2 focus:ring-blue-500/20"
             >
               <option value="">Select</option>
               <option value="hod-1">A. Khan</option>
               <option value="hod-2">M. Rahman</option>
             </select>
+            {((submitAttempted || touched.hod) && !hod.trim()) || fieldErrors.hod ? (
+              <p className="mt-1 text-xs text-red-600">{fieldErrors.hod || 'HOD is required'}</p>
+            ) : null}
           </div>
 
           <fieldset>
@@ -279,17 +336,21 @@ export function CreateTaskModal({ open, onClose, submissionDate, record }) {
 
           <div>
             <label className="text-xs font-semibold text-slate-600" htmlFor="create-deadline">
-              Deadline for Task Submission
+              Deadline for Task Submission <span className="text-red-600">*</span>
             </label>
             <input
               id="create-deadline"
               value={formattedDeadline}
               readOnly
+              required
               className="mt-1.5 w-full rounded-md border border-slate-300 bg-slate-50 px-3 py-2 text-sm font-semibold text-slate-900 outline-none"
             />
             <p className="mt-1 text-xs text-slate-500">
               {daysFromToday == null ? 'Select Date of Submission on details page' : `${daysFromToday} day(s) from today`}
             </p>
+            {(submitAttempted && !validSubmissionDate) || fieldErrors.deadline ? (
+              <p className="mt-1 text-xs text-red-600">{fieldErrors.deadline || 'Deadline for Task Submission is required'}</p>
+            ) : null}
           </div>
 
           <div>
@@ -309,7 +370,7 @@ export function CreateTaskModal({ open, onClose, submissionDate, record }) {
             {error ? <p className="mr-3 self-center text-xs text-red-600">{error}</p> : null}
             <button
               type="submit"
-              disabled={submitting}
+              disabled={submitting || taskName.trim().length < 2 || !hod.trim() || !validSubmissionDate}
               className="rounded-full bg-blue-600 px-10 py-2.5 text-sm font-semibold text-white shadow-sm transition hover:bg-blue-700 focus:outline-none focus-visible:ring-2 focus-visible:ring-blue-500 focus-visible:ring-offset-2"
             >
               {submitting ? 'Creating...' : 'Create'}
