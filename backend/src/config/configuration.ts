@@ -27,11 +27,38 @@ export default () => ({
     accessSecret: process.env.JWT_ACCESS_SECRET ?? 'change_me',
     accessExpiresIn: process.env.JWT_ACCESS_EXPIRES_IN ?? '1d',
   },
+  /**
+   * AUTH_MODE=demo (default)  — use internal JWT_ACCESS_SECRET.
+   * AUTH_MODE=external        — use EXTERNAL_JWT_SECRET from the pre-existing ERP site.
+   */
+  auth: {
+    mode: (process.env.AUTH_MODE ?? 'demo').toLowerCase(),
+    externalJwtSecret:  process.env.EXTERNAL_JWT_SECRET ?? '',
+    externalSubField:   process.env.EXTERNAL_SUB_FIELD   ?? 'sub',
+    externalEmailField: process.env.EXTERNAL_EMAIL_FIELD ?? 'email',
+    externalRoleField:  process.env.EXTERNAL_ROLE_FIELD  ?? 'role',
+    /** JSON map from external role labels → internal UserRole values */
+    externalRoleMap:    process.env.EXTERNAL_ROLE_MAP    ?? '{}',
+  },
   database: {
     url: process.env.DATABASE_URL ?? buildDatabaseUrlFromParts(),
   },
   /** When set, use [catalog].[dbo].…; otherwise use the DB from DATABASE_URL (current catalog). */
   erp: {
     sqlCatalog: process.env.ERP_SQL_CATALOG ?? '',
+    /** dbo table name segment only — used as [catalog].[dbo].[name] or [dbo].[name]. */
+    chatterPostTable: (process.env.ERP_CHATTER_POST_TABLE || 'ErpTSChatterPost').trim(),
+    /**
+     * When set, used verbatim as the FROM target (e.g. `[OtherDb].[dbo].[TSChatterPost]`).
+     * Overrides catalog + chatterPostTable.
+     */
+    chatterPostSqlObject: (process.env.ERP_CHATTER_POST_SQL_OBJECT || '').trim(),
+  },
+  aws: {
+    accessKeyId: process.env.AWS_ACCESS_KEY_ID ?? '',
+    secretAccessKey: process.env.AWS_SECRET_ACCESS_KEY ?? '',
+    region: process.env.AWS_REGION ?? '',
+    bucket: process.env.AWS_BUCKET ?? '',
+    folder: process.env.AWS_FOLDER ?? 'taskfiles',
   },
 });

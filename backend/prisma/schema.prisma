@@ -7,54 +7,438 @@ datasource db {
   url      = env("DATABASE_URL")
 }
 
+// ---------------------------------------------------------
+// USERS & ROLES
+// ---------------------------------------------------------
 model Role {
-  id        String   @id @default(uuid())
+  id          String   @id @default(dbgenerated("newid()")) @db.UniqueIdentifier
+  name        String   @unique @db.NVarChar(50)
+  permissions String?  @db.NVarChar(Max)
+  users       User[]
+  createdAt   DateTime @default(dbgenerated("sysutcdatetime()"))
+  updatedAt   DateTime @default(dbgenerated("sysutcdatetime()")) @updatedAt
+
+  @@map("ErpTSRole")
+}
+
+/// Legacy department table (referenced by ErpTSUser.departmentId).
+model Department {
+  id        String   @id @db.NVarChar(450)
   name      String   @unique
   users     User[]
   createdAt DateTime @default(now())
-  updatedAt DateTime @updatedAt
+  updatedAt DateTime @default(now()) @updatedAt
+
+  @@map("Department")
 }
 
 model User {
-  id           String    @id @default(uuid())
-  email        String    @unique
-  passwordHash String
-  fullName     String
-  roleId       String
-  role         Role      @relation(fields: [roleId], references: [id])
-  tasks        Task[]    @relation("TaskAssignee")
-  projects     Project[] @relation("ProjectCreator")
-  createdAt    DateTime  @default(now())
-  updatedAt    DateTime  @updatedAt
+  id           String   @id @default(dbgenerated("newid()")) @db.UniqueIdentifier
+  email        String   @unique @db.NVarChar(255)
+  passwordHash String   @db.NVarChar(255)
+  fullName     String   @db.NVarChar(150)
+  roleId       String   @db.UniqueIdentifier
+  departmentId String?  @db.NVarChar(450)
+
+  role         Role     @relation(fields: [roleId], references: [id], onUpdate: NoAction)
+  department   Department? @relation(fields: [departmentId], references: [id], onDelete: NoAction, onUpdate: NoAction)
+
+  tasks                    Task[]                     @relation("TaskAssignee")
+  projects                 Project[]                  @relation("ProjectCreator")
+  projectAttachments       ProjectAttachment[]
+  chatterPosts             ChatterPost[]              @relation("PostAuthor")
+  chatterMentions          ChatterPost[]              @relation("MentionedUser")
+  chatterComments          ChatterComment[]           @relation("CommentAuthor")
+  activities               ActivityLog[]
+  leaveRequests            LeaveRequest[]
+  notifications            Notification[]
+  regularizationAsDesigner RegularizationRequest[]    @relation("RegularizationDesigner")
+  regularizationAsApprover RegularizationRequest[]    @relation("RegularizationApprover")
+  overtimeRequests         OvertimeRequest[]          @relation("OvertimeDesigner")
+  schedulerAssignments     SchedulerAssignment[]      @relation("SchedulerDesigner")
+  schedulerAssignedBy      SchedulerAssignment[]      @relation("SchedulerAssignedBy")
+  designTasksAssigned      DesignTask[]               @relation("DesignTaskAssignee")
+  designTasksUpdated       DesignTask[]               @relation("DesignTaskUpdatedBy")
+
+  createdAt DateTime @default(dbgenerated("sysutcdatetime()"))
+  updatedAt DateTime @default(dbgenerated("sysutcdatetime()")) @updatedAt
+
+  @@map("ErpTSUser")
 }
 
+// ---------------------------------------------------------
+// PROJECTS & TASKS
+// ---------------------------------------------------------
 model Project {
-  id          String   @id @default(uuid())
-  name        String
-  description String?
-  isActive    Boolean  @default(true)
-  tasks       Task[]
-  createdById String?
-  createdBy   User?    @relation("ProjectCreator", fields: [createdById], references: [id], onDelete: NoAction, onUpdate: NoAction)
-  createdAt   DateTime @default(now())
-  updatedAt   DateTime @updatedAt
+  id           String   @id @default(dbgenerated("newid()")) @db.UniqueIdentifier
+  projectNo    String?  @unique
+  name         String   @db.NVarChar(200)
+  category     String   @default("Project") @db.NVarChar(100)
+  businessUnit String?  @db.NVarChar(255)
+  description  String?  @db.NVarChar(Max)
+  status       String   @default("ACTIVE") @db.NVarChar(50)
+  salesPerson  String?  @db.NVarChar(255)
+  createdById  String?  @db.UniqueIdentifier
+  createdBy    User?    @relation("ProjectCreator", fields: [createdById], references: [id], onDelete: NoAction, onUpdate: NoAction)
+  tasks        Task[]
+  attachments  ProjectAttachment[]
+  createdAt    DateTime @default(dbgenerated("sysutcdatetime()"))
+  updatedAt    DateTime @default(dbgenerated("sysutcdatetime()")) @updatedAt
 
   @@index([createdById])
+  @@map("ErpTSProject")
 }
 
 model Task {
-  id          String     @id @default(uuid())
-  title       String
-  description String?
-  status      String     @default("PENDING")
-  projectId   String
-  project     Project    @relation(fields: [projectId], references: [id])
-  assigneeId  String?
-  assignee    User?      @relation("TaskAssignee", fields: [assigneeId], references: [id], onDelete: NoAction, onUpdate: NoAction)
+  id          String    @id @default(dbgenerated("newid()")) @db.UniqueIdentifier
+  taskNo      String    @unique @db.NVarChar(100)
+  opNo        String?   @db.NVarChar(100)
+  title       String    @db.NVarChar(200)
+  description String?   @db.NVarChar(Max)
+  status      String    @default("PENDING") @db.NVarChar(20)
+  priority    String    @default("Medium") @db.NVarChar(50)
+  projectId   String    @db.UniqueIdentifier
+  assigneeId  String?   @db.UniqueIdentifier
   dueDate     DateTime?
-  createdAt   DateTime   @default(now())
-  updatedAt   DateTime   @updatedAt
+  startedAt   DateTime?
+  completedAt DateTime?
+
+  project                Project                 @relation(fields: [projectId], references: [id], onUpdate: NoAction)
+  assignee               User?                   @relation("TaskAssignee", fields: [assigneeId], references: [id], onDelete: NoAction, onUpdate: NoAction)
+  chatterPosts           ChatterPost[]
+  activityLogs           ActivityLog[]
+  regularizationRequests RegularizationRequest[]
+  overtimeRequests       OvertimeRequest[]
+  schedulerAssignments   SchedulerAssignment[]
+  retailDetails          RetailTaskDetail[]
+  projectDetails         ProjectTaskDetail[]
+
+  createdAt DateTime @default(dbgenerated("sysutcdatetime()"))
+  updatedAt DateTime @default(dbgenerated("sysutcdatetime()")) @updatedAt
 
   @@index([projectId])
   @@index([assigneeId])
+  @@map("ErpTSTask")
+}
+
+model RetailTaskDetail {
+  id             String   @id @default(dbgenerated("newid()")) @db.UniqueIdentifier
+  taskId         String   @db.UniqueIdentifier
+  task           Task     @relation(fields: [taskId], references: [id], onDelete: Cascade, onUpdate: NoAction)
+  attachments    RetailTaskDetailAttachment[]
+  providedFile   String?  @db.NVarChar(255)
+  fileKey        String?  @db.NVarChar(1024)
+  fileUrl        String?  @db.NVarChar(2000)
+  hodName        String?  @db.NVarChar(255)
+  designTypes    String?  @db.NVarChar(500)
+  hoursRequired  Decimal? @db.Decimal(10, 2)
+  comment        String?  @db.NVarChar(Max)
+  signFamily     String?  @db.NVarChar(255)
+  signType       String?  @db.NVarChar(255)
+  planCode       String?  @db.NVarChar(100)
+  contractRef    String?  @db.NVarChar(100)
+  quantity       Int?
+  deadline       DateTime?
+  createdAt      DateTime @default(now())
+
+  @@index([taskId])
+  @@map("ErpTSRetailTaskDetail")
+}
+
+model ProjectTaskDetail {
+  id             String   @id @default(dbgenerated("newid()")) @db.UniqueIdentifier
+  taskId         String   @db.UniqueIdentifier
+  task           Task     @relation(fields: [taskId], references: [id], onDelete: Cascade, onUpdate: NoAction)
+  attachments    ProjectTaskDetailAttachment[]
+  signType       String?  @db.NVarChar(255)
+  planCode       String?  @db.NVarChar(100)
+  area           String?  @db.NVarChar(100)
+  level          String?  @db.NVarChar(100)
+  artwork        Boolean? @default(false)
+  artworkHours   Decimal? @db.Decimal(10, 2)
+  technical      Boolean? @default(false)
+  technicalHours Decimal? @db.Decimal(10, 2)
+  location       Boolean? @default(false)
+  locationHours  Decimal? @db.Decimal(10, 2)
+  asBuilt        Boolean? @default(false)
+  asBuiltHours   Decimal? @db.Decimal(10, 2)
+  bim            Boolean? @default(false)
+  deadline       DateTime?
+  comment        String?  @db.NVarChar(Max)
+  createdAt      DateTime @default(now())
+
+  @@index([taskId])
+  @@map("ErpTSProjectTaskDetail")
+}
+
+model ProjectAttachment {
+  id           String   @id @default(dbgenerated("newid()")) @db.UniqueIdentifier
+  projectId    String   @db.UniqueIdentifier
+  project      Project  @relation(fields: [projectId], references: [id], onDelete: Cascade, onUpdate: NoAction)
+  fileKey      String   @db.NVarChar(1024)
+  fileName     String   @db.NVarChar(255)
+  mimeType     String?  @db.NVarChar(100)
+  sizeBytes    BigInt?
+  uploadedById String?  @db.UniqueIdentifier
+  uploadedBy   User?    @relation(fields: [uploadedById], references: [id], onDelete: NoAction, onUpdate: NoAction)
+  createdAt    DateTime @default(now())
+
+  @@index([projectId])
+  @@index([createdAt])
+  @@map("ErpTSProjectAttachment")
+}
+
+model RetailTaskDetailAttachment {
+  id                 String           @id @default(dbgenerated("newid()")) @db.UniqueIdentifier
+  retailTaskDetailId String           @db.UniqueIdentifier
+  retailTaskDetail   RetailTaskDetail @relation(fields: [retailTaskDetailId], references: [id], onDelete: Cascade, onUpdate: NoAction)
+  fileKey            String           @db.NVarChar(1024)
+  fileName           String           @db.NVarChar(255)
+  mimeType           String?          @db.NVarChar(100)
+  sizeBytes          BigInt?
+  createdAt          DateTime         @default(now())
+
+  @@index([retailTaskDetailId])
+  @@index([createdAt])
+  @@map("ErpTSRetailTaskDetailAttachment")
+}
+
+model ProjectTaskDetailAttachment {
+  id                  String            @id @default(dbgenerated("newid()")) @db.UniqueIdentifier
+  projectTaskDetailId String            @db.UniqueIdentifier
+  projectTaskDetail   ProjectTaskDetail @relation(fields: [projectTaskDetailId], references: [id], onDelete: Cascade, onUpdate: NoAction)
+  fileKey             String            @db.NVarChar(1024)
+  fileName            String            @db.NVarChar(255)
+  mimeType            String?           @db.NVarChar(100)
+  sizeBytes           BigInt?
+  createdAt           DateTime          @default(now())
+
+  @@index([projectTaskDetailId])
+  @@index([createdAt])
+  @@map("ErpTSProjectTaskDetailAttachment")
+}
+
+// ---------------------------------------------------------
+// DESIGN LIST (ERP design tasks — separate from ErpTSTask)
+// ---------------------------------------------------------
+model DesignTask {
+  id                 String    @id @default(dbgenerated("newid()")) @db.UniqueIdentifier
+  opNo               String?   @db.NVarChar(100)
+  projectNo          String?   @db.NVarChar(100)
+  name               String?   @db.NVarChar(255)
+  description        String?   @db.NVarChar(Max)
+  designType         String?   @db.NVarChar(50)
+  businessUnit       String?   @db.NVarChar(100)
+  status             String?   @db.NVarChar(50)
+  salesPerson        String?   @db.UniqueIdentifier
+  assignedDesignerId String?   @db.UniqueIdentifier
+  assignedDesigner   User?     @relation("DesignTaskAssignee", fields: [assignedDesignerId], references: [id], onDelete: NoAction, onUpdate: NoAction)
+  lastUpdatedBy      String?   @db.UniqueIdentifier
+  updatedBy          User?     @relation("DesignTaskUpdatedBy", fields: [lastUpdatedBy], references: [id], onDelete: NoAction, onUpdate: NoAction)
+  deadline           DateTime? @db.DateTime
+  agingDays          Int?
+  priority           String?   @db.NVarChar(20)
+  estimatedHours     Decimal?  @db.Decimal(10, 2)
+  completedHours     Decimal?  @db.Decimal(10, 2)
+  revisionCount      Int?      @default(0)
+  completionPercentage Int?    @default(0)
+  isOverdue          Boolean?  @default(false)
+  isDeleted          Boolean?  @default(false)
+  created            DateTime? @default(now()) @db.DateTime
+  createdAt          DateTime? @default(now()) @db.DateTime
+  updatedAt          DateTime? @default(now()) @updatedAt @db.DateTime
+  signageDetails     SignageDetail[]
+
+  @@map("ErpTSDesignTask")
+}
+
+model SignageDetail {
+  id          String     @id @default(dbgenerated("newid()")) @db.UniqueIdentifier
+  taskId      String?    @db.UniqueIdentifier
+  designTask  DesignTask? @relation(fields: [taskId], references: [id], onDelete: NoAction, onUpdate: NoAction)
+  signFamily  String?    @db.NVarChar(255)
+  signType    String?    @db.NVarChar(255)
+  planCode    String?    @db.NVarChar(100)
+  contractRef String?    @db.NVarChar(100)
+  quantity    Int?
+  createdAt   DateTime?  @default(now()) @db.DateTime
+
+  @@map("ErpTSSignageDetail")
+}
+
+// ---------------------------------------------------------
+// CHATTER & ATTACHMENTS
+// ---------------------------------------------------------
+model ChatterPost {
+  id              String    @id @default(dbgenerated("newid()")) @db.UniqueIdentifier
+  title           String?   @db.NVarChar(255)
+  message         String?   @db.NVarChar(Max)
+  postType        String?   @db.NVarChar(50)
+  priority        String?   @db.NVarChar(20)
+  visibility      String?   @db.NVarChar(50)
+  seenByCount     Int?      @default(0)
+  attachmentCount Int?      @default(0)
+  isPinned        Boolean?  @default(false)
+  editedAt        DateTime? @db.DateTime
+
+  taskId        String? @db.UniqueIdentifier
+  task          Task?   @relation(fields: [taskId], references: [id], onDelete: NoAction, onUpdate: NoAction)
+  authorId      String? @db.UniqueIdentifier
+  author        User?   @relation("PostAuthor", fields: [authorId], references: [id], onDelete: NoAction, onUpdate: NoAction)
+  mentionUserId String? @db.UniqueIdentifier
+  mentionUser   User?   @relation("MentionedUser", fields: [mentionUserId], references: [id], onDelete: NoAction, onUpdate: NoAction)
+
+  attachments Attachment[]
+  links       LinkAttachment[]
+  comments    ChatterComment[]
+
+  createdAt DateTime? @default(now()) @db.DateTime
+  updatedAt DateTime? @default(now()) @updatedAt @db.DateTime
+
+  @@map("ErpTSChatterPost")
+}
+
+model ChatterComment {
+  id       String    @id @default(dbgenerated("newid()")) @db.UniqueIdentifier
+  postId   String?   @db.UniqueIdentifier
+  post     ChatterPost? @relation(fields: [postId], references: [id], onDelete: Cascade, onUpdate: NoAction)
+  authorId String?   @db.UniqueIdentifier
+  author   User?     @relation("CommentAuthor", fields: [authorId], references: [id], onDelete: NoAction, onUpdate: NoAction)
+  message  String?   @db.NVarChar(Max)
+  createdAt DateTime? @default(now()) @db.DateTime
+
+  @@map("ErpTSChatterComment")
+}
+
+model Attachment {
+  id            String      @id @default(dbgenerated("newid()")) @db.UniqueIdentifier
+  fileName      String      @db.NVarChar(255)
+  filePath      String
+  mimeType      String?     @db.NVarChar(100)
+  sizeBytes     BigInt?
+  chatterPostId String      @db.UniqueIdentifier
+  chatterPost   ChatterPost @relation(fields: [chatterPostId], references: [id], onDelete: Cascade, onUpdate: NoAction)
+  createdAt     DateTime?   @default(now()) @db.DateTime
+
+  @@map("ErpTSChatterPostAttachment")
+}
+
+model LinkAttachment {
+  id            String      @id @default(dbgenerated("newid()")) @db.UniqueIdentifier
+  url           String      @db.NVarChar(2000)
+  platform      String?     @db.NVarChar(255)
+  displayName   String?
+  chatterPostId String      @db.UniqueIdentifier
+  chatterPost   ChatterPost @relation(fields: [chatterPostId], references: [id], onDelete: Cascade, onUpdate: NoAction)
+  createdAt     DateTime    @default(now())
+
+  @@map("ErpTSLinkAttachment")
+}
+
+// ---------------------------------------------------------
+// REQUESTS (leave, regularization, overtime)
+// ---------------------------------------------------------
+model LeaveRequest {
+  id        String    @id @default(dbgenerated("newid()")) @db.UniqueIdentifier
+  userId    String    @db.UniqueIdentifier
+  user      User      @relation(fields: [userId], references: [id], onDelete: NoAction, onUpdate: NoAction)
+  type      String    @db.NVarChar(255)
+  status    String    @default("Pending") @db.NVarChar(255)
+  startDate DateTime
+  endDate   DateTime?
+  reason    String?   @db.NVarChar(Max)
+  createdAt DateTime  @default(now())
+  updatedAt DateTime  @default(now()) @updatedAt
+
+  @@map("ErpTSLeaveRequest")
+}
+
+model RegularizationRequest {
+  id         String    @id @default(dbgenerated("newid()")) @db.UniqueIdentifier
+  designerId String?   @db.UniqueIdentifier
+  designer   User?     @relation("RegularizationDesigner", fields: [designerId], references: [id], onDelete: NoAction, onUpdate: NoAction)
+  taskId     String?   @db.UniqueIdentifier
+  task       Task?     @relation(fields: [taskId], references: [id], onDelete: NoAction, onUpdate: NoAction)
+  date       DateTime? @db.Date
+  duration   String?   @db.NVarChar(100)
+  reason     String?   @db.NVarChar(100)
+  notes      String?   @db.NVarChar(Max)
+  status     String?   @db.NVarChar(50)
+  approverId String?   @db.UniqueIdentifier
+  approver   User?     @relation("RegularizationApprover", fields: [approverId], references: [id], onDelete: NoAction, onUpdate: NoAction)
+  createdAt  DateTime? @default(now())
+
+  @@map("ErpTSRegularizationRequest")
+}
+
+model OvertimeRequest {
+  id                 String    @id @default(dbgenerated("newid()")) @db.UniqueIdentifier
+  designerId         String?   @db.UniqueIdentifier
+  designer           User?     @relation("OvertimeDesigner", fields: [designerId], references: [id], onDelete: NoAction, onUpdate: NoAction)
+  taskId             String?   @db.UniqueIdentifier
+  task               Task?     @relation(fields: [taskId], references: [id], onDelete: NoAction, onUpdate: NoAction)
+  date               DateTime? @db.Date
+  estimatedRemaining String?   @db.NVarChar(255)
+  requestedHours     Decimal?  @db.Decimal(10, 2)
+  approvedHours      Decimal?  @db.Decimal(10, 2)
+  reason             String?   @db.NVarChar(Max)
+  status             String?   @db.NVarChar(50)
+  createdAt          DateTime? @default(now())
+
+  @@map("ErpTSOvertimeRequest")
+}
+
+// ---------------------------------------------------------
+// SCHEDULER
+// ---------------------------------------------------------
+model SchedulerAssignment {
+  id            String    @id @default(dbgenerated("newid()")) @db.UniqueIdentifier
+  designerId    String?   @db.UniqueIdentifier
+  designer      User?     @relation("SchedulerDesigner", fields: [designerId], references: [id], onDelete: NoAction, onUpdate: NoAction)
+  taskId        String?   @db.UniqueIdentifier
+  task          Task?     @relation(fields: [taskId], references: [id], onDelete: NoAction, onUpdate: NoAction)
+  dayIndex      Int?
+  assignedHours Decimal?  @db.Decimal(10, 2)
+  parentId      String?   @db.UniqueIdentifier
+  splitIndex    Int?
+  totalParts    Int?
+  weekStartDate DateTime? @db.Date
+  weekEndDate   DateTime? @db.Date
+  notes         String?   @db.NVarChar(Max)
+  isLocked      Boolean?  @default(false)
+  assignedBy    String?   @db.UniqueIdentifier
+  assignedByUser User?    @relation("SchedulerAssignedBy", fields: [assignedBy], references: [id], onDelete: NoAction, onUpdate: NoAction)
+  createdAt     DateTime? @default(now())
+  updatedAt     DateTime? @default(now()) @updatedAt
+
+  @@map("ErpTSSchedulerAssignment")
+}
+
+// ---------------------------------------------------------
+// ACTIVITY & NOTIFICATIONS
+// ---------------------------------------------------------
+model ActivityLog {
+  id        String   @id @default(dbgenerated("newid()")) @db.UniqueIdentifier
+  action    String   @db.NVarChar(1000)
+  details   String?  @db.NVarChar(Max)
+  userId    String   @db.UniqueIdentifier
+  user      User     @relation(fields: [userId], references: [id], onDelete: NoAction, onUpdate: NoAction)
+  taskId    String?  @db.UniqueIdentifier
+  task      Task?    @relation(fields: [taskId], references: [id], onDelete: NoAction, onUpdate: NoAction)
+  createdAt DateTime @default(now())
+
+  @@map("ErpTSActivityLog")
+}
+
+model Notification {
+  id        String   @id @default(dbgenerated("newid()")) @db.UniqueIdentifier
+  userId    String   @db.UniqueIdentifier
+  user      User     @relation(fields: [userId], references: [id], onDelete: Cascade, onUpdate: NoAction)
+  title     String
+  message   String   @db.NVarChar(Max)
+  isRead    Boolean  @default(false)
+  linkUrl   String?  @db.NVarChar(2000)
+  createdAt DateTime @default(now())
+
+  @@map("ErpTSNotification")
 }

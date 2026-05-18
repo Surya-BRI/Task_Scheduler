@@ -3,15 +3,15 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { useSearchParams } from "next/navigation";
 import { Navbar } from "@/components/Navbar";
-import { MOCK_ACTIVITIES } from "../data/mockActivities";
+import { fetchTeamActivities } from "../services/activities.api";
 import { filterActivities } from "../lib/teamActivityFilters";
 import { TeamActivityFilters } from "./TeamActivityFilters";
 import { ActivityFeedList } from "./ActivityFeedList";
 import { IndividualsPeopleList } from "./IndividualsPeopleList";
 
-function buildInitialLikes() {
+function buildInitialLikes(activities) {
   const o = {};
-  for (const a of MOCK_ACTIVITIES) {
+  for (const a of activities) {
     if (a.kind === "task_update" && typeof a.liked === "boolean") o[a.id] = a.liked;
   }
   return o;
@@ -33,7 +33,7 @@ export function TeamActivityFeedScreenInner() {
   const [priority, setPriority] = useState("all");
   const [dateRange, setDateRange] = useState(DEFAULT_RANGE);
   const [timeOrder, setTimeOrder] = useState("latest");
-  const [likes, setLikes] = useState(buildInitialLikes);
+  const [likes, setLikes] = useState({});
   const [selectedPersonId, setSelectedPersonId] = useState(null);
 
   useEffect(() => {
@@ -48,6 +48,26 @@ export function TeamActivityFeedScreenInner() {
     }
   }, [from]);
 
+  const [activities, setActivities] = useState([]);
+  const [loading, setLoading] = useState(true);
+
+  useEffect(() => {
+    let active = true;
+    fetchTeamActivities({ limit: 100 })
+      .then(data => {
+        if (active) {
+          setActivities(data);
+          setLikes(buildInitialLikes(data));
+          setLoading(false);
+        }
+      })
+      .catch(err => {
+        console.error("Failed to load activities", err);
+        if (active) setLoading(false);
+      });
+    return () => { active = false; };
+  }, []);
+
   const handleTeammateMode = useCallback((mode) => {
     setTeammateMode(mode);
     if (mode !== "individuals") {
@@ -59,7 +79,7 @@ export function TeamActivityFeedScreenInner() {
 
   const visible = useMemo(
     () =>
-      filterActivities(MOCK_ACTIVITIES, {
+      filterActivities(activities, {
         teammateMode,
         activityKind,
         sortMonthIndex,
@@ -67,7 +87,7 @@ export function TeamActivityFeedScreenInner() {
         timeOrder,
         priority,
       }),
-    [teammateMode, activityKind, sortMonthIndex, dateRange, timeOrder, priority],
+    [activities, teammateMode, activityKind, sortMonthIndex, dateRange, timeOrder, priority],
   );
 
   const onToggleLike = useCallback((id) => {
@@ -134,6 +154,7 @@ export function TeamActivityFeedScreenInner() {
         />
 
         {showIndividualsRoster ? (
+          loading ? <div className="p-4 text-center text-slate-500">Loading...</div> :
           <IndividualsPeopleList
             people={individualsRoster}
             selectedPersonId={selectedPersonId}
@@ -154,6 +175,7 @@ export function TeamActivityFeedScreenInner() {
         ) : null}
 
         {teammateMode !== "individuals" ? (
+          loading ? <div className="p-4 text-center text-slate-500">Loading...</div> :
           <ActivityFeedList items={visible} likes={likes} onToggleLike={onToggleLike} activityKind={activityKind} />
         ) : null}
       </main>

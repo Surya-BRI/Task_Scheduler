@@ -1,7 +1,7 @@
-import { IsEnum } from 'class-validator';
-import { TaskStatus } from '../../common/constants/task-status.enum';
+import { IsIn, IsString } from 'class-validator';
 
 export class UpdateTaskStatusDto {
-  @IsEnum(TaskStatus)
-  status!: TaskStatus;
+  @IsString()
+  @IsIn(['PENDING', 'WIP', 'COMPLETED', 'REVISION', 'APPROVED'])
+  status: string;
 }

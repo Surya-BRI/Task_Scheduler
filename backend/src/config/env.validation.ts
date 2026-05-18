@@ -5,6 +5,7 @@ export const envValidationSchema = Joi.object({
   PORT: Joi.number().default(4000),
   API_PREFIX: Joi.string().default('api/v1'),
   DATABASE_URL: Joi.string().optional(),
+  LIVE_DATABASE_URL: Joi.string().optional(),
   DB_SERVER: Joi.string().optional(),
   DB_PORT: Joi.number().default(1433),
   DB_NAME: Joi.string().optional(),
@@ -39,6 +40,28 @@ export const envValidationSchema = Joi.object({
     }),
   LOG_LEVEL: Joi.string().default('debug'),
   ERP_SQL_CATALOG: Joi.string().max(128).optional(),
+  /** dbo table name only — bracketed as [dbo].[name] in SQL */
+  ERP_CHATTER_POST_TABLE: Joi.string().max(128).pattern(/^[\w-]+$/).optional(),
+  /** Full FROM object (e.g. `[MyDb].[dbo].[TSChatterPost]`). Disallows SQL metacharacters. */
+  ERP_CHATTER_POST_SQL_OBJECT: Joi.string().max(280).pattern(/^[\s[\]a-zA-Z0-9_.-]*$/).optional(),
+  // ─── Authentication mode ─────────────────────────────────────────────────────
+  /** 'demo' = internal JWT (default). 'external' = validate tokens from ERP site. */
+  AUTH_MODE: Joi.string().valid('demo', 'external').default('demo'),
+  /** Required when AUTH_MODE=external. The JWT secret used by the external ERP site. */
+  EXTERNAL_JWT_SECRET:  Joi.string().min(8).optional(),
+  /** JWT claim name for the user id in external tokens (default: 'sub') */
+  EXTERNAL_SUB_FIELD:   Joi.string().optional(),
+  /** JWT claim name for the email in external tokens (default: 'email') */
+  EXTERNAL_EMAIL_FIELD: Joi.string().optional(),
+  /** JWT claim name for the role in external tokens (default: 'role') */
+  EXTERNAL_ROLE_FIELD:  Joi.string().optional(),
+  /** JSON object mapping external role strings to internal UserRole values */
+  EXTERNAL_ROLE_MAP:    Joi.string().optional(),
+  AWS_ACCESS_KEY_ID: Joi.string().optional(),
+  AWS_SECRET_ACCESS_KEY: Joi.string().optional(),
+  AWS_REGION: Joi.string().optional(),
+  AWS_BUCKET: Joi.string().optional(),
+  AWS_FOLDER: Joi.string().max(128).pattern(/^[a-zA-Z0-9/_-]+$/).optional(),
 }).custom((value, helpers) => {
   const hasDatabaseUrl = !!value.DATABASE_URL;
   const hasDbParts =

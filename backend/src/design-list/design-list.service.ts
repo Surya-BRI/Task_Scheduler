@@ -39,7 +39,8 @@ function toDdMmYyyy(value: Date): string {
   return `${day}/${month}/${year}`;
 }
 
-const RETAIL_UNIT_CODES = new Set<string>(['retail', 'rtl', 'r']);
+const RETAIL_UNIT_CODES = new Set<string>(['retail', 'rtl', 'r', 'prosigns-retail']);
+const PROJECT_UNIT_CODES = new Set<string>(['project', 'normal', 'prosigns-projects']);
 
 @Injectable()
 export class DesignListService {
@@ -50,6 +51,7 @@ export class DesignListService {
   private resolveDesignType(businessUnitCode: string | null): 'Retail' | 'Project' {
     const normalized = (businessUnitCode ?? '').trim().toLowerCase();
     if (RETAIL_UNIT_CODES.has(normalized)) return 'Retail';
+    if (PROJECT_UNIT_CODES.has(normalized)) return 'Project';
 
     if (normalized.length > 0 && normalized !== 'project') {
       this.logger.warn(
@@ -74,8 +76,7 @@ export class DesignListService {
   }
 
   private mapRow(row: DesignListRow, preserveNulls = false) {
-    const createdIso = new Date(row.createdOn).toISOString();
-    const id = `${row.projectId}:${row.salesForceCode ?? 'no-op'}:${createdIso}`;
+    const id = String(row.projectId);
     const projectCode = row.projectCode ?? null;
     const salesForceCode = row.salesForceCode ?? null;
     const projectName = row.projectName ?? null;
@@ -189,7 +190,7 @@ export class DesignListService {
   }
 
   async findAll() {
-    const rows = await this.prisma.$queryRaw<DesignListRow[]>`
+    const rows = await this.prisma.live.$queryRaw<DesignListRow[]>`
       SELECT
         mp.projectid AS projectId,
         mp.projectCode,
@@ -234,14 +235,14 @@ export class DesignListService {
       : '';
 
     const baseQuery = this.buildBaseQuery(whereSearchClause);
-    const rows = await this.prisma.$queryRawUnsafe<DesignListRow[]>(`
+    const rows = await this.prisma.live.$queryRawUnsafe<DesignListRow[]>(`
       ${baseQuery}
       ORDER BY mp.createdOn DESC
       OFFSET ${offset} ROWS
       FETCH NEXT ${safeLimit} ROWS ONLY
     `);
 
-    const totalRows = await this.prisma.$queryRawUnsafe<Array<{ total: number }>>(`
+    const totalRows = await this.prisma.live.$queryRawUnsafe<Array<{ total: number }>>(`
       SELECT COUNT(*) AS total
       FROM (${baseQuery}) AS q
     `);
@@ -268,14 +269,14 @@ export class DesignListService {
     const whereClause = this.buildDesignListWhereClause(filters);
     const baseQuery = this.buildBaseQuery(whereClause);
 
-    const rows = await this.prisma.$queryRawUnsafe<DesignListRow[]>(`
+    const rows = await this.prisma.live.$queryRawUnsafe<DesignListRow[]>(`
       ${baseQuery}
       ORDER BY mp.createdOn DESC
       OFFSET ${offset} ROWS
       FETCH NEXT ${safeLimit} ROWS ONLY
     `);
 
-    const totalRows = await this.prisma.$queryRawUnsafe<Array<{ total: number }>>(`
+    const totalRows = await this.prisma.live.$queryRawUnsafe<Array<{ total: number }>>(`
       SELECT COUNT(*) AS total
       FROM (${baseQuery}) AS q
     `);

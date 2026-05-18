@@ -1,3 +1,4 @@
+import { parseApiErrorMessage } from './api-error';
 import { clearAccessToken, getAccessToken } from './auth-token';
 import { env } from './env';
 import { dateReviver } from './utils';
@@ -5,7 +6,11 @@ import { dateReviver } from './utils';
 async function request<T>(path: string, init?: RequestInit): Promise<T> {
   const token = getAccessToken();
   const headers = new Headers(init?.headers);
-  headers.set('Content-Type', 'application/json');
+  if (!(init?.body instanceof FormData)) {
+    headers.set('Content-Type', 'application/json');
+  } else {
+    headers.delete('Content-Type');
+  }
 
   if (token) {
     headers.set('Authorization', `Bearer ${token}`);
@@ -23,7 +28,7 @@ async function request<T>(path: string, init?: RequestInit): Promise<T> {
 
   if (!response.ok) {
     const errorBody = await response.text();
-    throw new Error(errorBody || 'API request failed');
+    throw new Error(parseApiErrorMessage(errorBody, response.status));
   }
 
   // Use a date-aware reviver so ISO strings are automatically parsed into
@@ -37,10 +42,15 @@ export const apiClient = {
     return request(path);
   },
   post<T>(path: string, body: unknown): Promise<T> {
-    return request(path, { method: 'POST', body: JSON.stringify(body) });
+    const isFormData = body instanceof FormData;
+    return request(path, { method: 'POST', body: isFormData ? body : JSON.stringify(body) });
   },
   patch<T>(path: string, body: unknown): Promise<T> {
-    return request(path, { method: 'PATCH', body: JSON.stringify(body) });
+    const isFormData = body instanceof FormData;
+    return request(path, { method: 'PATCH', body: isFormData ? body : JSON.stringify(body) });
+  },
+  delete<T>(path: string): Promise<T> {
+    return request(path, { method: 'DELETE' });
   },
 };
 

@@ -6,6 +6,12 @@ const eslintConfig = defineConfig([
   ...nextVitals,
   ...nextTs,
   {
+    rules: {
+      // Client-only session hydration and pagination resets use effects intentionally.
+      "react-hooks/set-state-in-effect": "off",
+    },
+  },
+  {
     files: ["src/**/*.{ts,tsx}"],
     rules: {
       "@typescript-eslint/ban-ts-comment": "off",

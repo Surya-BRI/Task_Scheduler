@@ -1,104 +1,104 @@
-# Backend — developer guide
+# Backend Development Guide
 
-NestJS REST API with Prisma (MSSQL). Global route prefix: **`/api/v1`**.
+NestJS REST API with Prisma (SQL Server). Global route prefix defaults to `/api/v1`.
 
-## Quick reference
+## Quick Reference
 
 | Item | Default |
 |------|---------|
-| HTTP port | `4000` (`PORT` in `.env`) |
+| HTTP port | `4000` (`PORT`) |
 | API base | `http://localhost:4000/api/v1` |
 | Health | `GET /api/v1/health` |
 
-## Environment variables
+## Environment
 
-Create `backend/.env` from `backend/.env.example`.
+Create `backend/.env`.
 
-### Required
+Required:
+- `JWT_ACCESS_SECRET` (min 16 chars)
+- `CORS_ORIGIN` (comma-separated valid origins)
+- Database via:
+- `DATABASE_URL`, or
+- `DB_SERVER`, `DB_NAME`, `DB_USER`, `DB_PASSWORD` (+ optional `DB_PORT`, `DB_ENCRYPT`, `DB_TRUST_SERVER_CERTIFICATE`)
 
-| Variable | Description |
-|----------|-------------|
-| `JWT_ACCESS_SECRET` | Secret for signing JWTs (minimum 16 characters). |
-| `CORS_ORIGIN` | Allowed browser origin(s), comma-separated URIs. Example: `http://localhost:5000` |
-| **Database** | Either `DATABASE_URL` **or** all of `DB_SERVER`, `DB_NAME`, `DB_USER`, `DB_PASSWORD` (optional `DB_PORT`, `DB_ENCRYPT`, `DB_TRUST_SERVER_CERTIFICATE`). |
-
-`DATABASE_URL` format (Prisma CLI uses this):
+`DATABASE_URL` format:
 
 ```text
 sqlserver://HOST:1433;database=YOUR_DB;user=USER;password=PASS;encrypt=true;trustServerCertificate=true
 ```
 
-### Optional
+Common optional:
+- `PORT` (default `4000`)
+- `API_PREFIX` (default `api/v1`)
+- `JWT_ACCESS_EXPIRES_IN` (default `1d`)
 
-| Variable | Default |
-|----------|---------|
-| `PORT` | `4000` |
-| `API_PREFIX` | `api/v1` |
-| `JWT_ACCESS_EXPIRES_IN` | `1d` |
-| `NODE_ENV` | `development` |
+## Prisma in This Backend
 
-## Database: two ways to initialise
-
-### A) Prisma (recommended for greenfield)
-
-From `backend/`:
+### Schema and client
+- Source schema: `backend/prisma/schema.prisma`
+- Generate client after schema changes:
 
 ```bash
 npm run prisma:generate
+```
+
+If not regenerated, TypeScript errors appear for missing model properties/fields.
+
+### Runtime DB used by PrismaService
+- `backend/src/prisma/prisma.service.ts` uses app DB config (`database.url` / `DATABASE_URL`) for Prisma model queries.
+- Keep ERP live/read-only connection config separate from core Prisma schema DB.
+
+### Migrations and seed
+
+```bash
 npm run prisma:migrate
 npm run prisma:seed
 ```
 
-`prisma:seed` creates roles `HOD` / `DESIGNER` and users:
+Seed currently upserts:
+- Roles: `HOD`, `DESIGNER`
+- Demo users with bcrypt-hashed passwords:
+- `sarah.mitchell@bluerhine.com` / `hod123`
+- `alex.johnson@bluerhine.com` / `alex123`
+- `alexander.allen@bluerhine.com` / `alex123`
+- `benjamin.harris@bluerhine.com` / `ben123`
 
-- `hod@company.com` / `Secret123!`
-- `designer@company.com` / `Secret123!`
+## Run API
 
-(Hashes are generated with `bcrypt` — correct for login.)
-
-### B) Manual SQL (existing ERP / DBA workflow)
-
-1. Create tables to match `prisma/schema.prisma` (or run your own DDL).
-2. Insert roles and users. **Important:** `passwordHash` must be a real **bcrypt** hash for the password you use. A placeholder string will cause `401` on login.
-
-If users were created with a wrong hash, run the fix script in the repo:
-
-- `backend/prisma/fix-passwords-for-login.sql`
-
-Then retry login with password `Secret123!` (or update the script to your chosen password and regenerate hashes — see `backend/scripts/gen-bcrypt.js`).
-
-## Generate a bcrypt hash (local)
-
-From `backend/`:
-
-```bash
-node scripts/gen-bcrypt.js "YourPasswordHere"
-```
-
-Use the printed `HASH` value in SQL `UPDATE` for `User.passwordHash`.
-
-## Run the API
-
-From repository root:
+From repo root:
 
 ```bash
 npm run dev:backend
 ```
 
-Or from `backend/`:
+From `backend/`:
 
 ```bash
 npm run start:dev
 ```
 
-## Auth endpoints
+## Current Module Scope
 
-| Method | Path | Notes |
-|--------|------|--------|
-| POST | `/api/v1/auth/register` | Create user (role in body) |
-| POST | `/api/v1/auth/login` | Returns `accessToken` + `user` |
+`AppModule` currently loads:
+- Health
+- Auth
+- Users
+- Departments
+- Projects
+- Tasks
+- Design List
+- Regularization Requests
+- Overtime Requests
+- Scheduler Assignments
+- Chatter Posts
 
-Protected routes expect header:
+## Auth Endpoints
+
+- `POST /api/v1/auth/register`
+- `POST /api/v1/auth/login`
+- `GET /api/v1/auth/me`
+
+Protected routes use:
 
 ```http
 Authorization: Bearer <accessToken>
@@ -106,34 +106,19 @@ Authorization: Bearer <accessToken>
 
 ## Troubleshooting
 
-### `EADDRINUSE` on port 4000
+### 500 on API after schema changes
+1. Run `npm run prisma:generate`.
+2. Restart backend watcher.
+3. Verify backend is pointing at intended DB/schema.
 
-Another process is using the port. Find the PID:
+### 401 Invalid credentials
+- User not found, or
+- `passwordHash` in DB is not a bcrypt hash for supplied password.
+
+### Port conflict
 
 ```powershell
 netstat -ano | findstr :4000
 ```
 
-Stop it (`Stop-Process -Id <PID> -Force`) or set `PORT` to another value in `.env` and point the frontend `NEXT_PUBLIC_API_BASE_URL` at the new port.
-
-### Config error: `CORS_ORIGIN must be a valid uri`
-
-Use full URIs only, e.g. `http://localhost:5000`. Multiple origins: comma-separated, no spaces unless trimmed by app.
-
-### Login returns `401 Invalid credentials`
-
-- User missing or email typo.
-- `passwordHash` in SQL is not bcrypt for the password you type. Fix with `fix-passwords-for-login.sql` or `npm run prisma:seed`.
-
-### Prisma: table does not exist
-
-Run migrations or create tables before `prisma:seed`.
-
-## Project layout (backend)
-
-- `src/auth` — login/register, JWT strategy  
-- `src/users`, `src/projects`, `src/tasks` — domain modules  
-- `src/health` — liveness  
-- `src/prisma` — Prisma service  
-- `src/common` — guards, decorators, filters  
-- `prisma/schema.prisma` — data model  
+Stop conflicting process or change `PORT` and align frontend `NEXT_PUBLIC_API_BASE_URL`.

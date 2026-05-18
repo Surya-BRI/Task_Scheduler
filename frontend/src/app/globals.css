@@ -113,3 +113,67 @@ body {
 .ta-filter-panel .ui-popover-panel button[role="option"] {
   @apply px-2.5 py-1.5 text-xs;
 }
+
+/* Task details datepicker: scoped style inspired by provided reference */
+.task-date-picker-wrapper {
+  width: 100%;
+}
+
+.task-date-picker-calendar.react-datepicker {
+  border: 1px solid #e2e8f0;
+  border-radius: 14px;
+  box-shadow: 0 10px 24px rgba(15, 23, 42, 0.08);
+  font-family: var(--font-geist-sans), Arial, Helvetica, sans-serif;
+  font-size: 12px;
+}
+
+.task-date-picker-calendar .react-datepicker__header {
+  background: #ffffff;
+  border-bottom: none;
+  padding-top: 12px;
+}
+
+.task-date-picker-calendar .react-datepicker__current-month {
+  display: none;
+}
+
+.task-date-picker-calendar .react-datepicker__month-dropdown-container,
+.task-date-picker-calendar .react-datepicker__year-dropdown-container {
+  margin: 0 6px 8px 6px;
+}
+
+.task-date-picker-calendar .react-datepicker__month-select,
+.task-date-picker-calendar .react-datepicker__year-select {
+  border: none;
+  background: transparent;
+  font-size: 16px;
+  font-weight: 600;
+  color: #0f172a;
+  padding: 0 2px;
+}
+
+.task-date-picker-calendar .react-datepicker__day-name {
+  color: #64748b;
+  font-weight: 500;
+  width: 1.7rem;
+  line-height: 1.7rem;
+  margin: 0.08rem;
+}
+
+.task-date-picker-calendar .react-datepicker__day {
+  color: #0f172a;
+  border-radius: 9999px;
+  width: 1.7rem;
+  line-height: 1.7rem;
+  margin: 0.08rem;
+}
+
+.task-date-picker-calendar .react-datepicker__day--selected,
+.task-date-picker-calendar .react-datepicker__day--keyboard-selected {
+  background: #2563eb;
+  color: #ffffff;
+}
+
+.task-date-picker-calendar .react-datepicker__month {
+  margin: 0.25rem 0.4rem 0.45rem 0.4rem;
+}

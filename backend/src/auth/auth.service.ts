@@ -51,4 +51,9 @@ export class AuthService {
       },
     };
   }
+
+  async getMe(userId: string) {
+    const user = await this.usersService.findById(userId);
+    return user;
+  }
 }

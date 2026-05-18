@@ -447,9 +447,9 @@ export function DesignerDesignListScreen() {
 
   useEffect(() => {
     const session = getSession();
-    if (session?.role === "DESIGNER" && session?.designerId) {
+    if (session?.role === "DESIGNER") {
       setDesignerIdentity({
-        id: session.designerId,
+        id: session.designerId || session.id,
         name: session.name || "Designer",
       });
       return;

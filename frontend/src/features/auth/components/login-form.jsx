@@ -3,7 +3,11 @@
 import { useState } from 'react';
 import { useRouter } from 'next/navigation';
 import { Eye, EyeOff, Lock, Mail, ShieldCheck } from 'lucide-react';
-import { mockLogin, getHomeRoute } from '@/lib/mock-auth';
+import { getHomeRoute } from '@/lib/mock-auth';
+import { buildSessionForUser } from '@/lib/designers';
+import { loginApi } from '@/features/auth/services/auth.api';
+import { setAccessToken } from '@/lib/auth-token';
+
 
 const DEMO_ACCOUNTS = [
   { label: 'HOD — Sarah Mitchell', email: 'sarah.mitchell@bluerhine.com', password: 'hod123', badge: 'HOD', color: 'bg-violet-100 text-violet-700 border-violet-200' },
@@ -26,12 +30,18 @@ export function LoginForm() {
     if (!email || !password) { setError('Please fill in all fields.'); return; }
     setLoading(true);
     try {
-      // Simulate slight delay for UX
       await new Promise((r) => setTimeout(r, 400));
-      const session = mockLogin(email, password);
+      const response = await loginApi(email, password);
+      // Persist JWT for API calls
+      setAccessToken(response.accessToken);
+      // Persist session profile to localStorage so mock-auth helpers still work
+      const session = buildSessionForUser(response.user);
+      if (typeof window !== 'undefined') {
+        localStorage.setItem('br_session', JSON.stringify(session));
+      }
       router.push(getHomeRoute(session));
     } catch (err) {
-      setError(err.message || 'Login failed.');
+      setError(err.message || 'Login failed. Check your credentials.');
     } finally {
       setLoading(false);
     }

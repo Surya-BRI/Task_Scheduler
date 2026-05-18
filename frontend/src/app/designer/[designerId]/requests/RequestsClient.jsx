@@ -5,7 +5,7 @@ import { useRouter } from "next/navigation";
 import { Navbar } from "@/components/Navbar";
 import StatsBar from "../components/StatsBar";
 import { Clock3, FileClock, TimerReset, X } from "lucide-react";
-import { formatDate, formatDateForInput } from "@/lib/utils";
+import { formatDate } from "@/lib/utils";
 import { apiClient } from "@/lib/api-client";
 
 const UUID_RE = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
@@ -37,14 +37,23 @@ export default function RequestsClient({ designer }) {
     setTimeout(() => setToastMessage(null), 3000);
   };
 
+  const [sessionErpId, setSessionErpId] = useState(null);
+
   useEffect(() => {
     import("@/lib/mock-auth").then(({ getSession }) => {
       const session = getSession();
       if (session?.role === "HOD") setIsHOD(true);
+      if (session?.erpDesignerId && isUuidString(session.erpDesignerId)) {
+        setSessionErpId(String(session.erpDesignerId).trim());
+      } else if (session?.id && isUuidString(session.id)) {
+        setSessionErpId(String(session.id).trim());
+      }
     });
   }, []);
 
-  const erpDesignerIdRaw = designer?.erpDesignerId != null ? String(designer.erpDesignerId).trim() : "";
+  const erpDesignerIdRaw =
+    sessionErpId ??
+    (designer?.erpDesignerId != null ? String(designer.erpDesignerId).trim() : "");
   const erpDesignerId = isUuidString(erpDesignerIdRaw) ? erpDesignerIdRaw : null;
 
   const [idleRequests, setIdleRequests] = useState([]);

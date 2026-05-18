@@ -1,5 +1,6 @@
 import { useEffect, useId, useRef, useState } from 'react'
 import { Pencil, X } from 'lucide-react'
+import { apiClient } from '@/lib/api-client'
 
 const DESIGN_OPTIONS = [
   { id: 'estimation', label: 'Estimation Purpose' },
@@ -7,11 +8,19 @@ const DESIGN_OPTIONS = [
   { id: 'client', label: 'Client Submission' },
   { id: 'technical', label: 'Technical Drawing' },
 ]
+const PRIORITY_OPTIONS = ['Low', 'Medium', 'High']
 
-export function CreateTaskModal({ open, onClose }) {
+function getPriorityClasses(level) {
+  if (level === 'High') return 'text-red-700 font-semibold'
+  if (level === 'Medium') return 'text-orange-600 font-semibold'
+  return 'text-emerald-700 font-semibold'
+}
+
+export function CreateTaskModal({ open, onClose, submissionDate, record }) {
   const titleId = useId()
   const fileInputRef = useRef(null)
-  const [providedFile, setProvidedFile] = useState('')
+  const [selectedFiles, setSelectedFiles] = useState([])
+  const [uploadedFiles, setUploadedFiles] = useState([])
   const [hod, setHod] = useState('')
   const [designs, setDesigns] = useState(() => ({
     estimation: false,
@@ -19,8 +28,11 @@ export function CreateTaskModal({ open, onClose }) {
     client: false,
     technical: false,
   }))
-  const [deadline, setDeadline] = useState('')
+  const [priorityLevel, setPriorityLevel] = useState('Medium')
+  const [hoursRequired, setHoursRequired] = useState('')
   const [comment, setComment] = useState('')
+  const [submitting, setSubmitting] = useState(false)
+  const [error, setError] = useState('')
 
   useEffect(() => {
     if (!open) return undefined
@@ -37,13 +49,82 @@ export function CreateTaskModal({ open, onClose }) {
 
   if (!open) return null
 
+  const startOfToday = new Date()
+  startOfToday.setHours(0, 0, 0, 0)
+  const validSubmissionDate =
+    submissionDate instanceof Date && !Number.isNaN(submissionDate.getTime()) ? submissionDate : null
+  const startOfDeadline = validSubmissionDate ? new Date(validSubmissionDate) : null
+  if (startOfDeadline) startOfDeadline.setHours(0, 0, 0, 0)
+  const daysFromToday =
+    startOfDeadline ? Math.max(0, Math.ceil((startOfDeadline.getTime() - startOfToday.getTime()) / 86400000)) : null
+  const formattedDeadline =
+    validSubmissionDate
+      ? validSubmissionDate.toLocaleDateString('en-GB')
+      : ''
+
   function toggleDesign(id) {
     setDesigns((prev) => ({ ...prev, [id]: !prev[id] }))
   }
 
-  function handleSubmit(e) {
+  async function handleSubmit(e) {
     e.preventDefault()
-    onClose()
+    if (!record) return
+    setError('')
+    setSubmitting(true)
+    try {
+      const newlyUploaded = []
+      for (const file of selectedFiles) {
+        const formData = new FormData()
+        formData.append('file', file)
+        const uploaded = await apiClient.post('/tasks/upload-file', formData)
+        newlyUploaded.push(uploaded)
+      }
+      const allUploaded = [...uploadedFiles, ...newlyUploaded]
+      setUploadedFiles(allUploaded)
+
+      const selectedDesignTypes = Object.entries(designs)
+        .filter(([, checked]) => checked)
+        .map(([key]) => key)
+      const payload = {
+        designType: 'Retail',
+        task: {
+          title: record.name ?? record.projectName ?? `Retail Task ${record.id}`,
+          opNo: record.opNo ?? undefined,
+          description: comment || undefined,
+          priority: priorityLevel,
+          dueDate: validSubmissionDate ? validSubmissionDate.toISOString() : undefined,
+          projectNo: record.projectNo ?? record.projectId ?? undefined,
+        },
+        retailDetails: [
+          {
+            providedFile: allUploaded.map((file) => file.fileName).join(', ') || undefined,
+            fileKey: allUploaded[0]?.key,
+            hodName: hod || undefined,
+            designTypes: selectedDesignTypes,
+            hoursRequired: hoursRequired ? Number(hoursRequired) : undefined,
+            comment: comment || undefined,
+            signFamily: undefined,
+            signType: undefined,
+            planCode: undefined,
+            contractRef: undefined,
+            quantity: undefined,
+            deadline: validSubmissionDate ? validSubmissionDate.toISOString() : undefined,
+            attachments: allUploaded.map((file) => ({
+              fileKey: file.key,
+              fileName: file.fileName,
+              mimeType: file.mimeType,
+              size: file.size,
+            })),
+          },
+        ],
+      }
+      await apiClient.post('/tasks/extended', payload)
+      onClose()
+    } catch (err) {
+      setError(err instanceof Error ? err.message : 'Failed to create retail task')
+    } finally {
+      setSubmitting(false)
+    }
   }
 
   function handlePickFile() {
@@ -89,14 +170,18 @@ export function CreateTaskModal({ open, onClose }) {
         <form className="space-y-4 p-5" onSubmit={handleSubmit}>
           <div>
             <label className="text-xs font-semibold text-slate-600" htmlFor="create-provided-files">
-              Provided Files
+              Task Files
             </label>
             <div className="mt-1.5 flex gap-2">
               <input
                 id="create-provided-files"
-                value={providedFile}
+                value={
+                  selectedFiles.length === 0
+                    ? ''
+                    : `${selectedFiles.length} file(s) selected`
+                }
                 readOnly
-                placeholder="Select File"
+                placeholder="Select task files"
                 className="w-full rounded-md border border-slate-300 bg-white px-3 py-2 text-sm text-slate-900 outline-none transition-colors focus:border-blue-500 focus:ring-2 focus:ring-blue-500/20"
               />
               <button
@@ -110,9 +195,19 @@ export function CreateTaskModal({ open, onClose }) {
             <input
               ref={fileInputRef}
               type="file"
+              multiple
               className="hidden"
-              onChange={(e) => setProvidedFile(e.target.files?.[0]?.name ?? '')}
+              onChange={(e) => {
+                const files = Array.from(e.target.files ?? [])
+                setSelectedFiles(files)
+                setUploadedFiles([])
+              }}
             />
+            {selectedFiles.length > 0 ? (
+              <div className="mt-2 rounded-md border border-slate-200 bg-slate-50 px-2 py-2 text-xs text-slate-600">
+                {selectedFiles.map((file) => file.name).join(', ')}
+              </div>
+            ) : null}
           </div>
 
           <div>
@@ -148,21 +243,53 @@ export function CreateTaskModal({ open, onClose }) {
             </div>
           </fieldset>
 
+          <div className="grid gap-3 sm:grid-cols-2">
+            <div>
+              <label className="text-xs font-semibold text-slate-600" htmlFor="create-priority">
+                Priority Level
+              </label>
+              <select
+                id="create-priority"
+                value={priorityLevel}
+                onChange={(e) => setPriorityLevel(e.target.value)}
+                className={`mt-1.5 w-full rounded-md border border-slate-300 bg-white px-3 py-2 text-sm outline-none transition-colors focus:border-blue-500 focus:ring-2 focus:ring-blue-500/20 ${getPriorityClasses(priorityLevel)}`}
+              >
+                {PRIORITY_OPTIONS.map((option) => (
+                  <option key={option} value={option}>
+                    {option}
+                  </option>
+                ))}
+              </select>
+            </div>
+            <div>
+              <label className="text-xs font-semibold text-slate-600" htmlFor="create-hours">
+                Hours Required
+              </label>
+              <input
+                id="create-hours"
+                type="number"
+                min={0}
+                value={hoursRequired}
+                onChange={(e) => setHoursRequired(e.target.value)}
+                placeholder="0"
+                className="mt-1.5 w-full rounded-md border border-slate-300 bg-white px-3 py-2 text-sm text-slate-900 outline-none transition-colors focus:border-blue-500 focus:ring-2 focus:ring-blue-500/20"
+              />
+            </div>
+          </div>
+
           <div>
             <label className="text-xs font-semibold text-slate-600" htmlFor="create-deadline">
               Deadline for Task Submission
             </label>
-            <select
+            <input
               id="create-deadline"
-              value={deadline}
-              onChange={(e) => setDeadline(e.target.value)}
-              className="mt-1.5 w-full rounded-md border border-slate-300 bg-white px-3 py-2 text-sm text-slate-900 outline-none transition-colors focus:border-blue-500 focus:ring-2 focus:ring-blue-500/20"
-            >
-              <option value="">Select</option>
-              <option value="3d">3 days</option>
-              <option value="1w">1 week</option>
-              <option value="2w">2 weeks</option>
-            </select>
+              value={formattedDeadline}
+              readOnly
+              className="mt-1.5 w-full rounded-md border border-slate-300 bg-slate-50 px-3 py-2 text-sm font-semibold text-slate-900 outline-none"
+            />
+            <p className="mt-1 text-xs text-slate-500">
+              {daysFromToday == null ? 'Select Date of Submission on details page' : `${daysFromToday} day(s) from today`}
+            </p>
           </div>
 
           <div>
@@ -179,11 +306,13 @@ export function CreateTaskModal({ open, onClose }) {
           </div>
 
           <div className="flex justify-center pt-1">
+            {error ? <p className="mr-3 self-center text-xs text-red-600">{error}</p> : null}
             <button
               type="submit"
+              disabled={submitting}
               className="rounded-full bg-blue-600 px-10 py-2.5 text-sm font-semibold text-white shadow-sm transition hover:bg-blue-700 focus:outline-none focus-visible:ring-2 focus-visible:ring-blue-500 focus-visible:ring-offset-2"
             >
-              Create
+              {submitting ? 'Creating...' : 'Create'}
             </button>
           </div>
         </form>

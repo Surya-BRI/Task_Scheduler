@@ -1,3 +1,5 @@
+import { mkdirSync } from 'fs';
+import { join } from 'path';
 import { NestFactory } from '@nestjs/core';
 import { AppModule } from './app.module';
 import helmet from 'helmet';
@@ -8,6 +10,8 @@ import { LoggingInterceptor } from './common/interceptors/logging.interceptor';
 import { ConfigService } from '@nestjs/config';
 
 async function bootstrap() {
+  mkdirSync(join(process.cwd(), 'uploads', 'chatter'), { recursive: true });
+
   const app = await NestFactory.create(AppModule);
   const configService = app.get(ConfigService);
   const prefix = configService.get<string>('api.prefix') ?? 'api/v1';
@@ -18,8 +22,10 @@ async function bootstrap() {
   app.setGlobalPrefix(prefix);
   app.use(helmet());
   app.use(compression());
+  const isDev = configService.get<string>('app.nodeEnv') !== 'production';
+  const corsOriginFn = (_o: string | undefined, cb: (e: Error | null, ok?: boolean) => void): void => cb(null, true);
   app.enableCors({
-    origin: allowedOrigins,
+    origin: isDev ? corsOriginFn : allowedOrigins,
     credentials: true,
   });
   app.useGlobalPipes(

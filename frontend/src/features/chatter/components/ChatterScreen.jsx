@@ -1,9 +1,17 @@
 "use client";
 
 import { useMemo, useState, useEffect } from "react";
-import { CalendarDays, Link2, MessageCircle, MessageSquareText, PlusSquare, Search, ThumbsUp, X } from "lucide-react";
+import { CalendarDays, Link2, MessageCircle, PlusSquare, Search, ThumbsUp, X } from "lucide-react";
 import { Navbar } from "@/components/Navbar";
-import { listChatterPosts, mapChatterPostDtoToFeedPost } from "@/features/chatter/services/chatter-posts.api";
+import {
+  createChatterComment,
+  createChatterPost,
+  listChatterMentionUsers,
+  listChatterPosts,
+  mapChatterPostDtoToFeedPost,
+  mapCommentDtoToFeedComment,
+} from "@/features/chatter/services/chatter-posts.api";
+import { getSession } from "@/lib/mock-auth";
 import {
   createLinkAttachment,
   isValidExternalUrl,
@@ -203,6 +211,8 @@ function ChatterPostAttachments({ post }) {
 function CreatePostModal({ isOpen, onClose, onSubmit, isSubmitting }) {
   const [title, setTitle] = useState("");
   const [mention, setMention] = useState("");
+  const [mentionUserId, setMentionUserId] = useState(null);
+  const [mentionUsers, setMentionUsers] = useState([]);
   const [message, setMessage] = useState("");
   const [priority, setPriority] = useState("Medium");
   const [postType, setPostType] = useState("Posts");
@@ -211,17 +221,18 @@ function CreatePostModal({ isOpen, onClose, onSubmit, isSubmitting }) {
   const [linkInput, setLinkInput] = useState("");
   const [showMentions, setShowMentions] = useState(false);
   const [errors, setErrors] = useState({});
-  const mentionList = ["@Aneesh Raghu", "@Delbin Delbin", "@Anju Krishna", "@Fahad Quazi", "@Rahul Menon"];
 
   const handleMentionChange = (e) => {
     const val = e.target.value;
     setMention(val);
+    setMentionUserId(null);
     if (val.includes("@")) setShowMentions(true);
     else setShowMentions(false);
   };
 
-  const selectMention = (m) => {
-    setMention(m);
+  const selectMention = (user) => {
+    setMention(`@${user.fullName}`);
+    setMentionUserId(user.id);
     setShowMentions(false);
   };
 
@@ -266,18 +277,30 @@ function CreatePostModal({ isOpen, onClose, onSubmit, isSubmitting }) {
   };
 
   useEffect(() => {
-    if (isOpen) {
-      setTitle("");
-      setMention("");
-      setMessage("");
-      setPriority("Medium");
-      setPostType("Posts");
-      setFileAttachments([]);
-      setLinkAttachments([]);
-      setLinkInput("");
-      setShowMentions(false);
-      setErrors({});
-    }
+    if (!isOpen) return;
+    setTitle("");
+    setMention("");
+    setMentionUserId(null);
+    setMessage("");
+    setPriority("Medium");
+    setPostType("Posts");
+    setFileAttachments([]);
+    setLinkAttachments([]);
+    setLinkInput("");
+    setShowMentions(false);
+    setErrors({});
+
+    let cancelled = false;
+    listChatterMentionUsers()
+      .then((users) => {
+        if (!cancelled && Array.isArray(users)) setMentionUsers(users);
+      })
+      .catch(() => {
+        if (!cancelled) setMentionUsers([]);
+      });
+    return () => {
+      cancelled = true;
+    };
   }, [isOpen]);
 
   if (!isOpen) return null;
@@ -291,7 +314,16 @@ function CreatePostModal({ isOpen, onClose, onSubmit, isSubmitting }) {
       return;
     }
     setErrors({});
-    onSubmit({ title, mention, message, priority, postType, fileAttachments, linkAttachments });
+    onSubmit({
+      title,
+      mention,
+      mentionUserId,
+      message,
+      priority,
+      postType,
+      fileAttachments,
+      linkAttachments,
+    });
   };
 
   return (
@@ -350,23 +382,25 @@ function CreatePostModal({ isOpen, onClose, onSubmit, isSubmitting }) {
                 placeholder="@username"
                 className="w-full rounded-lg border border-slate-300 bg-white px-3 py-2 text-sm text-slate-900 outline-none focus:border-blue-500 focus:ring-2 focus:ring-blue-500/25"
               />
-              {showMentions && (
+              {showMentions && mentionUsers.length > 0 ? (
                 <ul className="ui-popover-panel absolute z-20 mt-1 max-h-36 w-full overflow-y-auto">
-                  {mentionList
-                    .filter((m) => m.toLowerCase().includes(mention.toLowerCase()))
-                    .map((m) => (
-                      <li key={m}>
+                  {mentionUsers
+                    .filter((user) =>
+                      `@${user.fullName}`.toLowerCase().includes(mention.toLowerCase()),
+                    )
+                    .map((user) => (
+                      <li key={user.id}>
                         <button
                           type="button"
-                          onClick={() => selectMention(m)}
+                          onClick={() => selectMention(user)}
                           className="w-full px-3 py-2 text-left text-sm text-slate-700 hover:bg-slate-50"
                         >
-                          {m}
+                          @{user.fullName}
                         </button>
                       </li>
                     ))}
                 </ul>
-              )}
+              ) : null}
             </div>
           </div>
 
@@ -543,6 +577,7 @@ function ChatterCard({
   post,
   isComposerOpen,
   draftComment,
+  isSubmittingComment,
   onOpenComposer,
   onDraftChange,
   onSubmitComment,
@@ -611,6 +646,16 @@ function ChatterCard({
           </aside>
         ) : null}
       </div>
+      {hasComments ? (
+        <ul className="mt-1 space-y-2 border-t border-slate-100 pt-3">
+          {(post.comments ?? []).map((comment) => (
+            <li key={comment.id} className="rounded-md bg-slate-50 px-3 py-2 text-sm">
+              <p className="font-semibold text-slate-800">{comment.author}</p>
+              <p className="mt-0.5 whitespace-pre-wrap text-slate-700">{comment.message}</p>
+            </li>
+          ))}
+        </ul>
+      ) : null}
       {isComposerOpen ? (
         <div className="mt-2 rounded-lg border border-slate-200 bg-slate-50 p-3">
           <textarea
@@ -631,10 +676,10 @@ function ChatterCard({
             <button
               type="button"
               onClick={onSubmitComment}
-              disabled={!draftComment.trim()}
+              disabled={!draftComment.trim() || isSubmittingComment}
               className="rounded-md bg-blue-600 px-4 py-1.5 text-sm font-semibold text-white hover:bg-blue-700 disabled:cursor-not-allowed disabled:opacity-50 transition-colors"
             >
-              Comment
+              {isSubmittingComment ? "Saving…" : "Comment"}
             </button>
           </div>
         </div>
@@ -654,17 +699,31 @@ export function ChatterScreen() {
   const [isCreatePostOpen, setIsCreatePostOpen] = useState(false);
   const [isSubmitting, setIsSubmitting] = useState(false);
   const [toastMessage, setToastMessage] = useState(null);
+  const [postsLoadError, setPostsLoadError] = useState(null);
+  const [submittingCommentPostId, setSubmittingCommentPostId] = useState(null);
+
+  const currentUserId = useMemo(() => getSession()?.id ?? null, []);
 
   useEffect(() => {
     let cancelled = false;
     listChatterPosts({ limit: 500 })
       .then((rows) => {
-        if (cancelled || !Array.isArray(rows)) return;
-        setPosts(rows.map((row) => mapChatterPostDtoToFeedPost(row)));
+        if (cancelled) return;
+        if (!Array.isArray(rows)) {
+          setPosts([]);
+          setPostsLoadError(
+            `Unexpected response: expected a JSON array, received ${rows === null || rows === undefined ? String(rows) : typeof rows}`,
+          );
+          return;
+        }
+        setPostsLoadError(null);
+        const userId = getSession()?.id ?? null;
+        setPosts(rows.map((row) => mapChatterPostDtoToFeedPost(row, userId)));
       })
-      .catch(() => {
+      .catch((err) => {
         if (cancelled) return;
         setPosts([]);
+        setPostsLoadError(err instanceof Error ? err.message : String(err));
       });
     return () => {
       cancelled = true;
@@ -763,84 +822,66 @@ export function ChatterScreen() {
     setCurrentDate(new Date(Number(yyyy), Number(mm) - 1, Number(dd)));
   };
 
-  const submitComment = (postId) => {
+  const submitComment = async (postId) => {
     const content = (draftByPostId[postId] ?? "").trim();
-    if (!content) return;
+    if (!content || submittingCommentPostId) return;
 
-    const now = new Date().toISOString();
-    setPosts((prev) => {
-      const sourcePost = prev.find((post) => post.id === postId);
-      if (!sourcePost) return prev;
-
-      const updatedExisting = prev.map((post) =>
-        post.id === postId
-          ? {
-              ...post,
-              time: "just now",
-              updatedAt: now,
-              comments: [
-                {
-                  id: `${postId}-comment-${Date.now()}`,
-                  message: content,
-                  author: "You",
-                  createdAt: now,
-                },
-                ...(post.comments ?? []),
-              ],
-            }
-          : post,
+    setSubmittingCommentPostId(postId);
+    try {
+      const created = await createChatterComment(postId, content);
+      const feedComment = mapCommentDtoToFeedComment(created, currentUserId);
+      const now = new Date().toISOString();
+      setPosts((prev) =>
+        prev.map((post) =>
+          post.id === postId
+            ? {
+                ...post,
+                updatedAt: now,
+                comments: [feedComment, ...(post.comments ?? [])],
+              }
+            : post,
+        ),
       );
-
-      const commentRecord = {
-        id: `c-${postId}-${Date.now()}`,
-        title: `COMMENT UPDATE - ${sourcePost.title}`,
-        author: "You",
-        time: "just now",
-        mention: sourcePost.mention,
-        message: content,
-        projectName: sourcePost.projectName,
-        responsibleUser: sourcePost.responsibleUser,
-        priority: sourcePost.priority,
-        seenBy: 1,
-        comments: [],
-        updatedAt: now,
-      };
-
-      return [commentRecord, ...updatedExisting];
-    });
-    setDraftByPostId((prev) => ({ ...prev, [postId]: "" }));
-    setOpenComposerPostId(null);
+      setDraftByPostId((prev) => ({ ...prev, [postId]: "" }));
+      setOpenComposerPostId(null);
+    } catch (err) {
+      console.error("Failed to save comment:", err);
+      setToastMessage("Error: Could not save comment to database.");
+      setTimeout(() => setToastMessage(null), 3000);
+    } finally {
+      setSubmittingCommentPostId(null);
+    }
   };
 
   const handleCreatePost = async (postData) => {
     setIsSubmitting(true);
-    await new Promise((resolve) => setTimeout(resolve, 800));
+    try {
+      const createdDto = await createChatterPost({
+        title: postData.title,
+        message: postData.message,
+        postType: postData.postType,
+        priority: postData.priority,
+        mentionUserId: postData.mentionUserId || null,
+        // authorId: ... (should be from auth context if available)
+      }, postData.fileAttachments);
 
-    const newPost = {
-      id: `new-${Date.now()}`,
-      title: postData.title,
-      author: CURRENT_USER,
-      time: "just now",
-      mention: postData.mention,
-      message: postData.message,
-      projectName: postData.title,
-      responsibleUser: CURRENT_USER,
-      priority: postData.priority.toLowerCase(),
-      seenBy: 0,
-      comments: [],
-      updatedAt: new Date().toISOString(),
-      postType: postData.postType,
-      fileAttachments: postData.fileAttachments,
-      linkAttachments: postData.linkAttachments,
-    };
-
-    setPosts((prev) => [newPost, ...prev]);
-    setIsSubmitting(false);
-    setIsCreatePostOpen(false);
-    setActiveTab("posts");
-
-    setToastMessage("Post created successfully!");
-    setTimeout(() => setToastMessage(null), 3000);
+      const newFeedPost = mapChatterPostDtoToFeedPost(createdDto, currentUserId);
+      if (postData.mention?.trim()) {
+        newFeedPost.mention = postData.mention.trim().startsWith("@")
+          ? postData.mention.trim()
+          : `@${postData.mention.trim()}`;
+      }
+      setPosts((prev) => [newFeedPost, ...prev]);
+      setIsCreatePostOpen(false);
+      setActiveTab("posts");
+      setToastMessage("Post created successfully!");
+    } catch (err) {
+      console.error("Failed to create post:", err);
+      setToastMessage("Error: Could not save post to database.");
+    } finally {
+      setIsSubmitting(false);
+      setTimeout(() => setToastMessage(null), 3000);
+    }
   };
 
   return (
@@ -907,9 +948,19 @@ export function ChatterScreen() {
         {activeTab === "posts" ? (
           <section className="mt-3 space-y-2.5">
             {sortedPosts.length === 0 ? (
-              <p className="rounded-lg border border-slate-200 bg-slate-50 px-4 py-8 text-center text-sm text-slate-600">
-                No chatter posts loaded. Ensure the API is running and <code className="rounded bg-slate-200 px-1">ErpTSChatterPost</code> has rows, or check the browser network tab for errors.
-              </p>
+              <div className="rounded-lg border border-slate-200 bg-slate-50 px-4 py-8 text-center text-sm text-slate-600">
+                <p>
+                  No chatter posts loaded. Ensure the backend is running,{" "}
+                  <code className="rounded bg-slate-200 px-1">NEXT_PUBLIC_API_BASE_URL</code> points at it (not an older
+                  deploy missing <code className="rounded bg-slate-200 px-1">/chatter-posts</code>), the chatter table
+                  has rows, or check the browser network tab for errors.
+                </p>
+                {postsLoadError ? (
+                  <pre className="mt-3 max-h-48 overflow-auto text-left font-mono text-[11px] leading-snug text-red-700 whitespace-pre-wrap break-words">
+                    {postsLoadError}
+                  </pre>
+                ) : null}
+              </div>
             ) : null}
             {sortedPosts.map((post, postIndex) => (
               <ChatterCard
@@ -917,6 +968,7 @@ export function ChatterScreen() {
                 post={post}
                 isComposerOpen={openComposerPostId === post.id}
                 draftComment={draftByPostId[post.id] ?? ""}
+                isSubmittingComment={submittingCommentPostId === post.id}
                 onOpenComposer={() => openComposer(post.id)}
                 onDraftChange={(value) => changeDraft(post.id, value)}
                 onSubmitComment={() => submitComment(post.id)}

@@ -1,5 +1,13 @@
 import { apiClient } from '@/lib/api-client';
 
+export type ChatterCommentDto = {
+  id: string;
+  postId: string | null;
+  authorId: string | null;
+  message: string;
+  createdAt: string;
+};
+
 export type ChatterPostDto = {
   id: string;
   taskId: string | null;
@@ -16,6 +24,7 @@ export type ChatterPostDto = {
   visibility: string | null;
   createdAt: string;
   updatedAt: string;
+  comments?: ChatterCommentDto[];
 };
 
 /** Shape expected by `ChatterScreen` / `ChatterCard` for the main feed */
@@ -81,7 +90,29 @@ function normalizePostType(raw: string | null | undefined): string {
   return t;
 }
 
-export function mapChatterPostDtoToFeedPost(dto: ChatterPostDto): ChatterFeedPost {
+export function mapCommentDtoToFeedComment(
+  dto: ChatterCommentDto,
+  currentUserId?: string | null,
+): { id: string; message: string; author: string; authorId: string | null; createdAt: string } {
+  const authorLabel =
+    dto.authorId && currentUserId && dto.authorId === currentUserId
+      ? 'You'
+      : dto.authorId
+        ? `User ${shortId(dto.authorId, 14)}`
+        : 'Unknown';
+  return {
+    id: dto.id,
+    message: dto.message || '',
+    author: authorLabel,
+    authorId: dto.authorId,
+    createdAt: dto.createdAt,
+  };
+}
+
+export function mapChatterPostDtoToFeedPost(
+  dto: ChatterPostDto,
+  currentUserId?: string | null,
+): ChatterFeedPost {
   const created = dto.createdAt ? new Date(dto.createdAt) : null;
   const authorLabel = dto.authorId ? `User ${shortId(dto.authorId, 14)}` : 'Unknown';
   const mention =
@@ -104,7 +135,7 @@ export function mapChatterPostDtoToFeedPost(dto: ChatterPostDto): ChatterFeedPos
     responsibleUser: authorLabel,
     priority: normalizePriority(dto.priority),
     seenBy: dto.seenByCount,
-    comments: [],
+    comments: (dto.comments ?? []).map((c) => mapCommentDtoToFeedComment(c, currentUserId)),
     updatedAt: dto.updatedAt || dto.createdAt || new Date(0).toISOString(),
     taskId: dto.taskId,
   };
@@ -116,10 +147,45 @@ export function mapChatterPostDtoToFeedPost(dto: ChatterPostDto): ChatterFeedPos
   return base;
 }
 
+export type ChatterMentionUser = {
+  id: string;
+  fullName: string;
+};
+
+export function listChatterMentionUsers() {
+  return apiClient.get<ChatterMentionUser[]>('/chatter-posts/mention-users');
+}
+
 export function listChatterPosts(params?: { limit?: number; taskId?: string }) {
   const qs = new URLSearchParams();
   if (params?.limit != null) qs.set('limit', String(params.limit));
   if (params?.taskId?.trim()) qs.set('taskId', params.taskId.trim());
   const suffix = qs.toString() ? `?${qs.toString()}` : '';
   return apiClient.get<ChatterPostDto[]>(`/chatter-posts${suffix}`);
+}
+
+export function listChatterComments(postId: string) {
+  return apiClient.get<ChatterCommentDto[]>(`/chatter-posts/${encodeURIComponent(postId)}/comments`);
+}
+
+export function createChatterComment(postId: string, message: string) {
+  return apiClient.post<ChatterCommentDto>(`/chatter-posts/${encodeURIComponent(postId)}/comments`, {
+    message,
+  });
+}
+
+export function createChatterPost(data: Partial<ChatterPostDto>, files?: File[]) {
+  if (files && files.length > 0) {
+    const formData = new FormData();
+    Object.entries(data).forEach(([key, value]) => {
+      if (value !== undefined && value !== null) {
+        formData.append(key, String(value));
+      }
+    });
+    files.forEach(file => {
+      formData.append('files', file);
+    });
+    return apiClient.post<ChatterPostDto>('/chatter-posts', formData);
+  }
+  return apiClient.post<ChatterPostDto>('/chatter-posts', data);
 }
