@@ -2,6 +2,7 @@ import { Injectable, NotFoundException } from '@nestjs/common';
 import { PrismaService } from '../prisma/prisma.service';
 import { CreateProjectDto } from './dto/create-project.dto';
 import { UpdateProjectDto } from './dto/update-project.dto';
+import { TaskFilesService } from '../tasks/task-files.service';
 
 const PROJECT_SELECT = {
   id: true,
@@ -29,7 +30,10 @@ export type ProjectFilters = {
 
 @Injectable()
 export class ProjectsService {
-  constructor(private readonly prisma: PrismaService) {}
+  constructor(
+    private readonly prisma: PrismaService,
+    private readonly taskFilesService: TaskFilesService,
+  ) {}
 
   create(createdById: string, dto: CreateProjectDto) {
     return this.prisma.project.create({
@@ -102,7 +106,74 @@ export class ProjectsService {
       },
     });
     if (!project) throw new NotFoundException('Project not found');
-    return project;
+    const attachments = await this.getProjectFiles(id);
+    return { ...project, attachments };
+  }
+
+  async uploadProjectFile(projectId: string, file: Express.Multer.File, userId: string) {
+    const project = await this.prisma.project.findUnique({ where: { id: projectId }, select: { id: true } });
+    if (!project) throw new NotFoundException('Project not found');
+
+    const uploaded = await this.taskFilesService.uploadTaskFile(file, userId);
+    const created = await this.prisma.projectAttachment.create({
+      data: {
+        projectId,
+        fileKey: uploaded.key,
+        fileName: uploaded.fileName,
+        mimeType: uploaded.mimeType,
+        sizeBytes: uploaded.size,
+        uploadedById: userId,
+      },
+      select: {
+        id: true,
+        fileKey: true,
+        fileName: true,
+        mimeType: true,
+        sizeBytes: true,
+        createdAt: true,
+      },
+    });
+    const signedUrl = await this.taskFilesService.createSignedReadUrl(created.fileKey);
+    return {
+      ...created,
+      sizeBytes: typeof created.sizeBytes === 'bigint' ? Number(created.sizeBytes) : created.sizeBytes,
+      signedUrl,
+    };
+  }
+
+  async getProjectFiles(projectId: string) {
+    const project = await this.prisma.project.findUnique({ where: { id: projectId }, select: { id: true } });
+    if (!project) throw new NotFoundException('Project not found');
+
+    const files = await this.prisma.projectAttachment.findMany({
+      where: { projectId },
+      select: {
+        id: true,
+        fileKey: true,
+        fileName: true,
+        mimeType: true,
+        sizeBytes: true,
+        createdAt: true,
+      },
+      orderBy: { createdAt: 'desc' },
+    });
+
+    return Promise.all(
+      files.map(async (file: (typeof files)[number]) => ({
+        ...file,
+        sizeBytes: typeof file.sizeBytes === 'bigint' ? Number(file.sizeBytes) : file.sizeBytes,
+        signedUrl: await this.taskFilesService.createSignedReadUrl(file.fileKey),
+      })),
+    );
+  }
+
+  async removeProjectFile(projectId: string, fileId: string) {
+    const existing = await this.prisma.projectAttachment.findFirst({
+      where: { id: fileId, projectId },
+      select: { id: true },
+    });
+    if (!existing) throw new NotFoundException('Project attachment not found');
+    return this.prisma.projectAttachment.delete({ where: { id: fileId } });
   }
 
   async update(id: string, dto: UpdateProjectDto) {

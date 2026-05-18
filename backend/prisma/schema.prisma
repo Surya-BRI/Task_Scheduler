@@ -45,6 +45,7 @@ model User {
 
   tasks                    Task[]                     @relation("TaskAssignee")
   projects                 Project[]                  @relation("ProjectCreator")
+  projectAttachments       ProjectAttachment[]
   chatterPosts             ChatterPost[]              @relation("PostAuthor")
   chatterMentions          ChatterPost[]              @relation("MentionedUser")
   chatterComments          ChatterComment[]           @relation("CommentAuthor")
@@ -80,6 +81,7 @@ model Project {
   createdById  String?  @db.UniqueIdentifier
   createdBy    User?    @relation("ProjectCreator", fields: [createdById], references: [id], onDelete: NoAction, onUpdate: NoAction)
   tasks        Task[]
+  attachments  ProjectAttachment[]
   createdAt    DateTime @default(dbgenerated("sysutcdatetime()"))
   updatedAt    DateTime @default(dbgenerated("sysutcdatetime()")) @updatedAt
 
@@ -89,7 +91,8 @@ model Project {
 
 model Task {
   id          String    @id @default(dbgenerated("newid()")) @db.UniqueIdentifier
-  opNo        String?   @unique
+  taskNo      String    @unique @db.NVarChar(100)
+  opNo        String?   @db.NVarChar(100)
   title       String    @db.NVarChar(200)
   description String?   @db.NVarChar(Max)
   status      String    @default("PENDING") @db.NVarChar(20)
@@ -107,6 +110,8 @@ model Task {
   regularizationRequests RegularizationRequest[]
   overtimeRequests       OvertimeRequest[]
   schedulerAssignments   SchedulerAssignment[]
+  retailDetails          RetailTaskDetail[]
+  projectDetails         ProjectTaskDetail[]
 
   createdAt DateTime @default(dbgenerated("sysutcdatetime()"))
   updatedAt DateTime @default(dbgenerated("sysutcdatetime()")) @updatedAt
@@ -114,6 +119,103 @@ model Task {
   @@index([projectId])
   @@index([assigneeId])
   @@map("ErpTSTask")
+}
+
+model RetailTaskDetail {
+  id             String   @id @default(dbgenerated("newid()")) @db.UniqueIdentifier
+  taskId         String   @db.UniqueIdentifier
+  task           Task     @relation(fields: [taskId], references: [id], onDelete: Cascade, onUpdate: NoAction)
+  attachments    RetailTaskDetailAttachment[]
+  providedFile   String?  @db.NVarChar(255)
+  fileKey        String?  @db.NVarChar(1024)
+  fileUrl        String?  @db.NVarChar(2000)
+  hodName        String?  @db.NVarChar(255)
+  designTypes    String?  @db.NVarChar(500)
+  hoursRequired  Decimal? @db.Decimal(10, 2)
+  comment        String?  @db.NVarChar(Max)
+  signFamily     String?  @db.NVarChar(255)
+  signType       String?  @db.NVarChar(255)
+  planCode       String?  @db.NVarChar(100)
+  contractRef    String?  @db.NVarChar(100)
+  quantity       Int?
+  deadline       DateTime?
+  createdAt      DateTime @default(now())
+
+  @@index([taskId])
+  @@map("ErpTSRetailTaskDetail")
+}
+
+model ProjectTaskDetail {
+  id             String   @id @default(dbgenerated("newid()")) @db.UniqueIdentifier
+  taskId         String   @db.UniqueIdentifier
+  task           Task     @relation(fields: [taskId], references: [id], onDelete: Cascade, onUpdate: NoAction)
+  attachments    ProjectTaskDetailAttachment[]
+  signType       String?  @db.NVarChar(255)
+  planCode       String?  @db.NVarChar(100)
+  area           String?  @db.NVarChar(100)
+  level          String?  @db.NVarChar(100)
+  artwork        Boolean? @default(false)
+  artworkHours   Decimal? @db.Decimal(10, 2)
+  technical      Boolean? @default(false)
+  technicalHours Decimal? @db.Decimal(10, 2)
+  location       Boolean? @default(false)
+  locationHours  Decimal? @db.Decimal(10, 2)
+  asBuilt        Boolean? @default(false)
+  asBuiltHours   Decimal? @db.Decimal(10, 2)
+  bim            Boolean? @default(false)
+  deadline       DateTime?
+  comment        String?  @db.NVarChar(Max)
+  createdAt      DateTime @default(now())
+
+  @@index([taskId])
+  @@map("ErpTSProjectTaskDetail")
+}
+
+model ProjectAttachment {
+  id           String   @id @default(dbgenerated("newid()")) @db.UniqueIdentifier
+  projectId    String   @db.UniqueIdentifier
+  project      Project  @relation(fields: [projectId], references: [id], onDelete: Cascade, onUpdate: NoAction)
+  fileKey      String   @db.NVarChar(1024)
+  fileName     String   @db.NVarChar(255)
+  mimeType     String?  @db.NVarChar(100)
+  sizeBytes    BigInt?
+  uploadedById String?  @db.UniqueIdentifier
+  uploadedBy   User?    @relation(fields: [uploadedById], references: [id], onDelete: NoAction, onUpdate: NoAction)
+  createdAt    DateTime @default(now())
+
+  @@index([projectId])
+  @@index([createdAt])
+  @@map("ErpTSProjectAttachment")
+}
+
+model RetailTaskDetailAttachment {
+  id                 String           @id @default(dbgenerated("newid()")) @db.UniqueIdentifier
+  retailTaskDetailId String           @db.UniqueIdentifier
+  retailTaskDetail   RetailTaskDetail @relation(fields: [retailTaskDetailId], references: [id], onDelete: Cascade, onUpdate: NoAction)
+  fileKey            String           @db.NVarChar(1024)
+  fileName           String           @db.NVarChar(255)
+  mimeType           String?          @db.NVarChar(100)
+  sizeBytes          BigInt?
+  createdAt          DateTime         @default(now())
+
+  @@index([retailTaskDetailId])
+  @@index([createdAt])
+  @@map("ErpTSRetailTaskDetailAttachment")
+}
+
+model ProjectTaskDetailAttachment {
+  id                  String            @id @default(dbgenerated("newid()")) @db.UniqueIdentifier
+  projectTaskDetailId String            @db.UniqueIdentifier
+  projectTaskDetail   ProjectTaskDetail @relation(fields: [projectTaskDetailId], references: [id], onDelete: Cascade, onUpdate: NoAction)
+  fileKey             String            @db.NVarChar(1024)
+  fileName            String            @db.NVarChar(255)
+  mimeType            String?           @db.NVarChar(100)
+  sizeBytes           BigInt?
+  createdAt           DateTime          @default(now())
+
+  @@index([projectTaskDetailId])
+  @@index([createdAt])
+  @@map("ErpTSProjectTaskDetailAttachment")
 }
 
 // ---------------------------------------------------------

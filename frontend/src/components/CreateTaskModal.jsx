@@ -1,5 +1,6 @@
 import { useEffect, useId, useRef, useState } from 'react'
 import { Pencil, X } from 'lucide-react'
+import { apiClient } from '@/lib/api-client'
 
 const DESIGN_OPTIONS = [
   { id: 'estimation', label: 'Estimation Purpose' },
@@ -15,10 +16,11 @@ function getPriorityClasses(level) {
   return 'text-emerald-700 font-semibold'
 }
 
-export function CreateTaskModal({ open, onClose, submissionDate }) {
+export function CreateTaskModal({ open, onClose, submissionDate, record }) {
   const titleId = useId()
   const fileInputRef = useRef(null)
-  const [providedFile, setProvidedFile] = useState('')
+  const [selectedFiles, setSelectedFiles] = useState([])
+  const [uploadedFiles, setUploadedFiles] = useState([])
   const [hod, setHod] = useState('')
   const [designs, setDesigns] = useState(() => ({
     estimation: false,
@@ -29,6 +31,8 @@ export function CreateTaskModal({ open, onClose, submissionDate }) {
   const [priorityLevel, setPriorityLevel] = useState('Medium')
   const [hoursRequired, setHoursRequired] = useState('')
   const [comment, setComment] = useState('')
+  const [submitting, setSubmitting] = useState(false)
+  const [error, setError] = useState('')
 
   useEffect(() => {
     if (!open) return undefined
@@ -62,9 +66,65 @@ export function CreateTaskModal({ open, onClose, submissionDate }) {
     setDesigns((prev) => ({ ...prev, [id]: !prev[id] }))
   }
 
-  function handleSubmit(e) {
+  async function handleSubmit(e) {
     e.preventDefault()
-    onClose()
+    if (!record) return
+    setError('')
+    setSubmitting(true)
+    try {
+      const newlyUploaded = []
+      for (const file of selectedFiles) {
+        const formData = new FormData()
+        formData.append('file', file)
+        const uploaded = await apiClient.post('/tasks/upload-file', formData)
+        newlyUploaded.push(uploaded)
+      }
+      const allUploaded = [...uploadedFiles, ...newlyUploaded]
+      setUploadedFiles(allUploaded)
+
+      const selectedDesignTypes = Object.entries(designs)
+        .filter(([, checked]) => checked)
+        .map(([key]) => key)
+      const payload = {
+        designType: 'Retail',
+        task: {
+          title: record.name ?? record.projectName ?? `Retail Task ${record.id}`,
+          opNo: record.opNo ?? undefined,
+          description: comment || undefined,
+          priority: priorityLevel,
+          dueDate: validSubmissionDate ? validSubmissionDate.toISOString() : undefined,
+          projectNo: record.projectNo ?? record.projectId ?? undefined,
+        },
+        retailDetails: [
+          {
+            providedFile: allUploaded.map((file) => file.fileName).join(', ') || undefined,
+            fileKey: allUploaded[0]?.key,
+            hodName: hod || undefined,
+            designTypes: selectedDesignTypes,
+            hoursRequired: hoursRequired ? Number(hoursRequired) : undefined,
+            comment: comment || undefined,
+            signFamily: undefined,
+            signType: undefined,
+            planCode: undefined,
+            contractRef: undefined,
+            quantity: undefined,
+            deadline: validSubmissionDate ? validSubmissionDate.toISOString() : undefined,
+            attachments: allUploaded.map((file) => ({
+              fileKey: file.key,
+              fileName: file.fileName,
+              mimeType: file.mimeType,
+              size: file.size,
+            })),
+          },
+        ],
+      }
+      await apiClient.post('/tasks/extended', payload)
+      onClose()
+    } catch (err) {
+      setError(err instanceof Error ? err.message : 'Failed to create retail task')
+    } finally {
+      setSubmitting(false)
+    }
   }
 
   function handlePickFile() {
@@ -110,14 +170,18 @@ export function CreateTaskModal({ open, onClose, submissionDate }) {
         <form className="space-y-4 p-5" onSubmit={handleSubmit}>
           <div>
             <label className="text-xs font-semibold text-slate-600" htmlFor="create-provided-files">
-              Provided Files
+              Task Files
             </label>
             <div className="mt-1.5 flex gap-2">
               <input
                 id="create-provided-files"
-                value={providedFile}
+                value={
+                  selectedFiles.length === 0
+                    ? ''
+                    : `${selectedFiles.length} file(s) selected`
+                }
                 readOnly
-                placeholder="Select File"
+                placeholder="Select task files"
                 className="w-full rounded-md border border-slate-300 bg-white px-3 py-2 text-sm text-slate-900 outline-none transition-colors focus:border-blue-500 focus:ring-2 focus:ring-blue-500/20"
               />
               <button
@@ -131,9 +195,19 @@ export function CreateTaskModal({ open, onClose, submissionDate }) {
             <input
               ref={fileInputRef}
               type="file"
+              multiple
               className="hidden"
-              onChange={(e) => setProvidedFile(e.target.files?.[0]?.name ?? '')}
+              onChange={(e) => {
+                const files = Array.from(e.target.files ?? [])
+                setSelectedFiles(files)
+                setUploadedFiles([])
+              }}
             />
+            {selectedFiles.length > 0 ? (
+              <div className="mt-2 rounded-md border border-slate-200 bg-slate-50 px-2 py-2 text-xs text-slate-600">
+                {selectedFiles.map((file) => file.name).join(', ')}
+              </div>
+            ) : null}
           </div>
 
           <div>
@@ -232,11 +306,13 @@ export function CreateTaskModal({ open, onClose, submissionDate }) {
           </div>
 
           <div className="flex justify-center pt-1">
+            {error ? <p className="mr-3 self-center text-xs text-red-600">{error}</p> : null}
             <button
               type="submit"
+              disabled={submitting}
               className="rounded-full bg-blue-600 px-10 py-2.5 text-sm font-semibold text-white shadow-sm transition hover:bg-blue-700 focus:outline-none focus-visible:ring-2 focus-visible:ring-blue-500 focus-visible:ring-offset-2"
             >
-              Create
+              {submitting ? 'Creating...' : 'Create'}
             </button>
           </div>
         </form>

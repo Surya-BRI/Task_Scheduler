@@ -57,6 +57,11 @@ export const envValidationSchema = Joi.object({
   EXTERNAL_ROLE_FIELD:  Joi.string().optional(),
   /** JSON object mapping external role strings to internal UserRole values */
   EXTERNAL_ROLE_MAP:    Joi.string().optional(),
+  AWS_ACCESS_KEY_ID: Joi.string().optional(),
+  AWS_SECRET_ACCESS_KEY: Joi.string().optional(),
+  AWS_REGION: Joi.string().optional(),
+  AWS_BUCKET: Joi.string().optional(),
+  AWS_FOLDER: Joi.string().max(128).pattern(/^[a-zA-Z0-9/_-]+$/).optional(),
 }).custom((value, helpers) => {
   const hasDatabaseUrl = !!value.DATABASE_URL;
   const hasDbParts =

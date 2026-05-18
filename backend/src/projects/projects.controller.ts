@@ -9,8 +9,12 @@ import {
   Patch,
   Post,
   Query,
+  UploadedFile,
   UseGuards,
+  UseInterceptors,
 } from '@nestjs/common';
+import { FileInterceptor } from '@nestjs/platform-express';
+import { memoryStorage } from 'multer';
 import { ProjectsService } from './projects.service';
 import { CreateProjectDto } from './dto/create-project.dto';
 import { UpdateProjectDto } from './dto/update-project.dto';
@@ -51,6 +55,34 @@ export class ProjectsController {
   @Roles(UserRole.HOD, UserRole.DESIGNER, UserRole.ADMIN, UserRole.PROJECT_MANAGER)
   findOne(@Param('id') id: string) {
     return this.projectsService.findOne(id);
+  }
+
+  @Post(':id/files')
+  @Roles(UserRole.HOD, UserRole.ADMIN, UserRole.PROJECT_MANAGER)
+  @UseInterceptors(
+    FileInterceptor('file', {
+      storage: memoryStorage(),
+      limits: { fileSize: 20 * 1024 * 1024 },
+    }),
+  )
+  uploadFile(
+    @Param('id') id: string,
+    @UploadedFile() file: Express.Multer.File,
+    @CurrentUser() user: JwtPayload,
+  ) {
+    return this.projectsService.uploadProjectFile(id, file, user.sub);
+  }
+
+  @Get(':id/files')
+  @Roles(UserRole.HOD, UserRole.DESIGNER, UserRole.ADMIN, UserRole.PROJECT_MANAGER)
+  getFiles(@Param('id') id: string) {
+    return this.projectsService.getProjectFiles(id);
+  }
+
+  @Delete(':id/files/:fileId')
+  @Roles(UserRole.HOD, UserRole.ADMIN, UserRole.PROJECT_MANAGER)
+  removeFile(@Param('id') id: string, @Param('fileId') fileId: string) {
+    return this.projectsService.removeProjectFile(id, fileId);
   }
 
   /** PATCH /projects/:id — HOD/Admin */

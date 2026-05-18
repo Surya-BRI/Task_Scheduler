@@ -1,4 +1,4 @@
-import { IsDateString, IsIn, IsOptional, IsString, IsUUID, MinLength } from 'class-validator';
+import { IsDateString, IsIn, IsOptional, IsString, MinLength } from 'class-validator';
 
 export class CreateTaskDto {
   @IsString()
@@ -13,8 +13,9 @@ export class CreateTaskDto {
   @IsOptional()
   description?: string;
 
-  @IsUUID()
-  projectId: string;
+  @IsString()
+  @IsOptional()
+  projectNo?: string;
 
   @IsString()
   @IsOptional()

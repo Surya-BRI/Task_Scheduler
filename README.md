@@ -7,6 +7,7 @@ Monorepo for task scheduling and resource workflows: **Next.js** frontend + **Ne
 | Area | Guide |
 |------|-------|
 | Full backend guide (API, Prisma, auth, DB) | [backend/docs/DEVELOPMENT.md](backend/docs/DEVELOPMENT.md) |
+| Backend API-table mapping | [backend/docs/API_TABLE_CONNECTIONS.md](backend/docs/API_TABLE_CONNECTIONS.md) |
 | Frontend guide (Next.js env + runtime) | [frontend/docs/DEVELOPMENT.md](frontend/docs/DEVELOPMENT.md) |
 | Full repository technical reference | [repo refrence.md](repo%20refrence.md) |
 
@@ -16,24 +17,33 @@ Monorepo for task scheduling and resource workflows: **Next.js** frontend + **Ne
 - npm workspaces
 - Reachable SQL Server instance
 
-## Quick Start
+## Setup Commands
 
-From repo root:
+Run all commands from repo root, in this order.
+
+### 1) Install dependencies
 
 ```bash
 npm install
 ```
 
-### 1) Configure backend
+### 2) Configure backend env
 
 Create `backend/.env` and set at minimum:
 - `JWT_ACCESS_SECRET`
 - `CORS_ORIGIN` (usually `http://localhost:5000`)
 - Database via `DATABASE_URL` or DB parts (`DB_SERVER`, `DB_NAME`, `DB_USER`, `DB_PASSWORD`, ...)
 
-### 2) Prepare Prisma + DB
+### 3) Configure frontend env
 
-Greenfield (migrations):
+Create `frontend/.env.local` and set:
+- `NEXT_PUBLIC_API_BASE_URL=http://localhost:<PORT>/api/v1`
+
+`<PORT>` must match backend `PORT` in `backend/.env`.
+
+### 4) Prepare Prisma + DB
+
+For a new database (migrations):
 
 ```bash
 npm run prisma:generate
@@ -41,29 +51,22 @@ npm run prisma:migrate
 npm run prisma:seed
 ```
 
-Existing ERP database — apply client, activity-log table, and ErpTS foreign keys (safe to re-run):
+For an existing ERP database:
 
 ```bash
 npm run prisma:setup
 npm run prisma:seed
 ```
 
-You can also use **manual SQL** when attaching to an existing ERP database. Details and password-hash notes are in [backend/docs/DEVELOPMENT.md](backend/docs/DEVELOPMENT.md).
+You can also use manual SQL when attaching to an existing ERP database. Details and password-hash notes are in [backend/docs/DEVELOPMENT.md](backend/docs/DEVELOPMENT.md).
 
-### 3) Configure frontend
-
-Create `frontend/.env.local` and set:
-- `NEXT_PUBLIC_API_BASE_URL=http://localhost:<PORT>/api/v1`
-
-`<PORT>` must match backend `PORT` in `backend/.env`.
-
-### 4) Run dev
+### 5) Run development servers
 
 ```bash
 npm run dev
 ```
 
-or separately:
+Or run separately:
 
 ```bash
 npm run dev:backend

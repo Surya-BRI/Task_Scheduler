@@ -1,5 +1,6 @@
 import { useEffect, useId, useState } from 'react'
 import { ChevronDown, ChevronRight, Pencil, X } from 'lucide-react'
+import { apiClient } from '@/lib/api-client'
 
 const AREA_OPTIONS = ['Area A', 'Area B', 'Area C', 'Area D']
 const LEVEL_OPTIONS = ['Level 1', 'Level 2', 'Level 3', 'Level 4']
@@ -202,7 +203,7 @@ function TickBox({ checked, onChange }) {
   )
 }
 
-export function ProjectCreateTaskModal({ open, onClose, submissionDate }) {
+export function ProjectCreateTaskModal({ open, onClose, submissionDate, record }) {
   const titleId = useId()
   const [rows, setRows] = useState(() => structuredClone(SIGN_TYPE_ROWS))
   const [expanded, setExpanded] = useState(() => new Set())
@@ -212,6 +213,8 @@ export function ProjectCreateTaskModal({ open, onClose, submissionDate }) {
   const [planCode, setPlanCode] = useState('')
   const [priorityLevel, setPriorityLevel] = useState('Medium')
   const [hoursRequired, setHoursRequired] = useState('')
+  const [submitting, setSubmitting] = useState(false)
+  const [error, setError] = useState('')
   const startOfToday = new Date()
   startOfToday.setHours(0, 0, 0, 0)
   const startOfDeadline =
@@ -317,6 +320,91 @@ export function ProjectCreateTaskModal({ open, onClose, submissionDate }) {
         children: row.children.map((child) => emptyWorkFields(child)),
       })),
     )
+  }
+
+  function isRowSelected(r) {
+    return (
+      r.artwork ||
+      r.technical ||
+      r.location ||
+      r.asBuilt ||
+      r.bim ||
+      String(r.artHours ?? '').trim() !== '' ||
+      String(r.techHours ?? '').trim() !== '' ||
+      String(r.locationHours ?? '').trim() !== '' ||
+      String(r.asBuiltHours ?? '').trim() !== ''
+    )
+  }
+
+  async function handleCreateTasks() {
+    if (!record) return
+    setError('')
+    setSubmitting(true)
+    try {
+      const details = []
+      for (const row of rows) {
+        if (isRowSelected(row)) {
+          details.push({
+            signType: row.signType || undefined,
+            planCode: planCode || undefined,
+            area: selectedArea || undefined,
+            level: selectedLevel || undefined,
+            artwork: !!row.artwork,
+            artworkHours: row.artHours ? Number(row.artHours) : undefined,
+            technical: !!row.technical,
+            technicalHours: row.techHours ? Number(row.techHours) : undefined,
+            location: !!row.location,
+            locationHours: row.locationHours ? Number(row.locationHours) : undefined,
+            asBuilt: !!row.asBuilt,
+            asBuiltHours: row.asBuiltHours ? Number(row.asBuiltHours) : undefined,
+            bim: !!row.bim,
+            deadline: submissionDate instanceof Date && !Number.isNaN(submissionDate.getTime()) ? submissionDate.toISOString() : undefined,
+            comment: undefined,
+          })
+        }
+        for (const child of row.children) {
+          if (isRowSelected(child)) {
+            details.push({
+              signType: child.signType || undefined,
+              planCode: planCode || undefined,
+              area: selectedArea || undefined,
+              level: selectedLevel || undefined,
+              artwork: !!child.artwork,
+              artworkHours: child.artHours ? Number(child.artHours) : undefined,
+              technical: !!child.technical,
+              technicalHours: child.techHours ? Number(child.techHours) : undefined,
+              location: !!child.location,
+              locationHours: child.locationHours ? Number(child.locationHours) : undefined,
+              asBuilt: !!child.asBuilt,
+              asBuiltHours: child.asBuiltHours ? Number(child.asBuiltHours) : undefined,
+              bim: !!child.bim,
+              deadline: submissionDate instanceof Date && !Number.isNaN(submissionDate.getTime()) ? submissionDate.toISOString() : undefined,
+              comment: undefined,
+            })
+          }
+        }
+      }
+
+      const payload = {
+        designType: 'Project',
+        task: {
+          title: record.name ?? record.projectName ?? `Project Task ${record.id}`,
+          opNo: record.opNo ?? undefined,
+          description: undefined,
+          priority: priorityLevel,
+          dueDate: submissionDate instanceof Date && !Number.isNaN(submissionDate.getTime()) ? submissionDate.toISOString() : undefined,
+          projectNo: record.projectNo ?? record.projectId ?? undefined,
+        },
+        projectDetails: details,
+      }
+
+      await apiClient.post('/tasks/extended', payload)
+      onClose()
+    } catch (err) {
+      setError(err instanceof Error ? err.message : 'Failed to create project task')
+    } finally {
+      setSubmitting(false)
+    }
   }
 
   return (
@@ -488,13 +576,15 @@ export function ProjectCreateTaskModal({ open, onClose, submissionDate }) {
             <div className="rounded bg-blue-50 px-3 py-2 text-sm text-blue-700">
               {selectedCount} tasks selected
             </div>
+            {error ? <p className="text-xs text-red-600">{error}</p> : null}
             <button
               type="button"
+              onClick={handleCreateTasks}
               className="rounded-md bg-blue-600 px-8 py-2.5 text-sm font-semibold text-white shadow-sm transition hover:bg-blue-700 focus:outline-none focus-visible:ring-2 focus-visible:ring-blue-500 focus-visible:ring-offset-2 disabled:pointer-events-none disabled:opacity-45"
-              disabled={selectedCount === 0}
+              disabled={selectedCount === 0 || submitting}
               title={selectedCount === 0 ? 'Select at least one work type or enter hours on a row' : undefined}
             >
-              Create Tasks
+              {submitting ? 'Creating...' : 'Create Tasks'}
             </button>
           </div>
         </div>

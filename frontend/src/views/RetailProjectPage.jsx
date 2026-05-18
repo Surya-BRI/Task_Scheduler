@@ -2,10 +2,11 @@
 
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import { useParams, usePathname, useRouter, useSearchParams } from 'next/navigation'
-import { ChevronLeft, CircleCheck, Clock3, Flag, Hourglass, Info, Pencil, Shield, Upload } from 'lucide-react'
+import { ChevronLeft, CircleCheck, Clock3, Flag, Hourglass, Info, Pencil, Shield, Trash2, Upload } from 'lucide-react'
 import { CreateTaskModal } from '../components/CreateTaskModal'
 import { Navbar } from '../components/Navbar'
 import { dummyProjects } from '../features/projects/data/dummy-projects'
+import { apiClient } from '@/lib/api-client'
 
 const STAGE_ITEMS = [
   { id: 'new', label: 'Design Task New', hint: 'Awaiting project allocation', icon: Flag },
@@ -100,23 +101,43 @@ function FormFieldWithPencil({ id, label, value, onChange, placeholder }) {
   )
 }
 
-function FilesPanel() {
+function FilesPanel({ projectId, files, uploading, onPick, onDelete }) {
   const fileInputRef = useRef(null)
   return (
     <section className="rounded-lg border border-slate-200 bg-white p-3 shadow-sm">
       <h2 className="text-sm font-semibold text-slate-900">Files</h2>
       <button
         type="button"
+        disabled={!projectId || uploading}
         onClick={() => fileInputRef.current?.click()}
-        className="mt-2 inline-flex w-full items-center justify-center gap-2 rounded-md bg-blue-50 px-3 py-1.5 text-xs font-semibold text-blue-700 hover:bg-blue-100"
+        className="mt-2 inline-flex w-full items-center justify-center gap-2 rounded-md bg-blue-50 px-3 py-1.5 text-xs font-semibold text-blue-700 hover:bg-blue-100 disabled:cursor-not-allowed disabled:opacity-60"
       >
         <Upload className="h-3.5 w-3.5" />
-        Upload Files
+        {uploading ? 'Uploading...' : 'Upload Project Files'}
       </button>
-      <input ref={fileInputRef} type="file" className="hidden" />
+      <input
+        ref={fileInputRef}
+        type="file"
+        className="hidden"
+        multiple
+        onChange={(event) => onPick(Array.from(event.target.files ?? []))}
+      />
       <div className="mt-2 rounded-md border border-dashed border-slate-300 px-3 py-5 text-center text-xs text-slate-500">
         Drag &amp; drop files here or click to browse.
         <span className="mt-1 block text-xs text-slate-400">Supported: Audio, MP4 Files.</span>
+      </div>
+      <div className="mt-2 space-y-1.5">
+        {files.map((file) => (
+          <div key={file.id} className="flex min-h-10 items-center justify-between rounded border border-slate-200 bg-slate-50 px-3 py-2 text-sm">
+            <a href={file.signedUrl} target="_blank" rel="noreferrer" className="flex min-w-0 items-center gap-2 truncate text-blue-700 hover:underline">
+              <span className="shrink-0 text-base" aria-hidden>📄</span>
+              <span className="truncate">{file.fileName}</span>
+            </a>
+            <button type="button" className="ml-2 text-slate-500 hover:text-red-600" onClick={() => onDelete(file.id)}>
+              <Trash2 className="h-4 w-4" />
+            </button>
+          </div>
+        ))}
       </div>
     </section>
   )
@@ -159,6 +180,9 @@ export function RetailProjectPage() {
   const [hoursRequired, setHoursRequired] = useState('')
   const [dateIssued, setDateIssued] = useState('')
   const [dateSubmission, setDateSubmission] = useState('')
+  const [projectId, setProjectId] = useState('')
+  const [projectFiles, setProjectFiles] = useState([])
+  const [uploadingProjectFiles, setUploadingProjectFiles] = useState(false)
 
   useEffect(() => {
     if (!row) {
@@ -199,6 +223,75 @@ export function RetailProjectPage() {
 
   const m = modelFromProjectRow(row)
   const canPostChatter = chatterMessage.trim().length > 0
+  const normalizeProjectNo = (value) => String(value ?? '').toLowerCase().replace(/[\s-]/g, '')
+
+  useEffect(() => {
+    let alive = true
+    async function resolveProjectId() {
+      if (!row?.projectId) return
+      if (/^[0-9a-f]{8}-[0-9a-f]{4}-[1-5][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i.test(row.projectId)) {
+        setProjectId(row.projectId)
+        return
+      }
+      try {
+        const result = await apiClient.get(`/projects?search=${encodeURIComponent(row.projectId)}&limit=100`)
+        const rows = result?.data ?? []
+        const exact = rows.find((project) => project.projectNo === row.projectId)
+        const normalized = normalizeProjectNo(row.projectId)
+        const normalizedMatch = rows.find(
+          (project) => normalizeProjectNo(project.projectNo) === normalized,
+        )
+        const fallback = rows[0]
+        if (!alive) return
+        setProjectId(exact?.id ?? normalizedMatch?.id ?? fallback?.id ?? '')
+      } catch {
+        if (!alive) return
+        setProjectId('')
+      }
+    }
+    resolveProjectId()
+    return () => {
+      alive = false
+    }
+  }, [row?.projectId])
+
+  const fetchProjectFiles = useCallback(async () => {
+    if (!projectId) {
+      setProjectFiles([])
+      return
+    }
+    try {
+      const files = await apiClient.get(`/projects/${projectId}/files`)
+      setProjectFiles(files ?? [])
+    } catch {
+      setProjectFiles([])
+    }
+  }, [projectId])
+
+  useEffect(() => {
+    fetchProjectFiles()
+  }, [fetchProjectFiles])
+
+  async function handleProjectFilesPicked(files) {
+    if (!projectId || files.length === 0) return
+    setUploadingProjectFiles(true)
+    try {
+      for (const file of files) {
+        const formData = new FormData()
+        formData.append('file', file)
+        await apiClient.post(`/projects/${projectId}/files`, formData)
+      }
+      await fetchProjectFiles()
+    } finally {
+      setUploadingProjectFiles(false)
+    }
+  }
+
+  async function handleDeleteProjectFile(fileId) {
+    if (!projectId) return
+    await apiClient.delete(`/projects/${projectId}/files/${fileId}`)
+    await fetchProjectFiles()
+  }
 
   function handlePostChatter() {
     const normalized = chatterMessage.trim()
@@ -395,13 +488,23 @@ export function RetailProjectPage() {
                 </section>
               )}
 
-              <FilesPanel />
+              <FilesPanel
+                projectId={projectId}
+                files={projectFiles}
+                uploading={uploadingProjectFiles}
+                onPick={handleProjectFilesPicked}
+                onDelete={handleDeleteProjectFile}
+              />
             </aside>
           </div>
         </div>
       </main>
 
-      <CreateTaskModal open={createModalOpen || isCreateRequested} onClose={() => setCreateModalOpen(false)} />
+      <CreateTaskModal
+        open={createModalOpen || isCreateRequested}
+        onClose={() => setCreateModalOpen(false)}
+        record={row}
+      />
     </div>
   )
 }

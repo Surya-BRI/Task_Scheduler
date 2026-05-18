@@ -9,10 +9,15 @@ import {
   Patch,
   Post,
   Query,
+  UploadedFile,
   UseGuards,
+  UseInterceptors,
 } from '@nestjs/common';
+import { FileInterceptor } from '@nestjs/platform-express';
+import { memoryStorage } from 'multer';
 import { TasksService } from './tasks.service';
 import { CreateTaskDto } from './dto/create-task.dto';
+import { CreateExtendedTaskDto } from './dto/create-extended-task.dto';
 import { UpdateTaskDto } from './dto/update-task.dto';
 import { AssignTaskDto } from './dto/assign-task.dto';
 import { UpdateTaskStatusDto } from './dto/update-task-status.dto';
@@ -22,17 +27,40 @@ import { Roles } from '../common/decorators/roles.decorator';
 import { UserRole } from '../common/constants/roles.enum';
 import { CurrentUser } from '../common/decorators/current-user.decorator';
 import type { JwtPayload } from '../common/types/jwt-payload.type';
+import { TaskFilesService } from './task-files.service';
 
 @Controller('tasks')
 @UseGuards(JwtAuthGuard, RolesGuard)
 export class TasksController {
-  constructor(private readonly tasksService: TasksService) {}
+  constructor(
+    private readonly tasksService: TasksService,
+    private readonly taskFilesService: TaskFilesService,
+  ) {}
 
   /** POST /tasks — HOD/Admin/PM */
   @Post()
   @Roles(UserRole.HOD, UserRole.ADMIN, UserRole.PROJECT_MANAGER)
   create(@Body() dto: CreateTaskDto) {
     return this.tasksService.create(dto);
+  }
+
+  /** POST /tasks/extended — HOD/Admin/PM */
+  @Post('extended')
+  @Roles(UserRole.HOD, UserRole.ADMIN, UserRole.PROJECT_MANAGER)
+  createExtended(@Body() dto: CreateExtendedTaskDto) {
+    return this.tasksService.createExtended(dto);
+  }
+
+  @Post('upload-file')
+  @Roles(UserRole.HOD, UserRole.ADMIN, UserRole.PROJECT_MANAGER)
+  @UseInterceptors(
+    FileInterceptor('file', {
+      storage: memoryStorage(),
+      limits: { fileSize: 20 * 1024 * 1024 },
+    }),
+  )
+  uploadFile(@UploadedFile() file: Express.Multer.File, @CurrentUser() user: JwtPayload) {
+    return this.taskFilesService.uploadTaskFile(file, user.sub);
   }
 
   /**
