@@ -3,6 +3,8 @@ import { PrismaService } from '../prisma/prisma.service';
 import { CreateProjectDto } from './dto/create-project.dto';
 import { UpdateProjectDto } from './dto/update-project.dto';
 import { TaskFilesService } from '../tasks/task-files.service';
+import { ActivityLoggerService } from '../activities/activity-logger.service';
+import { ActivityAction } from '../activities/activity-events';
 
 const PROJECT_SELECT = {
   id: true,
@@ -33,6 +35,7 @@ export class ProjectsService {
   constructor(
     private readonly prisma: PrismaService,
     private readonly taskFilesService: TaskFilesService,
+    private readonly activityLogger: ActivityLoggerService,
   ) {}
 
   create(createdById: string, dto: CreateProjectDto) {
@@ -110,6 +113,34 @@ export class ProjectsService {
     return { ...project, attachments };
   }
 
+  async findByProjectNo(projectNo: string) {
+    const value = (projectNo ?? '').trim();
+    if (!value) throw new NotFoundException('Project not found');
+
+    const exact = await this.prisma.project.findFirst({
+      where: { projectNo: value },
+      select: PROJECT_SELECT,
+    });
+    if (exact) return exact;
+
+    const normalized = value.toLowerCase().replace(/[\s-]/g, '');
+    const candidates = await this.prisma.project.findMany({
+      where: { projectNo: { not: null } },
+      select: PROJECT_SELECT,
+      take: 5000,
+    });
+    const normalizedMatch =
+      candidates.find(
+        (project) =>
+          (project.projectNo ?? '')
+            .toLowerCase()
+            .replace(/[\s-]/g, '') === normalized,
+      ) ?? null;
+    if (normalizedMatch) return normalizedMatch;
+
+    throw new NotFoundException('Project not found');
+  }
+
   async uploadProjectFile(projectId: string, file: Express.Multer.File, userId: string) {
     const project = await this.prisma.project.findUnique({ where: { id: projectId }, select: { id: true } });
     if (!project) throw new NotFoundException('Project not found');
@@ -134,6 +165,28 @@ export class ProjectsService {
       },
     });
     const signedUrl = await this.taskFilesService.createSignedReadUrl(created.fileKey);
+    await this.activityLogger.log({
+      action: ActivityAction.PROJECT_FILE_UPLOADED,
+      userId,
+      taskId: null,
+      details: {
+        event: ActivityAction.PROJECT_FILE_UPLOADED,
+        messageKey: 'project_file_uploaded',
+        projectSnapshot: {
+          id: projectId,
+          projectNo: undefined,
+          name: undefined,
+        },
+        fileMeta: {
+          id: created.id,
+          fileName: created.fileName,
+          fileKey: created.fileKey,
+          mimeType: created.mimeType,
+          sizeBytes: typeof created.sizeBytes === 'bigint' ? Number(created.sizeBytes) : created.sizeBytes,
+        },
+        context: { source: 'projects.uploadFile', projectId },
+      },
+    });
     return {
       ...created,
       sizeBytes: typeof created.sizeBytes === 'bigint' ? Number(created.sizeBytes) : created.sizeBytes,
@@ -167,13 +220,37 @@ export class ProjectsService {
     );
   }
 
-  async removeProjectFile(projectId: string, fileId: string) {
+  async removeProjectFile(projectId: string, fileId: string, userId: string) {
     const existing = await this.prisma.projectAttachment.findFirst({
       where: { id: fileId, projectId },
-      select: { id: true },
+      select: { id: true, fileName: true, fileKey: true, mimeType: true, sizeBytes: true },
     });
     if (!existing) throw new NotFoundException('Project attachment not found');
-    return this.prisma.projectAttachment.delete({ where: { id: fileId } });
+    const deleted = await this.prisma.projectAttachment.delete({ where: { id: fileId } });
+    await this.activityLogger.log({
+      action: ActivityAction.PROJECT_FILE_DELETED,
+      userId,
+      taskId: null,
+      details: {
+        event: ActivityAction.PROJECT_FILE_DELETED,
+        messageKey: 'project_file_deleted',
+        projectSnapshot: {
+          id: projectId,
+          projectNo: undefined,
+          name: undefined,
+        },
+        fileMeta: {
+          id: existing.id,
+          fileName: existing.fileName,
+          fileKey: existing.fileKey,
+          mimeType: existing.mimeType,
+          sizeBytes:
+            typeof existing.sizeBytes === 'bigint' ? Number(existing.sizeBytes) : existing.sizeBytes,
+        },
+        context: { source: 'projects.removeFile', projectId },
+      },
+    });
+    return deleted;
   }
 
   async update(id: string, dto: UpdateProjectDto) {

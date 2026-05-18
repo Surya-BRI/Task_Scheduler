@@ -4,6 +4,8 @@ export type ChatterCommentDto = {
   id: string;
   postId: string | null;
   authorId: string | null;
+  authorName?: string | null;
+  authorRole?: string | null;
   message: string;
   createdAt: string;
 };
@@ -12,6 +14,8 @@ export type ChatterPostDto = {
   id: string;
   taskId: string | null;
   authorId: string | null;
+  authorName?: string | null;
+  authorRole?: string | null;
   title: string;
   message: string;
   postType: string | null;
@@ -94,12 +98,13 @@ export function mapCommentDtoToFeedComment(
   dto: ChatterCommentDto,
   currentUserId?: string | null,
 ): { id: string; message: string; author: string; authorId: string | null; createdAt: string } {
+  const full = dto.authorName?.trim();
+  const role = dto.authorRole?.trim();
+  const pretty = full ? `${full}${role ? ` (${role})` : ''}` : null;
   const authorLabel =
     dto.authorId && currentUserId && dto.authorId === currentUserId
       ? 'You'
-      : dto.authorId
-        ? `User ${shortId(dto.authorId, 14)}`
-        : 'Unknown';
+      : pretty ?? (dto.authorId ? `User ${shortId(dto.authorId, 14)}` : 'Unknown');
   return {
     id: dto.id,
     message: dto.message || '',
@@ -114,7 +119,9 @@ export function mapChatterPostDtoToFeedPost(
   currentUserId?: string | null,
 ): ChatterFeedPost {
   const created = dto.createdAt ? new Date(dto.createdAt) : null;
-  const authorLabel = dto.authorId ? `User ${shortId(dto.authorId, 14)}` : 'Unknown';
+  const full = dto.authorName?.trim();
+  const role = dto.authorRole?.trim();
+  const authorLabel = full ? `${full}${role ? ` (${role})` : ''}` : (dto.authorId ? `User ${shortId(dto.authorId, 14)}` : 'Unknown');
   const mention =
     dto.mentionUserId != null && String(dto.mentionUserId).trim()
       ? `@${shortId(dto.mentionUserId, 18)}`
@@ -156,10 +163,11 @@ export function listChatterMentionUsers() {
   return apiClient.get<ChatterMentionUser[]>('/chatter-posts/mention-users');
 }
 
-export function listChatterPosts(params?: { limit?: number; taskId?: string }) {
+export function listChatterPosts(params?: { limit?: number; taskId?: string; projectId?: string }) {
   const qs = new URLSearchParams();
   if (params?.limit != null) qs.set('limit', String(params.limit));
   if (params?.taskId?.trim()) qs.set('taskId', params.taskId.trim());
+  if (params?.projectId?.trim()) qs.set('projectId', params.projectId.trim());
   const suffix = qs.toString() ? `?${qs.toString()}` : '';
   return apiClient.get<ChatterPostDto[]>(`/chatter-posts${suffix}`);
 }

@@ -27,28 +27,24 @@ import { Roles } from '../common/decorators/roles.decorator';
 import { UserRole } from '../common/constants/roles.enum';
 import { CurrentUser } from '../common/decorators/current-user.decorator';
 import type { JwtPayload } from '../common/types/jwt-payload.type';
-import { TaskFilesService } from './task-files.service';
 
 @Controller('tasks')
 @UseGuards(JwtAuthGuard, RolesGuard)
 export class TasksController {
-  constructor(
-    private readonly tasksService: TasksService,
-    private readonly taskFilesService: TaskFilesService,
-  ) {}
+  constructor(private readonly tasksService: TasksService) {}
 
   /** POST /tasks — HOD/Admin/PM */
   @Post()
   @Roles(UserRole.HOD, UserRole.ADMIN, UserRole.PROJECT_MANAGER)
-  create(@Body() dto: CreateTaskDto) {
-    return this.tasksService.create(dto);
+  create(@CurrentUser() user: JwtPayload, @Body() dto: CreateTaskDto) {
+    return this.tasksService.create(user.sub, dto);
   }
 
   /** POST /tasks/extended — HOD/Admin/PM */
   @Post('extended')
   @Roles(UserRole.HOD, UserRole.ADMIN, UserRole.PROJECT_MANAGER)
-  createExtended(@Body() dto: CreateExtendedTaskDto) {
-    return this.tasksService.createExtended(dto);
+  createExtended(@CurrentUser() user: JwtPayload, @Body() dto: CreateExtendedTaskDto) {
+    return this.tasksService.createExtended(user.sub, dto);
   }
 
   @Post('upload-file')
@@ -60,7 +56,7 @@ export class TasksController {
     }),
   )
   uploadFile(@UploadedFile() file: Express.Multer.File, @CurrentUser() user: JwtPayload) {
-    return this.taskFilesService.uploadTaskFile(file, user.sub);
+    return this.tasksService.uploadTaskFile(file, user.sub);
   }
 
   /**
@@ -114,8 +110,8 @@ export class TasksController {
   /** PATCH /tasks/:id/assign — HOD/Admin */
   @Patch(':id/assign')
   @Roles(UserRole.HOD, UserRole.ADMIN)
-  assign(@Param('id') id: string, @Body() dto: AssignTaskDto) {
-    return this.tasksService.assign(id, dto);
+  assign(@Param('id') id: string, @CurrentUser() user: JwtPayload, @Body() dto: AssignTaskDto) {
+    return this.tasksService.assign(id, user.sub, dto);
   }
 
   /** PATCH /tasks/:id/status — all authenticated roles */

@@ -104,6 +104,53 @@ Protected routes use:
 Authorization: Bearer <accessToken>
 ```
 
+## Project + File Endpoints
+
+- `GET /api/v1/projects`
+- `GET /api/v1/projects/by-project-no/:projectNo`
+- `GET /api/v1/projects/:id`
+- `POST /api/v1/projects/:id/files`
+- `GET /api/v1/projects/:id/files`
+- `DELETE /api/v1/projects/:id/files/:fileId`
+
+## Activity Endpoints
+
+- Team feed compatibility:
+  - `GET /api/v1/activities?limit=50`
+- Task timeline (new):
+  - `GET /api/v1/activities/task/:taskId?limit=30&cursor=<isoDate>`
+- Project timeline (new):
+  - `GET /api/v1/activities/project/:projectId?limit=30&cursor=<isoDate>`
+
+## Activity Logging Notes
+
+- Activity records are stored in `ErpTSActivityLog`.
+- Structured JSON is stored in `details` for new events.
+- Current rollout logs:
+  - task created
+  - task assigned
+  - task status changed
+  - task file uploaded
+  - project file uploaded/deleted
+  - chatter post created
+  - chatter comment created
+- Full coverage list is maintained in:
+  - `backend/docs/ACTIVITY_LOG_COVERAGE.md`
+
+## Chatter Endpoints
+
+- `GET /api/v1/chatter-posts?limit=200`
+- `GET /api/v1/chatter-posts?taskId=<taskUuid>&limit=200`
+- `GET /api/v1/chatter-posts?projectId=<projectUuid>&limit=200`
+- `POST /api/v1/chatter-posts`
+  - `message` required
+  - `title` optional (backend defaults to `"Chatter Post"` when omitted)
+- `POST /api/v1/chatter-posts/:postId/comments`
+
+Chatter list responses now include:
+- `authorName`
+- `authorRole`
+
 ## Troubleshooting
 
 ### 500 on API after schema changes

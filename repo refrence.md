@@ -63,11 +63,17 @@ All routes are under `/api/v1/*` via global prefix.
 
 - `POST /projects`
 - `GET /projects`
+- `GET /projects/by-project-no/:projectNo`
 - `GET /projects/:id`
+- `POST /projects/:id/files`
+- `GET /projects/:id/files`
+- `DELETE /projects/:id/files/:fileId`
 - `PATCH /projects/:id`
 - `DELETE /projects/:id`
 
 - `POST /tasks`
+- `POST /tasks/extended`
+- `POST /tasks/upload-file`
 - `GET /tasks`
 - `GET /tasks/summary`
 - `GET /tasks/:id`
@@ -85,8 +91,13 @@ All routes are under `/api/v1/*` via global prefix.
 - `POST /overtime-requests`
 - `PATCH /overtime-requests/:id`
 - `GET /scheduler-assignments`
+- `GET /activities`
+- `GET /activities/task/:taskId`
+- `GET /activities/project/:projectId`
 - `GET /chatter-posts`
+- `GET /chatter-posts?projectId=:projectId`
 - `POST /chatter-posts`
+- `POST /chatter-posts/:postId/comments`
 
 ### 3.4 Auth and Roles
 - JWT auth is implemented with Nest guards/strategy.
@@ -98,6 +109,23 @@ All routes are under `/api/v1/*` via global prefix.
 - looks up user by email
 - compares bcrypt hash
 - returns `accessToken` + user payload
+
+### 3.6 Activity Timeline and Logging
+- Activity timeline is backed by `ErpTSActivityLog` (`ActivityLog` model).
+- New scoped endpoints support Activity tab UX:
+- `/activities/task/:taskId` (default mode)
+- `/activities/project/:projectId` (project-wide toggle mode)
+- Logging for current rollout includes:
+- `TASK_CREATED`
+- `ASSIGNED_TASK`
+- `STATUS_CHANGED`
+- `TASK_FILE_UPLOADED`
+- `PROJECT_FILE_UPLOADED`
+- `PROJECT_FILE_DELETED`
+- `CREATED_CHATTER_POST`
+- `CREATED_CHATTER_COMMENT`
+- Coverage document:
+- `backend/docs/ACTIVITY_LOG_COVERAGE.md`
 
 ### 3.5 Config and Env
 - Config source: `backend/src/config/configuration.ts`
@@ -176,6 +204,19 @@ Seed file: `backend/prisma/seed.ts`
 - designer dashboard
 - chatter
 - team activity
+
+### 5.4 Detail Page Timeline/Chatter Wiring
+- Activity tab in detail pages supports:
+- Task mode: `/activities/task/:taskId`
+- Project mode: `/activities/project/:projectId`
+- Chatter tab in detail pages is backend-driven and project-scoped by default:
+- `/chatter-posts?projectId=<projectUuid>`
+- Chatter cards now render author name/role from API fields:
+- `authorName`
+- `authorRole`
+- Sidebar panels in detail pages are live now:
+- Project History uses project activity feed
+- Field History uses filtered project activity (`TASK_CREATED`, `ASSIGNED_TASK`, `STATUS_CHANGED`)
 
 ## 6) Root Scripts
 From repository root:

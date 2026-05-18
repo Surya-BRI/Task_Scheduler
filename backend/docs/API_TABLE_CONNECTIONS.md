@@ -58,23 +58,38 @@ Prisma schema models (and mapped SQL tables) in `backend/prisma/schema.prisma`: 
 ### `projects`
 - Controller: `backend/src/projects/projects.controller.ts`
 - Service: `backend/src/projects/projects.service.ts`
-- Connected table: `ErpTSProject`
+- Connected tables: `ErpTSProject`, `ErpTSProjectAttachment`, `ErpTSActivityLog`
+- Key endpoints include:
+  - `GET /projects/by-project-no/:projectNo`
+  - `POST /projects/:id/files`
+  - `GET /projects/:id/files`
+  - `DELETE /projects/:id/files/:fileId`
 
 ### `tasks`
 - Controller: `backend/src/tasks/tasks.controller.ts`
 - Service: `backend/src/tasks/tasks.service.ts`
-- Connected tables: `ErpTSTask`, `ErpTSUser`, `ErpTSProject`, `ErpTSActivityLog`, `ErpTSRetailTaskDetail`, `ErpTSProjectTaskDetail`
+- Connected tables: `ErpTSTask`, `ErpTSUser`, `ErpTSProject`, `ErpTSActivityLog`, `ErpTSRetailTaskDetail`, `ErpTSProjectTaskDetail`, `ErpTSRetailTaskDetailAttachment`, `ErpTSProjectTaskDetailAttachment`
 - Extended create endpoint: `POST /tasks/extended` creates parent `ErpTSTask` and type-specific details in a single transaction.
+- File endpoint: `POST /tasks/upload-file` uploads to S3 and logs activity.
 
 ### `activities`
 - Controller: `backend/src/activities/activities.controller.ts`
 - Service: `backend/src/activities/activities.service.ts`
 - Connected table: `ErpTSActivityLog`
+- Endpoints:
+  - `GET /activities` (team feed compatibility shape)
+  - `GET /activities/task/:taskId` (task timeline)
+  - `GET /activities/project/:projectId` (project timeline)
 
 ### `chatter-posts`
 - Controller: `backend/src/chatter-posts/chatter-posts.controller.ts`
 - Service: `backend/src/chatter-posts/chatter-posts.service.ts`
 - Connected tables: `ErpTSChatterPost`, `ErpTSChatterComment`, `ErpTSActivityLog`, `ErpTSUser`, `ErpTSTask`
+- Endpoints:
+  - `GET /chatter-posts?taskId=<uuid>&limit=<n>`
+  - `GET /chatter-posts?projectId=<uuid>&limit=<n>` (project-wide feed for detail pages)
+  - `POST /chatter-posts`
+  - `POST /chatter-posts/:postId/comments`
 
 ### `requests` (Leave Requests)
 - Controller: `backend/src/requests/requests.controller.ts`

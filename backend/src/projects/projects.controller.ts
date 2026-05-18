@@ -50,6 +50,13 @@ export class ProjectsController {
     return this.projectsService.findAll({ status, category, search, page, limit });
   }
 
+  /** GET /projects/by-project-no/:projectNo */
+  @Get('by-project-no/:projectNo')
+  @Roles(UserRole.HOD, UserRole.DESIGNER, UserRole.ADMIN, UserRole.PROJECT_MANAGER)
+  findByProjectNo(@Param('projectNo') projectNo: string) {
+    return this.projectsService.findByProjectNo(projectNo);
+  }
+
   /** GET /projects/:id — returns project with its tasks */
   @Get(':id')
   @Roles(UserRole.HOD, UserRole.DESIGNER, UserRole.ADMIN, UserRole.PROJECT_MANAGER)
@@ -81,8 +88,8 @@ export class ProjectsController {
 
   @Delete(':id/files/:fileId')
   @Roles(UserRole.HOD, UserRole.ADMIN, UserRole.PROJECT_MANAGER)
-  removeFile(@Param('id') id: string, @Param('fileId') fileId: string) {
-    return this.projectsService.removeProjectFile(id, fileId);
+  removeFile(@Param('id') id: string, @Param('fileId') fileId: string, @CurrentUser() user: JwtPayload) {
+    return this.projectsService.removeProjectFile(id, fileId, user.sub);
   }
 
   /** PATCH /projects/:id — HOD/Admin */
