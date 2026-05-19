@@ -59,17 +59,20 @@ Prisma schema models (and mapped SQL tables) in `backend/prisma/schema.prisma`: 
 - Controller: `backend/src/projects/projects.controller.ts`
 - Service: `backend/src/projects/projects.service.ts`
 - Connected tables: `ErpTSProject`, `ErpTSProjectAttachment`, `ErpTSActivityLog`
+- Fallback read source for hydration: ERP master project tables via `prisma.live` (`ErpMasterProject` + joins)
 - Key endpoints include:
   - `GET /projects/by-project-no/:projectNo`
   - `POST /projects/:id/files`
   - `GET /projects/:id/files`
   - `DELETE /projects/:id/files/:fileId`
+- `GET /projects/by-project-no/:projectNo` now hydrates missing app rows into `ErpTSProject` when project exists in ERP master source.
 
 ### `tasks`
 - Controller: `backend/src/tasks/tasks.controller.ts`
 - Service: `backend/src/tasks/tasks.service.ts`
 - Connected tables: `ErpTSTask`, `ErpTSUser`, `ErpTSProject`, `ErpTSActivityLog`, `ErpTSRetailTaskDetail`, `ErpTSProjectTaskDetail`, `ErpTSRetailTaskDetailAttachment`, `ErpTSProjectTaskDetailAttachment`
 - Extended create endpoint: `POST /tasks/extended` creates parent `ErpTSTask` and type-specific details in a single transaction.
+- Extended create contract now requires `task.projectName` (no fallback naming); missing value returns `400`.
 - File endpoint: `POST /tasks/upload-file` uploads to S3 and logs activity.
 
 ### `activities`

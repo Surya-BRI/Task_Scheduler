@@ -99,6 +99,15 @@ All routes are under `/api/v1/*` via global prefix.
 - `POST /chatter-posts`
 - `POST /chatter-posts/:postId/comments`
 
+Behavior notes:
+- `GET /projects/by-project-no/:projectNo` now performs on-demand hydration:
+  - lookup in `ErpTSProject` first
+  - if not found, lookup ERP master project tables and auto-create `ErpTSProject` row
+  - `404` only when absent in both
+- `POST /tasks/extended` now requires `task.projectName`:
+  - missing/blank project name returns `400`
+  - no fallback to task title/default project naming
+
 ### 3.4 Auth and Roles
 - JWT auth is implemented with Nest guards/strategy.
 - Role checks use:
@@ -126,6 +135,11 @@ All routes are under `/api/v1/*` via global prefix.
 - `CREATED_CHATTER_COMMENT`
 - Coverage document:
 - `backend/docs/ACTIVITY_LOG_COVERAGE.md`
+
+Detail page summary wiring (current):
+- `Created By (HOD)` comes from `TASK_CREATED` activity actor
+- `Reviewer HOD` comes from retail detail `hodName`
+- Provided assets are shown as clickable file links when signed URLs exist
 
 ### 3.5 Config and Env
 - Config source: `backend/src/config/configuration.ts`

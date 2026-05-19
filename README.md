@@ -21,6 +21,12 @@ Monorepo for task scheduling and resource workflows: **Next.js** frontend + **Ne
   - `GET /api/v1/chatter-posts?projectId=<projectUuid>&limit=<n>`
 - Chatter payload includes author metadata for UI labels:
   - `authorName`, `authorRole`
+- Project lookup endpoint now supports ERP fallback hydration:
+  - `GET /api/v1/projects/by-project-no/:projectNo`
+  - If project code exists in ERP master tables but is missing in `ErpTSProject`, API auto-creates an app project row and returns it.
+- Extended task create now requires source project name:
+  - `POST /api/v1/tasks/extended`
+  - `task.projectName` is required (no fallback to task title/default project name).
 
 ## Prerequisites
 
