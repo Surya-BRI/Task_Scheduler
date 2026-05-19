@@ -1,0 +1,84 @@
+# Task Scheduler Deployment Runbook (WinSCP + PuTTY)
+
+## 1. Server Paths
+- Backend: `/home/ubuntu/bri-erp-api/task-scheduler/backend`
+- Frontend: `/home/ubuntu/bri-erp-api/task-scheduler/frontend`
+
+## 2. Upload via WinSCP
+Upload only changed files from local repo to same relative path on server.
+
+### Backend (common)
+- `backend/src/tasks/tasks.service.ts`
+- `backend/src/tasks/dto/update-task-status.dto.ts`
+
+### Frontend (common)
+- `frontend/src/views/TaskDetailsPage.jsx`
+- `frontend/src/features/scheduler/components/DesignSchedulerScreen.jsx`
+- `frontend/src/features/design-list/task-view-model.js`
+- `frontend/src/features/design-list/components/DesignListScreen.jsx`
+- `frontend/src/features/design-list/components/DesignerDesignListScreen.jsx`
+
+## 3. Backend Deploy Commands (PuTTY)
+```bash
+cd /home/ubuntu/bri-erp-api/task-scheduler/backend
+npm run build
+pm2 restart 70
+pm2 logs 70 --lines 50
+```
+
+If backend PM2 id/name is different, replace `70`.
+
+## 4. Frontend Deploy Commands (PuTTY)
+If frontend is hosted from this server:
+```bash
+cd /home/ubuntu/bri-erp-api/task-scheduler/frontend
+npm run build
+pm2 restart <frontend-pm2-id-or-name>
+```
+
+If frontend is Vercel-hosted, deploy frontend there instead.
+
+## 5. DB Check Constraint (one-time / when status changes)
+Task status constraint must include:
+- `PENDING`
+- `WIP`
+- `COMPLETED`
+- `REVISION`
+- `APPROVED`
+- `ON_HOLD`
+
+### Verify constraint
+```sql
+SELECT cc.name, cc.definition
+FROM sys.check_constraints cc
+WHERE cc.name = 'CK_Task_status';
+```
+
+### Update constraint
+```sql
+ALTER TABLE [dbo].[ErpTSTask] DROP CONSTRAINT [CK_Task_status];
+ALTER TABLE [dbo].[ErpTSTask] WITH CHECK ADD CONSTRAINT [CK_Task_status]
+CHECK ([status] IN ('PENDING','WIP','COMPLETED','REVISION','APPROVED','ON_HOLD'));
+```
+
+## 6. Post-Deploy Smoke Tests
+1. Open Design List and verify rows load from `/api/v1/tasks`.
+2. Open Scheduler and verify real designers load (not mock list).
+3. Hold/unhold a task in Scheduler and confirm status persists.
+4. Open task detail by UUID and verify task loads.
+5. Try non-UUID task URL (`/api/v1/tasks/12746`) and confirm no server crash (should be 400, not 500).
+
+## 7. Known Error Meanings
+- `Conversion failed when converting from a character string to uniqueidentifier`
+  - Cause: Non-UUID passed to `/tasks/:id`.
+  - Fix: Frontend must not call task endpoint with numeric/project ids; backend UUID guard must be deployed.
+
+- `CK_Task_status` constraint error
+  - Cause: DB check constraint missing one of used status values.
+  - Fix: Update `CK_Task_status` values (see section 5).
+
+## 8. Quick Rollback
+1. Re-upload previous stable file versions with WinSCP.
+2. Rebuild + restart PM2.
+3. Confirm logs are clean.
+

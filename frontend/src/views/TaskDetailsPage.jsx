@@ -136,7 +136,7 @@ function DatePickerField({ id, label, selected, onChange, minDate }) {
   )
 }
 
-function FilesPanel({ projectId, files, uploading, onPick, onDelete }) {
+function FilesPanel({ projectId, files, uploading, resolvingProjectId, onPick, onDelete }) {
   const fileInputRef = useRef(null)
 
   const openFilePicker = () => {
@@ -148,12 +148,12 @@ function FilesPanel({ projectId, files, uploading, onPick, onDelete }) {
       <h2 className="text-sm font-semibold text-slate-900">Files</h2>
       <button
         type="button"
-        disabled={!projectId || uploading}
+        disabled={!projectId || uploading || resolvingProjectId}
         onClick={openFilePicker}
         className="mt-2 inline-flex w-full items-center justify-center gap-2 rounded-md bg-blue-50 px-3 py-1.5 text-xs font-semibold text-blue-700 hover:bg-blue-100 disabled:cursor-not-allowed disabled:opacity-60"
       >
         <Upload className="h-3.5 w-3.5" />
-        {uploading ? 'Uploading...' : 'Upload Project Files'}
+        {resolvingProjectId ? 'Preparing Project...' : uploading ? 'Uploading...' : 'Upload Project Files'}
       </button>
       <input
         ref={fileInputRef}
@@ -408,13 +408,48 @@ function mapTaskToRecord(task) {
     client: null,
   }
 }
+
+function mapProjectListRowToRecord(row) {
+  const createdOn = row?.created ?? row?.createdOn ?? new Date().toISOString()
+  const createdDate = createdOn ? new Date(createdOn) : new Date()
+  const dd = String(createdDate.getDate()).padStart(2, '0')
+  const mm = String(createdDate.getMonth() + 1).padStart(2, '0')
+  const yyyy = createdDate.getFullYear()
+  const dateLabel = `${dd}/${mm}/${yyyy}`
+  return {
+    id: String(row?.id ?? ''),
+    taskId: null,
+    opNo: row?.salesForceCode ?? row?.opNo ?? '-',
+    projectNo: row?.projectCode ?? row?.projectNo ?? '-',
+    projectId: row?.projectId ?? row?.id ?? null,
+    designType: row?.designType ?? row?.category ?? 'Project',
+    businessUnit: row?.businessUnitCode ?? row?.businessUnit ?? 'Project',
+    name: row?.projectName ?? row?.name ?? '-',
+    status: row?.status ?? 'Pending',
+    salesPerson: row?.salesPerson ?? 'Unassigned',
+    created: dateLabel,
+    deadline: dateLabel,
+    agingDays: 0,
+    clientName: row?.clientName ?? row?.customerName ?? null,
+    projectName: row?.projectName ?? row?.name ?? null,
+    client: row?.clientName ?? row?.customerName ?? null,
+  }
+}
+
+function isUuid(value) {
+  return /^[0-9a-f]{8}-[0-9a-f]{4}-[1-5][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i.test(String(value ?? '').trim())
+}
 const TASK_TAB_IDS = ['details', 'activity', 'chatter', 'team']
 export function TaskDetailsPage() {
   const router = useRouter()
   const pathname = usePathname()
   const searchParams = useSearchParams()
   const params = useParams()
-  const recordId = params?.taskId ?? params?.id
+  const routeId = params?.taskId ?? params?.id
+  const queryOpNo = searchParams.get('opNo')
+  const queryProjectCode = searchParams.get('projectCode')
+  const from = searchParams.get('from')
+  const recordId = routeId
   const [record, setRecord] = useState(null)
   const [createModalOpen, setCreateModalOpen] = useState(false)
   const [projectCreateModalOpen, setProjectCreateModalOpen] = useState(false)
@@ -438,6 +473,7 @@ export function TaskDetailsPage() {
   const [taskId, setTaskId] = useState('')
   const [projectFiles, setProjectFiles] = useState([])
   const [uploadingProjectFiles, setUploadingProjectFiles] = useState(false)
+  const [resolvingProjectId, setResolvingProjectId] = useState(false)
   const [activityMode, setActivityMode] = useState('task')
   const [activityItems, setActivityItems] = useState([])
   const [activityLoading, setActivityLoading] = useState(false)
@@ -452,14 +488,53 @@ export function TaskDetailsPage() {
   useEffect(() => {
     let alive = true
     async function loadTask() {
-      if (!recordId) {
+      if (!recordId && !queryOpNo) {
         setRecord(null)
         return
       }
       try {
-        const task = await apiClient.get(`/tasks/${encodeURIComponent(String(recordId))}`)
+        const rawId = String(recordId ?? '').trim()
+        const rawOpNo = String(queryOpNo ?? '').trim()
+        const isProjectsListFlow = from === 'projects-list'
+        const lookupProjectCode = isProjectsListFlow ? (String(queryProjectCode ?? '').trim() || rawId) : ''
+        const lookupOpNo = isProjectsListFlow ? rawOpNo : rawOpNo
+        let task = null
+        if (!isProjectsListFlow && rawId && isUuid(rawId)) {
+          task = await apiClient.get(`/tasks/${encodeURIComponent(rawId)}`)
+        } else if (!isProjectsListFlow && rawId) {
+          const result = await apiClient.get(`/tasks?search=${encodeURIComponent(rawId)}&limit=20`)
+          const rows = result?.data ?? []
+          task =
+            rows.find((item) => String(item?.id ?? '') === rawId) ??
+            rows.find((item) => String(item?.taskId ?? '') === rawId) ??
+            rows.find((item) => String(item?.opNo ?? '') === rawId) ??
+            null
+        }
+        if (!task && lookupOpNo) {
+          const result = await apiClient.get(`/tasks?search=${encodeURIComponent(lookupOpNo)}&limit=20`)
+          const rows = result?.data ?? []
+          task = rows.find((item) => String(item?.opNo ?? '') === lookupOpNo) ?? rows[0] ?? null
+        }
+        if (!task) {
+          const projectLookupKey = lookupProjectCode || lookupOpNo || rawId
+          if (projectLookupKey) {
+            const projectRowsResponse = await apiClient.get(
+              `/design-list/projects-list?page=1&limit=30&q=${encodeURIComponent(projectLookupKey)}`,
+            )
+            const projectRows = Array.isArray(projectRowsResponse?.data) ? projectRowsResponse.data : []
+            const projectRow =
+              projectRows.find((row) => String(row?.projectCode ?? row?.projectNo ?? '') === projectLookupKey) ??
+              projectRows.find((row) => String(row?.salesForceCode ?? row?.opNo ?? '') === projectLookupKey) ??
+              null
+            if (projectRow) {
+              if (!alive) return
+              setRecord(mapProjectListRowToRecord(projectRow))
+              return
+            }
+          }
+        }
         if (!alive) return
-        setRecord(mapTaskToRecord(task))
+        setRecord(task ? mapTaskToRecord(task) : null)
       } catch {
         if (!alive) return
         setRecord(null)
@@ -469,7 +544,7 @@ export function TaskDetailsPage() {
     return () => {
       alive = false
     }
-  }, [recordId])
+  }, [recordId, queryOpNo, queryProjectCode, from])
 
   useEffect(() => {
     if (!record) return
@@ -501,7 +576,6 @@ export function TaskDetailsPage() {
       ? rawTab
       : 'details'
   const tabs = isRetail ? TABS : [...TABS, PROJECT_TAB]
-  const from = searchParams.get('from')
   const backPath =
     from === 'project-design'
       ? '/project-design'
@@ -513,16 +587,22 @@ export function TaskDetailsPage() {
             ? '/design-list/my-work'
           : '/design-list'
   const resolvedProjectName = record?.projectName ?? record?.name ?? ''
-  const resolvedClientName = record?.client ?? record?.clientName
-  const pageTitle = `${resolvedProjectName.toUpperCase()} @ ${(record?.businessUnit ?? '').toUpperCase()}`
+  const resolvedOpCode = String(record?.salesForceCode ?? record?.opNo ?? '').trim()
+  const pageTitleCore = `${resolvedProjectName.toUpperCase()} @ ${(record?.businessUnit ?? '').toUpperCase()}`
+  const pageTitle = resolvedOpCode ? `${resolvedOpCode} - ${pageTitleCore}` : pageTitleCore
   const canPostChatter = chatterMessage.trim().length > 0
   useEffect(() => {
     let alive = true
     async function resolveProjectId() {
+      setResolvingProjectId(true)
       const projectNo = record?.projectNo ?? record?.projectId
-      if (!projectNo) return
+      if (!projectNo) {
+        if (alive) setResolvingProjectId(false)
+        return
+      }
       if (/^[0-9a-f]{8}-[0-9a-f]{4}-[1-5][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i.test(projectNo)) {
         setProjectId(projectNo)
+        if (alive) setResolvingProjectId(false)
         return
       }
       try {
@@ -532,6 +612,8 @@ export function TaskDetailsPage() {
       } catch {
         if (!alive) return
         setProjectId('')
+      } finally {
+        if (alive) setResolvingProjectId(false)
       }
     }
     resolveProjectId()
@@ -779,16 +861,13 @@ export function TaskDetailsPage() {
                 <>
                   <div className="mt-2.5 grid gap-3 lg:grid-cols-2">
                     <div className="space-y-0.5">
-                      <DetailRow label="Project Name" value={resolvedProjectName} />
-                      <DetailRow label="Client" value={resolvedClientName ?? '-'} />
-                      <DetailRow label="OP No" value={record.opNo} />
-                      <DetailRow label="Project No" value={record.projectNo} />
+                      <DetailRow label="Project Code" value={record.projectNo ?? '-'} />
+                      <DetailRow label="Project Name" value={resolvedProjectName || '-'} />
+                      <DetailRow label="OP Code" value={resolvedOpCode || '-'} />
                     </div>
                     <div className="space-y-0.5">
-                      <DetailRow label="Project Location" value={`${record.businessUnit.toUpperCase()} — main site`} />
-                      <DetailRow label="Business Unit" value={record.businessUnit} />
-                      <DetailRow label="Sales Person" value={record.salesPerson} />
-                      <DetailRow label="Created On" value={record.created ?? '-'} />
+                      <DetailRow label="Sales Person" value={record.salesPerson ?? '-'} />
+                      <DetailRow label="Business Unit" value={record.businessUnit ?? '-'} />
                     </div>
                   </div>
 
@@ -1018,13 +1097,14 @@ export function TaskDetailsPage() {
                 </section>
               )}
 
-              <FilesPanel
-                projectId={projectId}
-                files={projectFiles}
-                uploading={uploadingProjectFiles}
-                onPick={handleProjectFilesPicked}
-                onDelete={handleDeleteProjectFile}
-              />
+      <FilesPanel
+        projectId={projectId}
+        files={projectFiles}
+        uploading={uploadingProjectFiles}
+        resolvingProjectId={resolvingProjectId}
+        onPick={handleProjectFilesPicked}
+        onDelete={handleDeleteProjectFile}
+      />
             </aside>
           </div>
         </div>

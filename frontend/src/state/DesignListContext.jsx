@@ -1,5 +1,6 @@
 import { createContext, useContext, useMemo, useState } from 'react'
 import { useEffect } from 'react'
+import { usePathname } from 'next/navigation'
 import { parseDesignListDate } from '@/lib/design-list-date'
 import { apiClient } from '@/lib/api-client'
 
@@ -30,6 +31,7 @@ function nextStatus(current) {
 }
 
 export function DesignListProvider({ children }) {
+  const pathname = usePathname()
   const [records, setRecords] = useState([])
   const [query, setQuery] = useState('')
   const [status, setStatus] = useState('All')
@@ -41,6 +43,7 @@ export function DesignListProvider({ children }) {
   })
 
   useEffect(() => {
+    if (!pathname?.startsWith('/design-list')) return
     let mounted = true
     apiClient
       .get('/design-list')
@@ -57,7 +60,7 @@ export function DesignListProvider({ children }) {
     return () => {
       mounted = false
     }
-  }, [])
+  }, [pathname])
 
   const statusOptions = useMemo(() => {
     const uniq = Array.from(new Set(records.map((r) => r.status)))
