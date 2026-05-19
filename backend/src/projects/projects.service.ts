@@ -138,6 +138,62 @@ export class ProjectsService {
       ) ?? null;
     if (normalizedMatch) return normalizedMatch;
 
+    // Fallback: if project exists in ERP master tables but not yet hydrated
+    // into ErpTSProject, create it on-demand so details page can resolve.
+    const escaped = value.replace(/'/g, "''");
+    const erpRows = await this.prisma.live.$queryRawUnsafe<
+      Array<{
+        projectCode: string | null;
+        projectName: string | null;
+        businessUnitCode: string | null;
+        salesPerson: string | null;
+      }>
+    >(`
+      SELECT TOP 1
+        mp.projectCode,
+        mp.projectName,
+        mb.businessUnitCode,
+        (me.firstName + '' + me.lastName) AS salesPerson
+      FROM ErpMasterProject mp
+      LEFT JOIN ErpMasterOpportunity mo ON mo.projectid = mp.projectid
+      LEFT JOIN ErpMasterBusinessUnit mb ON mb.businessUnitId = mp.businessUnitId
+      LEFT JOIN ErpMasterEmployee me ON me.employeeId = mo.salesRepId
+      WHERE mp.isActive = 1
+        AND (
+          mp.projectCode = '${escaped}'
+          OR REPLACE(REPLACE(LOWER(mp.projectCode), ' ', ''), '-', '') = REPLACE(REPLACE(LOWER('${escaped}'), ' ', ''), '-', '')
+        )
+      ORDER BY mp.createdOn DESC
+    `);
+
+    const erp = erpRows[0];
+    if (erp?.projectCode) {
+      const bu = String(erp.businessUnitCode ?? '').trim().toLowerCase();
+      const category = bu === 'retail' || bu === 'rtl' || bu === 'r' ? 'Retail' : 'Project';
+
+      try {
+        const created = await this.prisma.project.create({
+          data: {
+            projectNo: erp.projectCode,
+            name: erp.projectName?.trim() || erp.projectCode,
+            category,
+            businessUnit: erp.businessUnitCode?.trim() || category,
+            status: 'ACTIVE',
+            salesPerson: erp.salesPerson?.trim() || null,
+            description: null,
+          },
+          select: PROJECT_SELECT,
+        });
+        return created;
+      } catch {
+        const existingAfterRace = await this.prisma.project.findFirst({
+          where: { projectNo: erp.projectCode },
+          select: PROJECT_SELECT,
+        });
+        if (existingAfterRace) return existingAfterRace;
+      }
+    }
+
     throw new NotFoundException('Project not found');
   }
 

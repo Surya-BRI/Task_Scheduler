@@ -359,9 +359,12 @@ export function ProjectCreateTaskModal({ open, onClose, submissionDate, record }
     if (!(submissionDate instanceof Date) || Number.isNaN(submissionDate.getTime())) {
       nextFieldErrors.deadline = 'Deadline for Task Submission is required'
     }
+    if (!String(record?.projectName ?? '').trim()) {
+      nextFieldErrors.projectName = 'Project Name is required from source project'
+    }
     if (Object.keys(nextFieldErrors).length > 0) {
       setFieldErrors(nextFieldErrors)
-      setError('Please fill required fields')
+      setError(nextFieldErrors.projectName || 'Please fill required fields')
       return
     }
     setFieldErrors({})
@@ -417,6 +420,7 @@ export function ProjectCreateTaskModal({ open, onClose, submissionDate, record }
         task: {
           title: normalizedTaskName,
           opNo: record.opNo ?? undefined,
+          projectName: record.projectName ?? undefined,
           description: undefined,
           priority: priorityLevel,
           dueDate: submissionDate instanceof Date && !Number.isNaN(submissionDate.getTime()) ? submissionDate.toISOString() : undefined,

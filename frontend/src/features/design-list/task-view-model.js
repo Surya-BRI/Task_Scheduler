@@ -34,9 +34,13 @@ export function getStatusLabel(statusCode) {
   }
 }
 
-function toSubmissionDate(task) {
-  if (task?.dueDate instanceof Date && !Number.isNaN(task.dueDate.getTime())) return task.dueDate;
+function toCreatedDate(task) {
   if (task?.createdAt instanceof Date && !Number.isNaN(task.createdAt.getTime())) return task.createdAt;
+  return null;
+}
+
+function toDeadlineDate(task) {
+  if (task?.dueDate instanceof Date && !Number.isNaN(task.dueDate.getTime())) return task.dueDate;
   return null;
 }
 
@@ -51,21 +55,22 @@ export function computeAgingDays(submissionDate) {
 }
 
 export function mapTaskToDesignRow(task) {
-  const submissionDate = toSubmissionDate(task);
-  const displayDate = formatDisplayDate(submissionDate);
+  const createdDate = toCreatedDate(task);
+  const deadlineDate = toDeadlineDate(task);
   return {
     id: task?.id,
     opNo: task?.opNo || "—",
     projectNo: task?.project?.projectNo || "—",
+    projectName: task?.project?.name || task?.project?.projectNo || "—",
     designType: task?.project?.category || "Project",
     businessUnit: task?.project?.category || "Project",
     name: task?.title || "Untitled Task",
     status: normalizeStatusCode(task?.status),
     salesPerson: task?.project?.salesPerson || "Unassigned",
-    created: displayDate || "—",
-    deadline: displayDate || "—",
-    submissionDate,
-    agingDays: computeAgingDays(submissionDate),
+    created: formatDisplayDate(createdDate) || "—",
+    deadline: formatDisplayDate(deadlineDate) || "—",
+    submissionDate: createdDate,
+    agingDays: computeAgingDays(createdDate),
     assigneeId: task?.assigneeId || null,
   };
 }

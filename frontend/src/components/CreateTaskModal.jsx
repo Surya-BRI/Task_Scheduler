@@ -93,9 +93,12 @@ export function CreateTaskModal({ open, onClose, submissionDate, record }) {
     if (!validSubmissionDate) {
       nextFieldErrors.deadline = 'Deadline for Task Submission is required'
     }
+    if (!String(record?.projectName ?? '').trim()) {
+      nextFieldErrors.projectName = 'Project Name is required from source project'
+    }
     if (Object.keys(nextFieldErrors).length > 0) {
       setFieldErrors(nextFieldErrors)
-      setError('Please fill required fields')
+      setError(nextFieldErrors.projectName || 'Please fill required fields')
       return
     }
     setFieldErrors({})
@@ -120,6 +123,7 @@ export function CreateTaskModal({ open, onClose, submissionDate, record }) {
         task: {
           title: normalizedTaskName,
           opNo: record.opNo ?? undefined,
+          projectName: record.projectName ?? undefined,
           description: comment || undefined,
           priority: priorityLevel,
           dueDate: validSubmissionDate ? validSubmissionDate.toISOString() : undefined,

@@ -397,7 +397,7 @@ function mapTaskToRecord(task) {
     opNo: task.opNo ?? '-',
     projectNo: project.projectNo ?? '-',
     projectId: project.id ?? null,
-    projectName: project.name ?? task.title ?? 'Task',
+    projectName: project.name ?? project.projectNo ?? 'Task',
     name: task.title ?? 'Task',
     designType: project.category ?? 'Project',
     businessUnit: project.category ?? 'Project',

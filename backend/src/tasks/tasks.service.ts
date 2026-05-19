@@ -245,15 +245,28 @@ export class TasksService {
     },
     designType: 'Retail' | 'Project',
   ) {
+    const requestedName = (task.projectName ?? '').trim();
+    if (!requestedName) {
+      throw new BadRequestException('projectName is required when creating task from project context');
+    }
+
     const existing = await this.resolveProjectForCreate(task).catch(() => null);
-    if (existing) return existing;
+    if (existing) {
+      if (requestedName && requestedName !== (existing.name ?? '').trim()) {
+        return this.prisma.project.update({
+          where: { id: existing.id },
+          data: { name: requestedName },
+        });
+      }
+      return existing;
+    }
 
     const projectNo = (task.projectNo ?? task.opNo ?? '').trim();
     if (!projectNo) {
       throw new BadRequestException('projectNo or opNo is required to create project in ERP-Dev');
     }
 
-    const name = (task.projectName ?? task.title ?? '').trim() || `Project ${projectNo}`;
+    const name = requestedName;
     const businessUnit = (task.businessUnit ?? designType).trim();
     const category = designType;
 
