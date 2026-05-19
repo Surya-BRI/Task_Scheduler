@@ -146,6 +146,12 @@ export class TasksService {
     };
   }
 
+  private isUuid(value: string) {
+    return /^[0-9a-f]{8}-[0-9a-f]{4}-[1-5][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i.test(
+      String(value ?? '').trim(),
+    );
+  }
+
   private async withSignedAttachmentUrls<T extends { retailDetails?: any[]; projectDetails?: any[] }>(task: T): Promise<T> {
     const allKeys = [
       ...(task.retailDetails ?? []).flatMap((line) => (line.attachments ?? []).map((a: any) => a.fileKey)),
@@ -577,6 +583,9 @@ export class TasksService {
   }
 
   async findOne(id: string) {
+    if (!this.isUuid(id)) {
+      throw new BadRequestException('Invalid task id');
+    }
     const task = await this.prisma.task.findUnique({ where: { id }, select: TASK_SELECT });
     if (!task) throw new NotFoundException('Task not found');
     const withUrls = await this.withSignedAttachmentUrls(task);
@@ -584,6 +593,9 @@ export class TasksService {
   }
 
   async update(id: string, dto: UpdateTaskDto) {
+    if (!this.isUuid(id)) {
+      throw new BadRequestException('Invalid task id');
+    }
     const existing = await this.prisma.task.findUnique({ where: { id } });
     if (!existing) throw new NotFoundException('Task not found');
 
@@ -602,6 +614,9 @@ export class TasksService {
   }
 
   async assign(id: string, actingUserId: string, dto: AssignTaskDto) {
+    if (!this.isUuid(id)) {
+      throw new BadRequestException('Invalid task id');
+    }
     const existing = await this.prisma.task.findUnique({ where: { id } });
     if (!existing) throw new NotFoundException('Task not found');
 
@@ -646,6 +661,9 @@ export class TasksService {
   }
 
   async updateStatus(id: string, userId: string, role: UserRole, dto: UpdateTaskStatusDto) {
+    if (!this.isUuid(id)) {
+      throw new BadRequestException('Invalid task id');
+    }
     const existing = await this.prisma.task.findUnique({ where: { id } });
     if (!existing) throw new NotFoundException('Task not found');
     if (role === UserRole.DESIGNER && existing.assigneeId !== userId) {
@@ -718,6 +736,9 @@ export class TasksService {
   }
 
   async remove(id: string) {
+    if (!this.isUuid(id)) {
+      throw new BadRequestException('Invalid task id');
+    }
     const existing = await this.prisma.task.findUnique({ where: { id } });
     if (!existing) throw new NotFoundException('Task not found');
     return this.prisma.task.delete({ where: { id } });

@@ -9,10 +9,14 @@ import { FROM_PROJECTS_LIST, taskCreationPathForRecord } from "@/lib/design-list
 import { useDesignListStore } from "@/state/DesignListContext";
 
 function projectListTaskHref(row) {
-  if (!row?.id) return null;
+  const projectCode = String(row?.projectCode ?? "").trim();
+  if (!projectCode) return null;
   return taskCreationPathForRecord(
-    { id: row.id, designType: row.category, category: row.category },
-    { from: FROM_PROJECTS_LIST },
+    { id: projectCode, designType: row.category, category: row.category },
+    {
+      from: FROM_PROJECTS_LIST,
+      projectCode,
+    },
   );
 }
 
@@ -37,7 +41,7 @@ function ProjectTable({ data, onProjectOpen }) {
           <tbody className="divide-y divide-slate-100">
             {data.map((row, idx) => {
               if (!row) return null;
-              const projectHref = row.id ? projectListTaskHref(row) : null;
+              const projectHref = projectListTaskHref(row);
               const rowKey = `${row.id ?? row.projectCode ?? "row"}-${idx}`;
 
               return (
@@ -104,6 +108,7 @@ export function ProjectScreen() {
         setProjects(
           data.map((r) => ({
             id: r.id,
+            taskId: r.taskId ?? r.taskUUID ?? r.taskUuid ?? null,
             projectCode: r.projectCode ?? r.projectNo ?? null,
             salesForceCode: r.salesForceCode ?? r.opNo ?? null,
             projectName: r.projectName ?? r.name ?? null,

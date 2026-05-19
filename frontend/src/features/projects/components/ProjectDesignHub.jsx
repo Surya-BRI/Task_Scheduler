@@ -11,13 +11,21 @@ import {
 } from "@/lib/design-list-routes";
 
 function hubTaskHref(row, opts) {
+  if (!row?.taskId) return null;
   const q = { from: FROM_PROJECT_DESIGN };
   if (opts?.tab) q.tab = opts.tab;
   if (opts?.create) q.create = "1";
-  return taskCreationPathForRecord(row, q);
+  return taskCreationPathForRecord({ ...row, id: row.taskId }, q);
 }
 
 function ActionLink({ href, label }) {
+  if (!href) {
+    return (
+      <span className="inline-flex rounded border border-slate-200 bg-slate-100 px-2 py-1 text-[11px] font-medium text-slate-400 cursor-not-allowed">
+        {label}
+      </span>
+    );
+  }
   return (
     <Link
       href={href}
@@ -53,25 +61,31 @@ function DesignTypeTable({ rows, variant }) {
               rows.map((row) => (
                 <tr key={row.id} className="hover:bg-slate-50 transition-colors">
                   <td className="px-2 py-1">
-                    <Link
-                      href={hubTaskHref(row)}
-                      className="font-medium text-blue-600 hover:underline whitespace-nowrap"
-                    >
-                      {row.opNo}
-                    </Link>
+                    {hubTaskHref(row) ? (
+                      <Link href={hubTaskHref(row)} className="font-medium text-blue-600 hover:underline whitespace-nowrap">
+                        {row.opNo}
+                      </Link>
+                    ) : (
+                      <span className="font-medium text-slate-400 whitespace-nowrap">{row.opNo}</span>
+                    )}
                   </td>
                   <td className="px-2 py-1">
-                    <Link
-                      href={hubTaskHref(row)}
-                      className="text-blue-600 hover:underline whitespace-nowrap"
-                    >
-                      {row.projectNo}
-                    </Link>
+                    {hubTaskHref(row) ? (
+                      <Link href={hubTaskHref(row)} className="text-blue-600 hover:underline whitespace-nowrap">
+                        {row.projectNo}
+                      </Link>
+                    ) : (
+                      <span className="text-slate-400 whitespace-nowrap">{row.projectNo}</span>
+                    )}
                   </td>
                   <td className="px-2 py-1 text-slate-900">
-                    <Link href={hubTaskHref(row)} className="hover:text-blue-700 hover:underline">
-                      {row.name}
-                    </Link>
+                    {hubTaskHref(row) ? (
+                      <Link href={hubTaskHref(row)} className="hover:text-blue-700 hover:underline">
+                        {row.name}
+                      </Link>
+                    ) : (
+                      <span>{row.name}</span>
+                    )}
                   </td>
                   <td className="px-2 py-1 text-slate-600">{row.status}</td>
                   <td className="px-2 py-1">
@@ -118,6 +132,7 @@ export function ProjectDesignHub() {
       projectNo: r.projectNo,
       name: r.name,
       status: r.status,
+      taskId: r.taskId ?? null,
     });
     return {
       retailRows: retail.map(mapRow),

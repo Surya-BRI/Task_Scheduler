@@ -3,6 +3,7 @@ import { PrismaService } from '../prisma/prisma.service';
 
 type DesignListRow = {
   projectId: number;
+  taskId: string | null;
   projectCode: string | null;
   salesForceCode: string | null;
   projectName: string | null;
@@ -77,6 +78,7 @@ export class DesignListService {
 
   private mapRow(row: DesignListRow, preserveNulls = false) {
     const id = String(row.projectId);
+    const taskId = row.taskId ?? null;
     const projectCode = row.projectCode ?? null;
     const salesForceCode = row.salesForceCode ?? null;
     const projectName = row.projectName ?? null;
@@ -87,6 +89,7 @@ export class DesignListService {
 
     return {
       id,
+      taskId: preserveNulls ? taskId : taskId ?? undefined,
       opNo: preserveNulls ? salesForceCode : salesForceCode ?? projectCode ?? id,
       projectNo: preserveNulls ? projectCode : projectCode ?? id,
       projectCode: preserveNulls ? projectCode : projectCode ?? undefined,
@@ -113,6 +116,7 @@ export class DesignListService {
     return `
       SELECT
         mp.projectid AS projectId,
+        CAST(NULL AS NVARCHAR(36)) AS taskId,
         mp.projectCode,
         mo.salesForceCode,
         mp.projectName,
@@ -193,6 +197,7 @@ export class DesignListService {
     const rows = await this.prisma.live.$queryRaw<DesignListRow[]>`
       SELECT
         mp.projectid AS projectId,
+        CAST(NULL AS NVARCHAR(36)) AS taskId,
         mp.projectCode,
         mo.salesForceCode,
         mp.projectName,
@@ -229,6 +234,7 @@ export class DesignListService {
       ? `
       AND (
         mp.projectCode LIKE '%${escapedSearch}%'
+        OR mo.salesForceCode LIKE '%${escapedSearch}%'
         OR mp.projectName LIKE '%${escapedSearch}%'
         OR (me.firstName + '' + me.lastName) LIKE '%${escapedSearch}%'
       )`
