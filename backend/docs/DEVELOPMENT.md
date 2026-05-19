@@ -113,6 +113,19 @@ Authorization: Bearer <accessToken>
 - `GET /api/v1/projects/:id/files`
 - `DELETE /api/v1/projects/:id/files/:fileId`
 
+`GET /api/v1/projects/by-project-no/:projectNo` behavior:
+- First checks `ErpTSProject`.
+- If missing there, API checks ERP master tables and hydrates `ErpTSProject` on-demand.
+- Returns `404` only if project code is not found in either source.
+
+## Task Create Rules (Important)
+
+For `POST /api/v1/tasks/extended`:
+- `task.projectName` is required.
+- Backend rejects missing/blank project name with `400`.
+- No fallback to task title/default generated project name.
+- Existing resolved project names are synced to incoming `task.projectName` when different.
+
 ## Activity Endpoints
 
 - Team feed compatibility:

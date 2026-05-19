@@ -389,9 +389,50 @@ function formatDdMmYyyy(dateLike) {
   return d.toLocaleDateString('en-GB')
 }
 
+function prettifyHodName(value) {
+  const raw = String(value ?? '').trim()
+  if (!raw) return '-'
+  if (raw === 'hod-1') return 'A. Khan'
+  if (raw === 'hod-2') return 'M. Rahman'
+  return raw
+}
+
 function mapTaskToRecord(task) {
   if (!task) return null
   const project = task.project ?? {}
+  const assetsMap = new Map()
+  for (const line of task.retailDetails ?? []) {
+    const providedNames = String(line?.providedFile ?? '')
+      .split(',')
+      .map((x) => x.trim())
+      .filter(Boolean)
+    for (const name of providedNames) {
+      if (!assetsMap.has(name)) assetsMap.set(name, { name, url: null })
+    }
+    for (const attachment of line?.attachments ?? []) {
+      const name = String(attachment?.fileName ?? '').trim()
+      if (!name) continue
+      assetsMap.set(name, {
+        name,
+        url: attachment?.signedUrl ?? null,
+      })
+    }
+  }
+  for (const line of task.projectDetails ?? []) {
+    for (const attachment of line?.attachments ?? []) {
+      const name = String(attachment?.fileName ?? '').trim()
+      if (!name) continue
+      assetsMap.set(name, {
+        name,
+        url: attachment?.signedUrl ?? null,
+      })
+    }
+  }
+  const providedAssets = Array.from(assetsMap.values())
+  const reviewerHodRaw =
+    (task.retailDetails ?? []).find((line) => String(line?.hodName ?? '').trim())?.hodName ?? '-'
+  const reviewerHod = prettifyHodName(reviewerHodRaw)
+
   return {
     id: task.id,
     opNo: task.opNo ?? '-',
@@ -399,6 +440,10 @@ function mapTaskToRecord(task) {
     projectId: project.id ?? null,
     projectName: project.name ?? project.projectNo ?? 'Task',
     name: task.title ?? 'Task',
+    status: task.status ?? 'PENDING',
+    priority: task.priority ?? '-',
+    reviewerHod,
+    providedAssets,
     designType: project.category ?? 'Project',
     businessUnit: project.category ?? 'Project',
     salesPerson: project.salesPerson ?? 'Unassigned',
@@ -482,6 +527,7 @@ export function TaskDetailsPage() {
   const [activityHasMore, setActivityHasMore] = useState(false)
   const [projectHistoryItems, setProjectHistoryItems] = useState([])
   const [fieldHistoryItems, setFieldHistoryItems] = useState([])
+  const [taskAuditInfo, setTaskAuditInfo] = useState({ createdByHod: '-' })
 
   const isCreateRequested = searchParams.get('create') === '1'
 
@@ -514,6 +560,13 @@ export function TaskDetailsPage() {
           const result = await apiClient.get(`/tasks?search=${encodeURIComponent(lookupOpNo)}&limit=20`)
           const rows = result?.data ?? []
           task = rows.find((item) => String(item?.opNo ?? '') === lookupOpNo) ?? rows[0] ?? null
+        }
+        if (task?.id && !task?.retailDetails && !task?.projectDetails) {
+          try {
+            task = await apiClient.get(`/tasks/${encodeURIComponent(task.id)}`)
+          } catch {
+            // Keep best-effort list payload if detail fetch fails.
+          }
         }
         if (!task) {
           const projectLookupKey = lookupProjectCode || lookupOpNo || rawId
@@ -591,6 +644,7 @@ export function TaskDetailsPage() {
   const pageTitleCore = `${resolvedProjectName.toUpperCase()} @ ${(record?.businessUnit ?? '').toUpperCase()}`
   const pageTitle = resolvedOpCode ? `${resolvedOpCode} - ${pageTitleCore}` : pageTitleCore
   const canPostChatter = chatterMessage.trim().length > 0
+  const hasExistingTask = Boolean(taskId || isUuid(record?.taskId ?? record?.id))
   useEffect(() => {
     let alive = true
     async function resolveProjectId() {
@@ -681,6 +735,33 @@ export function TaskDetailsPage() {
     if (activeTab !== 'activity') return
     fetchActivities({ append: false, cursor: null })
   }, [activeTab, activityMode, taskId, projectId, fetchActivities])
+
+  useEffect(() => {
+    let alive = true
+    async function fetchTaskAuditInfo() {
+      if (!taskId) {
+        if (!alive) return
+        setTaskAuditInfo({ createdByHod: '-' })
+        return
+      }
+      try {
+        const response = await fetchTaskActivities(taskId, { limit: 50 })
+        const items = Array.isArray(response?.data) ? response.data : []
+        const createdEvent = items.find((item) => item.action === 'TASK_CREATED')
+        if (!alive) return
+        setTaskAuditInfo({
+          createdByHod: createdEvent?.actor?.name ?? '-',
+        })
+      } catch {
+        if (!alive) return
+        setTaskAuditInfo({ createdByHod: '-' })
+      }
+    }
+    fetchTaskAuditInfo()
+    return () => {
+      alive = false
+    }
+  }, [taskId])
 
   useEffect(() => {
     let alive = true
@@ -871,7 +952,59 @@ export function TaskDetailsPage() {
                     </div>
                   </div>
 
-                  {isRetail ? (
+                  {hasExistingTask ? (
+                    <div className="mt-3 border-t border-slate-200 pt-3">
+                      <div className="grid gap-3 lg:grid-cols-2">
+                        <div className="space-y-0.5">
+                          <DetailRow label="Task Name" value={record.name ?? '-'} />
+                          <DetailRow label="Task Status" value={record.status ?? '-'} />
+                          <DetailRow label="Priority Level" value={record.priority ?? '-'} />
+                          <DetailRow label="Created By (HOD)" value={taskAuditInfo.createdByHod} />
+                          <DetailRow label="Reviewer HOD" value={record.reviewerHod ?? '-'} />
+                        </div>
+                        <div className="space-y-0.5">
+                          <DetailRow label="Created Date" value={record.created ?? '-'} />
+                          <DetailRow label="Deadline" value={record.deadline ?? '-'} />
+                        </div>
+                      </div>
+                      <div className="mt-2.5">
+                        <div className="grid grid-cols-[125px_1fr] gap-2 py-0.5">
+                          <p className="text-[11px] text-slate-500">Provided Assets</p>
+                          <div>
+                            {Array.isArray(record.providedAssets) && record.providedAssets.length > 0 ? (
+                              <div className="flex flex-wrap gap-2">
+                                {record.providedAssets.map((asset) => (
+                                  <div
+                                    key={`${asset?.name ?? 'asset'}-${asset?.url ?? 'na'}`}
+                                    className="inline-flex items-center gap-1.5 rounded-md border border-slate-300 bg-slate-50 px-2.5 py-1.5 text-[12px] text-slate-800"
+                                  >
+                                    <FileText className="h-3.5 w-3.5 shrink-0 text-slate-500" />
+                                    {asset?.url ? (
+                                      <a
+                                        href={asset.url}
+                                        target="_blank"
+                                        rel="noreferrer"
+                                        className="max-w-[260px] truncate font-medium text-blue-700 underline hover:text-blue-800"
+                                        title={asset?.name}
+                                      >
+                                        {asset?.name}
+                                      </a>
+                                    ) : (
+                                      <span className="max-w-[260px] truncate" title={asset?.name}>
+                                        {asset?.name}
+                                      </span>
+                                    )}
+                                  </div>
+                                ))}
+                              </div>
+                            ) : (
+                              <span className="text-[13px] font-medium text-slate-900">-</span>
+                            )}
+                          </div>
+                        </div>
+                      </div>
+                    </div>
+                  ) : isRetail ? (
                     <div className="mt-3 border-t border-slate-200 pt-3">
                       <div className="grid gap-2.5 sm:grid-cols-2">
                         <DatePickerField
@@ -924,7 +1057,7 @@ export function TaskDetailsPage() {
                     </div>
                   )}
 
-                  {isRetail ? (
+                  {!hasExistingTask && isRetail ? (
                     <div className="mt-3 overflow-hidden rounded-md border border-slate-200">
                       <div className="grid grid-cols-5 bg-slate-100 px-2.5 py-1.5 text-[11px] font-semibold text-slate-600">
                         <div>Sign Family</div>

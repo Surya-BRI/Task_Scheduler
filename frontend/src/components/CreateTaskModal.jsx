@@ -279,8 +279,9 @@ export function CreateTaskModal({ open, onClose, submissionDate, record }) {
               className="mt-1.5 w-full rounded-md border border-slate-300 bg-white px-3 py-2 text-sm text-slate-900 outline-none transition-colors focus:border-blue-500 focus:ring-2 focus:ring-blue-500/20"
             >
               <option value="">Select</option>
-              <option value="hod-1">A. Khan</option>
-              <option value="hod-2">M. Rahman</option>
+              <option value="Sarah Mitchell">Sarah Mitchell</option>
+              <option value="A. Khan">A. Khan</option>
+              <option value="M. Rahman">M. Rahman</option>
             </select>
             {((submitAttempted || touched.hod) && !hod.trim()) || fieldErrors.hod ? (
               <p className="mt-1 text-xs text-red-600">{fieldErrors.hod || 'HOD is required'}</p>
