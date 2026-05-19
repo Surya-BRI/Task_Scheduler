@@ -56,8 +56,8 @@ class ExtendedTaskCoreDto {
   projectNo?: string;
 
   @IsString()
-  @IsOptional()
-  projectName?: string;
+  @MinLength(2)
+  projectName: string;
 
   @IsString()
   @IsOptional()
