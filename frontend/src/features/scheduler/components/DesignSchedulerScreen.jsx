@@ -10,14 +10,18 @@ import {
     buildDesignerSnapshot,
     buildSchedulerSnapshot
 } from "../utils/designerDashboardSync";
-import { listSchedulerAssignmentsForWeek } from "../services/scheduler-assignments.api";
+import {
+    getSchedulerWeekMeta,
+    listSchedulerAssignmentsForWeek,
+    saveSchedulerWeekSnapshot,
+} from "../services/scheduler-assignments.api";
 import {
     DEFAULT_SCHEDULER_REFERENCE_DATE,
     formatSchedulerDateRangeText,
     getCurrentDayIndex,
     getWeekDays,
 } from "../utils/schedulerWeek";
-import { FROM_DESIGN_SCHEDULER, taskSummaryPath } from "@/lib/design-list-routes";
+import { FROM_DESIGN_SCHEDULER, taskViewPathForRecord } from "@/lib/design-list-routes";
 import { apiClient } from "@/lib/api-client";
 import { mapTaskToDesignRow } from "@/features/design-list/task-view-model";
 // Capacity constants
@@ -388,6 +392,9 @@ export function DesignSchedulerScreen() {
     const [tasks, setTasks] = useState({});
     const [schedules, setSchedules] = useState({});
     const [loadedFromErp, setLoadedFromErp] = useState(false);
+    const [weekVersion, setWeekVersion] = useState(0);
+    const [saveError, setSaveError] = useState("");
+    const weekVersionRef = useRef(0);
 
     const [searchQuery, setSearchQuery] = useState("");
     const splitIdCounterRef = useRef(0);
@@ -399,6 +406,9 @@ export function DesignSchedulerScreen() {
     
     // Custom Date selection state
     const [currentDate, setCurrentDate] = useState(DEFAULT_SCHEDULER_REFERENCE_DATE);
+    useEffect(() => {
+        weekVersionRef.current = weekVersion;
+    }, [weekVersion]);
     useEffect(() => {
         let cancelled = false;
         apiClient.get("/users?role=DESIGNER")
@@ -452,14 +462,56 @@ export function DesignSchedulerScreen() {
         };
     }, []);
 
+    const buildWeekSnapshotPayload = (sourceSchedules, sourceTasks) => {
+        const assignments = [];
+        Object.entries(sourceSchedules || {}).forEach(([designerId, dayMap]) => {
+            Object.entries(dayMap || {}).forEach(([dayStr, taskIds]) => {
+                const dayIndex = Number(dayStr);
+                if (!Number.isFinite(dayIndex) || dayIndex < 0 || dayIndex > 6) return;
+                (taskIds || []).forEach((taskId) => {
+                    const task = sourceTasks?.[taskId];
+                    if (!task) return;
+                    const canonicalTaskId = isUuid(task.id) ? task.id : (isUuid(task.parentId) ? task.parentId : null);
+                    if (!canonicalTaskId) return;
+                    assignments.push({
+                        designerId,
+                        taskId: canonicalTaskId,
+                        dayIndex,
+                        assignedHours: Number(task.estimatedHours) || 0,
+                        parentId: isUuid(task.parentId) ? task.parentId : null,
+                        splitIndex: Number.isFinite(task.splitIndex) ? Number(task.splitIndex) : null,
+                        totalParts: Number.isFinite(task.totalParts) ? Number(task.totalParts) : null,
+                        notes: null,
+                    });
+                });
+            });
+        });
+        return assignments.filter((a) => a.assignedHours > 0);
+    };
+
+    const persistWeekSnapshot = async (nextSchedules, nextTasks) => {
+        const weekStartStr = formatLocalYyyyMmDd(getWeekDays(currentDate)[0]);
+        const payload = {
+            version: weekVersionRef.current,
+            assignments: buildWeekSnapshotPayload(nextSchedules, nextTasks),
+        };
+        const saved = await saveSchedulerWeekSnapshot(weekStartStr, payload);
+        setWeekVersion(saved.version);
+        setSaveError("");
+    };
+
     useEffect(() => {
         let cancelled = false;
         const weekDatesLocal = getWeekDays(currentDate);
         const weekStartStr = formatLocalYyyyMmDd(weekDatesLocal[0]);
-        listSchedulerAssignmentsForWeek(weekStartStr)
-            .then((rows) => {
+        Promise.all([
+            listSchedulerAssignmentsForWeek(weekStartStr),
+            getSchedulerWeekMeta(weekStartStr),
+        ])
+            .then(([rows, meta]) => {
                 if (cancelled)
                     return;
+                setWeekVersion(Number(meta?.version ?? 0));
                 if (Array.isArray(rows) && rows.length > 0) {
                     const next = buildSchedulerStateFromErpAssignments(queueRecords, rows, designers);
                     setTasks(next.tasksObj);
@@ -480,6 +532,7 @@ export function DesignSchedulerScreen() {
                 setTasks(mock.tasksObj);
                 setSchedules(mock.schedulesObj);
                 setLoadedFromErp(false);
+                setWeekVersion(0);
             });
         return () => {
             cancelled = true;
@@ -567,6 +620,15 @@ export function DesignSchedulerScreen() {
         setSchedules(preparedAssignment.updatedSchedules);
         setTasks(preparedAssignment.updatedTasks);
         setCurrentDay(preparedAssignment.targetDayIndex);
+        persistWeekSnapshot(preparedAssignment.updatedSchedules, preparedAssignment.updatedTasks).catch((error) => {
+            const msg = String(error?.message ?? "");
+            if (msg.includes("409")) {
+                setSaveError("Scheduler week changed on server. Please reload this week.");
+            } else {
+                setSaveError("Unable to save scheduler changes.");
+            }
+            console.warn("Unable to persist scheduler snapshot", error);
+        });
     };
     const handleDropToDay = (e, targetDesignerId, targetDayIndex, targetTaskIndex, targetPosition = "after") => {
         e.preventDefault();
@@ -643,6 +705,7 @@ export function DesignSchedulerScreen() {
         if (!taskId)
             return;
         setLoadedFromErp(false);
+        let updatedSchedules = schedules;
         setSchedules(prev => {
             if (sourceId === 'unassigned' || sourceId === 'ON_HOLD')
                 return prev;
@@ -650,6 +713,7 @@ export function DesignSchedulerScreen() {
             if (newSchedules[sourceId] && newSchedules[sourceId][sourceDay]) {
                 newSchedules[sourceId][sourceDay] = newSchedules[sourceId][sourceDay].filter(id => id !== taskId);
             }
+            updatedSchedules = newSchedules;
             return newSchedules;
         });
         const taskBefore = tasks[taskId];
@@ -678,6 +742,14 @@ export function DesignSchedulerScreen() {
         if (!isUuid(taskId)) return;
         apiClient.patch(`/tasks/${taskId}/status`, { status: backendStatus }).catch((error) => {
             console.warn("Unable to persist task status change", { taskId, backendStatus, error });
+        });
+        persistWeekSnapshot(updatedSchedules, tasks).catch((error) => {
+            const msg = String(error?.message ?? "");
+            if (msg.includes("409")) {
+                setSaveError("Scheduler week changed on server. Please reload this week.");
+            } else {
+                setSaveError("Unable to save scheduler changes.");
+            }
         });
     };
     const toggleHoldState = (taskId, shouldHold) => {
@@ -838,6 +910,11 @@ export function DesignSchedulerScreen() {
           </div>
         </div>
       </div>
+      {saveError ? (
+        <div className="shrink-0 border-b border-amber-200 bg-amber-50 px-6 py-2 text-xs text-amber-800">
+          {saveError}
+        </div>
+      ) : null}
       {viewMode === "custom" && (<div className="flex shrink-0 items-center gap-2 border-b border-slate-200 bg-white px-6 py-2 text-xs">
           <div className="w-64 border-r border-slate-200 pr-4 font-medium text-slate-500">Visible Days</div>
           <div className="flex-1 flex items-center gap-1 px-6">
@@ -874,7 +951,7 @@ export function DesignSchedulerScreen() {
              </div>
 
              <div className="flex-1 overflow-y-auto space-y-1.5 pr-1 pb-4 custom-scrollbar">
-                {onHoldTasks.map(task => (<div key={task.id} draggable onDragStart={(e) => handleDragStart(e, task.id, "ON_HOLD")} onDragEnd={() => setDropIndicator(null)} onClick={() => router.push(taskSummaryPath(getDesignListRoutingTaskId(task), { from: FROM_DESIGN_SCHEDULER }))} className={`p-2 rounded cursor-grab active:cursor-grabbing flex flex-col relative bg-white shadow-sm hover:shadow-md transition-shadow ${task.colorClass}`}>
+                {onHoldTasks.map(task => (<div key={task.id} draggable onDragStart={(e) => handleDragStart(e, task.id, "ON_HOLD")} onDragEnd={() => setDropIndicator(null)} onClick={() => router.push(taskViewPathForRecord({ id: getDesignListRoutingTaskId(task), designType: task.designType }, { from: FROM_DESIGN_SCHEDULER }))} className={`p-2 rounded cursor-grab active:cursor-grabbing flex flex-col relative bg-white shadow-sm hover:shadow-md transition-shadow ${task.colorClass}`}>
                     <div className="flex justify-between items-start">
                       <span className="font-semibold text-[11px] leading-tight pr-5">{getTaskLabel(task)}</span>
                       <button
@@ -893,7 +970,7 @@ export function DesignSchedulerScreen() {
                     <div className="text-[9px] font-bold mt-1.5 bg-slate-100 text-slate-600 inline-block px-1.5 py-0.5 rounded uppercase self-start">Hold: {formatHoldDuration(task.holdStartedAt)}</div>
                   </div>))}
 
-                {unassignedTasks.map(task => (<div key={task.id} draggable onDragStart={(e) => handleDragStart(e, task.id, "unassigned")} onDragEnd={() => setDropIndicator(null)} onClick={() => router.push(taskSummaryPath(getDesignListRoutingTaskId(task), { from: FROM_DESIGN_SCHEDULER }))} className={`p-2 rounded cursor-grab active:cursor-grabbing flex flex-col relative group bg-white shadow-sm hover:shadow-md transition-shadow ${task.colorClass}`}>
+                {unassignedTasks.map(task => (<div key={task.id} draggable onDragStart={(e) => handleDragStart(e, task.id, "unassigned")} onDragEnd={() => setDropIndicator(null)} onClick={() => router.push(taskViewPathForRecord({ id: getDesignListRoutingTaskId(task), designType: task.designType }, { from: FROM_DESIGN_SCHEDULER }))} className={`p-2 rounded cursor-grab active:cursor-grabbing flex flex-col relative group bg-white shadow-sm hover:shadow-md transition-shadow ${task.colorClass}`}>
                     <div className="flex justify-between items-start">
                       <span className="font-semibold text-[11px] leading-tight pr-5">{getTaskLabel(task)}</span>
                       <button
@@ -1008,7 +1085,7 @@ export function DesignSchedulerScreen() {
                                         handleDropToDay(e, designer.id, dayIndex, idx, getDropPosition(e, e.currentTarget));
                                     }} onClick={(e) => {
                                         e.stopPropagation();
-                                        router.push(taskSummaryPath(getDesignListRoutingTaskId(taskInfo), { from: FROM_DESIGN_SCHEDULER }));
+                                        router.push(taskViewPathForRecord({ id: getDesignListRoutingTaskId(taskInfo), designType: taskInfo.designType }, { from: FROM_DESIGN_SCHEDULER }));
                                     }} className={`h-[24px] min-w-0 rounded flex items-center justify-between px-1.5 cursor-grab active:cursor-grabbing shadow-sm hover:shadow transition-shadow ${dropIndicator &&
                                         dropIndicator.designerId === designer.id &&
                                         dropIndicator.dayIndex === dayIndex &&

@@ -1,6 +1,20 @@
-import { BadRequestException, HttpException, HttpStatus, Injectable, Logger } from '@nestjs/common';
+import {
+  BadRequestException,
+  ConflictException,
+  ForbiddenException,
+  HttpException,
+  HttpStatus,
+  Injectable,
+  Logger,
+} from '@nestjs/common';
 import { ConfigService } from '@nestjs/config';
+import { Prisma } from '@prisma/client';
+import { createHash } from 'crypto';
 import { PrismaService } from '../prisma/prisma.service';
+import { ActivityLoggerService } from '../activities/activity-logger.service';
+import { ActivityAction } from '../activities/activity-events';
+import { SaveSchedulerWeekDto } from './dto/save-scheduler-week.dto';
+import { UserRole } from '../common/constants/roles.enum';
 
 type RawAssignmentRow = {
   id: string;
@@ -38,32 +52,30 @@ export type SchedulerAssignmentDto = {
   updatedAt: string;
 };
 
+type SchedulerWeekMetaDto = {
+  weekStart: string;
+  version: number;
+  isLocked: boolean;
+  updatedAt: string;
+  updatedBy: string | null;
+};
+
+const DAILY_CAPACITY = 8;
+const MAX_DAILY_HOURS = 12;
+
 @Injectable()
 export class SchedulerAssignmentsService {
   private readonly logger = new Logger(SchedulerAssignmentsService.name);
-  private readonly table: string;
-
   constructor(
     private readonly prisma: PrismaService,
-    private readonly config: ConfigService,
-  ) {
-    const catalog = (this.config.get<string>('erp.sqlCatalog') ?? '').trim();
-    if (catalog && !/^[\w-]+$/.test(catalog)) {
-      throw new Error('Invalid erp.sqlCatalog / ERP_SQL_CATALOG');
-    }
-    this.table = catalog
-      ? `[${catalog}].[dbo].[ErpTSSchedulerAssignment]`
-      : `[dbo].[ErpTSSchedulerAssignment]`;
-  }
+    _config: ConfigService,
+    private readonly activityLogger: ActivityLoggerService,
+  ) {}
 
   private fail(context: string, err: unknown): never {
     const msg = err instanceof Error ? err.message : String(err);
     this.logger.warn(`${context}: ${msg}`);
     throw new HttpException(`${context}: ${msg}`, HttpStatus.SERVICE_UNAVAILABLE);
-  }
-
-  private esc(s: string): string {
-    return s.replace(/'/g, "''");
   }
 
   private toIso(d: Date | null | undefined): string {
@@ -80,6 +92,26 @@ export class SchedulerAssignmentsService {
   private toBool(value: boolean | number | null | undefined): boolean {
     if (value === true || value === 1) return true;
     return false;
+  }
+
+  private isUuid(value: string): boolean {
+    return /^[0-9a-f]{8}-[0-9a-f]{4}-[1-5][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i.test(
+      String(value ?? '').trim(),
+    );
+  }
+
+  private parseWeekStart(weekStart: string): { weekStartDate: Date; weekEndDate: Date } {
+    const trimmed = weekStart.trim();
+    if (!/^\d{4}-\d{2}-\d{2}$/.test(trimmed)) {
+      throw new BadRequestException('weekStart must be YYYY-MM-DD.');
+    }
+    const ws = new Date(`${trimmed}T00:00:00.000Z`);
+    if (Number.isNaN(ws.getTime())) {
+      throw new BadRequestException('Invalid weekStart date.');
+    }
+    const weekEndDate = new Date(ws);
+    weekEndDate.setUTCDate(weekEndDate.getUTCDate() + 6);
+    return { weekStartDate: ws, weekEndDate };
   }
 
   private mapRow(row: RawAssignmentRow): SchedulerAssignmentDto {
@@ -104,46 +136,309 @@ export class SchedulerAssignmentsService {
     };
   }
 
-  private selectListSql(): string {
-    return `
-      CAST(id AS NVARCHAR(450)) AS id,
-      CAST(designerId AS NVARCHAR(64)) AS designerId,
-      CAST(taskId AS NVARCHAR(450)) AS taskId,
-      dayIndex,
-      assignedHours,
-      CAST(parentId AS NVARCHAR(450)) AS parentId,
-      splitIndex,
-      totalParts,
-      weekStartDate,
-      weekEndDate,
-      notes,
-      isLocked,
-      CAST(assignedBy AS NVARCHAR(450)) AS assignedBy,
-      createdAt,
-      updatedAt
-    `;
+  private validateAssignments(dto: SaveSchedulerWeekDto) {
+    const dayTotals = new Map<string, number>();
+    const duplicateKey = new Set<string>();
+
+    for (const row of dto.assignments) {
+      if (row.dayIndex < 0 || row.dayIndex > 6) {
+        throw new BadRequestException(`dayIndex must be between 0 and 6 for task ${row.taskId}`);
+      }
+      if (!Number.isFinite(row.assignedHours) || row.assignedHours <= 0) {
+        throw new BadRequestException(`assignedHours must be > 0 for task ${row.taskId}`);
+      }
+      if (row.splitIndex != null && row.totalParts == null) {
+        throw new BadRequestException(`totalParts is required when splitIndex is provided for task ${row.taskId}`);
+      }
+      if (row.totalParts != null && row.splitIndex != null && row.totalParts < row.splitIndex) {
+        throw new BadRequestException(`totalParts must be >= splitIndex for task ${row.taskId}`);
+      }
+
+      const uniq = `${row.designerId}|${row.dayIndex}|${row.taskId}|${row.splitIndex ?? 0}`;
+      if (duplicateKey.has(uniq)) {
+        throw new BadRequestException(`Duplicate assignment row for task ${row.taskId} on day ${row.dayIndex}`);
+      }
+      duplicateKey.add(uniq);
+
+      const capacityKey = `${row.designerId}|${row.dayIndex}`;
+      const next = (dayTotals.get(capacityKey) ?? 0) + Number(row.assignedHours);
+      if (next > MAX_DAILY_HOURS) {
+        throw new BadRequestException(`Capacity exceeded (> ${MAX_DAILY_HOURS}h) for designer ${row.designerId} day ${row.dayIndex}`);
+      }
+      dayTotals.set(capacityKey, next);
+    }
   }
 
-  /** weekStart: Monday date as YYYY-MM-DD (matches UI week picker). */
+  private stablePayloadHash(assignments: SaveSchedulerWeekDto['assignments']): string {
+    const normalized = assignments
+      .map((a) => ({
+        designerId: a.designerId,
+        taskId: a.taskId,
+        dayIndex: a.dayIndex,
+        assignedHours: Number(a.assignedHours),
+        parentId: a.parentId ?? null,
+        splitIndex: a.splitIndex ?? null,
+        totalParts: a.totalParts ?? null,
+        notes: a.notes ?? null,
+      }))
+      .sort((a, b) => {
+        const ka = `${a.designerId}|${a.dayIndex}|${a.taskId}|${a.splitIndex ?? 0}`;
+        const kb = `${b.designerId}|${b.dayIndex}|${b.taskId}|${b.splitIndex ?? 0}`;
+        return ka.localeCompare(kb);
+      });
+    return createHash('sha256').update(JSON.stringify(normalized)).digest('hex');
+  }
+
   async findForWeekStart(weekStart: string): Promise<SchedulerAssignmentDto[]> {
-    const trimmed = weekStart.trim();
-    if (!/^\d{4}-\d{2}-\d{2}$/.test(trimmed)) {
-      throw new BadRequestException('weekStart must be YYYY-MM-DD (Monday of the week).');
-    }
+    const { weekStartDate } = this.parseWeekStart(weekStart);
 
     try {
-      const dateLit = this.esc(trimmed);
-      const rows = await this.prisma.$queryRawUnsafe<RawAssignmentRow[]>(`
-      SELECT TOP (2000)
-        ${this.selectListSql()}
-      FROM ${this.table}
-      WHERE CAST(weekStartDate AS DATE) = CAST(N'${dateLit}' AS DATE)
-      ORDER BY designerId, dayIndex, id
-    `);
-      return rows.map((r) => this.mapRow(r));
+      const rows = await this.prisma.schedulerAssignment.findMany({
+        where: { weekStartDate },
+        orderBy: [{ designerId: 'asc' }, { dayIndex: 'asc' }, { id: 'asc' }],
+      });
+      return rows.map((r) =>
+        this.mapRow({
+          ...(r as unknown as RawAssignmentRow),
+          designerId: r.designerId ?? '',
+          taskId: r.taskId ?? '',
+          dayIndex: r.dayIndex ?? 0,
+        }),
+      );
     } catch (err) {
-      if (err instanceof BadRequestException) throw err;
       this.fail('Scheduler assignments query failed', err);
     }
+  }
+
+  async getWeekMeta(weekStart: string): Promise<SchedulerWeekMetaDto> {
+    const { weekStartDate } = this.parseWeekStart(weekStart);
+    const row = await this.prisma.schedulerWeek.findUnique({ where: { weekStartDate } });
+    return {
+      weekStart,
+      version: row?.version ?? 0,
+      isLocked: Boolean(row?.isLocked ?? false),
+      updatedAt: (row?.updatedAt ?? new Date(0)).toISOString(),
+      updatedBy: row?.updatedBy ?? null,
+    };
+  }
+
+  async setWeekLock(weekStart: string, userId: string, locked: boolean): Promise<SchedulerWeekMetaDto> {
+    const { weekStartDate } = this.parseWeekStart(weekStart);
+
+    const result = await this.prisma.$transaction(async (tx) => {
+      const existing = await tx.schedulerWeek.findUnique({ where: { weekStartDate } });
+      const row = existing
+        ? await tx.schedulerWeek.update({
+            where: { weekStartDate },
+            data: { isLocked: locked, updatedBy: userId },
+          })
+        : await tx.schedulerWeek.create({
+            data: { weekStartDate, version: 0, isLocked: locked, updatedBy: userId },
+          });
+
+      return row;
+    });
+
+    await this.activityLogger.log({
+      action: locked ? ActivityAction.SCHEDULER_WEEK_LOCKED : ActivityAction.SCHEDULER_WEEK_UNLOCKED,
+      userId,
+      details: {
+        event: locked ? ActivityAction.SCHEDULER_WEEK_LOCKED : ActivityAction.SCHEDULER_WEEK_UNLOCKED,
+        messageKey: locked ? 'scheduler_week_locked' : 'scheduler_week_unlocked',
+        context: { weekStart, isLocked: locked },
+      },
+    });
+
+    return {
+      weekStart,
+      version: result.version,
+      isLocked: Boolean(result.isLocked),
+      updatedAt: result.updatedAt.toISOString(),
+      updatedBy: result.updatedBy ?? null,
+    };
+  }
+
+  async saveWeekSnapshot(weekStart: string, userId: string, dto: SaveSchedulerWeekDto) {
+    const { weekStartDate, weekEndDate } = this.parseWeekStart(weekStart);
+    this.validateAssignments(dto);
+    const payloadHash = this.stablePayloadHash(dto.assignments);
+
+    const result = await this.prisma.$transaction(async (tx) => {
+      const designerIds = Array.from(new Set(dto.assignments.map((a) => a.designerId)));
+      const taskIds = Array.from(new Set(dto.assignments.map((a) => a.taskId)));
+
+      const [designers, tasks, previousRows, week] = await Promise.all([
+        tx.user.findMany({
+          where: { id: { in: designerIds }, role: { name: UserRole.DESIGNER } },
+          select: { id: true },
+        }),
+        tx.task.findMany({ where: { id: { in: taskIds } }, select: { id: true, status: true, assigneeId: true } }),
+        tx.schedulerAssignment.findMany({ where: { weekStartDate } }),
+        tx.schedulerWeek.findUnique({ where: { weekStartDate } }),
+      ]);
+
+      if (designers.length !== designerIds.length) {
+        throw new BadRequestException('One or more designerId values are invalid or not DESIGNER role.');
+      }
+      if (tasks.length !== taskIds.length) {
+        throw new BadRequestException('One or more taskId values are invalid.');
+      }
+
+      const existing = week ??
+        (await tx.schedulerWeek.create({
+          data: {
+            weekStartDate,
+            version: 0,
+            isLocked: false,
+            updatedBy: userId,
+          },
+        }));
+
+      if (existing.isLocked) {
+        throw new ForbiddenException('This scheduler week is locked.');
+      }
+      if (dto.version !== existing.version) {
+        throw new ConflictException('Scheduler week has changed. Refresh and retry.');
+      }
+
+      if (existing.lastPayloadHash && existing.lastPayloadHash === payloadHash) {
+        return {
+          version: existing.version,
+          changed: false,
+          assignments: previousRows,
+          isLocked: Boolean(existing.isLocked),
+          updatedAt: existing.updatedAt,
+          updatedBy: existing.updatedBy,
+        };
+      }
+
+      await tx.schedulerAssignment.deleteMany({ where: { weekStartDate } });
+
+      if (dto.assignments.length > 0) {
+        await tx.schedulerAssignment.createMany({
+          data: dto.assignments.map((a) => ({
+            designerId: a.designerId,
+            taskId: a.taskId,
+            dayIndex: a.dayIndex,
+            assignedHours: new Prisma.Decimal(a.assignedHours),
+            parentId: a.parentId ?? null,
+            splitIndex: a.splitIndex ?? null,
+            totalParts: a.totalParts ?? null,
+            weekStartDate,
+            weekEndDate,
+            notes: a.notes ?? null,
+            isLocked: false,
+            assignedBy: userId,
+          })),
+        });
+      }
+
+      const prevTaskIds = Array.from(new Set(previousRows.map((r: any) => r.taskId).filter(Boolean))) as string[];
+      const affectedTaskIds = Array.from(new Set([...prevTaskIds, ...taskIds]));
+
+      const assigneesByTask = new Map<string, Set<string>>();
+      for (const row of dto.assignments) {
+        if (!assigneesByTask.has(row.taskId)) assigneesByTask.set(row.taskId, new Set());
+        assigneesByTask.get(row.taskId)?.add(row.designerId);
+      }
+
+      if (affectedTaskIds.length > 0) {
+        const affectedTasks = await tx.task.findMany({
+          where: { id: { in: affectedTaskIds } },
+          select: { id: true, status: true, assigneeId: true },
+        });
+
+        for (const task of affectedTasks) {
+          const designerSet = assigneesByTask.get(task.id) ?? new Set<string>();
+          const assignedDesigner = designerSet.size === 1 ? [...designerSet][0] : null;
+
+          const updateData: Prisma.TaskUncheckedUpdateInput = {};
+          if (assignedDesigner) {
+            updateData.assigneeId = assignedDesigner;
+            if (String(task.status ?? '').toUpperCase() !== 'ON_HOLD') {
+              updateData.status = 'PENDING';
+            }
+          } else if (designerSet.size === 0) {
+            updateData.assigneeId = null;
+            if (String(task.status ?? '').toUpperCase() !== 'ON_HOLD') {
+              updateData.status = 'PENDING';
+            }
+          }
+
+          if (Object.keys(updateData).length > 0) {
+            await tx.task.update({ where: { id: task.id }, data: updateData });
+          }
+        }
+      }
+
+      const nextVersion = existing.version + 1;
+      const updatedWeek = await tx.schedulerWeek.update({
+        where: { weekStartDate },
+        data: {
+          version: nextVersion,
+          updatedBy: userId,
+          lastPayloadHash: payloadHash,
+        },
+      });
+
+      await tx.schedulerAssignmentHistory.create({
+        data: {
+          weekStartDate,
+          versionFrom: existing.version,
+          versionTo: nextVersion,
+          changedBy: userId,
+          beforeJson: JSON.stringify(previousRows),
+          afterJson: JSON.stringify(dto.assignments),
+        },
+      });
+
+      const newRows = await tx.schedulerAssignment.findMany({
+        where: { weekStartDate },
+        orderBy: [{ designerId: 'asc' }, { dayIndex: 'asc' }, { id: 'asc' }],
+      });
+
+      return {
+        version: updatedWeek.version,
+        changed: true,
+        assignments: newRows,
+        isLocked: Boolean(updatedWeek.isLocked),
+        updatedAt: updatedWeek.updatedAt,
+        updatedBy: updatedWeek.updatedBy,
+      };
+    });
+
+    if (result.changed) {
+      await this.activityLogger.log({
+        action: ActivityAction.SCHEDULER_WEEK_SAVED,
+        userId,
+        details: {
+          event: ActivityAction.SCHEDULER_WEEK_SAVED,
+          messageKey: 'scheduler_week_saved',
+          context: {
+            weekStart,
+            version: result.version,
+            assignmentsCount: result.assignments.length,
+            weekdayCapacityHours: DAILY_CAPACITY,
+            overtimeCapHours: MAX_DAILY_HOURS,
+          },
+        },
+      });
+    }
+
+    return {
+      weekStart,
+      version: result.version,
+      isLocked: result.isLocked,
+      updatedAt: result.updatedAt.toISOString(),
+      updatedBy: result.updatedBy ?? null,
+      assignments: result.assignments.map((r: any) =>
+        this.mapRow({
+          ...(r as unknown as RawAssignmentRow),
+          designerId: r.designerId ?? '',
+          taskId: r.taskId ?? '',
+          dayIndex: r.dayIndex ?? 0,
+        }),
+      ),
+    };
   }
 }

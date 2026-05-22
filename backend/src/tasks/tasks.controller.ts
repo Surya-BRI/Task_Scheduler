@@ -8,6 +8,7 @@ import {
   ParseIntPipe,
   Patch,
   Post,
+  Put,
   Query,
   UploadedFile,
   UseGuards,
@@ -21,6 +22,7 @@ import { CreateExtendedTaskDto } from './dto/create-extended-task.dto';
 import { UpdateTaskDto } from './dto/update-task.dto';
 import { AssignTaskDto } from './dto/assign-task.dto';
 import { UpdateTaskStatusDto } from './dto/update-task-status.dto';
+import { SaveSignRowsDto } from './dto/save-sign-rows.dto';
 import { JwtAuthGuard } from '../common/guards/jwt-auth.guard';
 import { RolesGuard } from '../common/guards/roles.guard';
 import { Roles } from '../common/decorators/roles.decorator';
@@ -87,6 +89,17 @@ export class TasksController {
   }
 
   /** GET /tasks/summary — dashboard widget */
+  @Get('next-revision')
+  @Roles(UserRole.HOD, UserRole.DESIGNER, UserRole.ADMIN, UserRole.PROJECT_MANAGER)
+  getNextRevision(
+    @Query('projectId') projectId?: string,
+    @Query('projectNo') projectNo?: string,
+    @Query('opNo') opNo?: string,
+    @Query('designType') designType?: string,
+  ) {
+    return this.tasksService.getNextRevision({ projectId, projectNo, opNo, designType });
+  }
+
   @Get('summary')
   @Roles(UserRole.HOD, UserRole.DESIGNER, UserRole.ADMIN, UserRole.PROJECT_MANAGER)
   getSummary(@CurrentUser() user: JwtPayload) {
@@ -123,6 +136,20 @@ export class TasksController {
     @Body() dto: UpdateTaskStatusDto,
   ) {
     return this.tasksService.updateStatus(id, user.sub, user.role, dto);
+  }
+
+  /** GET /tasks/:id/sign-rows */
+  @Get(':id/sign-rows')
+  @Roles(UserRole.HOD, UserRole.DESIGNER, UserRole.ADMIN, UserRole.PROJECT_MANAGER)
+  getSignRows(@Param('id') id: string) {
+    return this.tasksService.getSignRows(id);
+  }
+
+  /** PUT /tasks/:id/sign-rows */
+  @Put(':id/sign-rows')
+  @Roles(UserRole.HOD, UserRole.ADMIN, UserRole.PROJECT_MANAGER)
+  saveSignRows(@Param('id') id: string, @Body() dto: SaveSignRowsDto) {
+    return this.tasksService.saveSignRows(id, dto);
   }
 
   /** DELETE /tasks/:id — Admin only */

@@ -18,7 +18,44 @@ export type SchedulerAssignmentRow = {
   updatedAt: Date;
 };
 
+export type SchedulerWeekMeta = {
+  weekStart: string;
+  version: number;
+  isLocked: boolean;
+  updatedAt: Date;
+  updatedBy: string | null;
+};
+
+export type SaveSchedulerAssignmentInput = {
+  designerId: string;
+  taskId: string;
+  dayIndex: number;
+  assignedHours: number;
+  parentId?: string | null;
+  splitIndex?: number | null;
+  totalParts?: number | null;
+  notes?: string | null;
+};
+
 export function listSchedulerAssignmentsForWeek(weekStart: string) {
   const q = encodeURIComponent(weekStart);
   return apiClient.get<SchedulerAssignmentRow[]>(`/scheduler-assignments?weekStart=${q}`);
+}
+
+export function getSchedulerWeekMeta(weekStart: string) {
+  return apiClient.get<SchedulerWeekMeta>(`/scheduler-assignments/week/${encodeURIComponent(weekStart)}/meta`);
+}
+
+export function saveSchedulerWeekSnapshot(
+  weekStart: string,
+  payload: { version: number; assignments: SaveSchedulerAssignmentInput[] },
+) {
+  return apiClient.put<{
+    weekStart: string;
+    version: number;
+    isLocked: boolean;
+    updatedAt: Date;
+    updatedBy: string | null;
+    assignments: SchedulerAssignmentRow[];
+  }>(`/scheduler-assignments/week/${encodeURIComponent(weekStart)}`, payload);
 }

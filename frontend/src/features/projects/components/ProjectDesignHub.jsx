@@ -8,14 +8,17 @@ import { Navbar } from "@/components/Navbar";
 import {
   FROM_PROJECT_DESIGN,
   taskCreationPathForRecord,
+  taskViewPathForRecord,
 } from "@/lib/design-list-routes";
 
-function hubTaskHref(row, opts) {
-  if (!row?.taskId) return null;
+function hubTaskHref(row, opts = {}) {
+  const routingId = row?.taskId || row?.opNo || row?.id;
+  if (!routingId) return null;
+  const routingRow = { ...row, id: routingId };
   const q = { from: FROM_PROJECT_DESIGN };
-  if (opts?.tab) q.tab = opts.tab;
-  if (opts?.create) q.create = "1";
-  return taskCreationPathForRecord({ ...row, id: row.taskId }, q);
+  if (opts.tab) q.tab = opts.tab;
+  if (opts.create) return taskCreationPathForRecord(routingRow, q);
+  return taskViewPathForRecord(routingRow, q);
 }
 
 function ActionLink({ href, label }) {

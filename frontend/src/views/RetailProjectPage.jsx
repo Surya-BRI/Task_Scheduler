@@ -10,6 +10,38 @@ import { apiClient } from '@/lib/api-client'
 import { fetchProjectActivities, fetchTaskActivities } from '@/features/team-activity/services/activities.api'
 import { createChatterComment, createChatterPost, listChatterPosts } from '@/features/chatter/services/chatter-posts.api'
 
+function isValidHttpUrl(value) {
+  try {
+    const url = new URL(String(value ?? '').trim())
+    return url.protocol === 'http:' || url.protocol === 'https:'
+  } catch {
+    return false
+  }
+}
+
+function deriveFileNameFromUrl(value) {
+  try {
+    const url = new URL(String(value ?? '').trim())
+    const queryName = url.searchParams.get('filename') || url.searchParams.get('fileName') || url.searchParams.get('name')
+    if (queryName && queryName.trim()) return queryName.trim()
+    const segments = url.pathname
+      .split('/')
+      .map((part) => part.trim())
+      .filter(Boolean)
+      .map((part) => decodeURIComponent(part))
+    const ignored = new Set(['view', 'edit', 'preview', 'open', 'download', 'u', 'd', 'file', 'folders'])
+    const preferred = [...segments].reverse().find((part) => !ignored.has(part.toLowerCase()))
+    if (url.hostname.includes('drive.google.com')) {
+      const fileIdIndex = segments.findIndex((part) => part.toLowerCase() === 'd')
+      const fileId = fileIdIndex >= 0 ? segments[fileIdIndex + 1] : null
+      if (fileId) return `google-drive-${fileId}`
+    }
+    return preferred || 'linked-file'
+  } catch {
+    return 'linked-file'
+  }
+}
+
 const STAGE_ITEMS = [
   { id: 'new', label: 'Design Task New', hint: 'Awaiting project allocation', icon: Flag },
   { id: 'planned', label: 'Design Planned', hint: 'Task scheduled for production', icon: Clock3 },
@@ -90,20 +122,60 @@ function FormFieldWithPencil({ id, label, value, onChange, placeholder }) {
   )
 }
 
-function FilesPanel({ projectId, files, uploading, onPick, onDelete }) {
+function FilesPanel({ projectId, files, uploading, onPick, onAddLink, onDelete }) {
   const fileInputRef = useRef(null)
+  const [mode, setMode] = useState('link')
+  const [linkUrl, setLinkUrl] = useState('')
+  const [linkError, setLinkError] = useState('')
   return (
     <section className="rounded-lg border border-slate-200 bg-white p-3 shadow-sm">
-      <h2 className="text-sm font-semibold text-slate-900">Files</h2>
-      <button
-        type="button"
-        disabled={!projectId || uploading}
-        onClick={() => fileInputRef.current?.click()}
-        className="mt-2 inline-flex w-full items-center justify-center gap-2 rounded-md bg-blue-50 px-3 py-1.5 text-xs font-semibold text-blue-700 hover:bg-blue-100 disabled:cursor-not-allowed disabled:opacity-60"
-      >
-        <Upload className="h-3.5 w-3.5" />
-        {uploading ? 'Uploading...' : 'Upload Project Files'}
-      </button>
+      <h2 className="text-sm font-semibold text-slate-900">Project Files</h2>
+      <div className="mt-2 inline-flex rounded-md border border-slate-300 bg-slate-50 p-1 text-xs">
+        <button type="button" onClick={() => setMode('link')} className={`rounded px-2 py-1 font-semibold ${mode === 'link' ? 'bg-white text-slate-900' : 'text-slate-600'}`}>Paste Link</button>
+        <button type="button" onClick={() => setMode('browse')} className={`rounded px-2 py-1 font-semibold ${mode === 'browse' ? 'bg-white text-slate-900' : 'text-slate-600'}`}>Browse Files</button>
+      </div>
+      {mode === 'link' ? (
+        <div className="mt-2 space-y-2">
+          <div className="flex gap-2">
+            <input
+              value={linkUrl}
+              onChange={(event) => {
+                setLinkUrl(event.target.value)
+                setLinkError('')
+              }}
+              placeholder="Paste Google Drive/S3/HTTP link"
+              className="w-full rounded-md border border-slate-300 bg-white px-2.5 py-1.5 text-xs text-slate-900 outline-none focus:border-blue-500 focus:ring-2 focus:ring-blue-500/20"
+            />
+            <button
+              type="button"
+              disabled={!projectId || uploading}
+              onClick={async () => {
+                const url = linkUrl.trim()
+                if (!isValidHttpUrl(url)) {
+                  setLinkError('Enter a valid http/https URL')
+                  return
+                }
+                await onAddLink(url, deriveFileNameFromUrl(url))
+                setLinkUrl('')
+              }}
+              className="shrink-0 rounded-md bg-blue-50 px-3 py-1.5 text-xs font-semibold text-blue-700 hover:bg-blue-100 disabled:cursor-not-allowed disabled:opacity-60"
+            >
+              Add Link
+            </button>
+          </div>
+          {linkError ? <p className="text-xs text-red-600">{linkError}</p> : null}
+        </div>
+      ) : (
+        <button
+          type="button"
+          disabled={!projectId || uploading}
+          onClick={() => fileInputRef.current?.click()}
+          className="mt-2 inline-flex w-full items-center justify-center gap-2 rounded-md bg-blue-50 px-3 py-1.5 text-xs font-semibold text-blue-700 hover:bg-blue-100 disabled:cursor-not-allowed disabled:opacity-60"
+        >
+          <Upload className="h-3.5 w-3.5" />
+          {uploading ? 'Uploading...' : 'Upload Project Files'}
+        </button>
+      )}
       <input
         ref={fileInputRef}
         type="file"
@@ -408,6 +480,17 @@ export function RetailProjectPage() {
     await fetchProjectFiles()
   }
 
+  async function handleProjectFileLinkAdd(url, fileName) {
+    if (!projectId) return
+    setUploadingProjectFiles(true)
+    try {
+      await apiClient.post(`/projects/${projectId}/files/link`, { url, fileName })
+      await fetchProjectFiles()
+    } finally {
+      setUploadingProjectFiles(false)
+    }
+  }
+
   async function handlePostChatter() {
     const message = chatterMessage.trim()
     if (!message || !projectId) return
@@ -702,6 +785,7 @@ export function RetailProjectPage() {
                 files={projectFiles}
                 uploading={uploadingProjectFiles}
                 onPick={handleProjectFilesPicked}
+                onAddLink={handleProjectFileLinkAdd}
                 onDelete={handleDeleteProjectFile}
               />
             </aside>

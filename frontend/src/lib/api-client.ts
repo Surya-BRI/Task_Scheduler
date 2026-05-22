@@ -49,6 +49,10 @@ export const apiClient = {
     const isFormData = body instanceof FormData;
     return request(path, { method: 'PATCH', body: isFormData ? body : JSON.stringify(body) });
   },
+  put<T>(path: string, body: unknown): Promise<T> {
+    const isFormData = body instanceof FormData;
+    return request(path, { method: 'PUT', body: isFormData ? body : JSON.stringify(body) });
+  },
   delete<T>(path: string): Promise<T> {
     return request(path, { method: 'DELETE' });
   },

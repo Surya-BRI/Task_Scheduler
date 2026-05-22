@@ -10,18 +10,25 @@ import { CreateExtendedTaskDto } from './dto/create-extended-task.dto';
 import { TaskFilesService } from './task-files.service';
 import { ActivityLoggerService } from '../activities/activity-logger.service';
 import { ActivityAction } from '../activities/activity-events';
+import { SaveSignRowsDto } from './dto/save-sign-rows.dto';
 
 const TASK_SELECT = {
   id: true,
   taskNo: true,
   opNo: true,
   title: true,
+  revisionCode: true,
+  designType: true,
   description: true,
   status: true,
   priority: true,
   dueDate: true,
   startedAt: true,
   completedAt: true,
+  technicalHead: true,
+  teamLead: true,
+  subTeamLead: true,
+  designers: true,
   projectId: true,
   project: { select: { id: true, name: true, projectNo: true, category: true } },
   assigneeId: true,
@@ -95,6 +102,8 @@ const TASK_LIST_SELECT = {
   taskNo: true,
   opNo: true,
   title: true,
+  revisionCode: true,
+  designType: true,
   description: true,
   status: true,
   priority: true,
@@ -117,6 +126,13 @@ export type TaskFilters = {
   search?: string;
   page?: number;
   limit?: number;
+};
+
+export type NextRevisionQuery = {
+  projectId?: string;
+  projectNo?: string;
+  opNo?: string;
+  designType?: string;
 };
 
 @Injectable()
@@ -152,6 +168,10 @@ export class TasksService {
     );
   }
 
+  private isAbsoluteHttpUrl(value: string) {
+    return /^https?:\/\//i.test(String(value ?? '').trim());
+  }
+
   private async withSignedAttachmentUrls<T extends { retailDetails?: any[]; projectDetails?: any[] }>(task: T): Promise<T> {
     const allKeys = [
       ...(task.retailDetails ?? []).flatMap((line) => (line.attachments ?? []).map((a: any) => a.fileKey)),
@@ -161,7 +181,9 @@ export class TasksService {
     const signedMap = new Map<string, string>();
     await Promise.all(
       uniqueKeys.map(async (key) => {
-        const signedUrl = await this.taskFilesService.createSignedReadUrl(key);
+        const signedUrl = this.isAbsoluteHttpUrl(key)
+          ? key
+          : await this.taskFilesService.createSignedReadUrl(key);
         signedMap.set(key, signedUrl);
       }),
     );
@@ -197,6 +219,67 @@ export class TasksService {
       .replace(/[^A-Z0-9]/g, '')
       .slice(-8);
     return cleanedOp ? `TSK-${cleanedOp}-${stamp}-${rand}` : `TSK-${stamp}-${rand}`;
+  }
+
+  private normalizeDesignType(value?: string | null): string {
+    const raw = String(value ?? '').trim().toUpperCase();
+    if (raw === 'ESTIMATION PURPOSE' || raw === 'ESTIMATION_PURPOSE') return 'ESTIMATION_PURPOSE';
+    if (raw === 'PRESENTATION') return 'PRESENTATION';
+    if (raw === 'CLIENT SUBMISSION' || raw === 'CLIENT_SUBMISSION') return 'CLIENT_SUBMISSION';
+    if (raw === 'TECHNICAL DRAWING' || raw === 'TECHNICAL_DRAWING') return 'TECHNICAL_DRAWING';
+    if (raw === 'PROJECT') return 'PROJECT';
+    if (!raw) return 'PROJECT';
+    return raw.replace(/\s+/g, '_');
+  }
+
+  private normalizeRevisionCode(value?: string | null): string | null {
+    const raw = String(value ?? '').trim().toUpperCase();
+    if (!raw) return null;
+    if (!/^R\d+$/.test(raw)) {
+      throw new BadRequestException('revisionCode must match R<number> (R0, R1, R2...).');
+    }
+    return raw;
+  }
+
+  private getRevisionNumber(revisionCode: string): number {
+    const m = /^R(\d+)$/.exec(revisionCode);
+    return m ? Number.parseInt(m[1], 10) : -1;
+  }
+
+  private async resolveNextRevisionCode(
+    tx: Prisma.TransactionClient,
+    params: { projectId: string; opNo: string; designType: string },
+  ): Promise<string> {
+    const rows = await tx.task.findMany({
+      where: {
+        projectId: params.projectId,
+        opNo: params.opNo,
+        designType: params.designType,
+        revisionCode: { not: null },
+      },
+      select: { revisionCode: true },
+    });
+    let max = -1;
+    for (const row of rows) {
+      if (!row.revisionCode) continue;
+      const n = this.getRevisionNumber(row.revisionCode);
+      if (n > max) max = n;
+    }
+    return `R${max + 1}`;
+  }
+
+  async getNextRevision(query: NextRevisionQuery) {
+    const opNo = String(query.opNo ?? '').trim();
+    if (!opNo) throw new BadRequestException('opNo is required');
+
+    let projectId = String(query.projectId ?? '').trim();
+    if (!projectId) {
+      const project = await this.resolveProjectForCreate({ projectNo: query.projectNo, opNo });
+      projectId = project.id;
+    }
+    const designType = this.normalizeDesignType(query.designType);
+    const revisionCode = await this.resolveNextRevisionCode(this.prisma, { projectId, opNo, designType });
+    return { projectId, opNo, designType, revisionCode };
   }
 
   private async resolveProjectForCreate(task: { projectId?: string; projectNo?: string; opNo?: string }) {
@@ -288,6 +371,11 @@ export class TasksService {
       projectNo: dto.projectNo,
       opNo: dto.opNo,
     });
+    const normalizedOpNo = String(dto.opNo ?? '').trim();
+    if (!normalizedOpNo) {
+      throw new BadRequestException('opNo is required for revision-based task creation.');
+    }
+    const normalizedDesignType = this.normalizeDesignType(dto.designType);
 
     if (dto.assigneeId) {
       const assignee = await this.prisma.user.findUnique({ where: { id: dto.assigneeId } });
@@ -296,18 +384,46 @@ export class TasksService {
 
     for (let attempt = 0; attempt < 5; attempt++) {
       try {
-        const created = await this.prisma.task.create({
-          data: {
-            taskNo: this.buildTaskNo(dto.opNo),
-            title: dto.title,
-            opNo: dto.opNo,
-            description: dto.description,
-            priority: dto.priority ?? 'Medium',
-            dueDate: dto.dueDate ? new Date(dto.dueDate) : undefined,
-            projectId: project.id,
-            assigneeId: dto.assigneeId ?? null,
-          },
-          select: TASK_SELECT,
+        const created = await this.prisma.$transaction(async (tx) => {
+          const requestedRevision = this.normalizeRevisionCode(dto.revisionCode);
+          const revisionCode =
+            requestedRevision ??
+            (await this.resolveNextRevisionCode(tx, {
+              projectId: project.id,
+              opNo: normalizedOpNo,
+              designType: normalizedDesignType,
+            }));
+
+          const duplicate = await tx.task.findFirst({
+            where: {
+              projectId: project.id,
+              opNo: normalizedOpNo,
+              designType: normalizedDesignType,
+              revisionCode,
+            },
+            select: { id: true },
+          });
+          if (duplicate) {
+            throw new BadRequestException(
+              `Revision ${revisionCode} already exists for ${normalizedDesignType} in this project/opNo.`,
+            );
+          }
+
+          return tx.task.create({
+            data: {
+              taskNo: this.buildTaskNo(dto.opNo),
+              title: dto.title?.trim() || null,
+              revisionCode,
+              designType: normalizedDesignType,
+              opNo: normalizedOpNo,
+              description: dto.description,
+              priority: dto.priority ?? 'Medium',
+              dueDate: dto.dueDate ? new Date(dto.dueDate) : undefined,
+              projectId: project.id,
+              assigneeId: dto.assigneeId ?? null,
+            },
+            select: TASK_SELECT,
+          });
         });
         await this.activityLogger.log({
           action: ActivityAction.TASK_CREATED,
@@ -320,7 +436,7 @@ export class TasksService {
               id: created.id,
               taskNo: created.taskNo,
               opNo: created.opNo,
-              title: created.title,
+              title: created.title ?? undefined,
               status: created.status,
             },
             projectSnapshot: {
@@ -349,6 +465,11 @@ export class TasksService {
   async createExtended(userId: string, dto: CreateExtendedTaskDto) {
     const hasRetail = (dto.retailDetails?.length ?? 0) > 0;
     const hasProject = (dto.projectDetails?.length ?? 0) > 0;
+    const normalizedOpNo = String(dto.task.opNo ?? '').trim();
+    if (!normalizedOpNo) {
+      throw new BadRequestException('task.opNo is required for revision-based task creation.');
+    }
+    const normalizedDesignType = this.normalizeDesignType(dto.task.designType ?? dto.designType);
 
     if (hasRetail && hasProject) {
       throw new BadRequestException('Send either retailDetails or projectDetails, not both');
@@ -375,7 +496,7 @@ export class TasksService {
       ...(dto.projectDetails ?? []).flatMap((line) =>
         (line.attachments ?? []).map((attachment) => attachment.fileKey),
       ),
-    ];
+    ].filter((key) => key && !this.isAbsoluteHttpUrl(key));
     if (fileKeysToCheck.length > 0) {
       await this.taskFilesService.assertKeysExist(fileKeysToCheck);
     }
@@ -384,11 +505,37 @@ export class TasksService {
       let taskId: string | null = null;
       for (let attempt = 0; attempt < 5; attempt++) {
         try {
+          const requestedRevision = this.normalizeRevisionCode(dto.task.revisionCode);
+          const revisionCode =
+            requestedRevision ??
+            (await this.resolveNextRevisionCode(tx, {
+              projectId: project.id,
+              opNo: normalizedOpNo,
+              designType: normalizedDesignType,
+            }));
+
+          const duplicate = await tx.task.findFirst({
+            where: {
+              projectId: project.id,
+              opNo: normalizedOpNo,
+              designType: normalizedDesignType,
+              revisionCode,
+            },
+            select: { id: true },
+          });
+          if (duplicate) {
+            throw new BadRequestException(
+              `Revision ${revisionCode} already exists for ${normalizedDesignType} in this project/opNo.`,
+            );
+          }
+
           const createdTask = await tx.task.create({
             data: {
               taskNo: this.buildTaskNo(dto.task.opNo),
-              title: dto.task.title,
-              opNo: dto.task.opNo,
+              title: dto.task.title?.trim() || null,
+              revisionCode,
+              designType: normalizedDesignType,
+              opNo: normalizedOpNo,
               description: dto.task.description,
               priority: dto.task.priority ?? 'Medium',
               dueDate: dto.task.dueDate ? new Date(dto.task.dueDate) : undefined,
@@ -420,7 +567,7 @@ export class TasksService {
               providedFile: line.providedFile,
               fileUrl: line.fileUrl,
               hodName: line.hodName,
-              designTypes: line.designTypes?.length ? line.designTypes.join(',') : null,
+              designTypes: line.designTypes?.length ? line.designTypes[0] : null,
               hoursRequired: line.hoursRequired ?? null,
               comment: line.comment,
               signFamily: line.signFamily,
@@ -519,7 +666,7 @@ export class TasksService {
           id: created.id,
           taskNo: created.taskNo,
           opNo: created.opNo,
-          title: created.title,
+          title: created.title ?? undefined,
           status: created.status,
         },
         projectSnapshot: {
@@ -619,6 +766,10 @@ export class TasksService {
         description: dto.description,
         priority: dto.priority,
         dueDate: dto.dueDate ? new Date(dto.dueDate) : undefined,
+        technicalHead: dto.technicalHead !== undefined ? (dto.technicalHead?.trim() || null) : undefined,
+        teamLead: dto.teamLead !== undefined ? (dto.teamLead?.trim() || null) : undefined,
+        subTeamLead: dto.subTeamLead !== undefined ? (dto.subTeamLead?.trim() || null) : undefined,
+        designers: dto.designers !== undefined ? (dto.designers?.trim() || null) : undefined,
       },
       select: TASK_SELECT,
     });
@@ -653,7 +804,7 @@ export class TasksService {
           id: updatedTask.id,
           taskNo: updatedTask.taskNo,
           opNo: updatedTask.opNo,
-          title: updatedTask.title,
+          title: updatedTask.title ?? undefined,
           status: updatedTask.status,
         },
         projectSnapshot: {
@@ -708,7 +859,7 @@ export class TasksService {
           id: updatedTask.id,
           taskNo: updatedTask.taskNo,
           opNo: updatedTask.opNo,
-          title: updatedTask.title,
+          title: updatedTask.title ?? undefined,
           status: updatedTask.status,
         },
         projectSnapshot: {
@@ -755,5 +906,45 @@ export class TasksService {
     const existing = await this.prisma.task.findUnique({ where: { id } });
     if (!existing) throw new NotFoundException('Task not found');
     return this.prisma.task.delete({ where: { id } });
+  }
+
+  async getSignRows(taskId: string) {
+    if (!this.isUuid(taskId)) throw new BadRequestException('Invalid task id');
+    return this.prisma.projectSignRow.findMany({
+      where: { taskId },
+      orderBy: { createdAt: 'asc' },
+    });
+  }
+
+  async saveSignRows(taskId: string, dto: SaveSignRowsDto) {
+    if (!this.isUuid(taskId)) throw new BadRequestException('Invalid task id');
+    const existing = await this.prisma.task.findUnique({ where: { id: taskId } });
+    if (!existing) throw new NotFoundException('Task not found');
+    await this.prisma.$transaction(async (tx) => {
+      await tx.projectSignRow.deleteMany({ where: { taskId } });
+      if (dto.rows.length > 0) {
+        await tx.projectSignRow.createMany({
+          data: dto.rows.map((row) => ({
+            taskId,
+            tNo: row.tNo?.trim() || null,
+            no: row.no?.trim() || null,
+            signType: row.signType?.trim() || null,
+            planCode: row.planCode?.trim() || null,
+            estQty: row.estQty ?? null,
+            qsQty: row.qsQty ?? null,
+            areaZone: row.areaZone?.trim() || null,
+            levelParcel: row.levelParcel?.trim() || null,
+            sequence: row.sequence?.trim() || null,
+            status: row.status?.trim() || null,
+            comment: row.comment?.trim() || null,
+            contRef: row.contRef?.trim() || null,
+          })),
+        });
+      }
+    });
+    return this.prisma.projectSignRow.findMany({
+      where: { taskId },
+      orderBy: { createdAt: 'asc' },
+    });
   }
 }

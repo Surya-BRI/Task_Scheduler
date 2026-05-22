@@ -1,9 +1,17 @@
-import { IsDateString, IsIn, IsOptional, IsString, MinLength } from 'class-validator';
+import { IsDateString, IsIn, IsOptional, IsString } from 'class-validator';
 
 export class CreateTaskDto {
   @IsString()
-  @MinLength(2)
-  title: string;
+  @IsOptional()
+  title?: string;
+
+  @IsString()
+  @IsOptional()
+  revisionCode?: string;
+
+  @IsString()
+  @IsOptional()
+  designType?: string;
 
   @IsString()
   @IsOptional()

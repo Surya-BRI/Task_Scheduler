@@ -9,5 +9,5 @@ export default async function LegacyDesignListTaskRedirect({ params, searchParam
     ),
   ).toString();
   const suffix = qs ? `?${qs}` : '';
-  redirect(`/project-task-creation/${encodeURIComponent(String(taskId))}${suffix}`);
+  redirect(`/task-summary/${encodeURIComponent(String(taskId))}${suffix}`);
 }
