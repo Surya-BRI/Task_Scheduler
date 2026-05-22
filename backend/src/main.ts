@@ -9,6 +9,49 @@ import { HttpExceptionFilter } from './common/filters/http-exception.filter';
 import { LoggingInterceptor } from './common/interceptors/logging.interceptor';
 import { ConfigService } from '@nestjs/config';
 
+// Prisma validates DATABASE_URL from schema.prisma at engine startup before
+// NestJS config is available, so we build it from individual DB_* vars here.
+function buildSqlServerUrl(
+  server: string | undefined,
+  port: string,
+  database: string | undefined,
+  user: string | undefined,
+  password: string | undefined,
+  encrypt: string,
+  trust: string,
+): string | undefined {
+  if (!server || !database || !user || !password) return undefined;
+  const encodedPassword = encodeURIComponent(password);
+  const encodedUser = encodeURIComponent(user);
+  return `sqlserver://${server}:${port};database=${database};user=${encodedUser};password=${encodedPassword};encrypt=${encrypt};trustServerCertificate=${trust}`;
+}
+
+if (!process.env.DATABASE_URL) {
+  const url = buildSqlServerUrl(
+    process.env.DB_SERVER,
+    process.env.DB_PORT ?? '1433',
+    process.env.DB_NAME,
+    process.env.DB_USER,
+    process.env.DB_PASSWORD,
+    process.env.DB_ENCRYPT ?? 'true',
+    process.env.DB_TRUST_SERVER_CERTIFICATE ?? 'true',
+  );
+  if (url) process.env.DATABASE_URL = url;
+}
+
+if (!process.env.LIVE_DATABASE_URL) {
+  const url = buildSqlServerUrl(
+    process.env.LIVE_DB_SERVER,
+    process.env.LIVE_DB_PORT ?? '1433',
+    process.env.LIVE_DB_NAME,
+    process.env.LIVE_DB_USER,
+    process.env.LIVE_DB_PASSWORD,
+    process.env.LIVE_DB_ENCRYPT ?? 'true',
+    process.env.LIVE_DB_TRUST_SERVER_CERTIFICATE ?? 'true',
+  );
+  if (url) process.env.LIVE_DATABASE_URL = url;
+}
+
 async function bootstrap() {
   mkdirSync(join(process.cwd(), 'uploads', 'chatter'), { recursive: true });
 
