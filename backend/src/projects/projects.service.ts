@@ -2,6 +2,7 @@ import { Injectable, NotFoundException } from '@nestjs/common';
 import { PrismaService } from '../prisma/prisma.service';
 import { CreateProjectDto } from './dto/create-project.dto';
 import { UpdateProjectDto } from './dto/update-project.dto';
+import { CreateProjectFileLinkDto } from './dto/create-project-file-link.dto';
 import { TaskFilesService } from '../tasks/task-files.service';
 import { ActivityLoggerService } from '../activities/activity-logger.service';
 import { ActivityAction } from '../activities/activity-events';
@@ -37,6 +38,10 @@ export class ProjectsService {
     private readonly taskFilesService: TaskFilesService,
     private readonly activityLogger: ActivityLoggerService,
   ) {}
+
+  private isAbsoluteHttpUrl(value: string) {
+    return /^https?:\/\//i.test(String(value ?? '').trim());
+  }
 
   create(createdById: string, dto: CreateProjectDto) {
     return this.prisma.project.create({
@@ -250,6 +255,59 @@ export class ProjectsService {
     };
   }
 
+  async addProjectFileLink(projectId: string, dto: CreateProjectFileLinkDto, userId: string) {
+    const project = await this.prisma.project.findUnique({ where: { id: projectId }, select: { id: true } });
+    if (!project) throw new NotFoundException('Project not found');
+
+    const fileKey = String(dto.url ?? '').trim();
+    const fileName = String(dto.fileName ?? '').trim();
+    const created = await this.prisma.projectAttachment.create({
+      data: {
+        projectId,
+        fileKey,
+        fileName,
+        mimeType: null,
+        sizeBytes: null,
+        uploadedById: userId,
+      },
+      select: {
+        id: true,
+        fileKey: true,
+        fileName: true,
+        mimeType: true,
+        sizeBytes: true,
+        createdAt: true,
+      },
+    });
+    await this.activityLogger.log({
+      action: ActivityAction.PROJECT_FILE_UPLOADED,
+      userId,
+      taskId: null,
+      details: {
+        event: ActivityAction.PROJECT_FILE_UPLOADED,
+        messageKey: 'project_file_uploaded',
+        projectSnapshot: {
+          id: projectId,
+          projectNo: undefined,
+          name: undefined,
+        },
+        fileMeta: {
+          id: created.id,
+          fileName: created.fileName,
+          fileKey: created.fileKey,
+          mimeType: created.mimeType,
+          sizeBytes: null,
+        },
+        context: { source: 'projects.addFileLink', projectId, external: true },
+      },
+    });
+    return {
+      ...created,
+      sizeBytes: null,
+      signedUrl: fileKey,
+    };
+  }
+
   async getProjectFiles(projectId: string) {
     const project = await this.prisma.project.findUnique({ where: { id: projectId }, select: { id: true } });
     if (!project) throw new NotFoundException('Project not found');
@@ -271,7 +329,9 @@ export class ProjectsService {
       files.map(async (file: (typeof files)[number]) => ({
         ...file,
         sizeBytes: typeof file.sizeBytes === 'bigint' ? Number(file.sizeBytes) : file.sizeBytes,
-        signedUrl: await this.taskFilesService.createSignedReadUrl(file.fileKey),
+        signedUrl: this.isAbsoluteHttpUrl(file.fileKey)
+          ? file.fileKey
+          : await this.taskFilesService.createSignedReadUrl(file.fileKey),
       })),
     );
   }
@@ -282,6 +342,9 @@ export class ProjectsService {
       select: { id: true, fileName: true, fileKey: true, mimeType: true, sizeBytes: true },
     });
     if (!existing) throw new NotFoundException('Project attachment not found');
+    if (!this.isAbsoluteHttpUrl(existing.fileKey)) {
+      await this.taskFilesService.deleteObjectByKey(existing.fileKey);
+    }
     const deleted = await this.prisma.projectAttachment.delete({ where: { id: fileId } });
     await this.activityLogger.log({
       action: ActivityAction.PROJECT_FILE_DELETED,

@@ -18,6 +18,7 @@ import { memoryStorage } from 'multer';
 import { ProjectsService } from './projects.service';
 import { CreateProjectDto } from './dto/create-project.dto';
 import { UpdateProjectDto } from './dto/update-project.dto';
+import { CreateProjectFileLinkDto } from './dto/create-project-file-link.dto';
 import { JwtAuthGuard } from '../common/guards/jwt-auth.guard';
 import { RolesGuard } from '../common/guards/roles.guard';
 import { Roles } from '../common/decorators/roles.decorator';
@@ -78,6 +79,16 @@ export class ProjectsController {
     @CurrentUser() user: JwtPayload,
   ) {
     return this.projectsService.uploadProjectFile(id, file, user.sub);
+  }
+
+  @Post(':id/files/link')
+  @Roles(UserRole.HOD, UserRole.ADMIN, UserRole.PROJECT_MANAGER)
+  addFileLink(
+    @Param('id') id: string,
+    @Body() dto: CreateProjectFileLinkDto,
+    @CurrentUser() user: JwtPayload,
+  ) {
+    return this.projectsService.addProjectFileLink(id, dto, user.sub);
   }
 
   @Get(':id/files')

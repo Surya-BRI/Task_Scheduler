@@ -36,8 +36,16 @@ export class TaskAttachmentInputDto {
 
 class ExtendedTaskCoreDto {
   @IsString()
-  @MinLength(2)
-  title: string;
+  @IsOptional()
+  title?: string;
+
+  @IsString()
+  @IsOptional()
+  revisionCode?: string;
+
+  @IsString()
+  @IsOptional()
+  designType?: string;
 
   @IsString()
   @IsOptional()

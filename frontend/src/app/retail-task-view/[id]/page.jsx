@@ -11,7 +11,7 @@ function Fallback() {
   );
 }
 
-export default function RetailTaskCreationRoutePage() {
+export default function RetailTaskViewRoutePage() {
   return (
     <Suspense fallback={<Fallback />}>
       <TaskViewPage />

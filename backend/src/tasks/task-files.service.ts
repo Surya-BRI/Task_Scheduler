@@ -1,6 +1,6 @@
 import { BadRequestException, Injectable, InternalServerErrorException } from '@nestjs/common';
 import { ConfigService } from '@nestjs/config';
-import { GetObjectCommand, HeadObjectCommand, PutObjectCommand, S3Client } from '@aws-sdk/client-s3';
+import { DeleteObjectCommand, GetObjectCommand, HeadObjectCommand, PutObjectCommand, S3Client } from '@aws-sdk/client-s3';
 import { getSignedUrl } from '@aws-sdk/s3-request-presigner';
 
 type UploadResult = {
@@ -116,6 +116,23 @@ export class TaskFilesService {
       );
     } catch {
       throw new BadRequestException('One or more file references are invalid');
+    }
+  }
+
+  async deleteObjectByKey(key: string): Promise<void> {
+    const trimmed = String(key ?? '').trim();
+    if (!trimmed) {
+      throw new BadRequestException('Invalid file key');
+    }
+    try {
+      await this.client.send(
+        new DeleteObjectCommand({
+          Bucket: this.bucket,
+          Key: trimmed,
+        }),
+      );
+    } catch {
+      throw new InternalServerErrorException('Failed to delete file from S3');
     }
   }
 }

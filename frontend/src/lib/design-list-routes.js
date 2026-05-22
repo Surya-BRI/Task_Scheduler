@@ -48,6 +48,33 @@ export function projectTaskCreationPath(recordId, query = {}) {
   return buildPath("/project-task-creation", recordId, query);
 }
 
+/** @param {string|number} recordId */
+export function retailTaskViewPath(recordId, query = {}) {
+  return buildPath("/retail-task-view", recordId, query);
+}
+
+/** @param {string|number} recordId */
+export function projectTaskViewPath(recordId, query = {}) {
+  return buildPath("/project-task-view", recordId, query);
+}
+
+/**
+ * Task view URL by record type (Retail vs Project).
+ * @param {{ id?: string, designType?: string, category?: string } | null | undefined} record
+ * @param {Record<string, string>} [query]
+ * @returns {string}
+ */
+export function taskViewPathForRecord(record, query = {}) {
+  const id = record?.id;
+  if (id == null || String(id).trim() === "") {
+    return "/design-list";
+  }
+  const kind = normalizeDesignType(record?.designType ?? record?.category);
+  if (kind === "retail") return retailTaskViewPath(id, query);
+  if (kind === "project") return projectTaskViewPath(id, query);
+  return projectTaskViewPath(id, query);
+}
+
 /**
  * Task creation URL by record type (Retail vs Project).
  * Unknown type → project path + console warning (caller may also toast).

@@ -18,4 +18,9 @@ export class UpdateTaskDto {
   @IsDateString()
   @IsOptional()
   dueDate?: string;
+
+  @IsString() @IsOptional() technicalHead?: string;
+  @IsString() @IsOptional() teamLead?: string;
+  @IsString() @IsOptional() subTeamLead?: string;
+  @IsString() @IsOptional() designers?: string;
 }

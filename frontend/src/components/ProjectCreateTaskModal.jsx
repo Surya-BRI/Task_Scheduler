@@ -5,6 +5,7 @@ import { apiClient } from '@/lib/api-client'
 const AREA_OPTIONS = ['Area A', 'Area B', 'Area C', 'Area D']
 const LEVEL_OPTIONS = ['Level 1', 'Level 2', 'Level 3', 'Level 4']
 const PRIORITY_OPTIONS = ['Low', 'Medium', 'High']
+const REVISION_PATTERN = /^R\d+$/
 
 function getPriorityClasses(level) {
   if (level === 'High') return 'text-red-700 font-semibold'
@@ -212,7 +213,7 @@ export function ProjectCreateTaskModal({ open, onClose, submissionDate, record }
   const [selectedLevel, setSelectedLevel] = useState('')
   const [planCode, setPlanCode] = useState('')
   const [priorityLevel, setPriorityLevel] = useState('Medium')
-  const [taskName, setTaskName] = useState('')
+  const [revisionCode, setRevisionCode] = useState('')
   const [hoursRequired, setHoursRequired] = useState('')
   const [submitting, setSubmitting] = useState(false)
   const [error, setError] = useState('')
@@ -248,7 +249,15 @@ export function ProjectCreateTaskModal({ open, onClose, submissionDate, record }
 
   useEffect(() => {
     if (!open) return
-    setTaskName('')
+    setRevisionCode('')
+    setPriorityLevel('Medium')
+    setHoursRequired('')
+    setSelectedSignType('')
+    setSelectedArea('')
+    setSelectedLevel('')
+    setPlanCode('')
+    setRows(structuredClone(SIGN_TYPE_ROWS))
+    setExpanded(new Set())
     setFieldErrors({})
     setTouched({})
     setSubmitAttempted(false)
@@ -348,13 +357,27 @@ export function ProjectCreateTaskModal({ open, onClose, submissionDate, record }
     )
   }
 
+  useEffect(() => {
+    if (!open || !record) return
+    const opNo = String(record.opNo ?? '').trim()
+    const projectNo = String(record.projectNo ?? record.projectId ?? '').trim()
+    if (!opNo || !projectNo) return
+    const qs = new URLSearchParams({ opNo, projectNo, designType: 'Project' }).toString()
+    apiClient
+      .get(`/tasks/next-revision?${qs}`)
+      .then((res) => {
+        if (!revisionCode.trim()) setRevisionCode(res?.revisionCode ?? 'R0')
+      })
+      .catch(() => {})
+  }, [open, record, revisionCode])
+
   async function handleCreateTasks() {
     if (!record) return
     setSubmitAttempted(true)
-    const normalizedTaskName = taskName.trim()
+    const normalizedRevision = revisionCode.trim().toUpperCase()
     const nextFieldErrors = {}
-    if (normalizedTaskName.length < 2) {
-      nextFieldErrors.taskName = 'Task Name is required'
+    if (!REVISION_PATTERN.test(normalizedRevision)) {
+      nextFieldErrors.revisionCode = 'Revision must be like R0, R1, R2'
     }
     if (!(submissionDate instanceof Date) || Number.isNaN(submissionDate.getTime())) {
       nextFieldErrors.deadline = 'Deadline for Task Submission is required'
@@ -418,7 +441,8 @@ export function ProjectCreateTaskModal({ open, onClose, submissionDate, record }
       const payload = {
         designType: 'Project',
         task: {
-          title: normalizedTaskName,
+          revisionCode: normalizedRevision,
+          designType: 'Project',
           opNo: record.opNo ?? undefined,
           projectName: record.projectName ?? undefined,
           description: undefined,
@@ -462,21 +486,21 @@ export function ProjectCreateTaskModal({ open, onClose, submissionDate, record }
         <div className="space-y-3 p-4">
           <div>
             <label className="mb-1 block text-xs font-semibold text-slate-600">
-              Task Name <span className="text-red-600">*</span>
+              Revision <span className="text-red-600">*</span>
             </label>
             <input
-              value={taskName}
+              value={revisionCode}
               onChange={(event) => {
-                setTaskName(event.target.value)
-                setFieldErrors((prev) => ({ ...prev, taskName: '' }))
+                setRevisionCode(event.target.value.toUpperCase())
+                setFieldErrors((prev) => ({ ...prev, revisionCode: '' }))
               }}
-              onBlur={() => setTouched((prev) => ({ ...prev, taskName: true }))}
-              placeholder="Enter task name"
+              onBlur={() => setTouched((prev) => ({ ...prev, revisionCode: true }))}
+              placeholder="R0"
               required
               className="h-10 w-full rounded-md border border-slate-300 px-3 text-sm outline-none transition-colors focus:border-blue-500 focus:ring-2 focus:ring-blue-500/20"
             />
-            {((submitAttempted || touched.taskName) && taskName.trim().length < 2) || fieldErrors.taskName ? (
-              <p className="mt-1 text-xs text-red-600">{fieldErrors.taskName || 'Task Name is required'}</p>
+            {((submitAttempted || touched.revisionCode) && !REVISION_PATTERN.test(revisionCode.trim().toUpperCase())) || fieldErrors.revisionCode ? (
+              <p className="mt-1 text-xs text-red-600">{fieldErrors.revisionCode || 'Revision must be like R0, R1, R2'}</p>
             ) : null}
           </div>
           <div className="rounded-md border border-slate-200 bg-slate-50 px-3 py-2 text-sm text-slate-700">
@@ -634,7 +658,7 @@ export function ProjectCreateTaskModal({ open, onClose, submissionDate, record }
               type="button"
               onClick={handleCreateTasks}
               className="rounded-md bg-blue-600 px-8 py-2.5 text-sm font-semibold text-white shadow-sm transition hover:bg-blue-700 focus:outline-none focus-visible:ring-2 focus-visible:ring-blue-500 focus-visible:ring-offset-2 disabled:pointer-events-none disabled:opacity-45"
-              disabled={selectedCount === 0 || submitting || taskName.trim().length < 2 || !(submissionDate instanceof Date) || Number.isNaN(submissionDate.getTime())}
+              disabled={selectedCount === 0 || submitting || !REVISION_PATTERN.test(revisionCode.trim().toUpperCase()) || !(submissionDate instanceof Date) || Number.isNaN(submissionDate.getTime())}
               title={selectedCount === 0 ? 'Select at least one work type or enter hours on a row' : undefined}
             >
               {submitting ? 'Creating...' : 'Create Tasks'}
