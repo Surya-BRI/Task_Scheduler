@@ -385,6 +385,8 @@ export function RetailProjectPage() {
   useEffect(() => {
     if (activeTab !== 'activity') return
     fetchActivities({ append: false, cursor: null })
+    const interval = setInterval(() => fetchActivities({ append: false, cursor: null }), 20000)
+    return () => clearInterval(interval)
   }, [activeTab, activityMode, taskId, projectId, fetchActivities])
 
   useEffect(() => {
@@ -410,8 +412,10 @@ export function RetailProjectPage() {
       }
     }
     fetchSidebarHistory()
+    const interval = setInterval(fetchSidebarHistory, 20000)
     return () => {
       alive = false
+      clearInterval(interval)
     }
   }, [projectId])
 

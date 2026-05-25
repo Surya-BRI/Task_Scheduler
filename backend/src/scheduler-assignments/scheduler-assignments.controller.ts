@@ -15,12 +15,12 @@ export class SchedulerAssignmentsController {
 
   @Get()
   @Roles(UserRole.HOD, UserRole.DESIGNER, UserRole.ADMIN, UserRole.PROJECT_MANAGER)
-  findForWeek(@Query('weekStart') weekStart?: string) {
+  findForWeek(@Query('weekStart') weekStart?: string, @Query('designerId') designerId?: string) {
     const ws = weekStart?.trim() ?? '';
     if (!ws) {
       return [];
     }
-    return this.schedulerAssignmentsService.findForWeekStart(ws);
+    return this.schedulerAssignmentsService.findForWeekStart(ws, designerId?.trim() || undefined);
   }
 
   @Get('week/:weekStart/meta')

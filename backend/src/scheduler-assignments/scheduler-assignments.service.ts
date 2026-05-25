@@ -189,12 +189,12 @@ export class SchedulerAssignmentsService {
     return createHash('sha256').update(JSON.stringify(normalized)).digest('hex');
   }
 
-  async findForWeekStart(weekStart: string): Promise<SchedulerAssignmentDto[]> {
+  async findForWeekStart(weekStart: string, designerId?: string): Promise<SchedulerAssignmentDto[]> {
     const { weekStartDate } = this.parseWeekStart(weekStart);
 
     try {
       const rows = await this.prisma.schedulerAssignment.findMany({
-        where: { weekStartDate },
+        where: { weekStartDate, ...(designerId ? { designerId } : {}) },
         orderBy: [{ designerId: 'asc' }, { dayIndex: 'asc' }, { id: 'asc' }],
       });
       return rows.map((r) =>
@@ -355,9 +355,8 @@ export class SchedulerAssignmentsService {
           const updateData: Prisma.TaskUncheckedUpdateInput = {};
           if (assignedDesigner) {
             updateData.assigneeId = assignedDesigner;
-            if (String(task.status ?? '').toUpperCase() !== 'ON_HOLD') {
-              updateData.status = 'PENDING';
-            }
+            // Re-assigning an ON_HOLD task via scheduler means it's back in play
+            updateData.status = 'PENDING';
           } else if (designerSet.size === 0) {
             updateData.assigneeId = null;
             if (String(task.status ?? '').toUpperCase() !== 'ON_HOLD') {

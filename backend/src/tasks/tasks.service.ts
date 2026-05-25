@@ -114,6 +114,8 @@ const TASK_LIST_SELECT = {
   project: { select: { id: true, name: true, projectNo: true, category: true, salesPerson: true } },
   assigneeId: true,
   assignee: { select: { id: true, fullName: true, email: true } },
+  retailDetails: { select: { hoursRequired: true } },
+  projectDetails: { select: { artworkHours: true, technicalHours: true, locationHours: true, asBuiltHours: true } },
   createdAt: true,
   updatedAt: true,
 };

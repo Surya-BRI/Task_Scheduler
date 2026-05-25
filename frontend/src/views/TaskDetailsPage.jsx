@@ -579,6 +579,7 @@ export function TaskDetailsPage() {
   const [record, setRecord] = useState(null)
   const [createModalOpen, setCreateModalOpen] = useState(false)
   const [projectCreateModalOpen, setProjectCreateModalOpen] = useState(false)
+  const [createdTasks, setCreatedTasks] = useState([])
   const [chatterMessage, setChatterMessage] = useState('')
   const [chatterPosts, setChatterPosts] = useState([])
   const [chatterLoading, setChatterLoading] = useState(false)
@@ -696,6 +697,7 @@ export function TaskDetailsPage() {
     [pathname, router, searchParams],
   )
 
+  const isCreationRoute = Boolean(pathname?.includes('-task-creation'))
   const isRetail = record?.designType === 'Retail'
   const rawTab = searchParams.get('tab')
   const activeTab =
@@ -765,7 +767,17 @@ export function TaskDetailsPage() {
         const rows = result?.data ?? []
         const exact = rows.find((task) => task.opNo === opNo && (!projectId || task.projectId === projectId))
         if (!alive) return
-        setTaskId(exact?.id ?? rows[0]?.id ?? '')
+        const foundId = exact?.id ?? rows[0]?.id ?? ''
+        setTaskId(foundId)
+        if (foundId) {
+          try {
+            const fullTask = await apiClient.get(`/tasks/${encodeURIComponent(foundId)}`)
+            if (!alive) return
+            setRecord(mapTaskToRecord(fullTask))
+          } catch {
+            // keep existing record if detail fetch fails
+          }
+        }
       } catch {
         if (!alive) return
         setTaskId('')
@@ -821,6 +833,8 @@ export function TaskDetailsPage() {
   useEffect(() => {
     if (activeTab !== 'activity') return
     fetchActivities({ append: false, cursor: null })
+    const interval = setInterval(() => fetchActivities({ append: false, cursor: null }), 20000)
+    return () => clearInterval(interval)
   }, [activeTab, activityMode, taskId, projectId, fetchActivities])
 
   useEffect(() => {
@@ -873,8 +887,10 @@ export function TaskDetailsPage() {
       }
     }
     fetchSidebarHistory()
+    const interval = setInterval(fetchSidebarHistory, 20000)
     return () => {
       alive = false
+      clearInterval(interval)
     }
   }, [projectId])
 
@@ -1086,7 +1102,7 @@ export function TaskDetailsPage() {
                     </div>
                   </div>
 
-                  {hasExistingTask ? (
+                  {(!isCreationRoute && hasExistingTask) ? (
                     <div className="mt-3 border-t border-slate-200 pt-3">
                       <div className="grid gap-3 lg:grid-cols-2">
                         <div className="space-y-0.5">
@@ -1199,7 +1215,7 @@ export function TaskDetailsPage() {
                     </div>
                   )}
 
-                  {!hasExistingTask && isRetail ? (
+                  {(isCreationRoute || !hasExistingTask) && isRetail ? (
                     <div className="mt-3 overflow-hidden rounded-md border border-slate-200">
                       <div className="grid grid-cols-5 bg-slate-100 px-2.5 py-1.5 text-[11px] font-semibold text-slate-600">
                         <div>Sign Family</div>
@@ -1448,12 +1464,20 @@ export function TaskDetailsPage() {
       <CreateTaskModal
         open={createModalOpen}
         onClose={() => setCreateModalOpen(false)}
+        onCreated={(task) => {
+          setCreateModalOpen(false)
+          if (task?.taskNo ?? task?.id) setCreatedTasks((prev) => [...prev, task?.taskNo ?? task?.id])
+        }}
         submissionDate={dateSubmission}
         record={record}
       />
       <ProjectCreateTaskModal
         open={projectCreateModalOpen}
         onClose={() => setProjectCreateModalOpen(false)}
+        onCreated={(task) => {
+          setProjectCreateModalOpen(false)
+          if (task?.taskNo ?? task?.id) setCreatedTasks((prev) => [...prev, task?.taskNo ?? task?.id])
+        }}
         submissionDate={dateSubmission}
         record={record}
       />

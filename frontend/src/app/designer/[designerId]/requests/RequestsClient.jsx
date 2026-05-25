@@ -1,7 +1,7 @@
 "use client";
 
-import { useState, useEffect } from "react";
-import { useRouter } from "next/navigation";
+import { useState, useEffect, useRef } from "react";
+import { useRouter, useSearchParams } from "next/navigation";
 import { Navbar } from "@/components/Navbar";
 import StatsBar from "../components/StatsBar";
 import { Clock3, FileClock, TimerReset, X } from "lucide-react";
@@ -16,6 +16,8 @@ function isUuidString(value) {
 
 export default function RequestsClient({ designer }) {
   const router = useRouter();
+  const searchParams = useSearchParams();
+  const prefillApplied = useRef(false);
   const REGULARIZATION_REASON_OPTIONS = [
     "Late Login",
     "Early Logout",
@@ -230,6 +232,27 @@ export default function RequestsClient({ designer }) {
     requestedHours: "2 hours",
     reason: "Unexpected scope change for animations",
   });
+
+  // Pre-fill OT form when navigated from SchedulerGrid OT button
+  useEffect(() => {
+    if (prefillApplied.current) return;
+    const taskId = searchParams?.get("taskId") || "";
+    const date = searchParams?.get("date") || "";
+    const estimated = searchParams?.get("estimated") || "";
+    if (taskId) {
+      prefillApplied.current = true;
+      setOtForm((f) => ({
+        ...f,
+        taskId,
+        date: date || f.date,
+        estimatedRemaining: estimated ? `${estimated} hours` : f.estimatedRemaining,
+      }));
+      // Scroll to overtime section
+      setTimeout(() => {
+        document.getElementById("overtime")?.scrollIntoView({ behavior: "smooth" });
+      }, 300);
+    }
+  }, [searchParams]);
 
   const handleOtSubmit = async (e) => {
     e.preventDefault();

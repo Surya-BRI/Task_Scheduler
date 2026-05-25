@@ -17,7 +17,60 @@ import {
   formatSchedulerDateRangeText,
   getWeekDays,
 } from "@/features/scheduler/utils/schedulerWeek";
+import { listSchedulerAssignmentsForWeek } from "@/features/scheduler/services/scheduler-assignments.api";
+import { apiClient } from "@/lib/api-client";
 import { getSession } from "@/lib/mock-auth";
+
+const UUID_RE = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
+
+function fmtYmd(date) {
+  const y = date.getFullYear();
+  const m = String(date.getMonth() + 1).padStart(2, "0");
+  const d = String(date.getDate()).padStart(2, "0");
+  return `${y}-${m}-${d}`;
+}
+
+const DASH_COLORS = [
+  "bg-blue-100 border border-blue-300 text-blue-800",
+  "bg-emerald-100 border border-emerald-300 text-emerald-800",
+  "bg-violet-100 border border-violet-300 text-violet-800",
+  "bg-amber-100 border border-amber-300 text-amber-800",
+  "bg-rose-100 border border-rose-300 text-rose-800",
+  "bg-teal-100 border border-teal-300 text-teal-800",
+  "bg-orange-100 border border-orange-300 text-orange-800",
+];
+
+function buildLiveScheduleData(assignments, tasksArr) {
+  const taskById = Object.fromEntries((tasksArr || []).map((t) => [t.id, t]));
+  const tasksMap = {};
+  const scheduleByDayIndex = {};
+  let colorIdx = 0;
+  const colorMap = {};
+
+  (assignments || []).forEach((a) => {
+    const key = a.splitIndex != null ? `${a.taskId}_s${a.splitIndex}` : a.taskId;
+    const apiTask = taskById[a.taskId];
+    if (!colorMap[a.taskId]) {
+      colorMap[a.taskId] = DASH_COLORS[colorIdx % DASH_COLORS.length];
+      colorIdx++;
+    }
+    tasksMap[key] = {
+      id: key,
+      parentId: a.parentId ?? (a.splitIndex != null ? a.taskId : null),
+      name: apiTask?.revisionCode || apiTask?.title || `Task #${a.taskId.slice(0, 6)}`,
+      baseName: apiTask?.revisionCode || apiTask?.title || `Task #${a.taskId.slice(0, 6)}`,
+      estimatedHours: Number(a.assignedHours) || 0,
+      colorClass: colorMap[a.taskId],
+      splitIndex: a.splitIndex,
+      totalParts: a.totalParts,
+    };
+    const dayStr = String(a.dayIndex);
+    if (!scheduleByDayIndex[dayStr]) scheduleByDayIndex[dayStr] = [];
+    scheduleByDayIndex[dayStr].push(key);
+  });
+
+  return buildDesignerSnapshot(tasksMap, scheduleByDayIndex);
+}
 
 export default function DesignerDashboard({ designer }) {
   const router = useRouter();
@@ -51,6 +104,28 @@ export default function DesignerDashboard({ designer }) {
     return initial;
   });
   const [dynamicStats, setDynamicStats] = useState(null);
+
+  // Live fetch: load scheduler assignments for this designer from the API
+  const erpId = designer.erpDesignerId || (UUID_RE.test(designer.id) ? designer.id : null);
+  useEffect(() => {
+    if (!erpId) return;
+    let cancelled = false;
+    const weekStartStr = fmtYmd(getWeekDays(currentDate)[0]);
+    Promise.all([
+      listSchedulerAssignmentsForWeek(weekStartStr, erpId),
+      apiClient.get(`/tasks?assigneeId=${erpId}&page=1&limit=200`),
+    ])
+      .then(([assignments, tasksRes]) => {
+        if (cancelled) return;
+        const rows = Array.isArray(assignments) ? assignments : [];
+        if (rows.length === 0) return; // keep static/sync data when no assignments yet
+        const snapshot = buildLiveScheduleData(rows, tasksRes?.data || []);
+        setScheduleData(snapshot.schedule);
+        setDynamicStats(snapshot.stats);
+      })
+      .catch(() => {});
+    return () => { cancelled = true; };
+  }, [erpId, currentDate]);
 
   useEffect(() => {
     const applySnapshot = (payload) => {
@@ -155,7 +230,7 @@ export default function DesignerDashboard({ designer }) {
         {/* Left Column: Scheduler + tables */}
         <div className="flex-1 flex flex-col gap-3 min-w-0">
           {/* Scheduler Grid */}
-          <SchedulerGrid schedule={scheduleData} weekDates={weekDates} />
+          <SchedulerGrid schedule={scheduleData} weekDates={weekDates} designerId={erpId || designer.id} isDesignerMode={isDesignerMode} />
 
           {/* Action Buttons */}
           <div className="mt-1 flex gap-3">

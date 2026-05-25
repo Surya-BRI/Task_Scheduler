@@ -1,4 +1,5 @@
 "use client";
+import { useRouter } from "next/navigation";
 
 const HOUR_COLS = [
   "0-1 HR", "1-2 HR", "2-3 HR", "3-4 HR",
@@ -19,19 +20,29 @@ const TASK_BG = {
   "#1e3a5f": "bg-slate-100 border border-slate-300 text-slate-800",
 };
 
-function TaskBlock({ task }) {
+function TaskBlock({ task, onOtClick }) {
   const bgClass = task.colorClass || TASK_BG[task.color] || "bg-slate-100 border border-slate-300 text-slate-800";
   return (
-    <div className="h-full flex items-center w-full relative z-10 px-0.5">
+    <div className="h-full flex items-center w-full relative z-10 px-0.5 group/task">
       <div className={`h-[24px] w-full min-w-0 rounded flex items-center justify-between px-1 shadow-sm transition-shadow truncate ${bgClass}`}>
         <div className="text-[9px] font-semibold truncate leading-none mr-1 select-none pointer-events-none">{task.label}</div>
-        <span className="text-[8px] font-bold opacity-70 shrink-0 pointer-events-none">{task.estimatedHours || (task.endHr - task.startHr)}h</span>
+        <div className="flex items-center gap-0.5 shrink-0">
+          <span className="text-[8px] font-bold opacity-70">{task.estimatedHours || (task.endHr - task.startHr)}h</span>
+          {onOtClick && (
+            <button
+              type="button"
+              onClick={(e) => { e.stopPropagation(); onOtClick(task); }}
+              className="hidden group-hover/task:flex items-center text-[7px] font-bold bg-orange-400 text-white rounded px-0.5 py-px leading-none ml-0.5"
+              title="Request Overtime"
+            >OT</button>
+          )}
+        </div>
       </div>
     </div>
   );
 }
 
-function SchedulerRow({ day, daySlot, dayDate }) {
+function SchedulerRow({ day, daySlot, dayDate, onOtClick }) {
   const isWeekend = day === "Saturday" || day === "Sunday";
   const dayLabel = dayDate
     ? `${dayDate.toLocaleDateString("en-US", { weekday: "short" })} ${dayDate.getDate()}`
@@ -98,7 +109,7 @@ function SchedulerRow({ day, daySlot, dayDate }) {
                     className="absolute top-1 bottom-1 pointer-events-auto"
                     style={{ left: `${leftPct}%`, width: `${widthPct}%` }}
                   >
-                    <TaskBlock task={task} />
+                    <TaskBlock task={task} onOtClick={onOtClick} />
                   </div>
                 );
               })}
@@ -110,7 +121,20 @@ function SchedulerRow({ day, daySlot, dayDate }) {
   );
 }
 
-export default function SchedulerGrid({ schedule, weekDates = [] }) {
+export default function SchedulerGrid({ schedule, weekDates = [], designerId, isDesignerMode }) {
+  const router = useRouter();
+
+  const handleOtClick = isDesignerMode && designerId
+    ? (task) => {
+        const today = new Date().toISOString().slice(0, 10);
+        const hrs = task.estimatedHours || (task.endHr - task.startHr) || "";
+        const taskId = task.parentId || task.id || "";
+        router.push(
+          `/designer/${designerId}/requests?tab=overtime&taskId=${taskId}&date=${today}&estimated=${hrs}#overtime`
+        );
+      }
+    : null;
+
   return (
     <div className="border border-slate-300 rounded-sm overflow-hidden text-xs">
       {/* Header row */}
@@ -145,6 +169,7 @@ export default function SchedulerGrid({ schedule, weekDates = [] }) {
           day={day}
           dayDate={weekDates[index]}
           daySlot={schedule[day] || { tasks: [], assignedStartHr: 0, assignedEndHr: 0 }}
+          onOtClick={handleOtClick}
         />
       ))}
     </div>
