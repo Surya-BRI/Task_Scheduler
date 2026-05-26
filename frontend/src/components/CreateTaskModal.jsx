@@ -50,7 +50,7 @@ function deriveFileNameFromUrl(value) {
   }
 }
 
-export function CreateTaskModal({ open, onClose, submissionDate, record }) {
+export function CreateTaskModal({ open, onClose, onCreated, submissionDate, record }) {
   const titleId = useId()
   const fileInputRef = useRef(null)
   const [selectedFiles, setSelectedFiles] = useState([])
@@ -220,8 +220,12 @@ export function CreateTaskModal({ open, onClose, submissionDate, record }) {
           },
         ],
       }
-      await apiClient.post('/tasks/extended', payload)
-      onClose()
+      const created = await apiClient.post('/tasks/extended', payload)
+      if (onCreated) {
+        onCreated(created)
+      } else {
+        onClose()
+      }
     } catch (err) {
       setError(err instanceof Error ? err.message : 'Failed to create retail task')
     } finally {

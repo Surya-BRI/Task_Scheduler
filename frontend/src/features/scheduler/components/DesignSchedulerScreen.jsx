@@ -235,6 +235,18 @@ function toInitials(fullName) {
     return `${parts[0][0] ?? ""}${parts[1][0] ?? ""}`.toUpperCase();
 }
 
+function getDesignTypeChipClass(designType) {
+    const t = String(designType ?? "").toLowerCase();
+    if (t.includes("retail"))   return "bg-amber-100 text-amber-700 border border-amber-200";
+    if (t.includes("project"))  return "bg-blue-100 text-blue-700 border border-blue-200";
+    if (t.includes("sign"))     return "bg-violet-100 text-violet-700 border border-violet-200";
+    if (t.includes("artwork") || t.includes("art")) return "bg-rose-100 text-rose-700 border border-rose-200";
+    if (t.includes("technical") || t.includes("tech")) return "bg-teal-100 text-teal-700 border border-teal-200";
+    if (t.includes("location")) return "bg-emerald-100 text-emerald-700 border border-emerald-200";
+    if (t.includes("plan"))     return "bg-sky-100 text-sky-700 border border-sky-200";
+    return "bg-slate-100 text-slate-600 border border-slate-200";
+}
+
 function formatHoldDuration(holdStartedAt) {
     if (!(holdStartedAt instanceof Date) || Number.isNaN(holdStartedAt.getTime())) {
         return "Today";
@@ -263,7 +275,9 @@ function buildMockSchedulerState(records, designers) {
             id: record.id,
             name: record.name,
             tag: record.projectName || "",
+            projectName: record.projectName || "",
             designType: record.designType || "",
+            opNo: record.opNo || "",
             estimatedHours: Number(record.estimatedHours) > 0 ? Number(record.estimatedHours) : (idx % 3) + 2,
             status,
             colorClass: status === "ON_HOLD" || status === "unassigned" && idx % 3 === 0
@@ -302,7 +316,9 @@ function buildSchedulerStateFromErpAssignments(records, rows, designers) {
             id: record.id,
             name: record.name,
             tag: record.projectName || "",
+            projectName: record.projectName || "",
             designType: record.designType || "",
+            opNo: record.opNo || "",
             estimatedHours: Number(record.estimatedHours) > 0 ? Number(record.estimatedHours) : (idx % 3) + 2,
             status: sourceStatus === "ON_HOLD" ? "ON_HOLD" : "unassigned",
             colorClass: TASK_COLORS[idx % TASK_COLORS.length],
@@ -439,15 +455,23 @@ export function DesignSchedulerScreen() {
                 const rows = Array.isArray(res?.data)
                     ? res.data.map((task) => {
                         const mapped = mapTaskToDesignRow(task);
+                        const retailHours = task?.retailDetails?.hoursRequired;
+                        const projectHours = task?.projectDetails
+                            ? (Number(task.projectDetails.artworkHours) || 0) +
+                              (Number(task.projectDetails.technicalHours) || 0) +
+                              (Number(task.projectDetails.locationHours) || 0) +
+                              (Number(task.projectDetails.asBuiltHours) || 0)
+                            : 0;
                         return {
                             id: mapped.id,
                             name: mapped.name,
-                            designType: mapped.designType,
-                            projectName: task?.project?.name || "",
+                            designType: task?.designType || mapped.designType || "",
+                            projectName: task?.project?.name || task?.project?.projectNo || "",
+                            opNo: task?.opNo || "",
                             status: task?.status,
                             updatedAt: task?.updatedAt,
                             holdStartedAt: task?.updatedAt,
-                            estimatedHours: Number(task?.hoursRequired ?? task?.estimatedHours ?? 0) || 0,
+                            estimatedHours: Number(retailHours ?? (projectHours || null) ?? task?.hoursRequired ?? task?.estimatedHours ?? 0) || 0,
                         };
                     })
                     : [];
@@ -951,9 +975,9 @@ export function DesignSchedulerScreen() {
              </div>
 
              <div className="flex-1 overflow-y-auto space-y-1.5 pr-1 pb-4 custom-scrollbar">
-                {onHoldTasks.map(task => (<div key={task.id} draggable onDragStart={(e) => handleDragStart(e, task.id, "ON_HOLD")} onDragEnd={() => setDropIndicator(null)} onClick={() => router.push(taskViewPathForRecord({ id: getDesignListRoutingTaskId(task), designType: task.designType }, { from: FROM_DESIGN_SCHEDULER }))} className={`p-2 rounded cursor-grab active:cursor-grabbing flex flex-col relative bg-white shadow-sm hover:shadow-md transition-shadow ${task.colorClass}`}>
+                {onHoldTasks.map(task => (<div key={task.id} draggable onDragStart={(e) => handleDragStart(e, task.id, "ON_HOLD")} onDragEnd={() => setDropIndicator(null)} onClick={() => router.push(taskViewPathForRecord({ id: getDesignListRoutingTaskId(task), designType: task.designType }, { from: FROM_DESIGN_SCHEDULER }))} className={`p-3.5 rounded-lg cursor-grab active:cursor-grabbing flex flex-col relative bg-white shadow-sm hover:shadow-md transition-shadow ${task.colorClass.replace(/bg-\S+/g, "")}`}>
                     <div className="flex justify-between items-start">
-                      <span className="font-semibold text-[11px] leading-tight pr-5">{getTaskLabel(task)}</span>
+                      <span className="font-semibold text-[12px] leading-tight pr-5">{getTaskLabel(task)}</span>
                       <button
                         type="button"
                         onClick={(event) => {
@@ -965,14 +989,23 @@ export function DesignSchedulerScreen() {
                         <PauseCircle size={10}/>
                       </button>
                     </div>
-                    <div className="text-[10px] opacity-70 mt-0.5">{task.tag || "—"}</div>
-                    <div className="text-[10px] opacity-60 mt-0.5">{task.designType || "—"}</div>
-                    <div className="text-[9px] font-bold mt-1.5 bg-slate-100 text-slate-600 inline-block px-1.5 py-0.5 rounded uppercase self-start">Hold: {formatHoldDuration(task.holdStartedAt)}</div>
+                    {task.projectName && <div className="text-[11px] font-semibold leading-snug mt-1">{task.projectName}</div>}
+                    <div className="flex items-center justify-between mt-1.5 gap-1">
+                      {(task.designType || task.opNo) && (
+                        <span className={`text-[9px] font-semibold px-1.5 py-0.5 rounded truncate max-w-[70%] ${getDesignTypeChipClass(task.designType || task.opNo)}`}>
+                          {task.designType || task.opNo}
+                        </span>
+                      )}
+                      <div className="flex items-center gap-1 ml-auto shrink-0">
+                        {task.estimatedHours > 0 && <span className="text-[9px] font-bold bg-slate-200 text-slate-700 px-1.5 py-0.5 rounded">{task.estimatedHours}h</span>}
+                      </div>
+                    </div>
+                    <div className="text-[9px] font-bold mt-1.5 bg-red-100 text-red-600 inline-block px-1.5 py-0.5 rounded uppercase self-start">Hold: {formatHoldDuration(task.holdStartedAt)}</div>
                   </div>))}
 
-                {unassignedTasks.map(task => (<div key={task.id} draggable onDragStart={(e) => handleDragStart(e, task.id, "unassigned")} onDragEnd={() => setDropIndicator(null)} onClick={() => router.push(taskViewPathForRecord({ id: getDesignListRoutingTaskId(task), designType: task.designType }, { from: FROM_DESIGN_SCHEDULER }))} className={`p-2 rounded cursor-grab active:cursor-grabbing flex flex-col relative group bg-white shadow-sm hover:shadow-md transition-shadow ${task.colorClass}`}>
+                {unassignedTasks.map(task => (<div key={task.id} draggable onDragStart={(e) => handleDragStart(e, task.id, "unassigned")} onDragEnd={() => setDropIndicator(null)} onClick={() => router.push(taskViewPathForRecord({ id: getDesignListRoutingTaskId(task), designType: task.designType }, { from: FROM_DESIGN_SCHEDULER }))} className={`p-3 rounded cursor-grab active:cursor-grabbing flex flex-col relative group bg-white shadow-sm hover:shadow-md transition-shadow ${task.colorClass.replace(/bg-\S+/g, "")}`}>
                     <div className="flex justify-between items-start">
-                      <span className="font-semibold text-[11px] leading-tight pr-5">{getTaskLabel(task)}</span>
+                      <span className="font-semibold text-[12px] leading-tight pr-5">{getTaskLabel(task)}</span>
                       <button
                         type="button"
                         onClick={(event) => {
@@ -984,8 +1017,17 @@ export function DesignSchedulerScreen() {
                         <Plus size={10}/>
                       </button>
                     </div>
-                    <div className="text-[10px] opacity-80 mt-0.5">{task.tag || "—"}</div>
-                    <div className="text-[10px] opacity-70 mt-0.5">{task.designType || "—"}</div>
+                    {task.projectName && <div className="text-[11px] font-semibold leading-snug mt-1">{task.projectName}</div>}
+                    <div className="flex items-center justify-between mt-1.5 gap-1">
+                      {(task.designType || task.opNo) && (
+                        <span className={`text-[9px] font-semibold px-1.5 py-0.5 rounded truncate max-w-[70%] ${getDesignTypeChipClass(task.designType || task.opNo)}`}>
+                          {task.designType || task.opNo}
+                        </span>
+                      )}
+                      <div className="flex items-center gap-1 ml-auto shrink-0">
+                        {task.estimatedHours > 0 && <span className="text-[9px] font-bold bg-slate-200 text-slate-700 px-1.5 py-0.5 rounded">{task.estimatedHours}h</span>}
+                      </div>
+                    </div>
                   </div>))}
              </div>
           </div>

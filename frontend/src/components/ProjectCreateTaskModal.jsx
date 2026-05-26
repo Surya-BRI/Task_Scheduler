@@ -204,7 +204,7 @@ function TickBox({ checked, onChange }) {
   )
 }
 
-export function ProjectCreateTaskModal({ open, onClose, submissionDate, record }) {
+export function ProjectCreateTaskModal({ open, onClose, onCreated, submissionDate, record }) {
   const titleId = useId()
   const [rows, setRows] = useState(() => structuredClone(SIGN_TYPE_ROWS))
   const [expanded, setExpanded] = useState(() => new Set())
@@ -453,8 +453,12 @@ export function ProjectCreateTaskModal({ open, onClose, submissionDate, record }
         projectDetails: details,
       }
 
-      await apiClient.post('/tasks/extended', payload)
-      onClose()
+      const created = await apiClient.post('/tasks/extended', payload)
+      if (onCreated) {
+        onCreated(created)
+      } else {
+        onClose()
+      }
     } catch (err) {
       setError(err instanceof Error ? err.message : 'Failed to create project task')
     } finally {

@@ -38,7 +38,11 @@ export class PrismaService extends PrismaClient implements OnModuleInit, OnModul
 
   async onModuleInit(): Promise<void> {
     await this.$connect();
-    await this.live.$connect();
+    try {
+      await this.live.$connect();
+    } catch (err) {
+      console.warn('[PrismaService] Live DB unavailable — live queries will fail until it recovers:', (err as Error).message);
+    }
   }
 
   async onModuleDestroy(): Promise<void> {
