@@ -267,15 +267,27 @@ export class SchedulerAssignmentsService {
       const designerIds = Array.from(new Set(dto.assignments.map((a) => a.designerId)));
       const taskIds = Array.from(new Set(dto.assignments.map((a) => a.taskId)));
 
-      const [designers, tasks, previousRows, week] = await Promise.all([
+      const [designers, tasks, previousRows, weekRows] = await Promise.all([
         tx.user.findMany({
           where: { id: { in: designerIds }, role: { name: UserRole.DESIGNER } },
           select: { id: true },
         }),
         tx.task.findMany({ where: { id: { in: taskIds } }, select: { id: true, status: true, assigneeId: true } }),
         tx.schedulerAssignment.findMany({ where: { weekStartDate } }),
-        tx.schedulerWeek.findUnique({ where: { weekStartDate } }),
+        // UPDLOCK + ROWLOCK: prevents two concurrent transactions from both passing the
+        // version check before either commits, which would cause a silent lost update.
+        tx.$queryRaw<Array<{
+          id: string;
+          version: number;
+          isLocked: boolean;
+          lastPayloadHash: string | null;
+          updatedAt: Date;
+          updatedBy: string | null;
+        }>>`SELECT id, version, isLocked, lastPayloadHash, updatedAt, updatedBy
+            FROM ErpTSSchedulerWeek WITH (UPDLOCK, ROWLOCK)
+            WHERE weekStartDate = ${weekStartDate}`,
       ]);
+      const week = weekRows[0] ?? null;
 
       if (designers.length !== designerIds.length) {
         throw new BadRequestException('One or more designerId values are invalid or not DESIGNER role.');

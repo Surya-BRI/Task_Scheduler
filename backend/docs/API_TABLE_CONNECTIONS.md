@@ -16,7 +16,7 @@ This document explains:
 
 ## Total Connected Tables
 
-Prisma schema models (and mapped SQL tables) in `backend/prisma/schema.prisma`: **19**
+Prisma schema models (and mapped SQL tables) in `backend/prisma/schema.prisma`: **21**
 
 1. `Role` -> `ErpTSRole`
 2. `Department` -> `Department`
@@ -37,6 +37,8 @@ Prisma schema models (and mapped SQL tables) in `backend/prisma/schema.prisma`: 
 17. `Notification` -> `ErpTSNotification`
 18. `RetailTaskDetail` -> `ErpTSRetailTaskDetail`
 19. `ProjectTaskDetail` -> `ErpTSProjectTaskDetail`
+20. `TaskWorkSession` -> `ErpTSTaskWorkSession`
+21. `TaskWorkSessionFile` -> `ErpTSTaskWorkSessionFile`
 
 ## Module to Table Mapping
 
@@ -70,10 +72,12 @@ Prisma schema models (and mapped SQL tables) in `backend/prisma/schema.prisma`: 
 ### `tasks`
 - Controller: `backend/src/tasks/tasks.controller.ts`
 - Service: `backend/src/tasks/tasks.service.ts`
-- Connected tables: `ErpTSTask`, `ErpTSUser`, `ErpTSProject`, `ErpTSActivityLog`, `ErpTSRetailTaskDetail`, `ErpTSProjectTaskDetail`, `ErpTSRetailTaskDetailAttachment`, `ErpTSProjectTaskDetailAttachment`
+- Connected tables: `ErpTSTask`, `ErpTSUser`, `ErpTSProject`, `ErpTSActivityLog`, `ErpTSRetailTaskDetail`, `ErpTSProjectTaskDetail`, `ErpTSRetailTaskDetailAttachment`, `ErpTSProjectTaskDetailAttachment`, `ErpTSTaskWorkSession`, `ErpTSTaskWorkSessionFile`
 - Extended create endpoint: `POST /tasks/extended` creates parent `ErpTSTask` and type-specific details in a single transaction.
 - Extended create contract now requires `task.projectName` (no fallback naming); missing value returns `400`.
 - File endpoint: `POST /tasks/upload-file` uploads to S3 and logs activity.
+- Timer state endpoints: `GET /tasks/:id/timer-state` and `POST /tasks/:id/save-timer` upsert a Draft `ErpTSTaskWorkSession` for cold-start restore.
+- Work submission endpoint: `POST /tasks/:id/submit-work` promotes session to Submitted status, uploads files to S3 into `ErpTSTaskWorkSessionFile`, and logs `TASK_WORK_SUBMITTED` activity.
 
 ### `activities`
 - Controller: `backend/src/activities/activities.controller.ts`

@@ -39,6 +39,10 @@ These events are recorded by the current backend implementation:
   - Triggered by:
   - `POST /chatter-posts/:postId/comments`
 
+- `TASK_WORK_SUBMITTED`
+  - Triggered by:
+  - `POST /tasks/:id/submit-work`
+
 ## Not Included Yet
 
 The following are not covered by this rollout (unless already logged by older custom logic):
