@@ -1,4 +1,4 @@
-export const DEFAULT_SCHEDULER_REFERENCE_DATE = new Date(2026, 2, 3);
+export const DEFAULT_SCHEDULER_REFERENCE_DATE = new Date();
 
 export const getCurrentDayIndex = (date) => (date.getDay() + 6) % 7;
 

@@ -121,8 +121,9 @@ function SchedulerRow({ day, daySlot, dayDate, onOtClick }) {
   );
 }
 
-export default function SchedulerGrid({ schedule, weekDates = [], designerId, isDesignerMode }) {
+export default function SchedulerGrid({ schedule, weekDates = [], designerId, isDesignerMode, visibleDays }) {
   const router = useRouter();
+  const effectiveVisibleDays = visibleDays ?? [0, 1, 2, 3, 4, 5, 6];
 
   const handleOtClick = isDesignerMode && designerId
     ? (task) => {
@@ -130,7 +131,7 @@ export default function SchedulerGrid({ schedule, weekDates = [], designerId, is
         const hrs = task.estimatedHours || (task.endHr - task.startHr) || "";
         const taskId = task.parentId || task.id || "";
         router.push(
-          `/designer/${designerId}/requests?tab=overtime&taskId=${taskId}&date=${today}&estimated=${hrs}#overtime`
+          `/designer/requests?tab=overtime&taskId=${taskId}&date=${today}&estimated=${hrs}#overtime`
         );
       }
     : null;
@@ -162,16 +163,20 @@ export default function SchedulerGrid({ schedule, weekDates = [], designerId, is
         ))}
       </div>
 
-      {/* Day rows */}
-      {DAYS.map((day, index) => (
-        <SchedulerRow
-          key={day}
-          day={day}
-          dayDate={weekDates[index]}
-          daySlot={schedule[day] || { tasks: [], assignedStartHr: 0, assignedEndHr: 0 }}
-          onOtClick={handleOtClick}
-        />
-      ))}
+      {/* Day rows — filtered by visibleDays */}
+      {effectiveVisibleDays.map((dayIndex) => {
+        const day = DAYS[dayIndex];
+        if (!day) return null;
+        return (
+          <SchedulerRow
+            key={day}
+            day={day}
+            dayDate={weekDates[dayIndex]}
+            daySlot={schedule[day] || { tasks: [], assignedStartHr: 0, assignedEndHr: 0 }}
+            onOtClick={handleOtClick}
+          />
+        );
+      })}
     </div>
   );
 }

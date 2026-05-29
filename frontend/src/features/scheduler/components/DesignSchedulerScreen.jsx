@@ -1,6 +1,7 @@
 "use client";
 
-import { useState, useEffect, useRef, useMemo } from "react";
+import { useState, useEffect, useRef, useMemo, useCallback } from "react";
+import { toast } from "sonner";
 import { Search, Plus, PauseCircle, AlertTriangle } from "lucide-react";
 import { useRouter } from "next/navigation";
 import { Navbar } from "@/components/Navbar";
@@ -409,7 +410,6 @@ export function DesignSchedulerScreen() {
     const [schedules, setSchedules] = useState({});
     const [loadedFromErp, setLoadedFromErp] = useState(false);
     const [weekVersion, setWeekVersion] = useState(0);
-    const [saveError, setSaveError] = useState("");
     const weekVersionRef = useRef(0);
 
     const [searchQuery, setSearchQuery] = useState("");
@@ -513,6 +513,38 @@ export function DesignSchedulerScreen() {
         return assignments.filter((a) => a.assignedHours > 0);
     };
 
+    const reloadWeek = useCallback(async () => {
+        const weekStartStr = formatLocalYyyyMmDd(getWeekDays(currentDate)[0]);
+        try {
+            const [rows, meta] = await Promise.all([
+                listSchedulerAssignmentsForWeek(weekStartStr),
+                getSchedulerWeekMeta(weekStartStr),
+            ]);
+            setWeekVersion(Number(meta?.version ?? 0));
+            if (Array.isArray(rows) && rows.length > 0) {
+                const next = buildSchedulerStateFromErpAssignments(queueRecords, rows, designers);
+                setTasks(next.tasksObj);
+                setSchedules(next.schedulesObj);
+                setLoadedFromErp(true);
+            } else {
+                const mock = buildMockSchedulerState(queueRecords, designers);
+                setTasks(mock.tasksObj);
+                setSchedules(mock.schedulesObj);
+                setLoadedFromErp(false);
+            }
+        } catch {
+            const mock = buildMockSchedulerState(queueRecords, designers);
+            setTasks(mock.tasksObj);
+            setSchedules(mock.schedulesObj);
+            setLoadedFromErp(false);
+            setWeekVersion(0);
+        }
+    }, [currentDate, queueRecords, designers]);
+
+    useEffect(() => {
+        reloadWeek();
+    }, [reloadWeek]);
+
     const persistWeekSnapshot = async (nextSchedules, nextTasks) => {
         const weekStartStr = formatLocalYyyyMmDd(getWeekDays(currentDate)[0]);
         const payload = {
@@ -521,47 +553,7 @@ export function DesignSchedulerScreen() {
         };
         const saved = await saveSchedulerWeekSnapshot(weekStartStr, payload);
         setWeekVersion(saved.version);
-        setSaveError("");
     };
-
-    useEffect(() => {
-        let cancelled = false;
-        const weekDatesLocal = getWeekDays(currentDate);
-        const weekStartStr = formatLocalYyyyMmDd(weekDatesLocal[0]);
-        Promise.all([
-            listSchedulerAssignmentsForWeek(weekStartStr),
-            getSchedulerWeekMeta(weekStartStr),
-        ])
-            .then(([rows, meta]) => {
-                if (cancelled)
-                    return;
-                setWeekVersion(Number(meta?.version ?? 0));
-                if (Array.isArray(rows) && rows.length > 0) {
-                    const next = buildSchedulerStateFromErpAssignments(queueRecords, rows, designers);
-                    setTasks(next.tasksObj);
-                    setSchedules(next.schedulesObj);
-                    setLoadedFromErp(true);
-                }
-                else {
-                    const mock = buildMockSchedulerState(queueRecords, designers);
-                    setTasks(mock.tasksObj);
-                    setSchedules(mock.schedulesObj);
-                    setLoadedFromErp(false);
-                }
-            })
-            .catch(() => {
-                if (cancelled)
-                    return;
-                const mock = buildMockSchedulerState(queueRecords, designers);
-                setTasks(mock.tasksObj);
-                setSchedules(mock.schedulesObj);
-                setLoadedFromErp(false);
-                setWeekVersion(0);
-            });
-        return () => {
-            cancelled = true;
-        };
-    }, [currentDate, queueRecords, designers]);
 
     const [overtimePrompt, setOvertimePrompt] = useState({
         open: false,
@@ -573,6 +565,28 @@ export function DesignSchedulerScreen() {
         splitIdCounterAfterFull: 0,
         splitIdCounterAfterSplit: 0,
     });
+    // Poll every 30s — version check only, full reload only when something changed
+    useEffect(() => {
+        const poll = async () => {
+            if (document.hidden) return;
+            const weekStartStr = formatLocalYyyyMmDd(getWeekDays(currentDate)[0]);
+            try {
+                const meta = await getSchedulerWeekMeta(weekStartStr);
+                const serverVersion = Number(meta?.version ?? 0);
+                if (serverVersion !== weekVersionRef.current) {
+                    reloadWeek();
+                }
+            } catch {}
+        };
+        const id = setInterval(poll, 30_000);
+        const onVisible = () => { if (document.visibilityState === 'visible') poll(); };
+        document.addEventListener('visibilitychange', onVisible);
+        return () => {
+            clearInterval(id);
+            document.removeEventListener('visibilitychange', onVisible);
+        };
+    }, [currentDate, reloadWeek]);
+
     const weekDates = useMemo(() => getWeekDays(currentDate), [currentDate]);
     const dateRangeText = useMemo(() => formatSchedulerDateRangeText(weekDates), [weekDates]);
     const customVisibleDays = useMemo(() => {
@@ -647,9 +661,10 @@ export function DesignSchedulerScreen() {
         persistWeekSnapshot(preparedAssignment.updatedSchedules, preparedAssignment.updatedTasks).catch((error) => {
             const msg = String(error?.message ?? "");
             if (msg.includes("409")) {
-                setSaveError("Scheduler week changed on server. Please reload this week.");
+                toast.warning("Week was updated by someone else — reloading. Please redo your last change.");
+                reloadWeek();
             } else {
-                setSaveError("Unable to save scheduler changes.");
+                toast.error("Unable to save scheduler changes. Please try again.");
             }
             console.warn("Unable to persist scheduler snapshot", error);
         });
@@ -766,13 +781,15 @@ export function DesignSchedulerScreen() {
         if (!isUuid(taskId)) return;
         apiClient.patch(`/tasks/${taskId}/status`, { status: backendStatus }).catch((error) => {
             console.warn("Unable to persist task status change", { taskId, backendStatus, error });
+            toast.error("Failed to update task status. Please try again.");
         });
         persistWeekSnapshot(updatedSchedules, tasks).catch((error) => {
             const msg = String(error?.message ?? "");
             if (msg.includes("409")) {
-                setSaveError("Scheduler week changed on server. Please reload this week.");
+                toast.warning("Week was updated by someone else — reloading. Please redo your last change.");
+                reloadWeek();
             } else {
-                setSaveError("Unable to save scheduler changes.");
+                toast.error("Unable to save scheduler changes. Please try again.");
             }
         });
     };
@@ -920,25 +937,20 @@ export function DesignSchedulerScreen() {
           <div className="flex items-center gap-2"><div className="w-2.5 h-2.5 bg-orange-400 rounded-sm"></div> Total Hours: {totalScheduledHours}h</div>
           <div className="flex items-center gap-2 text-red-500"><AlertTriangle size={14}/> Overloaded: {overloadedCount}</div>
           <div className="flex items-center gap-2 ml-2">
-            <button type="button" onClick={() => setViewMode("week")} className={`ui-chip-button ${viewMode === "week" ? "ui-chip-button-active" : ""}`}>
-              Week
-            </button>
+            <button type="button" onClick={() => setCurrentDate((d) => { const p = new Date(d); p.setDate(p.getDate() - 7); return p; })} className="ui-chip-button px-2" title="Previous week">‹</button>
+            <span className="text-xs font-medium text-slate-600 bg-slate-100 border border-slate-200 rounded-md px-2.5 py-1 whitespace-nowrap">{dateRangeText}</span>
+            <button type="button" onClick={() => setCurrentDate((d) => { const n = new Date(d); n.setDate(n.getDate() + 7); return n; })} className="ui-chip-button px-2" title="Next week">›</button>
+            <div className="w-px h-4 bg-slate-200 mx-1" />
+            <button type="button" onClick={() => setViewMode("week")} className={`ui-chip-button ${viewMode === "week" ? "ui-chip-button-active" : ""}`}>Week</button>
             <button type="button" onClick={() => {
             const weekdayCurrentDay = isWeekdayIndex(currentDay) ? currentDay : WEEKDAY_INDICES[0];
             setViewMode("custom");
             setCurrentDay(weekdayCurrentDay);
             setSelectedDays([weekdayCurrentDay]);
-        }} className={`ui-chip-button ${viewMode === "custom" ? "ui-chip-button-active" : ""}`}>
-              Custom
-            </button>
+        }} className={`ui-chip-button ${viewMode === "custom" ? "ui-chip-button-active" : ""}`}>Custom</button>
           </div>
         </div>
       </div>
-      {saveError ? (
-        <div className="shrink-0 border-b border-amber-200 bg-amber-50 px-6 py-2 text-xs text-amber-800">
-          {saveError}
-        </div>
-      ) : null}
       {viewMode === "custom" && (<div className="flex shrink-0 items-center gap-2 border-b border-slate-200 bg-white px-6 py-2 text-xs">
           <div className="w-64 border-r border-slate-200 pr-4 font-medium text-slate-500">Visible Days</div>
           <div className="flex-1 flex items-center gap-1 px-6">
@@ -1067,7 +1079,7 @@ export function DesignSchedulerScreen() {
                       <div className="w-[180px] shrink-0 py-1.5 px-3 flex items-center gap-2 border-r border-slate-200 bg-white z-10 transition-colors group-hover:bg-blue-50 cursor-pointer" onClick={() => {
                           const routeData = buildDesignerSnapshot(tasks, designerDays);
                           sessionStorage.setItem(`designer_data_${designer.id}`, JSON.stringify(routeData));
-                          router.push(`/designer/${designer.id}?from=home`);
+                          router.push(`/designer/dashboard`);
                       }} title={`Open ${designer.name}'s dashboard`}>
                         <div className="w-6 h-6 rounded-full bg-slate-800 text-white flex items-center justify-center text-[10px] font-bold leading-none shrink-0 shadow-sm">
                           {designer.initials}

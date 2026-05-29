@@ -6,8 +6,8 @@ const SESSION_KEY = 'br_session';
 function hydrateSession(session) {
   if (!session || typeof session !== 'object') return session;
   if (session.role === 'DESIGNER') {
-    if (!session.designerId && session.email) {
-      session.designerId = slugForDesignerEmail(session.email) ?? session.id ?? null;
+    if (!session.designerId && session.id) {
+      session.designerId = session.id;
     }
     if (!session.erpDesignerId && session.id) {
       session.erpDesignerId = session.id;
@@ -36,6 +36,6 @@ export function getSession() {
 export function getHomeRoute(session) {
   if (!session) return '/login';
   if (session.role === 'HOD') return '/design-list';
-  if (session.role === 'DESIGNER') return '/design-list/my-work';
+  if (session.role === 'DESIGNER') return '/designer/dashboard';
   return '/design-list';
 }

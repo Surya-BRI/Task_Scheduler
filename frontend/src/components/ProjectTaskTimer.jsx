@@ -2,11 +2,25 @@
 
 import { useCallback, useEffect, useReducer, useRef, useState } from 'react'
 import { Pause, Play, Square, X } from 'lucide-react'
+import { apiClient } from '@/lib/api-client'
+
+function saveTimerStateToDb(taskId, accumulatedSeconds, pauseLog) {
+  apiClient
+    .post(`/tasks/${taskId}/save-timer`, {
+      accumulatedSeconds,
+      ...(pauseLog !== undefined ? { pauseLog: JSON.stringify(pauseLog) } : {}),
+    })
+    .catch(() => {})
+}
 
 const TIMER_SYNC_EVENT = 'design-list-task-timer-sync'
 
 function storageKey(taskId) {
   return `design_list_task_timer_${taskId}`
+}
+
+function pauseStorageKey(taskId) {
+  return `design_list_task_pauses_${taskId}`
 }
 
 function readPersisted(taskId) {
@@ -32,6 +46,28 @@ function writePersisted(taskId, accumulatedSeconds, runStartAt) {
       detail: { taskId, accumulatedSeconds, runStartAt },
     }),
   )
+}
+
+function readPersistedPauses(taskId) {
+  if (typeof window === 'undefined') return []
+  try {
+    const raw = sessionStorage.getItem(pauseStorageKey(taskId))
+    return raw ? JSON.parse(raw) : []
+  } catch {
+    return []
+  }
+}
+
+function appendPause(taskId, reason, durationSeconds) {
+  if (typeof window === 'undefined') return
+  const existing = readPersistedPauses(taskId)
+  existing.push({ reason, durationSeconds })
+  sessionStorage.setItem(pauseStorageKey(taskId), JSON.stringify(existing))
+}
+
+function clearPersistedPauses(taskId) {
+  if (typeof window === 'undefined') return
+  sessionStorage.removeItem(pauseStorageKey(taskId))
 }
 
 function formatHms(totalSeconds) {
@@ -61,6 +97,7 @@ export function ProjectTaskTimer({
   const [, tick] = useReducer((n) => n + 1, 0)
   const [pauseReason, setPauseReason] = useState('')
   const [showPauseDropdown, setShowPauseDropdown] = useState(false)
+  const pauseStartedAt = useRef(null)
   const [showCompleteModal, setShowCompleteModal] = useState(false)
   const [showSubmitConfirm, setShowSubmitConfirm] = useState(false)
   const [selectedFiles, setSelectedFiles] = useState([])
@@ -83,6 +120,27 @@ export function ProjectTaskTimer({
     const { accumulatedSeconds: acc, runStartAt: start } = readPersisted(taskId)
     setAccumulatedSeconds(acc)
     setRunStartAt(start)
+
+    if (acc === 0 && start === null) {
+      apiClient
+        .get(`/tasks/${taskId}/timer-state`)
+        .then((data) => {
+          if (!data) return
+          const restored = data.accumulatedSeconds ?? 0
+          const restoredPauses = data.pauseLog ? JSON.parse(data.pauseLog) : []
+          if (restored > 0 || restoredPauses.length > 0) {
+            setAccumulatedSeconds(restored)
+            writePersisted(taskId, restored, null)
+            if (restoredPauses.length > 0) {
+              sessionStorage.setItem(pauseStorageKey(taskId), JSON.stringify(restoredPauses))
+            }
+          }
+        })
+        .catch(() => {})
+        .finally(() => setIsHydrated(true))
+      return
+    }
+
     setIsHydrated(true)
   }, [taskId])
 
@@ -203,21 +261,33 @@ export function ProjectTaskTimer({
     const startedAt = Date.now()
     setRunStartAt(startedAt)
     writePersisted(taskId, accumulatedSeconds, startedAt)
+    saveTimerStateToDb(taskId, accumulatedSeconds)
   }
 
   const handlePauseClick = () => {
     if (!isRunning) return
-    freezeRunningClock()
+    const frozen = freezeRunningClock()
+    pauseStartedAt.current = Date.now()
     setShowPauseDropdown(true)
+    saveTimerStateToDb(taskId, frozen)
   }
 
   const applyPauseReason = () => {
     const reason = pauseReason.trim()
     if (!reason) return
+    const durationSeconds = pauseStartedAt.current
+      ? Math.floor((Date.now() - pauseStartedAt.current) / 1000)
+      : 0
+    appendPause(taskId, reason, durationSeconds)
+    pauseStartedAt.current = null
+    setPauseReason('')
     setShowPauseDropdown(false)
+    const updatedPauses = readPersistedPauses(taskId)
+    saveTimerStateToDb(taskId, accumulatedSeconds, updatedPauses)
   }
 
   const cancelPauseReason = () => {
+    pauseStartedAt.current = null
     setPauseReason('')
     setShowPauseDropdown(false)
     const resumedAt = Date.now()
@@ -232,18 +302,40 @@ export function ProjectTaskTimer({
     setShowCompleteModal(true)
   }
 
-  const submitComplete = () => {
+  const [submitting, setSubmitting] = useState(false)
+
+  const submitComplete = async () => {
     const hasFiles = selectedFiles.length > 0
     const hasLink = submissionLink.trim().length > 0
     if (!hasFiles && !hasLink) return
-    setRunStartAt(null)
-    setShowPauseDropdown(false)
-    setPauseReason('')
-    setSelectedFiles([])
-    setSubmissionMode('file')
-    setSubmissionLink('')
-    setShowSubmitConfirm(false)
-    setShowCompleteModal(false)
+
+    const pauseLog = readPersistedPauses(taskId)
+    const formData = new FormData()
+    formData.append('durationSeconds', String(Math.floor(displaySeconds)))
+    if (hasLink) formData.append('submissionLink', submissionLink.trim())
+    if (pauseLog.length) formData.append('pauseLog', JSON.stringify(pauseLog))
+    selectedFiles.forEach((f) => formData.append('files', f))
+
+    setSubmitting(true)
+    try {
+      await apiClient.post(`/tasks/${taskId}/submit-work`, formData)
+      // Reset timer + clear pause log
+      writePersisted(taskId, 0, null)
+      clearPersistedPauses(taskId)
+      setAccumulatedSeconds(0)
+      setRunStartAt(null)
+      setShowPauseDropdown(false)
+      setPauseReason('')
+      setSelectedFiles([])
+      setSubmissionMode('file')
+      setSubmissionLink('')
+      setShowSubmitConfirm(false)
+      setShowCompleteModal(false)
+    } catch (err) {
+      alert(err?.message || 'Submission failed. Please try again.')
+    } finally {
+      setSubmitting(false)
+    }
   }
 
   const closeCompleteModal = () => {
@@ -554,16 +646,18 @@ export function ProjectTaskTimer({
               <button
                 type="button"
                 onClick={() => setShowSubmitConfirm(false)}
-                className="rounded-lg border border-slate-200 bg-white px-4 py-2 text-sm font-semibold text-slate-700 shadow-sm transition hover:bg-slate-50"
+                disabled={submitting}
+                className="rounded-lg border border-slate-200 bg-white px-4 py-2 text-sm font-semibold text-slate-700 shadow-sm transition hover:bg-slate-50 disabled:opacity-60"
               >
                 Go back
               </button>
               <button
                 type="button"
-                onClick={submitComplete}
-                className="rounded-lg bg-blue-600 px-5 py-2 text-sm font-semibold text-white shadow-sm transition hover:bg-blue-700 focus:outline-none focus-visible:ring-2 focus-visible:ring-blue-400 focus-visible:ring-offset-2"
+                onClick={() => void submitComplete()}
+                disabled={submitting}
+                className="rounded-lg bg-blue-600 px-5 py-2 text-sm font-semibold text-white shadow-sm transition hover:bg-blue-700 focus:outline-none focus-visible:ring-2 focus-visible:ring-blue-400 focus-visible:ring-offset-2 disabled:opacity-60 disabled:cursor-not-allowed"
               >
-                Yes, submit
+                {submitting ? 'Submitting…' : 'Yes, submit'}
               </button>
             </div>
           </div>
