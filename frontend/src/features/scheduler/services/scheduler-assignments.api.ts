@@ -37,9 +37,10 @@ export type SaveSchedulerAssignmentInput = {
   notes?: string | null;
 };
 
-export function listSchedulerAssignmentsForWeek(weekStart: string) {
+export function listSchedulerAssignmentsForWeek(weekStart: string, designerId?: string) {
   const q = encodeURIComponent(weekStart);
-  return apiClient.get<SchedulerAssignmentRow[]>(`/scheduler-assignments?weekStart=${q}`);
+  const dq = designerId ? `&designerId=${encodeURIComponent(designerId)}` : '';
+  return apiClient.get<SchedulerAssignmentRow[]>(`/scheduler-assignments?weekStart=${q}${dq}`);
 }
 
 export function getSchedulerWeekMeta(weekStart: string) {

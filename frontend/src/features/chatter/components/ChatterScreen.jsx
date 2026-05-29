@@ -1,6 +1,7 @@
 "use client";
 
 import { useMemo, useState, useEffect } from "react";
+import { toast } from "sonner";
 import { CalendarDays, Link2, MessageCircle, PlusSquare, Search, ThumbsUp, X } from "lucide-react";
 import { Navbar } from "@/components/Navbar";
 import {
@@ -698,7 +699,6 @@ export function ChatterScreen() {
   
   const [isCreatePostOpen, setIsCreatePostOpen] = useState(false);
   const [isSubmitting, setIsSubmitting] = useState(false);
-  const [toastMessage, setToastMessage] = useState(null);
   const [postsLoadError, setPostsLoadError] = useState(null);
   const [submittingCommentPostId, setSubmittingCommentPostId] = useState(null);
 
@@ -846,8 +846,7 @@ export function ChatterScreen() {
       setOpenComposerPostId(null);
     } catch (err) {
       console.error("Failed to save comment:", err);
-      setToastMessage("Error: Could not save comment to database.");
-      setTimeout(() => setToastMessage(null), 3000);
+      toast.error("Could not save comment. Please try again.");
     } finally {
       setSubmittingCommentPostId(null);
     }
@@ -874,13 +873,12 @@ export function ChatterScreen() {
       setPosts((prev) => [newFeedPost, ...prev]);
       setIsCreatePostOpen(false);
       setActiveTab("posts");
-      setToastMessage("Post created successfully!");
+      toast.success("Post created successfully");
     } catch (err) {
       console.error("Failed to create post:", err);
-      setToastMessage("Error: Could not save post to database.");
+      toast.error("Could not save post. Please try again.");
     } finally {
       setIsSubmitting(false);
-      setTimeout(() => setToastMessage(null), 3000);
     }
   };
 
@@ -1060,7 +1058,6 @@ export function ChatterScreen() {
           isSubmitting={isSubmitting}
         />
 
-        <Toast message={toastMessage} onClose={() => setToastMessage(null)} />
       </main>
     </div>
   );

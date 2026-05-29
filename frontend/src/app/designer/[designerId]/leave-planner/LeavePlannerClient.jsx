@@ -1,6 +1,7 @@
 "use client";
 
 import { useState, useEffect } from "react";
+import { toast } from "sonner";
 import { useRouter } from "next/navigation";
 import { Navbar } from "@/components/Navbar";
 import { X, Calendar as CalendarIcon } from "lucide-react";
@@ -11,25 +12,49 @@ const MONTHS = [
   "January", "February", "March", "April", "May", "June",
   "July", "August", "September", "October", "November", "December"
 ];
-const DAYS_IN_MONTH = [31, 28, 31, 30, 31, 30, 31, 31, 30, 31, 30, 31]; // 2026 is not a leap year
 
-export default function LeavePlannerClient({ designer }) {
+function isLeapYear(y) {
+  return (y % 4 === 0 && y % 100 !== 0) || y % 400 === 0;
+}
+
+export default function LeavePlannerClient() {
   const router = useRouter();
-  const YEAR = 2026; // Based on the UI mock
-  
-  // Local state for leaves
+  const YEAR = new Date().getFullYear();
+  const DAYS_IN_MONTH = [31, isLeapYear(YEAR) ? 29 : 28, 31, 30, 31, 30, 31, 31, 30, 31, 30, 31];
+
   const [leaves, setLeaves] = useState([]);
-  
-  // Modal state
+  const [designerList, setDesignerList] = useState([]);
   const [isModalOpen, setIsModalOpen] = useState(false);
   const [isHODModalOpen, setIsHODModalOpen] = useState(false);
   const [selectedLeave, setSelectedLeave] = useState(null);
   const [isHOD, setIsHOD] = useState(false);
+  const [sessionName, setSessionName] = useState(null);
+  const [sessionUser, setSessionUser] = useState(null);
 
   useEffect(() => {
     import("@/lib/mock-auth").then(({ getSession }) => {
       const session = getSession();
       if (session?.role === "HOD") setIsHOD(true);
+      if (session?.name) setSessionName(session.name);
+      if (session) setSessionUser(session);
+    });
+  }, []);
+
+  const designer = {
+    id: sessionUser?.id ?? '',
+    erpDesignerId: sessionUser?.erpDesignerId ?? sessionUser?.id ?? null,
+    name: sessionUser?.name ?? 'Designer',
+    designation: 'Designer',
+    avatar: null,
+    dateRange: null,
+  };
+
+  useEffect(() => {
+    import("@/lib/api-client").then(({ apiClient }) => {
+      apiClient.get("/users?role=DESIGNER").then((res) => {
+        const rows = Array.isArray(res) ? res : (Array.isArray(res?.data) ? res.data : []);
+        setDesignerList(rows.map((u) => ({ id: u.id, name: u.fullName })));
+      }).catch(() => {});
     });
   }, []);
   const [formData, setFormData] = useState({
@@ -119,9 +144,10 @@ export default function LeavePlannerClient({ designer }) {
       });
       setLeaves([...leaves, res]);
       setIsModalOpen(false);
+      toast.success("Leave request submitted successfully");
     } catch (error) {
       console.error(error);
-      alert("Failed to submit request.");
+      toast.error("Failed to submit leave request. Please try again.");
     }
   };
 
@@ -169,27 +195,31 @@ export default function LeavePlannerClient({ designer }) {
         <div className="flex w-auto items-center gap-3 border-r border-slate-200 pr-6">
           <div className="w-8 h-8 rounded-full bg-slate-800 text-white flex items-center justify-center text-xs font-bold leading-none shrink-0 shadow-sm">
             {designer.avatar ? (
-              <img src={designer.avatar} alt={designer.name} className="h-full w-full object-cover rounded-full" />
+              <img src={designer.avatar} alt={sessionName ?? designer.name} className="h-full w-full object-cover rounded-full" />
             ) : (
-              <span>{designer.name.split(" ").map(n => n[0]).join("").slice(0, 2)}</span>
+              <span>{(sessionName ?? designer.name).split(" ").map(n => n[0]).join("").slice(0, 2)}</span>
             )}
           </div>
           {isHOD ? (
             <div className="flex flex-col">
               <span className="text-xs font-bold leading-tight text-slate-500 mb-1">Creating Request For:</span>
-              <select 
+              <select
                 className="text-sm font-semibold bg-slate-100 border border-slate-200 rounded px-2 py-1 outline-none focus:ring-2 focus:ring-[#5d5baf]/20 cursor-pointer"
-                value={designer.id}
-                onChange={(e) => router.push(`/designer/${e.target.value}/leave-planner`)}
+                value={designer.erpDesignerId ?? designer.id}
+                onChange={() => router.push(`/designer/leave-planner`)}
               >
-                <option value="d1">Alex Johnson</option>
-                <option value="d2">Alexander Allen</option>
-                <option value="d3">Benjamin Harris</option>
+                {designerList.length === 0 ? (
+                  <option value={designer.erpDesignerId ?? designer.id}>{sessionName ?? designer.name}</option>
+                ) : (
+                  designerList.map((d) => (
+                    <option key={d.id} value={d.id}>{d.name}</option>
+                  ))
+                )}
               </select>
             </div>
           ) : (
             <div className="flex flex-col">
-              <span className="text-xs font-bold leading-tight text-slate-900">{designer.name}</span>
+              <span className="text-xs font-bold leading-tight text-slate-900">{sessionName ?? designer.name}</span>
               <span className="text-[10px] leading-tight text-slate-500">{designer.designation}</span>
             </div>
           )}

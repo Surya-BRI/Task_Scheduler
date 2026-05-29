@@ -2,6 +2,7 @@ import { useEffect, useId, useRef, useState } from 'react'
 import { Pencil, X } from 'lucide-react'
 import DatePicker from 'react-datepicker'
 import { apiClient } from '@/lib/api-client'
+import { toast } from 'sonner'
 
 const DESIGN_OPTIONS = [
   { value: 'Estimation Purpose', label: 'Estimation Purpose' },
@@ -50,7 +51,7 @@ function deriveFileNameFromUrl(value) {
   }
 }
 
-export function CreateTaskModal({ open, onClose, submissionDate, record }) {
+export function CreateTaskModal({ open, onClose, onCreated, submissionDate, record }) {
   const titleId = useId()
   const fileInputRef = useRef(null)
   const [selectedFiles, setSelectedFiles] = useState([])
@@ -220,10 +221,17 @@ export function CreateTaskModal({ open, onClose, submissionDate, record }) {
           },
         ],
       }
-      await apiClient.post('/tasks/extended', payload)
-      onClose()
+      const created = await apiClient.post('/tasks/extended', payload)
+      toast.success('Task created successfully')
+      if (onCreated) {
+        onCreated(created)
+      } else {
+        onClose()
+      }
     } catch (err) {
-      setError(err instanceof Error ? err.message : 'Failed to create retail task')
+      const msg = err instanceof Error ? err.message : 'Failed to create task'
+      setError(msg)
+      toast.error(msg)
     } finally {
       setSubmitting(false)
     }
@@ -270,51 +278,30 @@ export function CreateTaskModal({ open, onClose, submissionDate, record }) {
         </div>
 
         <form className="space-y-4 p-5" onSubmit={handleSubmit}>
-          <div className="grid grid-cols-2 gap-3">
-            <div>
-              <label className="text-xs font-semibold text-slate-600" htmlFor="create-revision-code">
-                Revision <span className="text-red-600">*</span>
-              </label>
-              <input
-                id="create-revision-code"
-                value={revisionCode}
-                onChange={(e) => {
-                  setRevisionCode(e.target.value.toUpperCase())
-                  setFieldErrors((prev) => ({ ...prev, revisionCode: '' }))
-                }}
-                onBlur={() => setTouched((prev) => ({ ...prev, revisionCode: true }))}
-                placeholder="R0"
-                className="mt-1.5 w-full rounded-md border border-slate-300 bg-white px-3 py-2 text-sm text-slate-900 outline-none transition-colors focus:border-blue-500 focus:ring-2 focus:ring-blue-500/20"
-              />
-              {((submitAttempted || touched.revisionCode) && !REVISION_PATTERN.test(revisionCode.trim().toUpperCase())) || fieldErrors.revisionCode ? (
-                <p className="mt-1 text-xs text-red-600">{fieldErrors.revisionCode || 'Must be R0, R1, R2…'}</p>
-              ) : null}
+          <fieldset>
+            <legend className="text-xs font-semibold text-slate-600">Select design type <span className="text-red-600">*</span></legend>
+            <div className="mt-2 grid gap-2 sm:grid-cols-2">
+              {DESIGN_OPTIONS.map((opt) => (
+                <label key={opt.value} className="flex items-center gap-2 text-sm text-slate-800">
+                  <input
+                    type="radio"
+                    name="design-type"
+                    checked={designType === opt.value}
+                    onChange={() => {
+                      setDesignType(opt.value)
+                      setFieldErrors((prev) => ({ ...prev, designType: '' }))
+                    }}
+                    className="h-4 w-4 rounded border-slate-300 text-blue-600 focus:ring-blue-500"
+                  />
+                  {opt.label}
+                </label>
+              ))}
             </div>
-            <div>
-              <label className="text-xs font-semibold text-slate-600" htmlFor="create-hod">
-                Select HOD <span className="text-red-600">*</span>
-              </label>
-              <select
-                id="create-hod"
-                value={hod}
-                onChange={(e) => {
-                  setHod(e.target.value)
-                  setFieldErrors((prev) => ({ ...prev, hod: '' }))
-                }}
-                onBlur={() => setTouched((prev) => ({ ...prev, hod: true }))}
-                required
-                className="mt-1.5 w-full rounded-md border border-slate-300 bg-white px-3 py-2 text-sm text-slate-900 outline-none transition-colors focus:border-blue-500 focus:ring-2 focus:ring-blue-500/20"
-              >
-                <option value="">Select</option>
-                <option value="Sarah Mitchell">Sarah Mitchell</option>
-                <option value="A. Khan">A. Khan</option>
-                <option value="M. Rahman">M. Rahman</option>
-              </select>
-              {((submitAttempted || touched.hod) && !hod.trim()) || fieldErrors.hod ? (
-                <p className="mt-1 text-xs text-red-600">{fieldErrors.hod || 'HOD is required'}</p>
-              ) : null}
-            </div>
-          </div>
+            {(submitAttempted && !designType.trim()) || fieldErrors.designType ? (
+              <p className="mt-1 text-xs text-red-600">{fieldErrors.designType || 'Design Type is required'}</p>
+            ) : null}
+          </fieldset>
+
           <div>
             <div className="flex items-center justify-between gap-3">
               <label className="text-xs font-semibold text-slate-600" htmlFor="create-provided-files">
@@ -396,29 +383,51 @@ export function CreateTaskModal({ open, onClose, submissionDate, record }) {
             ) : null}
           </div>
 
-          <fieldset>
-            <legend className="text-xs font-semibold text-slate-600">Select design type <span className="text-red-600">*</span></legend>
-            <div className="mt-2 grid gap-2 sm:grid-cols-2">
-              {DESIGN_OPTIONS.map((opt) => (
-                <label key={opt.value} className="flex items-center gap-2 text-sm text-slate-800">
-                  <input
-                    type="radio"
-                    name="design-type"
-                    checked={designType === opt.value}
-                    onChange={() => {
-                      setDesignType(opt.value)
-                      setFieldErrors((prev) => ({ ...prev, designType: '' }))
-                    }}
-                    className="h-4 w-4 rounded border-slate-300 text-blue-600 focus:ring-blue-500"
-                  />
-                  {opt.label}
-                </label>
-              ))}
+          <div className="grid grid-cols-2 gap-3">
+            <div>
+              <label className="text-xs font-semibold text-slate-600" htmlFor="create-revision-code">
+                Revision <span className="text-red-600">*</span>
+              </label>
+              <input
+                id="create-revision-code"
+                value={revisionCode}
+                onChange={(e) => {
+                  setRevisionCode(e.target.value.toUpperCase())
+                  setFieldErrors((prev) => ({ ...prev, revisionCode: '' }))
+                }}
+                onBlur={() => setTouched((prev) => ({ ...prev, revisionCode: true }))}
+                placeholder="R0"
+                className="mt-1.5 w-full rounded-md border border-slate-300 bg-white px-3 py-2 text-sm text-slate-900 outline-none transition-colors focus:border-blue-500 focus:ring-2 focus:ring-blue-500/20"
+              />
+              {((submitAttempted || touched.revisionCode) && !REVISION_PATTERN.test(revisionCode.trim().toUpperCase())) || fieldErrors.revisionCode ? (
+                <p className="mt-1 text-xs text-red-600">{fieldErrors.revisionCode || 'Must be R0, R1, R2…'}</p>
+              ) : null}
             </div>
-            {(submitAttempted && !designType.trim()) || fieldErrors.designType ? (
-              <p className="mt-1 text-xs text-red-600">{fieldErrors.designType || 'Design Type is required'}</p>
-            ) : null}
-          </fieldset>
+            <div>
+              <label className="text-xs font-semibold text-slate-600" htmlFor="create-hod">
+                Select HOD <span className="text-red-600">*</span>
+              </label>
+              <select
+                id="create-hod"
+                value={hod}
+                onChange={(e) => {
+                  setHod(e.target.value)
+                  setFieldErrors((prev) => ({ ...prev, hod: '' }))
+                }}
+                onBlur={() => setTouched((prev) => ({ ...prev, hod: true }))}
+                required
+                className="mt-1.5 w-full rounded-md border border-slate-300 bg-white px-3 py-2 text-sm text-slate-900 outline-none transition-colors focus:border-blue-500 focus:ring-2 focus:ring-blue-500/20"
+              >
+                <option value="">Select</option>
+                <option value="Sarah Mitchell">Sarah Mitchell</option>
+                <option value="A. Khan">A. Khan</option>
+                <option value="M. Rahman">M. Rahman</option>
+              </select>
+              {((submitAttempted || touched.hod) && !hod.trim()) || fieldErrors.hod ? (
+                <p className="mt-1 text-xs text-red-600">{fieldErrors.hod || 'HOD is required'}</p>
+              ) : null}
+            </div>
+          </div>
 
           <div className="grid gap-3 sm:grid-cols-2">
             <div>

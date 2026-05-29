@@ -189,12 +189,12 @@ export class SchedulerAssignmentsService {
     return createHash('sha256').update(JSON.stringify(normalized)).digest('hex');
   }
 
-  async findForWeekStart(weekStart: string): Promise<SchedulerAssignmentDto[]> {
+  async findForWeekStart(weekStart: string, designerId?: string): Promise<SchedulerAssignmentDto[]> {
     const { weekStartDate } = this.parseWeekStart(weekStart);
 
     try {
       const rows = await this.prisma.schedulerAssignment.findMany({
-        where: { weekStartDate },
+        where: { weekStartDate, ...(designerId ? { designerId } : {}) },
         orderBy: [{ designerId: 'asc' }, { dayIndex: 'asc' }, { id: 'asc' }],
       });
       return rows.map((r) =>
@@ -267,15 +267,27 @@ export class SchedulerAssignmentsService {
       const designerIds = Array.from(new Set(dto.assignments.map((a) => a.designerId)));
       const taskIds = Array.from(new Set(dto.assignments.map((a) => a.taskId)));
 
-      const [designers, tasks, previousRows, week] = await Promise.all([
+      const [designers, tasks, previousRows, weekRows] = await Promise.all([
         tx.user.findMany({
           where: { id: { in: designerIds }, role: { name: UserRole.DESIGNER } },
           select: { id: true },
         }),
         tx.task.findMany({ where: { id: { in: taskIds } }, select: { id: true, status: true, assigneeId: true } }),
         tx.schedulerAssignment.findMany({ where: { weekStartDate } }),
-        tx.schedulerWeek.findUnique({ where: { weekStartDate } }),
+        // UPDLOCK + ROWLOCK: prevents two concurrent transactions from both passing the
+        // version check before either commits, which would cause a silent lost update.
+        tx.$queryRaw<Array<{
+          id: string;
+          version: number;
+          isLocked: boolean;
+          lastPayloadHash: string | null;
+          updatedAt: Date;
+          updatedBy: string | null;
+        }>>`SELECT id, version, isLocked, lastPayloadHash, updatedAt, updatedBy
+            FROM ErpTSSchedulerWeek WITH (UPDLOCK, ROWLOCK)
+            WHERE weekStartDate = ${weekStartDate}`,
       ]);
+      const week = weekRows[0] ?? null;
 
       if (designers.length !== designerIds.length) {
         throw new BadRequestException('One or more designerId values are invalid or not DESIGNER role.');
@@ -355,9 +367,8 @@ export class SchedulerAssignmentsService {
           const updateData: Prisma.TaskUncheckedUpdateInput = {};
           if (assignedDesigner) {
             updateData.assigneeId = assignedDesigner;
-            if (String(task.status ?? '').toUpperCase() !== 'ON_HOLD') {
-              updateData.status = 'PENDING';
-            }
+            // Re-assigning an ON_HOLD task via scheduler means it's back in play
+            updateData.status = 'PENDING';
           } else if (designerSet.size === 0) {
             updateData.assigneeId = null;
             if (String(task.status ?? '').toUpperCase() !== 'ON_HOLD') {

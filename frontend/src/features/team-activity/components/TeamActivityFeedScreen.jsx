@@ -53,19 +53,23 @@ export function TeamActivityFeedScreenInner() {
 
   useEffect(() => {
     let active = true;
-    fetchTeamActivities({ limit: 100 })
-      .then(data => {
-        if (active) {
-          setActivities(data);
-          setLikes(buildInitialLikes(data));
-          setLoading(false);
-        }
-      })
-      .catch(err => {
-        console.error("Failed to load activities", err);
-        if (active) setLoading(false);
-      });
-    return () => { active = false; };
+    function load() {
+      fetchTeamActivities({ limit: 100 })
+        .then(data => {
+          if (active) {
+            setActivities(data);
+            setLikes(buildInitialLikes(data));
+            setLoading(false);
+          }
+        })
+        .catch(err => {
+          console.error("Failed to load activities", err);
+          if (active) setLoading(false);
+        });
+    }
+    load();
+    const interval = setInterval(load, 20000);
+    return () => { active = false; clearInterval(interval); };
   }, []);
 
   const handleTeammateMode = useCallback((mode) => {

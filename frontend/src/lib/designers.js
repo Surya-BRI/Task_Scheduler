@@ -60,7 +60,7 @@ export function buildSessionForUser(user) {
   };
 
   if (role === 'DESIGNER') {
-    session.designerId = slugForDesignerEmail(user.email) ?? 'd1';
+    session.designerId = user.id;
     session.erpDesignerId = user.id;
   }
 

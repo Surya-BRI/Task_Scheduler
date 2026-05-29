@@ -46,8 +46,7 @@ export class ActivitiesService {
     }
     if (input.taskId) {
       where.taskId = input.taskId;
-    }
-    if (input.projectId) {
+    } else if (input.projectId) {
       where.OR = [
         { task: { projectId: input.projectId } },
         { details: { contains: input.projectId } },
@@ -58,74 +57,79 @@ export class ActivitiesService {
       where,
       take: limit + 1,
       orderBy: { createdAt: 'desc' },
-      include: {
-        user: { select: { id: true, fullName: true } },
-        task: {
-          select: {
-            id: true,
-            taskNo: true,
-            opNo: true,
-            title: true,
-            priority: true,
-            dueDate: true,
-            assignee: { select: { id: true, fullName: true } },
-            retailDetails: { select: { hodName: true }, take: 1, orderBy: { createdAt: 'desc' } },
-            project: { select: { id: true, name: true, projectNo: true } },
-          },
-        },
-      },
+      include: this.getTaskInclude(),
     });
 
     const hasMore = rows.length > limit;
     const sliced = hasMore ? rows.slice(0, limit) : rows;
-
-    const data = sliced.map((row: any) => {
-      let details: any = {};
-      try {
-        details = row.details ? JSON.parse(row.details) : {};
-      } catch {
-        details = { raw: row.details };
-      }
-      const actorName = row.user?.fullName ?? 'Unknown user';
-      return {
-        id: row.id,
-        action: row.action,
-        occurredAt: row.createdAt.toISOString(),
-        actor: {
-          id: row.user?.id ?? '',
-          name: actorName,
-          avatarUrl: `https://ui-avatars.com/api/?name=${encodeURIComponent(actorName)}&background=random`,
-        },
-        task: row.task
-          ? {
-              id: row.task.id,
-              taskNo: row.task.taskNo,
-              opNo: row.task.opNo,
-              title: row.task.title,
-              priority: row.task.priority,
-              dueDate: row.task.dueDate ? row.task.dueDate.toISOString() : null,
-              assigneeName: row.task.assignee?.fullName ?? null,
-              hodName: row.task.retailDetails?.[0]?.hodName ?? null,
-            }
-          : null,
-        project: row.task?.project
-          ? {
-              id: row.task.project.id,
-              projectNo: row.task.project.projectNo,
-              name: row.task.project.name,
-            }
-          : null,
-        details,
-        summary: this.formatSummary(row.action, details, actorName),
-        severity: this.formatSeverity(row.action),
-      };
-    });
+    const data = sliced.map((row: any) => this.mapRow(row));
 
     return {
       data,
       pageInfo: {
         hasMore,
         nextCursor: hasMore ? sliced[sliced.length - 1]?.createdAt?.toISOString() ?? null : null,
+      },
+    };
+  }
+
+  private mapRow(row: any) {
+    let details: any = {};
+    try {
+      details = row.details ? JSON.parse(row.details) : {};
+    } catch {
+      details = { raw: row.details };
+    }
+    const actorName = row.user?.fullName ?? 'Unknown user';
+    return {
+      id: row.id,
+      action: row.action,
+      occurredAt: row.createdAt.toISOString(),
+      actor: {
+        id: row.user?.id ?? '',
+        name: actorName,
+        avatarUrl: `https://ui-avatars.com/api/?name=${encodeURIComponent(actorName)}&background=random`,
+      },
+      task: row.task
+        ? {
+            id: row.task.id,
+            taskNo: row.task.taskNo,
+            opNo: row.task.opNo,
+            title: row.task.title,
+            priority: row.task.priority,
+            dueDate: row.task.dueDate ? row.task.dueDate.toISOString() : null,
+            assigneeName: row.task.assignee?.fullName ?? null,
+            hodName: row.task.retailDetails?.[0]?.hodName ?? null,
+          }
+        : null,
+      project: row.task?.project
+        ? {
+            id: row.task.project.id,
+            projectNo: row.task.project.projectNo,
+            name: row.task.project.name,
+          }
+        : null,
+      details,
+      summary: this.formatSummary(row.action, details, actorName),
+      severity: this.formatSeverity(row.action),
+    };
+  }
+
+  private getTaskInclude() {
+    return {
+      user: { select: { id: true, fullName: true } },
+      task: {
+        select: {
+          id: true,
+          taskNo: true,
+          opNo: true,
+          title: true,
+          priority: true,
+          dueDate: true,
+          assignee: { select: { id: true, fullName: true } },
+          retailDetails: { select: { hodName: true } },
+          project: { select: { id: true, name: true, projectNo: true } },
+        },
       },
     };
   }

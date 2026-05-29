@@ -61,6 +61,7 @@ model User {
   schedulerAssignmentHistory SchedulerAssignmentHistory[] @relation("SchedulerAssignmentHistoryChangedBy")
   designTasksAssigned      DesignTask[]               @relation("DesignTaskAssignee")
   designTasksUpdated       DesignTask[]               @relation("DesignTaskUpdatedBy")
+  workSessions             TaskWorkSession[]          @relation("WorkSessionDesigner")
 
   createdAt DateTime @default(dbgenerated("sysutcdatetime()"))
   updatedAt DateTime @default(dbgenerated("sysutcdatetime()")) @updatedAt
@@ -122,6 +123,7 @@ model Task {
   retailDetails          RetailTaskDetail[]
   projectDetails         ProjectTaskDetail[]
   signRows               ProjectSignRow[]
+  workSessions           TaskWorkSession[]
 
   createdAt DateTime @default(dbgenerated("sysutcdatetime()"))
   updatedAt DateTime @default(dbgenerated("sysutcdatetime()")) @updatedAt
@@ -503,4 +505,40 @@ model Notification {
   createdAt DateTime @default(now())
 
   @@map("ErpTSNotification")
+}
+
+// ---------------------------------------------------------
+// TASK WORK SESSIONS (timer submissions)
+// ---------------------------------------------------------
+model TaskWorkSession {
+  id              String   @id @default(dbgenerated("newid()")) @db.UniqueIdentifier
+  taskId          String   @db.UniqueIdentifier
+  task            Task     @relation(fields: [taskId], references: [id], onDelete: Cascade, onUpdate: NoAction)
+  designerId      String   @db.UniqueIdentifier
+  designer        User     @relation("WorkSessionDesigner", fields: [designerId], references: [id], onDelete: NoAction, onUpdate: NoAction)
+  durationSeconds Int
+  submissionLink  String?  @db.NVarChar(2000)
+  pauseLog        String?  @db.NVarChar(Max)
+  status          String   @default("Submitted") @db.NVarChar(50)
+  submittedAt     DateTime @default(now())
+  createdAt       DateTime @default(now())
+  files           TaskWorkSessionFile[]
+
+  @@index([taskId])
+  @@index([designerId])
+  @@map("ErpTSTaskWorkSession")
+}
+
+model TaskWorkSessionFile {
+  id        String          @id @default(dbgenerated("newid()")) @db.UniqueIdentifier
+  sessionId String          @db.UniqueIdentifier
+  session   TaskWorkSession @relation(fields: [sessionId], references: [id], onDelete: Cascade, onUpdate: NoAction)
+  fileKey   String          @db.NVarChar(1024)
+  fileName  String          @db.NVarChar(255)
+  mimeType  String?         @db.NVarChar(100)
+  sizeBytes BigInt?
+  createdAt DateTime        @default(now())
+
+  @@index([sessionId])
+  @@map("ErpTSTaskWorkSessionFile")
 }

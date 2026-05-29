@@ -10,6 +10,7 @@ export const ActivityAction = {
   TASK_FILE_UPLOADED: 'TASK_FILE_UPLOADED',
   CREATED_CHATTER_POST: 'CREATED_CHATTER_POST',
   CREATED_CHATTER_COMMENT: 'CREATED_CHATTER_COMMENT',
+  TASK_WORK_SUBMITTED: 'TASK_WORK_SUBMITTED',
 } as const;
 
 export type ActivityActionType = (typeof ActivityAction)[keyof typeof ActivityAction];

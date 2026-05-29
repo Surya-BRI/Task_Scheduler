@@ -16,3 +16,4 @@ package-lock.json
 backend/prisma/migrations/
 
 .claude/
+CLAUDE.md
