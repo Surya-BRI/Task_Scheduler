@@ -104,6 +104,8 @@ function computeLiveData(tasks) {
     weekGroups[weekKey].push({
       taskNo: task.taskNo ?? "-",
       projectDetails: task.project?.name ?? task.project?.projectNo ?? "-",
+      designType: task.designType ?? null,
+      revisionCode: task.revisionCode ?? null,
       pctComplete: 100,
       deadline: fmtDdMmYyyy(task.dueDate),
     });

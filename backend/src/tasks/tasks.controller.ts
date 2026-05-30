@@ -155,6 +155,13 @@ export class TasksController {
     return this.tasksService.saveSignRows(id, dto);
   }
 
+  /** GET /tasks/:id/submitted-session — fetch the most recent submitted work session */
+  @Get(':id/submitted-session')
+  @Roles(UserRole.HOD, UserRole.DESIGNER, UserRole.ADMIN, UserRole.PROJECT_MANAGER)
+  getSubmittedSession(@Param('id') id: string) {
+    return this.tasksService.getSubmittedSession(id);
+  }
+
   /** GET /tasks/:id/timer-state — fetch draft session for cold-start restore */
   @Get(':id/timer-state')
   @Roles(UserRole.HOD, UserRole.DESIGNER, UserRole.ADMIN, UserRole.PROJECT_MANAGER)

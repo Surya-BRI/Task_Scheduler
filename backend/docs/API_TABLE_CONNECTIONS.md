@@ -126,7 +126,11 @@ Prisma schema models (and mapped SQL tables) in `backend/prisma/schema.prisma`: 
 ### `dashboard`
 - Controller: `backend/src/dashboard/dashboard.controller.ts`
 - Service: `backend/src/dashboard/dashboard.service.ts`
-- Connected tables: `ErpTSTask`, `ErpTSProject`
+- DTO: `backend/src/dashboard/projects-overview.dto.ts`
+- Connected tables: `ErpTSTask`, `ErpTSProject`, `ErpTSSchedulerAssignment`, `ErpTSActivityLog`, `ErpTSUser`
+- Endpoints:
+  - `GET /dashboard/metrics` — task/project counts for current user
+  - `GET /dashboard/projects-overview?weekStart=YYYY-MM-DD` — weekly snapshot: scheduled tasks, completed, on-hold, reallocated, inbox feed, donut summary
 
 ### `health`
 - Controller: `backend/src/health/health.controller.ts`
