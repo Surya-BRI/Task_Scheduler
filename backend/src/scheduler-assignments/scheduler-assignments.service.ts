@@ -354,6 +354,8 @@ export class SchedulerAssignmentsService {
         assigneesByTask.get(row.taskId)?.add(row.designerId);
       }
 
+      const reassignedTasks: Array<{ taskId: string; oldAssigneeId: string | null; newAssigneeId: string }> = [];
+
       if (affectedTaskIds.length > 0) {
         const affectedTasks = await tx.task.findMany({
           where: { id: { in: affectedTaskIds } },
@@ -364,20 +366,29 @@ export class SchedulerAssignmentsService {
           const designerSet = assigneesByTask.get(task.id) ?? new Set<string>();
           const assignedDesigner = designerSet.size === 1 ? [...designerSet][0] : null;
 
+          const currentStatus = String(task.status ?? '').toUpperCase();
+          const isTerminal = currentStatus === 'COMPLETED' || currentStatus === 'APPROVED';
+
           const updateData: Prisma.TaskUncheckedUpdateInput = {};
           if (assignedDesigner) {
             updateData.assigneeId = assignedDesigner;
-            // Re-assigning an ON_HOLD task via scheduler means it's back in play
-            updateData.status = 'PENDING';
+            // Only move to PENDING if not already completed/approved — never overwrite terminal states
+            if (!isTerminal) {
+              updateData.status = 'PENDING';
+            }
           } else if (designerSet.size === 0) {
             updateData.assigneeId = null;
-            if (String(task.status ?? '').toUpperCase() !== 'ON_HOLD') {
+            if (!isTerminal && currentStatus !== 'ON_HOLD') {
               updateData.status = 'PENDING';
             }
           }
 
           if (Object.keys(updateData).length > 0) {
             await tx.task.update({ where: { id: task.id }, data: updateData });
+          }
+
+          if (assignedDesigner && assignedDesigner !== task.assigneeId) {
+            reassignedTasks.push({ taskId: task.id, oldAssigneeId: task.assigneeId ?? null, newAssigneeId: assignedDesigner });
           }
         }
       }
@@ -415,8 +426,54 @@ export class SchedulerAssignmentsService {
         isLocked: Boolean(updatedWeek.isLocked),
         updatedAt: updatedWeek.updatedAt,
         updatedBy: updatedWeek.updatedBy,
+        reassignedTasks,
       };
     });
+
+    if (result.changed && result.reassignedTasks?.length) {
+      const allDesignerIds = Array.from(new Set([
+        ...result.reassignedTasks.map((r) => r.newAssigneeId),
+        ...result.reassignedTasks.map((r) => r.oldAssigneeId).filter(Boolean) as string[],
+      ]));
+      const designers = await this.prisma.user.findMany({
+        where: { id: { in: allDesignerIds } },
+        select: { id: true, fullName: true },
+      });
+      const nameById = new Map(designers.map((d) => [d.id, d.fullName]));
+
+      const taskIds = Array.from(new Set(result.reassignedTasks.map((r) => r.taskId)));
+      const taskDetails = await this.prisma.task.findMany({
+        where: { id: { in: taskIds } },
+        select: { id: true, taskNo: true, title: true },
+      });
+      const taskById = new Map(taskDetails.map((t) => [t.id, t]));
+
+      await Promise.all(
+        result.reassignedTasks.map((r) =>
+          this.activityLogger.log({
+            action: ActivityAction.ASSIGNED_TASK,
+            userId,
+            taskId: r.taskId,
+            details: {
+              event: ActivityAction.ASSIGNED_TASK,
+              messageKey: 'task_assigned',
+              taskSnapshot: {
+                id: r.taskId,
+                taskNo: taskById.get(r.taskId)?.taskNo,
+                title: taskById.get(r.taskId)?.title ?? undefined,
+              },
+              changes: {
+                newAssigneeId: r.newAssigneeId,
+                newAssigneeName: nameById.get(r.newAssigneeId) ?? 'Unknown',
+                oldAssigneeId: r.oldAssigneeId,
+                oldAssigneeName: r.oldAssigneeId ? (nameById.get(r.oldAssigneeId) ?? null) : null,
+                source: 'scheduler',
+              },
+            },
+          }),
+        ),
+      );
+    }
 
     if (result.changed) {
       await this.activityLogger.log({

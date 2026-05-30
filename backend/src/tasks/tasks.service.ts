@@ -788,7 +788,10 @@ export class TasksService {
     const existing = await this.prisma.task.findUnique({ where: { id } });
     if (!existing) throw new NotFoundException('Task not found');
 
-    const assignee = await this.prisma.user.findUnique({ where: { id: dto.assigneeId } });
+    const [assignee, oldAssignee] = await Promise.all([
+      this.prisma.user.findUnique({ where: { id: dto.assigneeId } }),
+      existing.assigneeId ? this.prisma.user.findUnique({ where: { id: existing.assigneeId }, select: { fullName: true } }) : null,
+    ]);
     if (!assignee) throw new NotFoundException('Assignee not found');
 
     const updatedTask = await this.prisma.task.update({
@@ -819,6 +822,8 @@ export class TasksService {
         changes: {
           assigneeId: dto.assigneeId,
           newAssigneeName: assignee.fullName,
+          oldAssigneeId: existing.assigneeId ?? null,
+          oldAssigneeName: oldAssignee?.fullName ?? null,
         },
         context: { source: 'tasks.assign' },
       },
@@ -1015,6 +1020,30 @@ export class TasksService {
     });
 
     return { sessionId: session.id, fileCount: uploadedFiles.length };
+  }
+
+  async getSubmittedSession(taskId: string) {
+    if (!this.isUuid(taskId)) throw new BadRequestException('Invalid task id');
+    const session = await this.prisma.taskWorkSession.findFirst({
+      where: { taskId, status: 'Submitted' },
+      orderBy: { submittedAt: 'desc' },
+      include: {
+        files: true,
+        designer: { select: { fullName: true } },
+      },
+    });
+    if (!session) return null;
+    return {
+      durationSeconds: session.durationSeconds,
+      submittedAt: session.submittedAt,
+      submissionLink: session.submissionLink,
+      submittedBy: session.designer?.fullName ?? null,
+      files: session.files.map((f) => ({
+        fileName: f.fileName,
+        mimeType: f.mimeType,
+        sizeBytes: f.sizeBytes,
+      })),
+    };
   }
 
   async getTimerState(taskId: string, userId: string) {

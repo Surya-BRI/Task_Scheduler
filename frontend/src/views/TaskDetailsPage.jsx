@@ -1,6 +1,6 @@
 import { useCallback, useEffect, useRef, useState } from 'react'
 import { toast } from 'sonner'
-import { Calendar, ChevronLeft, CircleCheck, Clock3, FileText, Flag, Hourglass, Info, Pencil, Shield, Trash2, Upload } from 'lucide-react'
+import { Calendar, CheckCircle2, ChevronLeft, CircleCheck, Clock3, FileText, Flag, Hourglass, Info, Link, Pencil, Shield, Trash2, Upload } from 'lucide-react'
 import { useParams, usePathname, useRouter, useSearchParams } from 'next/navigation'
 import DatePicker from 'react-datepicker'
 import { CreateTaskModal } from '../components/CreateTaskModal'
@@ -710,6 +710,8 @@ export function TaskDetailsPage() {
   const [sidebarHasMore, setSidebarHasMore] = useState(false)
   const [historyDialog, setHistoryDialog] = useState(null)
   const [taskAuditInfo, setTaskAuditInfo] = useState({ createdByHod: '-' })
+  const [taskRefreshCounter, setTaskRefreshCounter] = useState(0)
+  const [submittedSession, setSubmittedSession] = useState(null)
 
   useEffect(() => {
     let alive = true
@@ -777,7 +779,7 @@ export function TaskDetailsPage() {
     return () => {
       alive = false
     }
-  }, [recordId, queryOpNo, queryProjectCode, from])
+  }, [recordId, queryOpNo, queryProjectCode, from, taskRefreshCounter])
 
 
   const launchAutostart = searchParams.get('autostart') === '1'
@@ -829,7 +831,9 @@ export function TaskDetailsPage() {
   const pageTitle = resolvedOpCode ? `${resolvedOpCode} - ${pageTitleCore}` : pageTitleCore
   const canPostChatter = chatterMessage.trim().length > 0
   const hasExistingTask = Boolean(taskId || isUuid(record?.taskId ?? record?.id))
-  const showTimer = !isCreationRoute && hasExistingTask && Boolean(taskId) && (from === 'designer-queue' || from === 'designer-design-list')
+  const taskStatus = record?.status ?? null
+  const isTerminalStatus = taskStatus === 'COMPLETED' || taskStatus === 'APPROVED'
+  const showTimer = !isCreationRoute && hasExistingTask && Boolean(taskId) && !isTerminalStatus && (from === 'designer-queue' || from === 'designer-design-list')
   const tabs = hasExistingTask && !isRetail ? [...TABS, PROJECT_TAB] : TABS
   useEffect(() => {
     let alive = true
@@ -981,6 +985,15 @@ export function TaskDetailsPage() {
       alive = false
     }
   }, [taskId])
+
+  useEffect(() => {
+    if (!taskId || !isTerminalStatus) { setSubmittedSession(null); return }
+    let alive = true
+    apiClient.get(`/tasks/${taskId}/submitted-session`)
+      .then((data) => { if (alive) setSubmittedSession(data) })
+      .catch(() => { if (alive) setSubmittedSession(null) })
+    return () => { alive = false }
+  }, [taskId, isTerminalStatus])
 
   useEffect(() => {
     let alive = true
@@ -1289,11 +1302,81 @@ export function TaskDetailsPage() {
                       {showTimer ? (
                         <ProjectTaskTimer
                           taskId={taskId}
+                          taskStatus={taskStatus}
                           launchAutostart={launchAutostart}
                           launchPauseModal={launchPauseModal}
                           launchCompleteModal={launchCompleteModal}
                           onConsumedLaunchFlags={clearTimerLaunchParams}
+                          onSubmitComplete={() => setTaskRefreshCounter((c) => c + 1)}
                         />
+                      ) : null}
+                      {isTerminalStatus && submittedSession ? (
+                        <div className="mt-4 border-t border-slate-200 pt-4">
+                          <div className="flex items-center gap-2 mb-3">
+                            <CheckCircle2 className="h-4 w-4 text-emerald-600 shrink-0" />
+                            <span className="text-sm font-semibold text-slate-800">Work Submitted</span>
+                            {submittedSession.submittedBy && (
+                              <span className="text-xs text-slate-500">by {submittedSession.submittedBy}</span>
+                            )}
+                            {submittedSession.submittedAt && (
+                              <span className="ml-auto text-[11px] text-slate-400">
+                                {new Date(submittedSession.submittedAt).toLocaleString('en-GB', { day: '2-digit', month: 'short', year: 'numeric', hour: '2-digit', minute: '2-digit' })}
+                              </span>
+                            )}
+                          </div>
+                          <div className="rounded-lg border border-slate-200 bg-slate-50 p-3 space-y-2.5">
+                            <div className="flex items-center gap-2">
+                              <Clock3 className="h-3.5 w-3.5 text-slate-400 shrink-0" />
+                              <span className="text-xs text-slate-500 font-medium">Duration</span>
+                              <span className="ml-auto font-mono text-sm font-semibold text-slate-800">
+                                {(() => {
+                                  const s = submittedSession.durationSeconds ?? 0
+                                  const h = Math.floor(s / 3600)
+                                  const m = Math.floor((s % 3600) / 60)
+                                  const sec = s % 60
+                                  return `${h}h ${m}m ${sec}s`
+                                })()}
+                              </span>
+                            </div>
+                            {(submittedSession.submissionLink || submittedSession.files?.length > 0) && (
+                              <div>
+                                <div className="flex items-center gap-2 mb-1.5">
+                                  <FileText className="h-3.5 w-3.5 text-slate-400 shrink-0" />
+                                  <span className="text-xs text-slate-500 font-medium">Submitted Docs</span>
+                                </div>
+                                <ul className="space-y-1">
+                                  {submittedSession.submissionLink && (
+                                    <li className="flex items-center gap-2 rounded-md bg-white border border-slate-200 px-2.5 py-1.5 text-xs text-slate-800">
+                                      <Link className="h-3.5 w-3.5 shrink-0 text-slate-400" />
+                                      <a
+                                        href={submittedSession.submissionLink}
+                                        target="_blank"
+                                        rel="noreferrer"
+                                        className="truncate text-blue-600 hover:underline"
+                                        title={submittedSession.submissionLink}
+                                      >
+                                        {submittedSession.submissionLink}
+                                      </a>
+                                    </li>
+                                  )}
+                                  {submittedSession.files?.map((f, i) => (
+                                    <li key={i} className="flex items-center gap-2 rounded-md bg-white border border-slate-200 px-2.5 py-1.5 text-xs text-slate-800">
+                                      <FileText className="h-3.5 w-3.5 shrink-0 text-slate-400" />
+                                      <span className="truncate" title={f.fileName}>{f.fileName}</span>
+                                      {f.sizeBytes && (
+                                        <span className="ml-auto shrink-0 text-[10px] text-slate-400">
+                                          {f.sizeBytes > 1024 * 1024
+                                            ? `${(f.sizeBytes / (1024 * 1024)).toFixed(1)} MB`
+                                            : `${Math.round(f.sizeBytes / 1024)} KB`}
+                                        </span>
+                                      )}
+                                    </li>
+                                  ))}
+                                </ul>
+                              </div>
+                            )}
+                          </div>
+                        </div>
                       ) : null}
                     </div>
                   ) : isRetail ? (

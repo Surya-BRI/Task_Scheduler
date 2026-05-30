@@ -1,10 +1,11 @@
 import { useCallback, useEffect, useRef, useState } from 'react'
-import { CalendarCheck2, ChevronLeft, FileText, Hourglass, Pencil, ShieldCheck, ShieldX } from 'lucide-react'
+import { CalendarCheck2, CheckCircle2, ChevronLeft, Clock3, FileText, Hourglass, Link, Pencil, ShieldCheck, ShieldX } from 'lucide-react'
 import { useParams, usePathname, useRouter, useSearchParams } from 'next/navigation'
 import { Navbar } from '../components/Navbar'
 import { ProjectTaskTimer } from '../components/ProjectTaskTimer'
 import { useDesignListStore } from '../state/DesignListContext'
 import { isAlexSessionActive } from '@/lib/alex-session'
+import { apiClient } from '@/lib/api-client'
 
 const STAGE_ITEMS = [
   { id: 'new', label: 'Design Task New', hint: 'Awaiting project allocation', icon: FileText },
@@ -88,6 +89,8 @@ export function DesignListRecordPage() {
   const { records } = useDesignListStore()
   const record = records.find((item) => item.id === recordKey)
   const [providedFile, setProvidedFile] = useState('Design.ZIP')
+  const [submittedSession, setSubmittedSession] = useState(null)
+  const isTerminalStatus = record?.status === 'COMPLETED' || record?.status === 'APPROVED'
   const rawTab = searchParams.get('tab')
   const activeTab = RECORD_TAB_IDS.includes(rawTab) ? rawTab : 'details'
   const from = searchParams.get('from')
@@ -104,6 +107,15 @@ export function DesignListRecordPage() {
       router.replace('/design-list')
     }
   }, [record, router])
+
+  useEffect(() => {
+    if (!recordKey || !isTerminalStatus) { setSubmittedSession(null); return }
+    let alive = true
+    apiClient.get(`/tasks/${recordKey}/submitted-session`)
+      .then((data) => { if (alive) setSubmittedSession(data) })
+      .catch(() => { if (alive) setSubmittedSession(null) })
+    return () => { alive = false }
+  }, [recordKey, isTerminalStatus])
 
   const selectRecordTab = useCallback(
     (tab) => {
@@ -255,11 +267,73 @@ export function DesignListRecordPage() {
                   {showTimerForSource ? (
                     <ProjectTaskTimer
                       taskId={String(recordKey)}
+                      taskStatus={record.status}
                       launchAutostart={launchAutostart}
                       launchPauseModal={launchPauseModal}
                       launchCompleteModal={launchCompleteModal}
                       onConsumedLaunchFlags={clearTimerLaunchParams}
+                      onSubmitComplete={() => router.refresh()}
                     />
+                  ) : null}
+                  {isTerminalStatus && submittedSession ? (
+                    <div className="mt-4 border-t border-slate-200 pt-4">
+                      <div className="flex items-center gap-2 mb-3">
+                        <CheckCircle2 className="h-4 w-4 text-emerald-600 shrink-0" />
+                        <span className="text-sm font-semibold text-slate-800">Work Submitted</span>
+                        {submittedSession.submittedBy && (
+                          <span className="text-xs text-slate-500">by {submittedSession.submittedBy}</span>
+                        )}
+                        {submittedSession.submittedAt && (
+                          <span className="ml-auto text-[11px] text-slate-400">
+                            {new Date(submittedSession.submittedAt).toLocaleString('en-GB', { day: '2-digit', month: 'short', year: 'numeric', hour: '2-digit', minute: '2-digit' })}
+                          </span>
+                        )}
+                      </div>
+                      <div className="rounded-lg border border-slate-200 bg-slate-50 p-3 space-y-2.5">
+                        <div className="flex items-center gap-2">
+                          <Clock3 className="h-3.5 w-3.5 text-slate-400 shrink-0" />
+                          <span className="text-xs text-slate-500 font-medium">Duration</span>
+                          <span className="ml-auto font-mono text-sm font-semibold text-slate-800">
+                            {(() => {
+                              const s = submittedSession.durationSeconds ?? 0
+                              const h = Math.floor(s / 3600)
+                              const m = Math.floor((s % 3600) / 60)
+                              const sec = s % 60
+                              return `${h}h ${m}m ${sec}s`
+                            })()}
+                          </span>
+                        </div>
+                        {(submittedSession.submissionLink || submittedSession.files?.length > 0) && (
+                          <div>
+                            <div className="flex items-center gap-2 mb-1.5">
+                              <FileText className="h-3.5 w-3.5 text-slate-400 shrink-0" />
+                              <span className="text-xs text-slate-500 font-medium">Submitted Docs</span>
+                            </div>
+                            <ul className="space-y-1">
+                              {submittedSession.submissionLink && (
+                                <li className="flex items-center gap-2 rounded-md bg-white border border-slate-200 px-2.5 py-1.5 text-xs text-slate-800">
+                                  <Link className="h-3.5 w-3.5 shrink-0 text-slate-400" />
+                                  <a href={submittedSession.submissionLink} target="_blank" rel="noreferrer" className="truncate text-blue-600 hover:underline" title={submittedSession.submissionLink}>
+                                    {submittedSession.submissionLink}
+                                  </a>
+                                </li>
+                              )}
+                              {submittedSession.files?.map((f, i) => (
+                                <li key={i} className="flex items-center gap-2 rounded-md bg-white border border-slate-200 px-2.5 py-1.5 text-xs text-slate-800">
+                                  <FileText className="h-3.5 w-3.5 shrink-0 text-slate-400" />
+                                  <span className="truncate" title={f.fileName}>{f.fileName}</span>
+                                  {f.sizeBytes && (
+                                    <span className="ml-auto shrink-0 text-[10px] text-slate-400">
+                                      {f.sizeBytes > 1024 * 1024 ? `${(f.sizeBytes / (1024 * 1024)).toFixed(1)} MB` : `${Math.round(f.sizeBytes / 1024)} KB`}
+                                    </span>
+                                  )}
+                                </li>
+                              ))}
+                            </ul>
+                          </div>
+                        )}
+                      </div>
+                    </div>
                   ) : null}
 
                   <div className="mt-3 overflow-hidden rounded-lg border border-slate-200">

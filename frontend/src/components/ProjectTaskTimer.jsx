@@ -85,10 +85,12 @@ function liveTotalSeconds(accumulatedSeconds, runStartAt) {
 
 export function ProjectTaskTimer({
   taskId,
+  taskStatus,
   launchAutostart,
   launchPauseModal,
   launchCompleteModal,
   onConsumedLaunchFlags,
+  onSubmitComplete,
   inline = false,
 }) {
   const [accumulatedSeconds, setAccumulatedSeconds] = useState(0)
@@ -114,24 +116,31 @@ export function ProjectTaskTimer({
     'System issue',
   ]
 
-  const isRunning = runStartAt !== null
+  const isLocked = taskStatus === 'COMPLETED' || taskStatus === 'APPROVED'
+  const isRunning = runStartAt !== null && !isLocked
 
   useEffect(() => {
     const { accumulatedSeconds: acc, runStartAt: start } = readPersisted(taskId)
     setAccumulatedSeconds(acc)
     setRunStartAt(start)
 
-    if (acc === 0 && start === null) {
+    // Always try DB restore when sessionStorage has no active run — covers
+    // the case where accumulated is 0 but pauses exist only in the draft session
+    if (start === null) {
       apiClient
         .get(`/tasks/${taskId}/timer-state`)
         .then((data) => {
           if (!data) return
           const restored = data.accumulatedSeconds ?? 0
           const restoredPauses = data.pauseLog ? JSON.parse(data.pauseLog) : []
-          if (restored > 0 || restoredPauses.length > 0) {
+          // Only overwrite if DB has more than what sessionStorage has
+          if (restored > acc || (restored === 0 && restoredPauses.length > 0)) {
             setAccumulatedSeconds(restored)
             writePersisted(taskId, restored, null)
-            if (restoredPauses.length > 0) {
+          }
+          if (restoredPauses.length > 0) {
+            const existing = readPersistedPauses(taskId)
+            if (existing.length === 0) {
               sessionStorage.setItem(pauseStorageKey(taskId), JSON.stringify(restoredPauses))
             }
           }
@@ -185,10 +194,10 @@ export function ProjectTaskTimer({
   }, [taskId])
 
   useEffect(() => {
-    if (!runStartAt) return undefined
+    if (!runStartAt || isLocked) return undefined
     const id = window.setInterval(() => tick(), 1000)
     return () => window.clearInterval(id)
-  }, [runStartAt])
+  }, [runStartAt, isLocked])
 
   const freezeRunningClock = useCallback(() => {
     if (!runStartAt) return accumulatedSeconds
@@ -257,11 +266,13 @@ export function ProjectTaskTimer({
   }, [showCompleteModal, showSubmitConfirm])
 
   const handleStart = () => {
-    if (isRunning) return
+    if (isRunning || isLocked) return
     const startedAt = Date.now()
     setRunStartAt(startedAt)
     writePersisted(taskId, accumulatedSeconds, startedAt)
     saveTimerStateToDb(taskId, accumulatedSeconds)
+    // Move task to WIP so it reflects active work
+    apiClient.patch(`/tasks/${taskId}/status`, { status: 'WIP' }).catch(() => {})
   }
 
   const handlePauseClick = () => {
@@ -331,6 +342,7 @@ export function ProjectTaskTimer({
       setSubmissionLink('')
       setShowSubmitConfirm(false)
       setShowCompleteModal(false)
+      onSubmitComplete?.()
     } catch (err) {
       alert(err?.message || 'Submission failed. Please try again.')
     } finally {
@@ -379,7 +391,7 @@ export function ProjectTaskTimer({
     setShowSubmitConfirm(true)
   }
 
-  const displaySeconds = liveTotalSeconds(accumulatedSeconds, runStartAt)
+  const displaySeconds = isLocked ? accumulatedSeconds : liveTotalSeconds(accumulatedSeconds, runStartAt)
 
   const controlBtn = inline
     ? 'grid h-5 w-5 shrink-0 place-items-center rounded transition focus:outline-none focus-visible:ring-2 focus-visible:ring-offset-1 disabled:cursor-not-allowed'
@@ -400,33 +412,35 @@ export function ProjectTaskTimer({
               {formatHms(displaySeconds)}
             </span>
           </div>
-          <button
-            type="button"
-            title="Start"
-            onClick={handleStart}
-            disabled={isRunning}
-            className={`${controlBtn} ${inline ? 'text-emerald-500 hover:text-emerald-600 focus-visible:ring-emerald-300' : 'bg-emerald-500 hover:bg-emerald-600 focus-visible:ring-emerald-400'}`}
-          >
-            <Play className={inline ? 'h-3 w-3 fill-current' : 'h-4 w-4 fill-current'} aria-hidden />
-          </button>
-          <button
-            type="button"
-            title="Pause"
-            onClick={handlePauseClick}
-            disabled={!isRunning}
-            className={`${controlBtn} ${inline ? 'text-amber-400 hover:text-amber-500 focus-visible:ring-amber-200' : 'bg-amber-400 hover:bg-amber-500 focus-visible:ring-amber-300'}`}
-          >
-            <Pause className={inline ? 'h-3 w-3' : 'h-4 w-4'} aria-hidden />
-          </button>
-          <button
-            type="button"
-            title="Stop"
-            onClick={handleStopClick}
-            disabled={displaySeconds < 1}
-            className={`${controlBtn} ${inline ? 'text-red-600 hover:text-red-700 focus-visible:ring-red-300' : 'bg-red-600 hover:bg-red-700 focus-visible:ring-red-400'}`}
-          >
-            <Square className={inline ? 'h-3 w-3 fill-current' : 'h-3.5 w-3.5 fill-current'} aria-hidden />
-          </button>
+          <>
+            <button
+              type="button"
+              title="Start"
+              onClick={handleStart}
+              disabled={isRunning || isLocked}
+              className={`${controlBtn} ${inline ? 'text-emerald-500 hover:text-emerald-600 focus-visible:ring-emerald-300 disabled:opacity-30' : 'bg-emerald-500 hover:bg-emerald-600 focus-visible:ring-emerald-400'}`}
+            >
+              <Play className={inline ? 'h-3 w-3 fill-current' : 'h-4 w-4 fill-current'} aria-hidden />
+            </button>
+            <button
+              type="button"
+              title="Pause"
+              onClick={handlePauseClick}
+              disabled={!isRunning || isLocked}
+              className={`${controlBtn} ${inline ? 'text-amber-400 hover:text-amber-500 focus-visible:ring-amber-200 disabled:opacity-30' : 'bg-amber-400 hover:bg-amber-500 focus-visible:ring-amber-300'}`}
+            >
+              <Pause className={inline ? 'h-3 w-3' : 'h-4 w-4'} aria-hidden />
+            </button>
+            <button
+              type="button"
+              title="Stop"
+              onClick={handleStopClick}
+              disabled={displaySeconds < 1 || isLocked}
+              className={`${controlBtn} ${inline ? 'text-red-600 hover:text-red-700 focus-visible:ring-red-300 disabled:opacity-30' : 'bg-red-600 hover:bg-red-700 focus-visible:ring-red-400'}`}
+            >
+              <Square className={inline ? 'h-3 w-3 fill-current' : 'h-3.5 w-3.5 fill-current'} aria-hidden />
+            </button>
+          </>
           {showPauseDropdown ? (
             <div className="absolute right-0 top-[calc(100%+8px)] z-20 w-[min(92vw,360px)] rounded-xl border border-slate-200 bg-white p-3 shadow-xl ring-1 ring-slate-900/5">
               <div className="flex flex-col gap-2">

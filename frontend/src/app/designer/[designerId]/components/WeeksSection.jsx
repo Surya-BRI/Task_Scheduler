@@ -43,6 +43,8 @@ function CompletedTable({ tasks }) {
           <tr className="ui-table-header border-b border-slate-200">
             <th className="py-2.5 px-3 text-left">Task No</th>
             <th className="py-2.5 px-3 text-left">Project Details</th>
+            <th className="py-2.5 px-3 text-left">Design Type</th>
+            <th className="py-2.5 px-3 text-left">Rev</th>
             <th className="py-2.5 px-3 text-left">% Complete</th>
             <th className="py-2.5 px-3 text-left">Deadline</th>
           </tr>
@@ -50,11 +52,19 @@ function CompletedTable({ tasks }) {
         <tbody>
           {tasks.map((task, idx) => (
             <tr key={task.taskNo} className={idx % 2 === 0 ? "bg-white transition-colors hover:bg-slate-50" : "bg-slate-50/60 transition-colors hover:bg-slate-100/70"}>
-              <td className="py-2.5 px-3 font-semibold text-slate-900">{task.taskNo}</td>
-              <td className="py-2.5 px-3 text-slate-700">{task.projectDetails}</td>
+              <td className="py-2.5 px-3 font-semibold text-slate-900 whitespace-nowrap">{task.taskNo}</td>
+              <td className="py-2.5 px-3 text-slate-700 max-w-[220px]">
+                <span className="block truncate" title={task.projectDetails}>{task.projectDetails}</span>
+              </td>
+              <td className="py-2.5 px-3">
+                {task.designType ? (
+                  <span className="rounded bg-blue-50 px-1.5 py-0.5 text-[10px] font-medium text-blue-600 whitespace-nowrap">{task.designType}</span>
+                ) : <span className="text-slate-400">—</span>}
+              </td>
+              <td className="py-2.5 px-3 font-mono text-slate-500 whitespace-nowrap">{task.revisionCode ?? "—"}</td>
               <td className="py-2.5 px-3">
                 <div className="flex items-center gap-2">
-                  <div className="h-2.5 min-w-[80px] flex-1 overflow-hidden rounded-full bg-slate-200">
+                  <div className="h-2.5 min-w-[60px] flex-1 overflow-hidden rounded-full bg-slate-200">
                     <div
                       className="h-full rounded-full bg-blue-500"
                       style={{ width: `${task.pctComplete}%` }}
@@ -63,7 +73,7 @@ function CompletedTable({ tasks }) {
                   <span className="whitespace-nowrap font-medium text-slate-700">{task.pctComplete} %</span>
                 </div>
               </td>
-              <td className="py-2.5 px-3 text-slate-700">{task.deadline}</td>
+              <td className="py-2.5 px-3 text-slate-700 whitespace-nowrap">{task.deadline}</td>
             </tr>
           ))}
         </tbody>
