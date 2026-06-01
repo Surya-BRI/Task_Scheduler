@@ -39,6 +39,19 @@ These events are recorded by the current backend implementation:
   - Triggered by:
   - `POST /chatter-posts/:postId/comments`
 
+- `TASK_WORK_SUBMITTED`
+  - Triggered by:
+  - `POST /tasks/:id/submit-work`
+
+- `SCHEDULER_WEEK_SAVED`
+  - Triggered by: `PUT /scheduler-assignments/week/:weekStart`
+
+- `SCHEDULER_WEEK_LOCKED`
+  - Triggered by: `POST /scheduler-assignments/week/:weekStart/lock`
+
+- `SCHEDULER_WEEK_UNLOCKED`
+  - Triggered by: `DELETE /scheduler-assignments/week/:weekStart/lock`
+
 ## Not Included Yet
 
 The following are not covered by this rollout (unless already logged by older custom logic):
@@ -47,7 +60,6 @@ The following are not covered by this rollout (unless already logged by older cu
 - Leave request lifecycle events
 - Overtime request lifecycle events
 - Regularization request lifecycle events
-- Scheduler assignment lifecycle events
 - Dashboard view/open tracking
 - UI-only actions that do not call backend mutation endpoints
 

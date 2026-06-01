@@ -2,11 +2,25 @@
 
 import { useCallback, useEffect, useReducer, useRef, useState } from 'react'
 import { Pause, Play, Square, X } from 'lucide-react'
+import { apiClient } from '@/lib/api-client'
+
+function saveTimerStateToDb(taskId, accumulatedSeconds, pauseLog) {
+  apiClient
+    .post(`/tasks/${taskId}/save-timer`, {
+      accumulatedSeconds,
+      ...(pauseLog !== undefined ? { pauseLog: JSON.stringify(pauseLog) } : {}),
+    })
+    .catch(() => {})
+}
 
 const TIMER_SYNC_EVENT = 'design-list-task-timer-sync'
 
 function storageKey(taskId) {
   return `design_list_task_timer_${taskId}`
+}
+
+function pauseStorageKey(taskId) {
+  return `design_list_task_pauses_${taskId}`
 }
 
 function readPersisted(taskId) {
@@ -34,6 +48,28 @@ function writePersisted(taskId, accumulatedSeconds, runStartAt) {
   )
 }
 
+function readPersistedPauses(taskId) {
+  if (typeof window === 'undefined') return []
+  try {
+    const raw = sessionStorage.getItem(pauseStorageKey(taskId))
+    return raw ? JSON.parse(raw) : []
+  } catch {
+    return []
+  }
+}
+
+function appendPause(taskId, reason, durationSeconds) {
+  if (typeof window === 'undefined') return
+  const existing = readPersistedPauses(taskId)
+  existing.push({ reason, durationSeconds })
+  sessionStorage.setItem(pauseStorageKey(taskId), JSON.stringify(existing))
+}
+
+function clearPersistedPauses(taskId) {
+  if (typeof window === 'undefined') return
+  sessionStorage.removeItem(pauseStorageKey(taskId))
+}
+
 function formatHms(totalSeconds) {
   const s = Math.max(0, Math.floor(totalSeconds))
   const h = Math.floor(s / 3600)
@@ -49,10 +85,12 @@ function liveTotalSeconds(accumulatedSeconds, runStartAt) {
 
 export function ProjectTaskTimer({
   taskId,
+  taskStatus,
   launchAutostart,
   launchPauseModal,
   launchCompleteModal,
   onConsumedLaunchFlags,
+  onSubmitComplete,
   inline = false,
 }) {
   const [accumulatedSeconds, setAccumulatedSeconds] = useState(0)
@@ -61,6 +99,7 @@ export function ProjectTaskTimer({
   const [, tick] = useReducer((n) => n + 1, 0)
   const [pauseReason, setPauseReason] = useState('')
   const [showPauseDropdown, setShowPauseDropdown] = useState(false)
+  const pauseStartedAt = useRef(null)
   const [showCompleteModal, setShowCompleteModal] = useState(false)
   const [showSubmitConfirm, setShowSubmitConfirm] = useState(false)
   const [selectedFiles, setSelectedFiles] = useState([])
@@ -77,12 +116,40 @@ export function ProjectTaskTimer({
     'System issue',
   ]
 
-  const isRunning = runStartAt !== null
+  const isLocked = taskStatus === 'COMPLETED' || taskStatus === 'APPROVED'
+  const isRunning = runStartAt !== null && !isLocked
 
   useEffect(() => {
     const { accumulatedSeconds: acc, runStartAt: start } = readPersisted(taskId)
     setAccumulatedSeconds(acc)
     setRunStartAt(start)
+
+    // Always try DB restore when sessionStorage has no active run — covers
+    // the case where accumulated is 0 but pauses exist only in the draft session
+    if (start === null) {
+      apiClient
+        .get(`/tasks/${taskId}/timer-state`)
+        .then((data) => {
+          if (!data) return
+          const restored = data.accumulatedSeconds ?? 0
+          const restoredPauses = data.pauseLog ? JSON.parse(data.pauseLog) : []
+          // Only overwrite if DB has more than what sessionStorage has
+          if (restored > acc || (restored === 0 && restoredPauses.length > 0)) {
+            setAccumulatedSeconds(restored)
+            writePersisted(taskId, restored, null)
+          }
+          if (restoredPauses.length > 0) {
+            const existing = readPersistedPauses(taskId)
+            if (existing.length === 0) {
+              sessionStorage.setItem(pauseStorageKey(taskId), JSON.stringify(restoredPauses))
+            }
+          }
+        })
+        .catch(() => {})
+        .finally(() => setIsHydrated(true))
+      return
+    }
+
     setIsHydrated(true)
   }, [taskId])
 
@@ -127,10 +194,10 @@ export function ProjectTaskTimer({
   }, [taskId])
 
   useEffect(() => {
-    if (!runStartAt) return undefined
+    if (!runStartAt || isLocked) return undefined
     const id = window.setInterval(() => tick(), 1000)
     return () => window.clearInterval(id)
-  }, [runStartAt])
+  }, [runStartAt, isLocked])
 
   const freezeRunningClock = useCallback(() => {
     if (!runStartAt) return accumulatedSeconds
@@ -199,25 +266,39 @@ export function ProjectTaskTimer({
   }, [showCompleteModal, showSubmitConfirm])
 
   const handleStart = () => {
-    if (isRunning) return
+    if (isRunning || isLocked) return
     const startedAt = Date.now()
     setRunStartAt(startedAt)
     writePersisted(taskId, accumulatedSeconds, startedAt)
+    saveTimerStateToDb(taskId, accumulatedSeconds)
+    // Move task to WIP so it reflects active work
+    apiClient.patch(`/tasks/${taskId}/status`, { status: 'WIP' }).catch(() => {})
   }
 
   const handlePauseClick = () => {
     if (!isRunning) return
-    freezeRunningClock()
+    const frozen = freezeRunningClock()
+    pauseStartedAt.current = Date.now()
     setShowPauseDropdown(true)
+    saveTimerStateToDb(taskId, frozen)
   }
 
   const applyPauseReason = () => {
     const reason = pauseReason.trim()
     if (!reason) return
+    const durationSeconds = pauseStartedAt.current
+      ? Math.floor((Date.now() - pauseStartedAt.current) / 1000)
+      : 0
+    appendPause(taskId, reason, durationSeconds)
+    pauseStartedAt.current = null
+    setPauseReason('')
     setShowPauseDropdown(false)
+    const updatedPauses = readPersistedPauses(taskId)
+    saveTimerStateToDb(taskId, accumulatedSeconds, updatedPauses)
   }
 
   const cancelPauseReason = () => {
+    pauseStartedAt.current = null
     setPauseReason('')
     setShowPauseDropdown(false)
     const resumedAt = Date.now()
@@ -232,18 +313,41 @@ export function ProjectTaskTimer({
     setShowCompleteModal(true)
   }
 
-  const submitComplete = () => {
+  const [submitting, setSubmitting] = useState(false)
+
+  const submitComplete = async () => {
     const hasFiles = selectedFiles.length > 0
     const hasLink = submissionLink.trim().length > 0
     if (!hasFiles && !hasLink) return
-    setRunStartAt(null)
-    setShowPauseDropdown(false)
-    setPauseReason('')
-    setSelectedFiles([])
-    setSubmissionMode('file')
-    setSubmissionLink('')
-    setShowSubmitConfirm(false)
-    setShowCompleteModal(false)
+
+    const pauseLog = readPersistedPauses(taskId)
+    const formData = new FormData()
+    formData.append('durationSeconds', String(Math.floor(displaySeconds)))
+    if (hasLink) formData.append('submissionLink', submissionLink.trim())
+    if (pauseLog.length) formData.append('pauseLog', JSON.stringify(pauseLog))
+    selectedFiles.forEach((f) => formData.append('files', f))
+
+    setSubmitting(true)
+    try {
+      await apiClient.post(`/tasks/${taskId}/submit-work`, formData)
+      // Reset timer + clear pause log
+      writePersisted(taskId, 0, null)
+      clearPersistedPauses(taskId)
+      setAccumulatedSeconds(0)
+      setRunStartAt(null)
+      setShowPauseDropdown(false)
+      setPauseReason('')
+      setSelectedFiles([])
+      setSubmissionMode('file')
+      setSubmissionLink('')
+      setShowSubmitConfirm(false)
+      setShowCompleteModal(false)
+      onSubmitComplete?.()
+    } catch (err) {
+      alert(err?.message || 'Submission failed. Please try again.')
+    } finally {
+      setSubmitting(false)
+    }
   }
 
   const closeCompleteModal = () => {
@@ -287,7 +391,7 @@ export function ProjectTaskTimer({
     setShowSubmitConfirm(true)
   }
 
-  const displaySeconds = liveTotalSeconds(accumulatedSeconds, runStartAt)
+  const displaySeconds = isLocked ? accumulatedSeconds : liveTotalSeconds(accumulatedSeconds, runStartAt)
 
   const controlBtn = inline
     ? 'grid h-5 w-5 shrink-0 place-items-center rounded transition focus:outline-none focus-visible:ring-2 focus-visible:ring-offset-1 disabled:cursor-not-allowed'
@@ -308,33 +412,35 @@ export function ProjectTaskTimer({
               {formatHms(displaySeconds)}
             </span>
           </div>
-          <button
-            type="button"
-            title="Start"
-            onClick={handleStart}
-            disabled={isRunning}
-            className={`${controlBtn} ${inline ? 'text-emerald-500 hover:text-emerald-600 focus-visible:ring-emerald-300' : 'bg-emerald-500 hover:bg-emerald-600 focus-visible:ring-emerald-400'}`}
-          >
-            <Play className={inline ? 'h-3 w-3 fill-current' : 'h-4 w-4 fill-current'} aria-hidden />
-          </button>
-          <button
-            type="button"
-            title="Pause"
-            onClick={handlePauseClick}
-            disabled={!isRunning}
-            className={`${controlBtn} ${inline ? 'text-amber-400 hover:text-amber-500 focus-visible:ring-amber-200' : 'bg-amber-400 hover:bg-amber-500 focus-visible:ring-amber-300'}`}
-          >
-            <Pause className={inline ? 'h-3 w-3' : 'h-4 w-4'} aria-hidden />
-          </button>
-          <button
-            type="button"
-            title="Stop"
-            onClick={handleStopClick}
-            disabled={displaySeconds < 1}
-            className={`${controlBtn} ${inline ? 'text-red-600 hover:text-red-700 focus-visible:ring-red-300' : 'bg-red-600 hover:bg-red-700 focus-visible:ring-red-400'}`}
-          >
-            <Square className={inline ? 'h-3 w-3 fill-current' : 'h-3.5 w-3.5 fill-current'} aria-hidden />
-          </button>
+          <>
+            <button
+              type="button"
+              title="Start"
+              onClick={handleStart}
+              disabled={isRunning || isLocked}
+              className={`${controlBtn} ${inline ? 'text-emerald-500 hover:text-emerald-600 focus-visible:ring-emerald-300 disabled:opacity-30' : 'bg-emerald-500 hover:bg-emerald-600 focus-visible:ring-emerald-400'}`}
+            >
+              <Play className={inline ? 'h-3 w-3 fill-current' : 'h-4 w-4 fill-current'} aria-hidden />
+            </button>
+            <button
+              type="button"
+              title="Pause"
+              onClick={handlePauseClick}
+              disabled={!isRunning || isLocked}
+              className={`${controlBtn} ${inline ? 'text-amber-400 hover:text-amber-500 focus-visible:ring-amber-200 disabled:opacity-30' : 'bg-amber-400 hover:bg-amber-500 focus-visible:ring-amber-300'}`}
+            >
+              <Pause className={inline ? 'h-3 w-3' : 'h-4 w-4'} aria-hidden />
+            </button>
+            <button
+              type="button"
+              title="Stop"
+              onClick={handleStopClick}
+              disabled={displaySeconds < 1 || isLocked}
+              className={`${controlBtn} ${inline ? 'text-red-600 hover:text-red-700 focus-visible:ring-red-300 disabled:opacity-30' : 'bg-red-600 hover:bg-red-700 focus-visible:ring-red-400'}`}
+            >
+              <Square className={inline ? 'h-3 w-3 fill-current' : 'h-3.5 w-3.5 fill-current'} aria-hidden />
+            </button>
+          </>
           {showPauseDropdown ? (
             <div className="absolute right-0 top-[calc(100%+8px)] z-20 w-[min(92vw,360px)] rounded-xl border border-slate-200 bg-white p-3 shadow-xl ring-1 ring-slate-900/5">
               <div className="flex flex-col gap-2">
@@ -554,16 +660,18 @@ export function ProjectTaskTimer({
               <button
                 type="button"
                 onClick={() => setShowSubmitConfirm(false)}
-                className="rounded-lg border border-slate-200 bg-white px-4 py-2 text-sm font-semibold text-slate-700 shadow-sm transition hover:bg-slate-50"
+                disabled={submitting}
+                className="rounded-lg border border-slate-200 bg-white px-4 py-2 text-sm font-semibold text-slate-700 shadow-sm transition hover:bg-slate-50 disabled:opacity-60"
               >
                 Go back
               </button>
               <button
                 type="button"
-                onClick={submitComplete}
-                className="rounded-lg bg-blue-600 px-5 py-2 text-sm font-semibold text-white shadow-sm transition hover:bg-blue-700 focus:outline-none focus-visible:ring-2 focus-visible:ring-blue-400 focus-visible:ring-offset-2"
+                onClick={() => void submitComplete()}
+                disabled={submitting}
+                className="rounded-lg bg-blue-600 px-5 py-2 text-sm font-semibold text-white shadow-sm transition hover:bg-blue-700 focus:outline-none focus-visible:ring-2 focus-visible:ring-blue-400 focus-visible:ring-offset-2 disabled:opacity-60 disabled:cursor-not-allowed"
               >
-                Yes, submit
+                {submitting ? 'Submitting…' : 'Yes, submit'}
               </button>
             </div>
           </div>

@@ -1,11 +1,9 @@
 "use client";
 import { Flame, Star } from "lucide-react";
-import { useParams, useRouter } from "next/navigation";
+import { useRouter } from "next/navigation";
 
 export default function StatsBar({ stats, isDesignerMode = true, isHOD = false }) {
   const router = useRouter();
-  const params = useParams();
-  const designerId = params?.designerId || "d1";
   const { workLoad, workTill, monthlyTaskCount, monthlyHourCount, score, pendingRegularization, xp, streak } = stats;
 
   return (
@@ -67,7 +65,7 @@ export default function StatsBar({ stats, isDesignerMode = true, isHOD = false }
       {(isDesignerMode || isHOD) ? (
         <button
           type="button"
-          onClick={() => router.push(`/designer/${designerId}/requests#regularization`)}
+          onClick={() => router.push(`/designer/requests#regularization`)}
           className="flex items-center gap-1.5 hover:bg-slate-100 p-1 -m-1 rounded cursor-pointer transition-colors text-left"
         >
           <span className="inline-block h-2.5 w-2.5 rounded-full bg-orange-400 shrink-0" />

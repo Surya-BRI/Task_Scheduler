@@ -1,10 +1,12 @@
 import { useCallback, useEffect, useRef, useState } from 'react'
-import { Calendar, ChevronLeft, CircleCheck, Clock3, FileText, Flag, Hourglass, Info, Pencil, Shield, Trash2, Upload } from 'lucide-react'
+import { toast } from 'sonner'
+import { Calendar, CheckCircle2, ChevronLeft, CircleCheck, Clock3, FileText, Flag, Hourglass, Info, Link, Pencil, Shield, Trash2, Upload } from 'lucide-react'
 import { useParams, usePathname, useRouter, useSearchParams } from 'next/navigation'
 import DatePicker from 'react-datepicker'
 import { CreateTaskModal } from '../components/CreateTaskModal'
 import { ProjectCreateTaskModal } from '../components/ProjectCreateTaskModal'
 import { Navbar } from '../components/Navbar'
+import { ProjectTaskTimer } from '../components/ProjectTaskTimer'
 import { apiClient } from '@/lib/api-client'
 import { fetchProjectActivities, fetchTaskActivities } from '@/features/team-activity/services/activities.api'
 import { createChatterComment, createChatterPost, listChatterPosts } from '@/features/chatter/services/chatter-posts.api'
@@ -72,6 +74,96 @@ const PROJECT_TABLE_ROWS = Array.from({ length: 15 }, (_, idx) => ({
   comment: '',
   contRef: `QE$294$59${70 + idx}`,
 }))
+
+const HISTORY_FIELD_ACTIONS = new Set(['TASK_CREATED', 'ASSIGNED_TASK', 'STATUS_CHANGED'])
+
+function HistoryDialog({ title, projectId, type, onClose }) {
+  const [items, setItems] = useState([])
+  const [loading, setLoading] = useState(false)
+  const [pageIndex, setPageIndex] = useState(0)
+  const [cursorStack, setCursorStack] = useState([null])
+  const [nextCursor, setNextCursor] = useState(null)
+  const [hasMore, setHasMore] = useState(false)
+
+  useEffect(() => {
+    if (!projectId) return
+    let alive = true
+    setLoading(true)
+    const cursor = cursorStack[pageIndex]
+    fetchProjectActivities(projectId, { limit: 20, cursor: cursor ?? undefined })
+      .then((response) => {
+        if (!alive) return
+        let data = response?.data ?? []
+        if (type === 'field') data = data.filter((i) => HISTORY_FIELD_ACTIONS.has(i.action))
+        setItems(data)
+        setNextCursor(response?.pageInfo?.nextCursor ?? null)
+        setHasMore(Boolean(response?.pageInfo?.hasMore))
+      })
+      .catch(() => { if (alive) setItems([]) })
+      .finally(() => { if (alive) setLoading(false) })
+    return () => { alive = false }
+  }, [projectId, type, cursorStack, pageIndex])
+
+  const handlePrevious = () => {
+    if (!hasMore || !nextCursor) return
+    setCursorStack((prev) => {
+      const updated = [...prev]
+      if (updated.length <= pageIndex + 1) updated.push(nextCursor)
+      return updated
+    })
+    setPageIndex((i) => i + 1)
+  }
+
+  const handleLatest = () => {
+    setCursorStack([null])
+    setPageIndex(0)
+  }
+
+  return (
+    <div className="fixed inset-0 z-50 flex items-center justify-center p-4">
+      <button type="button" className="absolute inset-0 bg-slate-900/40" onClick={onClose} aria-label="Close" />
+      <div className="relative z-10 w-full max-w-3xl rounded-lg border border-slate-200 bg-white shadow-xl">
+        <div className="flex items-center justify-between border-b border-slate-200 px-6 py-3">
+          <h3 className="text-sm font-semibold text-slate-900">{title}</h3>
+          <button type="button" onClick={onClose} className="rounded p-1 text-slate-400 hover:bg-slate-100 hover:text-slate-700">✕</button>
+        </div>
+        {loading ? (
+          <p className="px-6 py-10 text-center text-xs text-slate-400">Loading…</p>
+        ) : (
+          <ul className="px-6 py-4 text-xs text-slate-700">
+            {items.length === 0 ? (
+              <li className="py-4 text-center text-slate-500">No history on this page.</li>
+            ) : items.map((entry) => (
+              <li key={entry.id} className="border-b border-slate-100 py-2.5">
+                <p className="text-[10px] text-slate-500">{new Date(entry.occurredAt).toLocaleDateString('en-CA')}</p>
+                <p className="mt-0.5">{entry.summary}</p>
+              </li>
+            ))}
+          </ul>
+        )}
+        <div className="flex items-center justify-between border-t border-slate-100 px-6 py-3">
+          <button
+            type="button"
+            onClick={handleLatest}
+            disabled={pageIndex === 0 || loading}
+            className="text-[11px] font-semibold text-blue-600 hover:underline disabled:opacity-40 disabled:cursor-not-allowed"
+          >
+            Latest
+          </button>
+          <span className="text-[10px] text-slate-400">Page {pageIndex + 1}</span>
+          <button
+            type="button"
+            onClick={handlePrevious}
+            disabled={!hasMore || loading}
+            className="text-[11px] font-semibold text-blue-600 hover:underline disabled:opacity-40 disabled:cursor-not-allowed"
+          >
+            Previous
+          </button>
+        </div>
+      </div>
+    </div>
+  )
+}
 
 function StagePill({ item }) {
   const Icon = item.icon
@@ -321,22 +413,24 @@ function ActivityTimelinePane({
   }
   return (
     <div className="mt-3 space-y-3">
-      <div className="inline-flex rounded-md border border-slate-200 bg-white p-1">
-        <button
-          type="button"
-          onClick={() => onModeChange('task')}
-          className={`rounded px-3 py-1 text-xs font-semibold ${mode === 'task' ? 'bg-slate-900 text-white' : 'text-slate-600 hover:bg-slate-100'}`}
-        >
-          Task
-        </button>
-        <button
-          type="button"
-          onClick={() => onModeChange('project')}
-          className={`rounded px-3 py-1 text-xs font-semibold ${mode === 'project' ? 'bg-slate-900 text-white' : 'text-slate-600 hover:bg-slate-100'}`}
-        >
-          Project
-        </button>
-      </div>
+      {onModeChange ? (
+        <div className="inline-flex rounded-md border border-slate-200 bg-white p-1">
+          <button
+            type="button"
+            onClick={() => onModeChange('task')}
+            className={`rounded px-3 py-1 text-xs font-semibold ${mode === 'task' ? 'bg-slate-900 text-white' : 'text-slate-600 hover:bg-slate-100'}`}
+          >
+            Task
+          </button>
+          <button
+            type="button"
+            onClick={() => onModeChange('project')}
+            className={`rounded px-3 py-1 text-xs font-semibold ${mode === 'project' ? 'bg-slate-900 text-white' : 'text-slate-600 hover:bg-slate-100'}`}
+          >
+            Project
+          </button>
+        </div>
+      ) : null}
 
       {loading ? (
         <div className="space-y-2">
@@ -604,7 +698,8 @@ export function TaskDetailsPage() {
   const [projectFiles, setProjectFiles] = useState([])
   const [uploadingProjectFiles, setUploadingProjectFiles] = useState(false)
   const [resolvingProjectId, setResolvingProjectId] = useState(false)
-  const [activityMode, setActivityMode] = useState('task')
+  const isCreationRoute = Boolean(pathname?.includes('-task-creation'))
+  const [activityMode] = useState(isCreationRoute ? 'project' : 'task')
   const [activityItems, setActivityItems] = useState([])
   const [activityLoading, setActivityLoading] = useState(false)
   const [activityError, setActivityError] = useState('')
@@ -612,7 +707,11 @@ export function TaskDetailsPage() {
   const [activityHasMore, setActivityHasMore] = useState(false)
   const [projectHistoryItems, setProjectHistoryItems] = useState([])
   const [fieldHistoryItems, setFieldHistoryItems] = useState([])
+  const [sidebarHasMore, setSidebarHasMore] = useState(false)
+  const [historyDialog, setHistoryDialog] = useState(null)
   const [taskAuditInfo, setTaskAuditInfo] = useState({ createdByHod: '-' })
+  const [taskRefreshCounter, setTaskRefreshCounter] = useState(0)
+  const [submittedSession, setSubmittedSession] = useState(null)
 
   useEffect(() => {
     let alive = true
@@ -680,8 +779,21 @@ export function TaskDetailsPage() {
     return () => {
       alive = false
     }
-  }, [recordId, queryOpNo, queryProjectCode, from])
+  }, [recordId, queryOpNo, queryProjectCode, from, taskRefreshCounter])
 
+
+  const launchAutostart = searchParams.get('autostart') === '1'
+  const launchPauseModal = searchParams.get('openPause') === '1'
+  const launchCompleteModal = searchParams.get('openComplete') === '1'
+
+  const clearTimerLaunchParams = useCallback(() => {
+    const next = new URLSearchParams(searchParams.toString())
+    next.delete('autostart')
+    next.delete('openPause')
+    next.delete('openComplete')
+    const qs = next.toString()
+    router.replace(qs ? `${pathname}?${qs}` : pathname, { scroll: false })
+  }, [pathname, router, searchParams])
 
   const selectTaskTab = useCallback(
     (tabId) => {
@@ -697,7 +809,6 @@ export function TaskDetailsPage() {
     [pathname, router, searchParams],
   )
 
-  const isCreationRoute = Boolean(pathname?.includes('-task-creation'))
   const isRetail = record?.designType === 'Retail'
   const rawTab = searchParams.get('tab')
   const activeTab =
@@ -720,6 +831,9 @@ export function TaskDetailsPage() {
   const pageTitle = resolvedOpCode ? `${resolvedOpCode} - ${pageTitleCore}` : pageTitleCore
   const canPostChatter = chatterMessage.trim().length > 0
   const hasExistingTask = Boolean(taskId || isUuid(record?.taskId ?? record?.id))
+  const taskStatus = record?.status ?? null
+  const isTerminalStatus = taskStatus === 'COMPLETED' || taskStatus === 'APPROVED'
+  const showTimer = !isCreationRoute && hasExistingTask && Boolean(taskId) && !isTerminalStatus && (from === 'designer-queue' || from === 'designer-design-list')
   const tabs = hasExistingTask && !isRetail ? [...TABS, PROJECT_TAB] : TABS
   useEffect(() => {
     let alive = true
@@ -802,10 +916,13 @@ export function TaskDetailsPage() {
     apiClient.get(`/tasks/${taskId}/sign-rows`).then((rows) => setSignRows(Array.isArray(rows) ? rows : [])).catch(() => setSignRows([]))
   }, [taskId])
 
+  const PROJECT_FILE_ACTIONS = new Set(['PROJECT_FILE_UPLOADED', 'PROJECT_FILE_DELETED'])
+
   const fetchActivities = useCallback(
     async (opts = { append: false, cursor: null }) => {
-      const targetId = activityMode === 'task' ? taskId : projectId
-      if (!targetId) {
+      // Always fetch by projectId so project-wide file events are included,
+      // then filter: keep events for this specific task + project file events
+      if (!projectId) {
         setActivityItems([])
         setActivityCursor(null)
         setActivityHasMore(false)
@@ -814,11 +931,16 @@ export function TaskDetailsPage() {
       setActivityLoading(true)
       setActivityError('')
       try {
-        const response =
-          activityMode === 'task'
-            ? await fetchTaskActivities(targetId, { limit: 20, cursor: opts.cursor ?? undefined })
-            : await fetchProjectActivities(targetId, { limit: 20, cursor: opts.cursor ?? undefined })
-        setActivityItems((prev) => (opts.append ? [...prev, ...(response?.data ?? [])] : (response?.data ?? [])))
+        const response = await fetchProjectActivities(projectId, { limit: 50, cursor: opts.cursor ?? undefined })
+        const allItems = response?.data ?? []
+        const filtered = isCreationRoute
+          ? allItems  // creation route: show all project activity
+          : allItems.filter(
+              (item) =>
+                PROJECT_FILE_ACTIONS.has(item.action) ||  // project-wide file events
+                item.task?.id === taskId                   // this task's events
+            )
+        setActivityItems((prev) => (opts.append ? [...prev, ...filtered] : filtered))
         setActivityCursor(response?.pageInfo?.nextCursor ?? null)
         setActivityHasMore(Boolean(response?.pageInfo?.hasMore))
       } catch (error) {
@@ -827,7 +949,7 @@ export function TaskDetailsPage() {
         setActivityLoading(false)
       }
     },
-    [activityMode, projectId, taskId],
+    [projectId, taskId, isCreationRoute],
   )
 
   useEffect(() => {
@@ -865,6 +987,15 @@ export function TaskDetailsPage() {
   }, [taskId])
 
   useEffect(() => {
+    if (!taskId || !isTerminalStatus) { setSubmittedSession(null); return }
+    let alive = true
+    apiClient.get(`/tasks/${taskId}/submitted-session`)
+      .then((data) => { if (alive) setSubmittedSession(data) })
+      .catch(() => { if (alive) setSubmittedSession(null) })
+    return () => { alive = false }
+  }, [taskId, isTerminalStatus])
+
+  useEffect(() => {
     let alive = true
     async function fetchSidebarHistory() {
       if (!projectId) {
@@ -874,16 +1005,18 @@ export function TaskDetailsPage() {
         return
       }
       try {
-        const response = await fetchProjectActivities(projectId, { limit: 30 })
+        const response = await fetchProjectActivities(projectId, { limit: 20 })
         const items = response?.data ?? []
         if (!alive) return
-        setProjectHistoryItems(items.slice(0, 6))
+        setProjectHistoryItems(items)
         const fieldActions = new Set(['TASK_CREATED', 'ASSIGNED_TASK', 'STATUS_CHANGED'])
-        setFieldHistoryItems(items.filter((item) => fieldActions.has(item.action)).slice(0, 6))
+        setFieldHistoryItems(items.filter((item) => fieldActions.has(item.action)))
+        setSidebarHasMore(Boolean(response?.pageInfo?.hasMore))
       } catch {
         if (!alive) return
         setProjectHistoryItems([])
         setFieldHistoryItems([])
+        setSidebarHasMore(false)
       }
     }
     fetchSidebarHistory()
@@ -894,13 +1027,14 @@ export function TaskDetailsPage() {
     }
   }, [projectId])
 
-  const fetchChatterPosts = useCallback(async () => {
+  const fetchChatterPosts = useCallback(async ({ silent = false } = {}) => {
     if (!projectId) {
       setChatterPosts([])
+      if (!silent) setChatterError('No project linked to this record — chatter cannot load.')
       return
     }
-    setChatterLoading(true)
     setChatterError('')
+    setChatterLoading(true)
     try {
       const posts = await listChatterPosts({ projectId, limit: 200 })
       const normalized = Array.isArray(posts) ? [...posts] : []
@@ -972,7 +1106,11 @@ export function TaskDetailsPage() {
 
   async function handlePostChatter() {
     const message = chatterMessage.trim()
-    if (!message || !projectId) return
+    if (!message) return
+    if (!projectId) {
+      setChatterError('Project is not yet linked. Please wait a moment and try again.')
+      return
+    }
     setChatterSubmitting(true)
     setChatterError('')
     try {
@@ -984,7 +1122,7 @@ export function TaskDetailsPage() {
       setChatterMessage('')
       await fetchChatterPosts()
     } catch (error) {
-      setChatterError(error instanceof Error ? error.message : 'Failed to post chatter')
+      toast.error(error instanceof Error ? error.message : 'Failed to post chatter')
     } finally {
       setChatterSubmitting(false)
     }
@@ -1000,7 +1138,7 @@ export function TaskDetailsPage() {
       setCommentByPostId((prev) => ({ ...prev, [postId]: '' }))
       await fetchChatterPosts()
     } catch (error) {
-      setChatterError(error instanceof Error ? error.message : 'Failed to post comment')
+      toast.error(error instanceof Error ? error.message : 'Failed to post comment')
     } finally {
       setCommentSubmittingPostId('')
     }
@@ -1161,6 +1299,85 @@ export function TaskDetailsPage() {
                           </div>
                         </div>
                       </div>
+                      {showTimer ? (
+                        <ProjectTaskTimer
+                          taskId={taskId}
+                          taskStatus={taskStatus}
+                          launchAutostart={launchAutostart}
+                          launchPauseModal={launchPauseModal}
+                          launchCompleteModal={launchCompleteModal}
+                          onConsumedLaunchFlags={clearTimerLaunchParams}
+                          onSubmitComplete={() => setTaskRefreshCounter((c) => c + 1)}
+                        />
+                      ) : null}
+                      {isTerminalStatus && submittedSession ? (
+                        <div className="mt-4 border-t border-slate-200 pt-4">
+                          <div className="flex items-center gap-2 mb-3">
+                            <CheckCircle2 className="h-4 w-4 text-emerald-600 shrink-0" />
+                            <span className="text-sm font-semibold text-slate-800">Work Submitted</span>
+                            {submittedSession.submittedBy && (
+                              <span className="text-xs text-slate-500">by {submittedSession.submittedBy}</span>
+                            )}
+                            {submittedSession.submittedAt && (
+                              <span className="ml-auto text-[11px] text-slate-400">
+                                {new Date(submittedSession.submittedAt).toLocaleString('en-GB', { day: '2-digit', month: 'short', year: 'numeric', hour: '2-digit', minute: '2-digit' })}
+                              </span>
+                            )}
+                          </div>
+                          <div className="rounded-lg border border-slate-200 bg-slate-50 p-3 space-y-2.5">
+                            <div className="flex items-center gap-2">
+                              <Clock3 className="h-3.5 w-3.5 text-slate-400 shrink-0" />
+                              <span className="text-xs text-slate-500 font-medium">Duration</span>
+                              <span className="ml-auto font-mono text-sm font-semibold text-slate-800">
+                                {(() => {
+                                  const s = submittedSession.durationSeconds ?? 0
+                                  const h = Math.floor(s / 3600)
+                                  const m = Math.floor((s % 3600) / 60)
+                                  const sec = s % 60
+                                  return `${h}h ${m}m ${sec}s`
+                                })()}
+                              </span>
+                            </div>
+                            {(submittedSession.submissionLink || submittedSession.files?.length > 0) && (
+                              <div>
+                                <div className="flex items-center gap-2 mb-1.5">
+                                  <FileText className="h-3.5 w-3.5 text-slate-400 shrink-0" />
+                                  <span className="text-xs text-slate-500 font-medium">Submitted Docs</span>
+                                </div>
+                                <ul className="space-y-1">
+                                  {submittedSession.submissionLink && (
+                                    <li className="flex items-center gap-2 rounded-md bg-white border border-slate-200 px-2.5 py-1.5 text-xs text-slate-800">
+                                      <Link className="h-3.5 w-3.5 shrink-0 text-slate-400" />
+                                      <a
+                                        href={submittedSession.submissionLink}
+                                        target="_blank"
+                                        rel="noreferrer"
+                                        className="truncate text-blue-600 hover:underline"
+                                        title={submittedSession.submissionLink}
+                                      >
+                                        {submittedSession.submissionLink}
+                                      </a>
+                                    </li>
+                                  )}
+                                  {submittedSession.files?.map((f, i) => (
+                                    <li key={i} className="flex items-center gap-2 rounded-md bg-white border border-slate-200 px-2.5 py-1.5 text-xs text-slate-800">
+                                      <FileText className="h-3.5 w-3.5 shrink-0 text-slate-400" />
+                                      <span className="truncate" title={f.fileName}>{f.fileName}</span>
+                                      {f.sizeBytes && (
+                                        <span className="ml-auto shrink-0 text-[10px] text-slate-400">
+                                          {f.sizeBytes > 1024 * 1024
+                                            ? `${(f.sizeBytes / (1024 * 1024)).toFixed(1)} MB`
+                                            : `${Math.round(f.sizeBytes / 1024)} KB`}
+                                        </span>
+                                      )}
+                                    </li>
+                                  ))}
+                                </ul>
+                              </div>
+                            )}
+                          </div>
+                        </div>
+                      ) : null}
                     </div>
                   ) : isRetail ? (
                     <div className="mt-3 border-t border-slate-200 pt-3">
@@ -1232,11 +1449,6 @@ export function TaskDetailsPage() {
 
               {activeTab === 'activity' ? (
                 <ActivityTimelinePane
-                  mode={activityMode}
-                  onModeChange={(next) => {
-                    setActivityMode(next)
-                    setActivityCursor(null)
-                  }}
                   items={activityItems}
                   loading={activityLoading}
                   error={activityError}
@@ -1260,11 +1472,16 @@ export function TaskDetailsPage() {
                       placeholder="Type your comment..."
                       className="mt-1.5 w-full resize-none rounded-md border border-slate-300 bg-white px-2.5 py-1.5 text-sm text-slate-900 outline-none focus:border-blue-500 focus:ring-2 focus:ring-blue-500/25"
                     />
-                    <div className="mt-1.5 flex justify-end">
+                    <div className="mt-1.5 flex items-center justify-between gap-2">
+                      {!projectId && !resolvingProjectId ? (
+                        <p className="text-[11px] text-amber-600">No project linked — chatter unavailable</p>
+                      ) : resolvingProjectId ? (
+                        <p className="text-[11px] text-slate-400">Resolving project…</p>
+                      ) : <span />}
                       <button
                         type="button"
                         onClick={handlePostChatter}
-                        disabled={!canPostChatter || chatterSubmitting}
+                        disabled={!canPostChatter || chatterSubmitting || !projectId || resolvingProjectId}
                         className="rounded-md bg-[#10a6e3] px-3.5 py-1.5 text-xs font-semibold text-white transition hover:bg-[#0f96cd] disabled:cursor-not-allowed disabled:opacity-60"
                       >
                         {chatterSubmitting ? 'Posting...' : 'Post'}
@@ -1423,13 +1640,18 @@ export function TaskDetailsPage() {
                   <ul className="mt-2 space-y-1.5 text-xs text-slate-700">
                     {projectHistoryItems.length === 0 ? (
                       <li className="text-slate-500">No history yet.</li>
-                    ) : projectHistoryItems.map((entry) => (
+                    ) : projectHistoryItems.slice(0, 4).map((entry) => (
                       <li key={entry.id} className="border-b border-slate-100 pb-1.5 last:border-b-0">
                         <p className="text-[10px] text-slate-500">{new Date(entry.occurredAt).toLocaleDateString('en-CA')}</p>
                         <p>{entry.summary}</p>
                       </li>
                     ))}
                   </ul>
+                  {projectHistoryItems.length > 4 && (
+                    <button type="button" onClick={() => setHistoryDialog({ title: 'Project History', type: 'project' })} className="mt-2 text-[11px] font-semibold text-blue-600 hover:underline">
+                      Show all ({projectHistoryItems.length}{sidebarHasMore ? '+' : ''})
+                    </button>
+                  )}
                 </section>
               ) : (
                 <section className="rounded-lg border border-slate-200 bg-white p-2.5 shadow-sm">
@@ -1437,13 +1659,18 @@ export function TaskDetailsPage() {
                   <ul className="mt-2 space-y-2 text-xs text-slate-700">
                     {fieldHistoryItems.length === 0 ? (
                       <li className="text-slate-500">No field changes yet.</li>
-                    ) : fieldHistoryItems.map((entry) => (
+                    ) : fieldHistoryItems.slice(0, 4).map((entry) => (
                       <li key={entry.id}>
                         <p className="text-xs text-slate-500">{new Date(entry.occurredAt).toLocaleDateString('en-CA')}</p>
                         <p>{entry.summary}</p>
                       </li>
                     ))}
                   </ul>
+                  {fieldHistoryItems.length > 4 && (
+                    <button type="button" onClick={() => setHistoryDialog({ title: 'Field History', type: 'field' })} className="mt-2 text-[11px] font-semibold text-blue-600 hover:underline">
+                      Show all ({fieldHistoryItems.length}{sidebarHasMore ? '+' : ''})
+                    </button>
+                  )}
                 </section>
               )}
 
@@ -1481,6 +1708,14 @@ export function TaskDetailsPage() {
         submissionDate={dateSubmission}
         record={record}
       />
+      {historyDialog && (
+        <HistoryDialog
+          title={historyDialog.title}
+          projectId={projectId}
+          type={historyDialog.type}
+          onClose={() => setHistoryDialog(null)}
+        />
+      )}
     </div>
   )
 }

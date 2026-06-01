@@ -1,6 +1,7 @@
 "use client";
 
-import { useState, useEffect, useRef, useMemo } from "react";
+import { useState, useEffect, useRef, useMemo, useCallback } from "react";
+import { toast } from "sonner";
 import { Search, Plus, PauseCircle, AlertTriangle } from "lucide-react";
 import { useRouter } from "next/navigation";
 import { Navbar } from "@/components/Navbar";
@@ -369,6 +370,9 @@ function buildSchedulerStateFromErpAssignments(records, rows, designers) {
                 id: taskId,
                 name: baseRecord.name,
                 tag: baseRecord.designType,
+                projectName: baseRecord.projectName || "",
+                designType: baseRecord.designType || "",
+                priority: baseRecord.priority || "",
                 baseName: baseRecord.name,
                 colorClass: prev?.colorClass ?? TASK_COLORS[colorIdx % TASK_COLORS.length],
             }
@@ -376,6 +380,9 @@ function buildSchedulerStateFromErpAssignments(records, rows, designers) {
                 id: taskId,
                 name: `Design task (${taskId.slice(0, 24)}${taskId.length > 24 ? "…" : ""})`,
                 tag: "ERP",
+                projectName: "",
+                designType: "",
+                priority: "",
                 baseName: "Design task",
                 colorClass: "bg-slate-100 border border-slate-200 text-slate-700",
             };
@@ -400,6 +407,21 @@ function buildSchedulerStateFromErpAssignments(records, rows, designers) {
     return { tasksObj, schedulesObj };
 }
 
+/**
+ * Keeps a state value and a ref in sync automatically.
+ * The ref is updated synchronously on every set call — safe to read
+ * inside async callbacks without stale-closure problems.
+ */
+function useStateRef(initial) {
+    const [state, setState] = useState(initial);
+    const ref = useRef(initial);
+    const set = useCallback((value) => {
+        ref.current = value;
+        setState(value);
+    }, []);
+    return [state, ref, set];
+}
+
 export function DesignSchedulerScreen() {
     const router = useRouter();
     const [designers, setDesigners] = useState([]);
@@ -408,9 +430,10 @@ export function DesignSchedulerScreen() {
     const [tasks, setTasks] = useState({});
     const [schedules, setSchedules] = useState({});
     const [loadedFromErp, setLoadedFromErp] = useState(false);
-    const [weekVersion, setWeekVersion] = useState(0);
-    const [saveError, setSaveError] = useState("");
-    const weekVersionRef = useRef(0);
+    const [weekVersion, weekVersionRef, setWeekVersion] = useStateRef(0);
+    const persistInFlightRef = useRef(false);
+    const pendingPersistRef  = useRef(null);
+    const flushPersistRef    = useRef(null);
 
     const [searchQuery, setSearchQuery] = useState("");
     const splitIdCounterRef = useRef(0);
@@ -422,9 +445,6 @@ export function DesignSchedulerScreen() {
     
     // Custom Date selection state
     const [currentDate, setCurrentDate] = useState(DEFAULT_SCHEDULER_REFERENCE_DATE);
-    useEffect(() => {
-        weekVersionRef.current = weekVersion;
-    }, [weekVersion]);
     useEffect(() => {
         let cancelled = false;
         apiClient.get("/users?role=DESIGNER")
@@ -468,6 +488,7 @@ export function DesignSchedulerScreen() {
                             designType: task?.designType || mapped.designType || "",
                             projectName: task?.project?.name || task?.project?.projectNo || "",
                             opNo: task?.opNo || "",
+                            priority: task?.priority || "",
                             status: task?.status,
                             updatedAt: task?.updatedAt,
                             holdStartedAt: task?.updatedAt,
@@ -513,55 +534,75 @@ export function DesignSchedulerScreen() {
         return assignments.filter((a) => a.assignedHours > 0);
     };
 
-    const persistWeekSnapshot = async (nextSchedules, nextTasks) => {
+    const reloadWeek = useCallback(async () => {
         const weekStartStr = formatLocalYyyyMmDd(getWeekDays(currentDate)[0]);
-        const payload = {
-            version: weekVersionRef.current,
-            assignments: buildWeekSnapshotPayload(nextSchedules, nextTasks),
-        };
-        const saved = await saveSchedulerWeekSnapshot(weekStartStr, payload);
-        setWeekVersion(saved.version);
-        setSaveError("");
-    };
-
-    useEffect(() => {
-        let cancelled = false;
-        const weekDatesLocal = getWeekDays(currentDate);
-        const weekStartStr = formatLocalYyyyMmDd(weekDatesLocal[0]);
-        Promise.all([
-            listSchedulerAssignmentsForWeek(weekStartStr),
-            getSchedulerWeekMeta(weekStartStr),
-        ])
-            .then(([rows, meta]) => {
-                if (cancelled)
-                    return;
-                setWeekVersion(Number(meta?.version ?? 0));
-                if (Array.isArray(rows) && rows.length > 0) {
-                    const next = buildSchedulerStateFromErpAssignments(queueRecords, rows, designers);
-                    setTasks(next.tasksObj);
-                    setSchedules(next.schedulesObj);
-                    setLoadedFromErp(true);
-                }
-                else {
-                    const mock = buildMockSchedulerState(queueRecords, designers);
-                    setTasks(mock.tasksObj);
-                    setSchedules(mock.schedulesObj);
-                    setLoadedFromErp(false);
-                }
-            })
-            .catch(() => {
-                if (cancelled)
-                    return;
+        try {
+            const [rows, meta] = await Promise.all([
+                listSchedulerAssignmentsForWeek(weekStartStr),
+                getSchedulerWeekMeta(weekStartStr),
+            ]);
+            setWeekVersion(Number(meta?.version ?? 0));
+            if (Array.isArray(rows) && rows.length > 0) {
+                const next = buildSchedulerStateFromErpAssignments(queueRecords, rows, designers);
+                setTasks(next.tasksObj);
+                setSchedules(next.schedulesObj);
+                setLoadedFromErp(true);
+            } else {
                 const mock = buildMockSchedulerState(queueRecords, designers);
                 setTasks(mock.tasksObj);
                 setSchedules(mock.schedulesObj);
                 setLoadedFromErp(false);
-                setWeekVersion(0);
-            });
-        return () => {
-            cancelled = true;
-        };
+            }
+        } catch {
+            const mock = buildMockSchedulerState(queueRecords, designers);
+            setTasks(mock.tasksObj);
+            setSchedules(mock.schedulesObj);
+            setLoadedFromErp(false);
+            setWeekVersion(0);
+        }
     }, [currentDate, queueRecords, designers]);
+
+    useEffect(() => {
+        pendingPersistRef.current = null;
+        reloadWeek();
+    }, [reloadWeek]);
+
+    const flushPersist = useCallback(async () => {
+        if (persistInFlightRef.current || !pendingPersistRef.current) return;
+        persistInFlightRef.current = true;
+        const { schedules: s, tasks: t, weekStartStr } = pendingPersistRef.current;
+        pendingPersistRef.current = null;
+        try {
+            const payload = {
+                version: weekVersionRef.current,
+                assignments: buildWeekSnapshotPayload(s, t),
+            };
+            const saved = await saveSchedulerWeekSnapshot(weekStartStr, payload);
+            const currentWeekStr = formatLocalYyyyMmDd(getWeekDays(currentDate)[0]);
+            if (weekStartStr === currentWeekStr) {
+                setWeekVersion(saved.version);
+            }
+        } catch (error) {
+            const msg = String(error?.message ?? '');
+            if (msg.includes('409')) {
+                toast.warning('Week was updated by someone else — reloading. Please redo your last change.');
+                reloadWeek();
+            } else {
+                toast.error('Unable to save scheduler changes. Please try again.');
+            }
+            console.warn('Unable to persist scheduler snapshot', error);
+        } finally {
+            persistInFlightRef.current = false;
+            flushPersistRef.current?.();
+        }
+    }, [currentDate, reloadWeek]);
+    flushPersistRef.current = flushPersist;
+
+    const persistWeekSnapshot = useCallback((nextSchedules, nextTasks) => {
+        const weekStartStr = formatLocalYyyyMmDd(getWeekDays(currentDate)[0]);
+        pendingPersistRef.current = { schedules: nextSchedules, tasks: nextTasks, weekStartStr };
+        flushPersist();
+    }, [currentDate, flushPersist]);
 
     const [overtimePrompt, setOvertimePrompt] = useState({
         open: false,
@@ -573,6 +614,40 @@ export function DesignSchedulerScreen() {
         splitIdCounterAfterFull: 0,
         splitIdCounterAfterSplit: 0,
     });
+    const [unassignPrompt, setUnassignPrompt] = useState({
+        open: false,
+        taskId: null,
+        taskName: '',
+        estimatedHours: 0,
+        sourceId: null,
+        sourceDay: null,
+        designerName: '',
+        projectName: '',
+        designType: '',
+        priority: '',
+    });
+    // Poll every 30s — version check only, full reload only when something changed
+    useEffect(() => {
+        const poll = async () => {
+            if (document.hidden) return;
+            const weekStartStr = formatLocalYyyyMmDd(getWeekDays(currentDate)[0]);
+            try {
+                const meta = await getSchedulerWeekMeta(weekStartStr);
+                const serverVersion = Number(meta?.version ?? 0);
+                if (serverVersion !== weekVersionRef.current) {
+                    reloadWeek();
+                }
+            } catch {}
+        };
+        const id = setInterval(poll, 30_000);
+        const onVisible = () => { if (document.visibilityState === 'visible') poll(); };
+        document.addEventListener('visibilitychange', onVisible);
+        return () => {
+            clearInterval(id);
+            document.removeEventListener('visibilitychange', onVisible);
+        };
+    }, [currentDate, reloadWeek]);
+
     const weekDates = useMemo(() => getWeekDays(currentDate), [currentDate]);
     const dateRangeText = useMemo(() => formatSchedulerDateRangeText(weekDates), [weekDates]);
     const customVisibleDays = useMemo(() => {
@@ -644,15 +719,7 @@ export function DesignSchedulerScreen() {
         setSchedules(preparedAssignment.updatedSchedules);
         setTasks(preparedAssignment.updatedTasks);
         setCurrentDay(preparedAssignment.targetDayIndex);
-        persistWeekSnapshot(preparedAssignment.updatedSchedules, preparedAssignment.updatedTasks).catch((error) => {
-            const msg = String(error?.message ?? "");
-            if (msg.includes("409")) {
-                setSaveError("Scheduler week changed on server. Please reload this week.");
-            } else {
-                setSaveError("Unable to save scheduler changes.");
-            }
-            console.warn("Unable to persist scheduler snapshot", error);
-        });
+        persistWeekSnapshot(preparedAssignment.updatedSchedules, preparedAssignment.updatedTasks);
     };
     const handleDropToDay = (e, targetDesignerId, targetDayIndex, targetTaskIndex, targetPosition = "after") => {
         e.preventDefault();
@@ -721,25 +788,18 @@ export function DesignSchedulerScreen() {
             splitIdCounterAfterSplit: splitIdAfterSplit,
         });
     };
-    const handleDropToPanel = (e, newStatus) => {
-        e.preventDefault();
-        const taskId = e.dataTransfer.getData("taskId");
-        const sourceId = e.dataTransfer.getData("sourceId");
-        const sourceDay = e.dataTransfer.getData("sourceDay");
-        if (!taskId)
-            return;
+    const commitPanelDrop = (taskId, sourceId, sourceDay, newStatus) => {
         setLoadedFromErp(false);
-        let updatedSchedules = schedules;
-        setSchedules(prev => {
-            if (sourceId === 'unassigned' || sourceId === 'ON_HOLD')
-                return prev;
-            const newSchedules = cloneState(prev);
-            if (newSchedules[sourceId] && newSchedules[sourceId][sourceDay]) {
-                newSchedules[sourceId][sourceDay] = newSchedules[sourceId][sourceDay].filter(id => id !== taskId);
-            }
-            updatedSchedules = newSchedules;
-            return newSchedules;
-        });
+        const newSchedules = (sourceId === 'unassigned' || sourceId === 'ON_HOLD')
+            ? schedules
+            : (() => {
+                const s = cloneState(schedules);
+                if (s[sourceId]?.[sourceDay]) {
+                    s[sourceId][sourceDay] = s[sourceId][sourceDay].filter(id => id !== taskId);
+                }
+                return s;
+            })();
+        setSchedules(newSchedules);
         const taskBefore = tasks[taskId];
         const nextTask = {
             ...taskBefore,
@@ -747,33 +807,43 @@ export function DesignSchedulerScreen() {
             holdStartedAt: newStatus === "ON_HOLD" ? new Date() : undefined,
         };
         const backendStatus = newStatus === "ON_HOLD" ? "ON_HOLD" : "PENDING";
-        setTasks(prev => ({
-            ...prev,
-            [taskId]: nextTask,
-        }));
-        setQueueRecords((prev) =>
-            prev.map((row) =>
-                row.id === taskId
-                    ? {
-                        ...row,
-                        status: backendStatus,
-                        updatedAt: new Date(),
-                        holdStartedAt: newStatus === "ON_HOLD" ? new Date() : row.holdStartedAt,
-                    }
-                    : row,
-            ),
-        );
-        if (!isUuid(taskId)) return;
+        const nextTasks = { ...tasks, [taskId]: nextTask };
+        setTasks(prev => ({ ...prev, [taskId]: nextTask }));
+        if (!isUuid(taskId)) {
+            persistWeekSnapshot(newSchedules, nextTasks);
+            return;
+        }
         apiClient.patch(`/tasks/${taskId}/status`, { status: backendStatus }).catch((error) => {
             console.warn("Unable to persist task status change", { taskId, backendStatus, error });
+            toast.error("Failed to update task status. Please try again.");
         });
-        persistWeekSnapshot(updatedSchedules, tasks).catch((error) => {
-            const msg = String(error?.message ?? "");
-            if (msg.includes("409")) {
-                setSaveError("Scheduler week changed on server. Please reload this week.");
-            } else {
-                setSaveError("Unable to save scheduler changes.");
-            }
+        persistWeekSnapshot(newSchedules, nextTasks);
+    };
+    const handleDropToPanel = (e) => {
+        e.preventDefault();
+        const taskId = e.dataTransfer.getData("taskId");
+        const sourceId = e.dataTransfer.getData("sourceId");
+        const sourceDay = e.dataTransfer.getData("sourceDay");
+        if (!taskId) return;
+        // Sidebar→sidebar rearrangements (already unassigned/on-hold) act immediately
+        if (sourceId === 'unassigned' || sourceId === 'ON_HOLD') {
+            commitPanelDrop(taskId, sourceId, sourceDay, 'unassigned');
+            return;
+        }
+        // Assigned grid task dropped onto sidebar — show confirmation modal
+        const task = tasks[taskId];
+        const designer = designers.find((d) => d.id === sourceId);
+        setUnassignPrompt({
+            open: true,
+            taskId,
+            taskName: task ? (task.baseName ?? task.name) : taskId,
+            estimatedHours: task?.estimatedHours ?? 0,
+            sourceId,
+            sourceDay,
+            designerName: designer?.name || '',
+            projectName: task?.projectName || '',
+            designType: task?.designType || task?.tag || '',
+            priority: task?.priority || '',
         });
     };
     const toggleHoldState = (taskId, shouldHold) => {
@@ -790,18 +860,6 @@ export function DesignSchedulerScreen() {
             },
         }));
         const backendStatus = shouldHold ? "ON_HOLD" : "PENDING";
-        setQueueRecords((prev) =>
-            prev.map((row) =>
-                row.id === taskId
-                    ? {
-                        ...row,
-                        status: backendStatus,
-                        updatedAt: new Date(),
-                        holdStartedAt: shouldHold ? new Date() : undefined,
-                    }
-                    : row,
-            ),
-        );
         if (!isUuid(taskId)) return;
         apiClient.patch(`/tasks/${taskId}/status`, { status: backendStatus }).catch((error) => {
             console.warn("Unable to persist hold toggle", { taskId, backendStatus, error });
@@ -920,25 +978,20 @@ export function DesignSchedulerScreen() {
           <div className="flex items-center gap-2"><div className="w-2.5 h-2.5 bg-orange-400 rounded-sm"></div> Total Hours: {totalScheduledHours}h</div>
           <div className="flex items-center gap-2 text-red-500"><AlertTriangle size={14}/> Overloaded: {overloadedCount}</div>
           <div className="flex items-center gap-2 ml-2">
-            <button type="button" onClick={() => setViewMode("week")} className={`ui-chip-button ${viewMode === "week" ? "ui-chip-button-active" : ""}`}>
-              Week
-            </button>
+            <button type="button" onClick={() => setCurrentDate((d) => { const p = new Date(d); p.setDate(p.getDate() - 7); return p; })} className="ui-chip-button px-2" title="Previous week">‹</button>
+            <span className="text-xs font-medium text-slate-600 bg-slate-100 border border-slate-200 rounded-md px-2.5 py-1 whitespace-nowrap">{dateRangeText}</span>
+            <button type="button" onClick={() => setCurrentDate((d) => { const n = new Date(d); n.setDate(n.getDate() + 7); return n; })} className="ui-chip-button px-2" title="Next week">›</button>
+            <div className="w-px h-4 bg-slate-200 mx-1" />
+            <button type="button" onClick={() => setViewMode("week")} className={`ui-chip-button ${viewMode === "week" ? "ui-chip-button-active" : ""}`}>Week</button>
             <button type="button" onClick={() => {
             const weekdayCurrentDay = isWeekdayIndex(currentDay) ? currentDay : WEEKDAY_INDICES[0];
             setViewMode("custom");
             setCurrentDay(weekdayCurrentDay);
             setSelectedDays([weekdayCurrentDay]);
-        }} className={`ui-chip-button ${viewMode === "custom" ? "ui-chip-button-active" : ""}`}>
-              Custom
-            </button>
+        }} className={`ui-chip-button ${viewMode === "custom" ? "ui-chip-button-active" : ""}`}>Custom</button>
           </div>
         </div>
       </div>
-      {saveError ? (
-        <div className="shrink-0 border-b border-amber-200 bg-amber-50 px-6 py-2 text-xs text-amber-800">
-          {saveError}
-        </div>
-      ) : null}
       {viewMode === "custom" && (<div className="flex shrink-0 items-center gap-2 border-b border-slate-200 bg-white px-6 py-2 text-xs">
           <div className="w-64 border-r border-slate-200 pr-4 font-medium text-slate-500">Visible Days</div>
           <div className="flex-1 flex items-center gap-1 px-6">
@@ -956,7 +1009,7 @@ export function DesignSchedulerScreen() {
 
       <div className="flex-1 flex overflow-hidden">
         {/* Left Sidebar */}
-        <div className="w-64 shrink-0 border-r border-slate-200 bg-slate-50 flex flex-col" onDragOver={handleDragOver} onDrop={(e) => handleDropToPanel(e, "unassigned")}>
+        <div className="w-64 shrink-0 border-r border-slate-200 bg-slate-50 flex flex-col" onDragOver={handleDragOver} onDrop={(e) => handleDropToPanel(e)}>
           <div className="p-4 flex flex-col h-full">
              <div className="flex items-center justify-between font-semibold text-slate-900 mb-2 text-xl tracking-tight">
                Design Tasks
@@ -1067,7 +1120,7 @@ export function DesignSchedulerScreen() {
                       <div className="w-[180px] shrink-0 py-1.5 px-3 flex items-center gap-2 border-r border-slate-200 bg-white z-10 transition-colors group-hover:bg-blue-50 cursor-pointer" onClick={() => {
                           const routeData = buildDesignerSnapshot(tasks, designerDays);
                           sessionStorage.setItem(`designer_data_${designer.id}`, JSON.stringify(routeData));
-                          router.push(`/designer/${designer.id}?from=home`);
+                          router.push(`/designer/dashboard`);
                       }} title={`Open ${designer.name}'s dashboard`}>
                         <div className="w-6 h-6 rounded-full bg-slate-800 text-white flex items-center justify-center text-[10px] font-bold leading-none shrink-0 shadow-sm">
                           {designer.initials}
@@ -1234,6 +1287,78 @@ export function DesignSchedulerScreen() {
             </div>
           </div>
         </div>) : null}
+      {unassignPrompt.open ? (
+        <div className="fixed inset-0 z-[120] flex items-center justify-center bg-slate-900/40 p-4" aria-modal="true" role="alertdialog">
+          <div className="ui-surface w-full max-w-lg p-6">
+            <h2 className="text-lg font-semibold text-slate-900">Remove from Schedule?</h2>
+            <p className="mt-3 text-sm leading-6 text-slate-600">
+              Choose what to do with this task after removing it from the calendar.
+            </p>
+            {unassignPrompt.designerName && (
+              <div className="mt-3 flex items-center gap-2 text-sm text-slate-600">
+                <div className="w-6 h-6 rounded-full bg-slate-800 text-white flex items-center justify-center text-[10px] font-bold shrink-0">
+                  {unassignPrompt.designerName.split(' ').map((p) => p[0]).join('').slice(0, 2).toUpperCase()}
+                </div>
+                <span>Removing from <span className="font-semibold text-slate-900">{unassignPrompt.designerName}</span>'s schedule</span>
+              </div>
+            )}
+            <div className="mt-4 rounded-lg border border-slate-200 bg-slate-50 px-4 py-3 text-sm text-slate-700">
+              <div className="font-medium text-slate-900 truncate">{unassignPrompt.taskName}</div>
+              {unassignPrompt.projectName && (
+                <div className="mt-1 text-xs text-slate-500 truncate">{unassignPrompt.projectName}</div>
+              )}
+              <div className="mt-2 flex flex-wrap items-center gap-2">
+                {unassignPrompt.designType && (
+                  <span className={`text-[10px] font-semibold px-2 py-0.5 rounded ${getDesignTypeChipClass(unassignPrompt.designType)}`}>
+                    {unassignPrompt.designType}
+                  </span>
+                )}
+                {unassignPrompt.priority && (
+                  <span className={`text-[10px] font-semibold px-2 py-0.5 rounded border ${
+                    unassignPrompt.priority === 'High' ? 'bg-red-50 text-red-700 border-red-200' :
+                    unassignPrompt.priority === 'Medium' ? 'bg-amber-50 text-amber-700 border-amber-200' :
+                    'bg-slate-50 text-slate-600 border-slate-200'
+                  }`}>
+                    {unassignPrompt.priority}
+                  </span>
+                )}
+                {unassignPrompt.estimatedHours > 0 && (
+                  <span className="text-[10px] text-slate-500">{unassignPrompt.estimatedHours}h estimated</span>
+                )}
+              </div>
+            </div>
+            <div className="mt-6 flex flex-wrap items-center justify-end gap-2">
+              <button
+                type="button"
+                onClick={() => setUnassignPrompt({ open: false, taskId: null, taskName: '', estimatedHours: 0, sourceId: null, sourceDay: null, designerName: '', projectName: '', designType: '', priority: '' })}
+                className="ui-chip-button"
+              >
+                Cancel
+              </button>
+              <button
+                type="button"
+                onClick={() => {
+                  commitPanelDrop(unassignPrompt.taskId, unassignPrompt.sourceId, unassignPrompt.sourceDay, 'ON_HOLD');
+                  setUnassignPrompt({ open: false, taskId: null, taskName: '', estimatedHours: 0, sourceId: null, sourceDay: null, designerName: '', projectName: '', designType: '', priority: '' });
+                }}
+                className="ui-chip-button"
+              >
+                Move to On Hold
+              </button>
+              <button
+                type="button"
+                onClick={() => {
+                  commitPanelDrop(unassignPrompt.taskId, unassignPrompt.sourceId, unassignPrompt.sourceDay, 'unassigned');
+                  setUnassignPrompt({ open: false, taskId: null, taskName: '', estimatedHours: 0, sourceId: null, sourceDay: null, designerName: '', projectName: '', designType: '', priority: '' });
+                }}
+                className="ui-chip-button ui-chip-button-active"
+              >
+                Unassign Task
+              </button>
+            </div>
+          </div>
+        </div>
+      ) : null}
     </div>);
 }
 function ClockIcon() {

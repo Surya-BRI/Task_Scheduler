@@ -1,6 +1,7 @@
 "use client";
 
 import { useState, useEffect, useRef } from "react";
+import { toast } from "sonner";
 import { useRouter, useSearchParams } from "next/navigation";
 import { Navbar } from "@/components/Navbar";
 import StatsBar from "../components/StatsBar";
@@ -14,7 +15,7 @@ function isUuidString(value) {
   return UUID_RE.test(String(value ?? "").trim());
 }
 
-export default function RequestsClient({ designer }) {
+export default function RequestsClient() {
   const router = useRouter();
   const searchParams = useSearchParams();
   const prefillApplied = useRef(false);
@@ -31,13 +32,11 @@ export default function RequestsClient({ designer }) {
     "Other",
   ];
 
-  const [stats, setStats] = useState(designer.stats);
+  const [stats, setStats] = useState({ workLoad: { tasks: 0, hours: 0 }, workTill: { label: '-', hours: 0 }, monthlyTaskCount: 0, monthlyHourCount: 0, score: 0, pendingRegularization: 0, xp: 0, streak: 0 });
   const [isHOD, setIsHOD] = useState(false);
-  const [toastMessage, setToastMessage] = useState(null);
-  const showToast = (msg) => {
-    setToastMessage(msg);
-    setTimeout(() => setToastMessage(null), 3000);
-  };
+  const [designerList, setDesignerList] = useState([]);
+  const [sessionName, setSessionName] = useState(null);
+  const [sessionUser, setSessionUser] = useState(null);
 
   const [sessionErpId, setSessionErpId] = useState(null);
 
@@ -45,6 +44,8 @@ export default function RequestsClient({ designer }) {
     import("@/lib/mock-auth").then(({ getSession }) => {
       const session = getSession();
       if (session?.role === "HOD") setIsHOD(true);
+      if (session?.name) setSessionName(session.name);
+      if (session) setSessionUser(session);
       if (session?.erpDesignerId && isUuidString(session.erpDesignerId)) {
         setSessionErpId(String(session.erpDesignerId).trim());
       } else if (session?.id && isUuidString(session.id)) {
@@ -53,10 +54,26 @@ export default function RequestsClient({ designer }) {
     });
   }, []);
 
-  const erpDesignerIdRaw =
-    sessionErpId ??
-    (designer?.erpDesignerId != null ? String(designer.erpDesignerId).trim() : "");
+  useEffect(() => {
+    apiClient.get("/users?role=DESIGNER").then((res) => {
+      const rows = Array.isArray(res) ? res : (Array.isArray(res?.data) ? res.data : []);
+      setDesignerList(rows.map((u) => ({ id: u.id, name: u.fullName })));
+    }).catch(() => {});
+  }, []);
+
+  const erpDesignerIdRaw = sessionErpId ?? '';
   const erpDesignerId = isUuidString(erpDesignerIdRaw) ? erpDesignerIdRaw : null;
+
+  const designer = {
+    id: sessionUser?.id ?? '',
+    erpDesignerId: sessionUser?.erpDesignerId ?? sessionUser?.id ?? null,
+    name: sessionUser?.name ?? 'Designer',
+    designation: 'Designer',
+    avatar: null,
+    dateRange: null,
+    stats,
+    currentDay: new Date().toLocaleDateString('en-US', { weekday: 'long', month: 'short', day: 'numeric' }).toUpperCase(),
+  };
 
   const [idleRequests, setIdleRequests] = useState([]);
   const [regularizationError, setRegularizationError] = useState(null);
@@ -139,12 +156,12 @@ export default function RequestsClient({ designer }) {
     const req = idleRequests.find((r) => r.id === id);
     if (!req || erpDesignerId == null) return;
     if (!req.date || !req.reason || (req.reason === "Other" && !String(req.notes ?? "").trim())) {
-      alert("Please fill in the Date and Reason (Required).");
+      toast.warning("Please fill in the Date and Reason (Required).");
       return;
     }
     const taskId = String(req.taskId ?? "").trim();
     if (!isUuidString(taskId)) {
-      alert("Please enter a valid Task UUID (same type as ErpTSRegularizationRequest.taskId).");
+      toast.warning("Please enter a valid Task UUID (same type as ErpTSRegularizationRequest.taskId).");
       return;
     }
     try {
@@ -158,9 +175,9 @@ export default function RequestsClient({ designer }) {
         status: "Pending",
       });
       await loadRegularization();
-      showToast("Regularization request submitted!");
+      toast.success("Regularization request submitted!");
     } catch (e) {
-      alert(e?.message || "Submit failed");
+      toast.error(e?.message || "Submit failed");
     }
   };
 
@@ -173,9 +190,9 @@ export default function RequestsClient({ designer }) {
       };
       await apiClient.patch(`/regularization-requests/${encodeURIComponent(id)}`, body);
       await loadRegularization();
-      showToast("Regularization request approved!");
+      toast.success("Regularization request approved!");
     } catch (e) {
-      alert(e?.message || "Approve failed");
+      toast.error(e?.message || "Approve failed");
     }
   };
 
@@ -183,24 +200,24 @@ export default function RequestsClient({ designer }) {
     try {
       await apiClient.patch(`/regularization-requests/${encodeURIComponent(id)}`, { status: "Rejected" });
       await loadRegularization();
-      showToast("Regularization request rejected!");
+      toast.success("Regularization request rejected!");
     } catch (e) {
-      alert(e?.message || "Reject failed");
+      toast.error(e?.message || "Reject failed");
     }
   };
 
   const handleRequestAllRegularization = async () => {
     const drafts = idleRequests.filter((r) => r.status === "unsubmitted" && r.localDraft);
     if (drafts.length === 0) {
-      showToast("No draft regularization rows to submit. Use Add row first.");
+      toast.success("No draft regularization rows to submit. Use Add row first.");
       return;
     }
     if (drafts.some((r) => !r.date || !r.reason || (r.reason === "Other" && !String(r.notes ?? "").trim()))) {
-      alert("Please fill in Date and Reason for all draft rows.");
+      toast.warning("Please fill in Date and Reason for all draft rows.");
       return;
     }
     if (drafts.some((r) => !isUuidString(String(r.taskId ?? "").trim()))) {
-      alert("Please enter a valid Task UUID for every draft row.");
+      toast.warning("Please enter a valid Task UUID for every draft row.");
       return;
     }
     if (erpDesignerId == null) return;
@@ -218,9 +235,9 @@ export default function RequestsClient({ designer }) {
         });
       }
       await loadRegularization();
-      showToast("All regularization requests submitted!");
+      toast.success("All regularization requests submitted!");
     } catch (e) {
-      alert(e?.message || "Bulk submit failed");
+      toast.warning(e?.message || "Bulk submit failed");
     }
   };
 
@@ -228,9 +245,9 @@ export default function RequestsClient({ designer }) {
   const [otForm, setOtForm] = useState({
     taskId: "",
     date: "",
-    estimatedRemaining: "4 hours",
-    requestedHours: "2 hours",
-    reason: "Unexpected scope change for animations",
+    estimatedRemaining: "2 hours",
+    requestedHours: "1 hour",
+    reason: "",
   });
 
   // Pre-fill OT form when navigated from SchedulerGrid OT button
@@ -257,20 +274,20 @@ export default function RequestsClient({ designer }) {
   const handleOtSubmit = async (e) => {
     e.preventDefault();
     if (erpDesignerId == null) {
-      alert("Designer UUID is not configured.");
+      toast.warning("Designer UUID is not configured.");
       return;
     }
     if (!isUuidString(String(otForm.taskId ?? "").trim())) {
-      alert("Please enter a valid Task UUID (ErpTSOvertimeRequest.taskId).");
+      toast.warning("Please enter a valid Task UUID (ErpTSOvertimeRequest.taskId).");
       return;
     }
     const m = /^(\d+)/.exec(otForm.requestedHours);
     if (m && Number(m[1]) > 4) {
-      alert("Cannot exceed 4 hours allowed limit.");
+      toast.warning("Cannot exceed 4 hours allowed limit.");
       return;
     }
     if (!otForm.date) {
-      alert("Please select a date.");
+      toast.warning("Please select a date.");
       return;
     }
     try {
@@ -284,10 +301,10 @@ export default function RequestsClient({ designer }) {
         status: "Pending",
       });
       await loadOvertime();
-      showToast("Overtime request submitted successfully!");
+      toast.success("Overtime request submitted successfully!");
       setOtForm((f) => ({ ...f, taskId: "", date: "" }));
     } catch (err) {
-      alert(err?.message || "Submit failed");
+      toast.error(err?.message || "Submit failed");
     }
   };
 
@@ -299,9 +316,9 @@ export default function RequestsClient({ designer }) {
         approvedHours: row?.requested ?? "0 hours",
       });
       await loadOvertime();
-      showToast("Overtime request approved!");
+      toast.success("Overtime request approved!");
     } catch (e) {
-      alert(e?.message || "Approve failed");
+      toast.error(e?.message || "Approve failed");
     }
   };
 
@@ -309,9 +326,9 @@ export default function RequestsClient({ designer }) {
     try {
       await apiClient.patch(`/overtime-requests/${encodeURIComponent(id)}`, { status: "Rejected" });
       await loadOvertime();
-      showToast("Overtime request rejected!");
+      toast.success("Overtime request rejected!");
     } catch (e) {
-      alert(e?.message || "Reject failed");
+      toast.error(e?.message || "Reject failed");
     }
   };
 
@@ -345,27 +362,31 @@ export default function RequestsClient({ designer }) {
         <div className="flex w-auto items-center gap-3 border-r border-slate-200 pr-6">
           <div className="w-8 h-8 rounded-full bg-slate-800 text-white flex items-center justify-center text-xs font-bold leading-none shrink-0 shadow-sm">
             {designer.avatar ? (
-              <img src={designer.avatar} alt={designer.name} className="h-full w-full object-cover rounded-full" />
+              <img src={designer.avatar} alt={sessionName ?? designer.name} className="h-full w-full object-cover rounded-full" />
             ) : (
-              <span>{designer.name.split(" ").map(n => n[0]).join("").slice(0, 2)}</span>
+              <span>{(sessionName ?? designer.name).split(" ").map(n => n[0]).join("").slice(0, 2)}</span>
             )}
           </div>
           {isHOD ? (
             <div className="flex flex-col">
               <span className="text-xs font-bold leading-tight text-slate-500 mb-1">Creating Request For:</span>
-              <select 
+              <select
                 className="text-sm font-semibold bg-slate-100 border border-slate-200 rounded px-2 py-1 outline-none focus:ring-2 focus:ring-[#5d5baf]/20 cursor-pointer"
-                value={designer.id}
-                onChange={(e) => router.push(`/designer/${e.target.value}/requests`)}
+                value={designer.erpDesignerId ?? designer.id}
+                onChange={() => router.push(`/designer/requests`)}
               >
-                <option value="d1">Alex Johnson</option>
-                <option value="d2">Alexander Allen</option>
-                <option value="d3">Benjamin Harris</option>
+                {designerList.length === 0 ? (
+                  <option value={designer.erpDesignerId ?? designer.id}>{sessionName ?? designer.name}</option>
+                ) : (
+                  designerList.map((d) => (
+                    <option key={d.id} value={d.id}>{d.name}</option>
+                  ))
+                )}
               </select>
             </div>
           ) : (
             <div className="flex flex-col">
-              <span className="text-xs font-bold leading-tight text-slate-900">{designer.name}</span>
+              <span className="text-xs font-bold leading-tight text-slate-900">{sessionName ?? designer.name}</span>
               <span className="text-[10px] leading-tight text-slate-500">{designer.designation}</span>
             </div>
           )}
@@ -628,7 +649,8 @@ export default function RequestsClient({ designer }) {
                 <div className="grid grid-cols-1 gap-4 xl:grid-cols-[1fr_auto] xl:items-end">
                   <div>
                     <label className="mb-1.5 block text-sm font-medium text-slate-700">Reason for Overtime</label>
-                    <select value={otForm.reason} onChange={(e) => setOtForm({ ...otForm, reason: e.target.value })} className={inputClass}>
+                    <select value={otForm.reason} onChange={(e) => setOtForm({ ...otForm, reason: e.target.value })} className={inputClass} required>
+                      <option value="" disabled>Select a reason</option>
                       <option>Unexpected scope change for animations</option>
                       <option>Client requested urgent revisions</option>
                       <option>Technical delays</option>
@@ -713,14 +735,6 @@ export default function RequestsClient({ designer }) {
         </div>
       </div>
 
-      {toastMessage && (
-        <div className="fixed bottom-4 right-4 z-50 bg-emerald-500 text-white px-5 py-3 rounded-xl shadow-lg flex items-center gap-3 animate-in fade-in slide-in-from-bottom-5">
-          <span className="text-sm font-semibold">{toastMessage}</span>
-          <button onClick={() => setToastMessage(null)} className="hover:text-emerald-100">
-            <X className="w-4 h-4" />
-          </button>
-        </div>
-      )}
     </div>
   );
 }

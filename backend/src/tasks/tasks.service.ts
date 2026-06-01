@@ -11,6 +11,8 @@ import { TaskFilesService } from './task-files.service';
 import { ActivityLoggerService } from '../activities/activity-logger.service';
 import { ActivityAction } from '../activities/activity-events';
 import { SaveSignRowsDto } from './dto/save-sign-rows.dto';
+import { SubmitWorkDto } from './dto/submit-work.dto';
+import { SaveTimerStateDto } from './dto/save-timer-state.dto';
 
 const TASK_SELECT = {
   id: true,
@@ -786,7 +788,10 @@ export class TasksService {
     const existing = await this.prisma.task.findUnique({ where: { id } });
     if (!existing) throw new NotFoundException('Task not found');
 
-    const assignee = await this.prisma.user.findUnique({ where: { id: dto.assigneeId } });
+    const [assignee, oldAssignee] = await Promise.all([
+      this.prisma.user.findUnique({ where: { id: dto.assigneeId } }),
+      existing.assigneeId ? this.prisma.user.findUnique({ where: { id: existing.assigneeId }, select: { fullName: true } }) : null,
+    ]);
     if (!assignee) throw new NotFoundException('Assignee not found');
 
     const updatedTask = await this.prisma.task.update({
@@ -817,6 +822,8 @@ export class TasksService {
         changes: {
           assigneeId: dto.assigneeId,
           newAssigneeName: assignee.fullName,
+          oldAssigneeId: existing.assigneeId ?? null,
+          oldAssigneeName: oldAssignee?.fullName ?? null,
         },
         context: { source: 'tasks.assign' },
       },
@@ -916,6 +923,169 @@ export class TasksService {
       where: { taskId },
       orderBy: { createdAt: 'asc' },
     });
+  }
+
+  async submitWork(
+    taskId: string,
+    userId: string,
+    dto: SubmitWorkDto,
+    files: Express.Multer.File[],
+  ) {
+    if (!this.isUuid(taskId)) throw new BadRequestException('Invalid task id');
+    const task = await this.prisma.task.findUnique({ where: { id: taskId } });
+    if (!task) throw new NotFoundException('Task not found');
+
+    // Upload files to S3
+    const uploadedFiles: { fileKey: string; fileName: string; mimeType: string; sizeBytes: number }[] = [];
+    for (const file of files ?? []) {
+      const result = await this.taskFilesService.uploadTaskFile(file, userId);
+      uploadedFiles.push({
+        fileKey: result.key,
+        fileName: result.fileName,
+        mimeType: result.mimeType,
+        sizeBytes: result.size,
+      });
+    }
+
+    // Create/promote work session + files in a transaction, then update task status
+    const session = await this.prisma.$transaction(async (tx) => {
+      const draft = await tx.taskWorkSession.findFirst({
+        where: { taskId, designerId: userId, status: 'Draft' },
+      });
+
+      let session;
+      if (draft) {
+        session = await tx.taskWorkSession.update({
+          where: { id: draft.id },
+          data: {
+            durationSeconds: dto.durationSeconds,
+            submissionLink: dto.submissionLink?.trim() || null,
+            pauseLog: dto.pauseLog || draft.pauseLog || null,
+            status: 'Submitted',
+            submittedAt: new Date(),
+          },
+        });
+      } else {
+        session = await tx.taskWorkSession.create({
+          data: {
+            taskId,
+            designerId: userId,
+            durationSeconds: dto.durationSeconds,
+            submissionLink: dto.submissionLink?.trim() || null,
+            pauseLog: dto.pauseLog || null,
+            status: 'Submitted',
+          },
+        });
+      }
+
+      if (uploadedFiles.length > 0) {
+        await tx.taskWorkSessionFile.createMany({
+          data: uploadedFiles.map((f) => ({
+            sessionId: session.id,
+            fileKey: f.fileKey,
+            fileName: f.fileName,
+            mimeType: f.mimeType || null,
+            sizeBytes: BigInt(f.sizeBytes),
+          })),
+        });
+      }
+
+      await tx.task.update({
+        where: { id: taskId },
+        data: {
+          status: 'COMPLETED',
+          completedAt: new Date(),
+          ...(task.startedAt ? {} : { startedAt: new Date() }),
+        },
+      });
+
+      return session;
+    });
+
+    await this.activityLogger.log({
+      action: ActivityAction.TASK_WORK_SUBMITTED,
+      userId,
+      taskId,
+      details: {
+        event: ActivityAction.TASK_WORK_SUBMITTED,
+        messageKey: 'task_work_submitted',
+        taskSnapshot: { id: task.id, taskNo: task.taskNo, opNo: task.opNo, title: task.title ?? undefined },
+        changes: {
+          durationSeconds: dto.durationSeconds,
+          fileCount: uploadedFiles.length,
+          hasLink: !!dto.submissionLink,
+        },
+        context: { sessionId: session.id, source: 'tasks.submitWork' },
+      },
+    });
+
+    return { sessionId: session.id, fileCount: uploadedFiles.length };
+  }
+
+  async getSubmittedSession(taskId: string) {
+    if (!this.isUuid(taskId)) throw new BadRequestException('Invalid task id');
+    const session = await this.prisma.taskWorkSession.findFirst({
+      where: { taskId, status: 'Submitted' },
+      orderBy: { submittedAt: 'desc' },
+      include: {
+        files: true,
+        designer: { select: { fullName: true } },
+      },
+    });
+    if (!session) return null;
+    return {
+      durationSeconds: session.durationSeconds,
+      submittedAt: session.submittedAt,
+      submissionLink: session.submissionLink,
+      submittedBy: session.designer?.fullName ?? null,
+      files: session.files.map((f) => ({
+        fileName: f.fileName,
+        mimeType: f.mimeType,
+        sizeBytes: f.sizeBytes,
+      })),
+    };
+  }
+
+  async getTimerState(taskId: string, userId: string) {
+    if (!this.isUuid(taskId)) throw new BadRequestException('Invalid task id');
+    const draft = await this.prisma.taskWorkSession.findFirst({
+      where: { taskId, designerId: userId, status: 'Draft' },
+      orderBy: { createdAt: 'desc' },
+    });
+    if (!draft) return null;
+    return { accumulatedSeconds: draft.durationSeconds, pauseLog: draft.pauseLog ?? null };
+  }
+
+  async saveTimerState(taskId: string, userId: string, dto: SaveTimerStateDto) {
+    if (!this.isUuid(taskId)) throw new BadRequestException('Invalid task id');
+    const task = await this.prisma.task.findUnique({ where: { id: taskId } });
+    if (!task) throw new NotFoundException('Task not found');
+
+    const existing = await this.prisma.taskWorkSession.findFirst({
+      where: { taskId, designerId: userId, status: 'Draft' },
+    });
+
+    if (existing) {
+      await this.prisma.taskWorkSession.update({
+        where: { id: existing.id },
+        data: {
+          durationSeconds: dto.accumulatedSeconds,
+          pauseLog: dto.pauseLog ?? existing.pauseLog,
+        },
+      });
+      return { sessionId: existing.id };
+    }
+
+    const created = await this.prisma.taskWorkSession.create({
+      data: {
+        taskId,
+        designerId: userId,
+        durationSeconds: dto.accumulatedSeconds,
+        pauseLog: dto.pauseLog ?? null,
+        status: 'Draft',
+      },
+    });
+    return { sessionId: created.id };
   }
 
   async saveSignRows(taskId: string, dto: SaveSignRowsDto) {

@@ -11,10 +11,11 @@ import {
   Put,
   Query,
   UploadedFile,
+  UploadedFiles,
   UseGuards,
   UseInterceptors,
 } from '@nestjs/common';
-import { FileInterceptor } from '@nestjs/platform-express';
+import { FileInterceptor, FilesInterceptor } from '@nestjs/platform-express';
 import { memoryStorage } from 'multer';
 import { TasksService } from './tasks.service';
 import { CreateTaskDto } from './dto/create-task.dto';
@@ -23,6 +24,8 @@ import { UpdateTaskDto } from './dto/update-task.dto';
 import { AssignTaskDto } from './dto/assign-task.dto';
 import { UpdateTaskStatusDto } from './dto/update-task-status.dto';
 import { SaveSignRowsDto } from './dto/save-sign-rows.dto';
+import { SubmitWorkDto } from './dto/submit-work.dto';
+import { SaveTimerStateDto } from './dto/save-timer-state.dto';
 import { JwtAuthGuard } from '../common/guards/jwt-auth.guard';
 import { RolesGuard } from '../common/guards/roles.guard';
 import { Roles } from '../common/decorators/roles.decorator';
@@ -150,6 +153,49 @@ export class TasksController {
   @Roles(UserRole.HOD, UserRole.ADMIN, UserRole.PROJECT_MANAGER)
   saveSignRows(@Param('id') id: string, @Body() dto: SaveSignRowsDto) {
     return this.tasksService.saveSignRows(id, dto);
+  }
+
+  /** GET /tasks/:id/submitted-session — fetch the most recent submitted work session */
+  @Get(':id/submitted-session')
+  @Roles(UserRole.HOD, UserRole.DESIGNER, UserRole.ADMIN, UserRole.PROJECT_MANAGER)
+  getSubmittedSession(@Param('id') id: string) {
+    return this.tasksService.getSubmittedSession(id);
+  }
+
+  /** GET /tasks/:id/timer-state — fetch draft session for cold-start restore */
+  @Get(':id/timer-state')
+  @Roles(UserRole.HOD, UserRole.DESIGNER, UserRole.ADMIN, UserRole.PROJECT_MANAGER)
+  getTimerState(@Param('id') id: string, @CurrentUser() user: JwtPayload) {
+    return this.tasksService.getTimerState(id, user.sub);
+  }
+
+  /** POST /tasks/:id/save-timer — upsert draft session on start/pause */
+  @Post(':id/save-timer')
+  @Roles(UserRole.HOD, UserRole.DESIGNER, UserRole.ADMIN, UserRole.PROJECT_MANAGER)
+  saveTimerState(
+    @Param('id') id: string,
+    @CurrentUser() user: JwtPayload,
+    @Body() dto: SaveTimerStateDto,
+  ) {
+    return this.tasksService.saveTimerState(id, user.sub, dto);
+  }
+
+  /** POST /tasks/:id/submit-work — all authenticated roles (designer submits their timer work) */
+  @Post(':id/submit-work')
+  @Roles(UserRole.HOD, UserRole.DESIGNER, UserRole.ADMIN, UserRole.PROJECT_MANAGER)
+  @UseInterceptors(
+    FilesInterceptor('files', 10, {
+      storage: memoryStorage(),
+      limits: { fileSize: 20 * 1024 * 1024 },
+    }),
+  )
+  submitWork(
+    @Param('id') id: string,
+    @CurrentUser() user: JwtPayload,
+    @Body() dto: SubmitWorkDto,
+    @UploadedFiles() files: Express.Multer.File[],
+  ) {
+    return this.tasksService.submitWork(id, user.sub, dto, files ?? []);
   }
 
   /** DELETE /tasks/:id — Admin only */
