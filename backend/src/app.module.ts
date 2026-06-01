@@ -18,6 +18,7 @@ import { resolveEnvFilePaths } from './config/resolve-env-file';
 import { ActivitiesModule } from './activities/activities.module';
 import { RequestsModule } from './requests/requests.module';
 import { DashboardModule } from './dashboard/dashboard.module';
+import { ChatModule } from './chat/chat.module';
 
 @Module({
   imports: [
@@ -42,6 +43,7 @@ import { DashboardModule } from './dashboard/dashboard.module';
     ActivitiesModule,
     RequestsModule,
     DashboardModule,
+    ChatModule,
   ],
 })
 export class AppModule {}

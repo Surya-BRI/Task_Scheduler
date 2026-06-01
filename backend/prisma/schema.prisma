@@ -61,6 +61,8 @@ model User {
   schedulerAssignmentHistory SchedulerAssignmentHistory[] @relation("SchedulerAssignmentHistoryChangedBy")
   designTasksAssigned      DesignTask[]               @relation("DesignTaskAssignee")
   designTasksUpdated       DesignTask[]               @relation("DesignTaskUpdatedBy")
+  conversations            ConversationParticipant[]
+  messages                 Message[]                  @relation("MessageSender")
 
   createdAt DateTime @default(dbgenerated("sysutcdatetime()"))
   updatedAt DateTime @default(dbgenerated("sysutcdatetime()")) @updatedAt
@@ -503,4 +505,48 @@ model Notification {
   createdAt DateTime @default(now())
 
   @@map("ErpTSNotification")
+}
+
+// ---------------------------------------------------------
+// REALTIME CHAT / CONVERSATIONS (CHATTER DIRECT MESSAGES)
+// ---------------------------------------------------------
+model Conversation {
+  id        String   @id @default(dbgenerated("newid()")) @db.UniqueIdentifier
+  name      String?  @db.NVarChar(255)
+  isGroup   Boolean  @default(false)
+  createdAt DateTime @default(dbgenerated("sysutcdatetime()"))
+  updatedAt DateTime @default(dbgenerated("sysutcdatetime()")) @updatedAt
+
+  participants ConversationParticipant[]
+  messages     Message[]
+
+  @@map("ErpTSConversation")
+}
+
+model ConversationParticipant {
+  id             String       @id @default(dbgenerated("newid()")) @db.UniqueIdentifier
+  conversationId String       @db.UniqueIdentifier
+  userId         String       @db.UniqueIdentifier
+  joinedAt       DateTime     @default(dbgenerated("sysutcdatetime()"))
+  lastReadAt     DateTime     @default(dbgenerated("sysutcdatetime()"))
+
+  conversation   Conversation @relation(fields: [conversationId], references: [id], onDelete: Cascade, onUpdate: NoAction)
+  user           User         @relation(fields: [userId], references: [id], onDelete: Cascade, onUpdate: NoAction)
+
+  @@unique([conversationId, userId])
+  @@map("ErpTSConversationParticipant")
+}
+
+model Message {
+  id             String       @id @default(dbgenerated("newid()")) @db.UniqueIdentifier
+  conversationId String       @db.UniqueIdentifier
+  senderId       String       @db.UniqueIdentifier
+  content        String       @db.NVarChar(Max)
+  createdAt      DateTime     @default(dbgenerated("sysutcdatetime()"))
+  updatedAt      DateTime     @default(dbgenerated("sysutcdatetime()")) @updatedAt
+
+  conversation   Conversation @relation(fields: [conversationId], references: [id], onDelete: Cascade, onUpdate: NoAction)
+  sender         User         @relation("MessageSender", fields: [senderId], references: [id], onDelete: Cascade, onUpdate: NoAction)
+
+  @@map("ErpTSMessage")
 }
