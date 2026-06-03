@@ -4,6 +4,27 @@ import { Reply, ThumbsUp } from "lucide-react";
 import { LUCIDE_ICON_STROKE } from "@/constants/icons";
 import { formatRelative } from "../lib/teamActivityFilters";
 
+const ACTION_BADGE = {
+  TASK_CREATED:           { label: "Task Created",      color: "bg-emerald-100 text-emerald-700" },
+  ASSIGNED_TASK:          { label: "Assigned",          color: "bg-blue-100 text-blue-700" },
+  STATUS_CHANGED:         { label: "Status Changed",    color: "bg-violet-100 text-violet-700" },
+  TASK_WORK_SUBMITTED:    { label: "Work Submitted",    color: "bg-amber-100 text-amber-700" },
+  PROJECT_FILE_UPLOADED:  { label: "File Uploaded",     color: "bg-sky-100 text-sky-700" },
+  PROJECT_FILE_DELETED:   { label: "File Deleted",      color: "bg-red-100 text-red-700" },
+  TASK_FILE_UPLOADED:     { label: "File Uploaded",     color: "bg-sky-100 text-sky-700" },
+  CREATED_CHATTER_POST:   { label: "Chatter Post",      color: "bg-slate-100 text-slate-600" },
+  CREATED_CHATTER_COMMENT:{ label: "Chatter Comment",   color: "bg-slate-100 text-slate-600" },
+  SCHEDULER_WEEK_SAVED:   { label: "Schedule Saved",    color: "bg-teal-100 text-teal-700" },
+  SCHEDULER_WEEK_LOCKED:          { label: "Schedule Locked",        color: "bg-orange-100 text-orange-700" },
+  SCHEDULER_WEEK_UNLOCKED:        { label: "Schedule Unlocked",      color: "bg-orange-100 text-orange-700" },
+  LEAVE_REQUEST_SUBMITTED:        { label: "Leave Request",          color: "bg-indigo-100 text-indigo-700" },
+  LEAVE_REQUEST_STATUS_CHANGED:   { label: "Leave Updated",          color: "bg-indigo-100 text-indigo-700" },
+  REGULARIZATION_SUBMITTED:       { label: "Regularization",         color: "bg-purple-100 text-purple-700" },
+  REGULARIZATION_STATUS_CHANGED:  { label: "Regularization Updated", color: "bg-purple-100 text-purple-700" },
+  OVERTIME_REQUEST_SUBMITTED:     { label: "Overtime Request",       color: "bg-rose-100 text-rose-700" },
+  OVERTIME_REQUEST_STATUS_CHANGED:{ label: "Overtime Updated",       color: "bg-rose-100 text-rose-700" },
+};
+
 function MessageBody({ segments }) {
   return (
     <p className="text-sm leading-6 text-slate-800">
@@ -28,32 +49,10 @@ function MessageBody({ segments }) {
 }
 
 export function ActivityFeedItem(props) {
-  const { item, nowMs } = props;
-  if (item.kind === "project_milestone") {
-    const ts = formatRelative(new Date(item.occurredAt).getTime(), nowMs);
-    return (
-      <li className="flex gap-4 py-4">
-        <div className="w-9 shrink-0" aria-hidden />
-        <div className="min-w-0 flex-1">
-          <p className="text-base font-semibold leading-snug text-slate-900">Project: {item.project}</p>
-          <p className="mt-0.5 text-sm font-medium leading-snug text-slate-600">{item.team}</p>
-          <p className="mt-2 text-xs text-slate-500">{ts}</p>
-        </div>
-        <div className="flex shrink-0 items-start gap-0.5">
-          <button type="button" className="ui-icon-button h-8 w-8 text-slate-500" aria-label="Reply">
-            <Reply className="h-5 w-5" strokeWidth={LUCIDE_ICON_STROKE} aria-hidden />
-          </button>
-          <button type="button" className="ui-icon-button h-8 w-8 text-slate-500" aria-label="Like">
-            <ThumbsUp className="h-5 w-5" strokeWidth={LUCIDE_ICON_STROKE} aria-hidden />
-          </button>
-        </div>
-      </li>
-    );
-  }
-
-  const { liked, onToggleLike } = props;
+  const { item, nowMs, liked, onToggleLike } = props;
 
   const ts = formatRelative(new Date(item.occurredAt).getTime(), nowMs);
+  const badge = ACTION_BADGE[item.action];
 
   return (
     <li className="flex gap-4 py-4">
@@ -65,6 +64,11 @@ export function ActivityFeedItem(props) {
         />
       </div>
       <div className="min-w-0 flex-1">
+        {badge && (
+          <span className={`mb-1 inline-block rounded-full px-2 py-0.5 text-[11px] font-medium leading-none ${badge.color}`}>
+            {badge.label}
+          </span>
+        )}
         <MessageBody segments={item.messageSegments} />
         <p className="mt-1.5 text-xs leading-normal text-slate-500">{ts}</p>
       </div>

@@ -2,11 +2,18 @@ import { Injectable } from '@nestjs/common';
 import { PrismaService } from '../prisma/prisma.service';
 import { ActivityAction } from './activity-events';
 
+const MILESTONE_ACTIONS = new Set([
+  ActivityAction.SCHEDULER_WEEK_LOCKED,
+  ActivityAction.PROJECT_FILE_UPLOADED,
+  ActivityAction.TASK_WORK_SUBMITTED,
+]);
+
 type FindInput = {
   limit?: number;
   cursor?: string;
   taskId?: string;
   projectId?: string;
+  userId?: string;
 };
 
 @Injectable()
@@ -20,14 +27,36 @@ export class ActivitiesService {
     if (msg === 'status_changed') {
       const oldStatus = details?.changes?.oldStatus ?? '-';
       const newStatus = details?.changes?.newStatus ?? '-';
-      return `${actorName} changed status ${oldStatus} -> ${newStatus}`;
+      return `${actorName} changed status ${oldStatus} → ${newStatus}`;
     }
     if (msg === 'project_file_uploaded') return `${actorName} uploaded ${details?.fileMeta?.fileName ?? 'a file'}`;
     if (msg === 'project_file_deleted') return `${actorName} deleted ${details?.fileMeta?.fileName ?? 'a file'}`;
     if (msg === 'task_file_uploaded') return `${actorName} uploaded ${details?.fileMeta?.fileName ?? 'a file'} to task files`;
     if (msg === 'chatter_post_created') return `${actorName} posted in chatter`;
     if (msg === 'chatter_comment_created') return `${actorName} commented on chatter`;
-    return `${actorName} performed ${action}`;
+    if (msg === 'task_work_submitted') {
+      const mins = Math.round((details?.changes?.durationSeconds ?? 0) / 60);
+      const taskNo = details?.taskSnapshot?.taskNo ?? '';
+      return `${actorName} submitted work on task ${taskNo} (${mins} min)`.replace(/\s+/g, ' ').trim();
+    }
+    if (msg === 'scheduler_week_saved') return `${actorName} saved the schedule for week of ${details?.context?.weekStart ?? ''}`;
+    if (msg === 'scheduler_week_locked') return `${actorName} locked the schedule for week of ${details?.context?.weekStart ?? ''}`;
+    if (msg === 'scheduler_week_unlocked') return `${actorName} unlocked the schedule for week of ${details?.context?.weekStart ?? ''}`;
+    if (msg === 'leave_request_submitted')
+      return `${actorName} submitted a ${details?.context?.type ?? 'leave'} request`;
+    if (msg === 'leave_request_status_changed')
+      return `${actorName} ${(details?.changes?.newStatus as string)?.toLowerCase() ?? 'updated'} a leave request`;
+    if (msg === 'regularization_submitted')
+      return `${actorName} submitted a regularization request`;
+    if (msg === 'regularization_status_changed')
+      return `${actorName} ${(details?.changes?.newStatus as string)?.toLowerCase() ?? 'updated'} a regularization request`;
+    if (msg === 'overtime_request_submitted')
+      return `${actorName} submitted an overtime request`;
+    if (msg === 'overtime_request_status_changed')
+      return `${actorName} ${(details?.changes?.newStatus as string)?.toLowerCase().replace(/_/g, ' ') ?? 'updated'} an overtime request`;
+    // Graceful fallback: convert RAW_ACTION_NAME → "raw action name"
+    const readable = action.toLowerCase().replace(/_/g, ' ');
+    return `${actorName} ${readable}`;
   }
 
   private formatSeverity(action: string): 'info' | 'success' | 'warning' {
@@ -43,6 +72,9 @@ export class ActivitiesService {
     const where: Record<string, unknown> = {};
     if (cursorDate && !Number.isNaN(cursorDate.getTime())) {
       where.createdAt = { lt: cursorDate };
+    }
+    if (input.userId) {
+      where.userId = input.userId;
     }
     if (input.taskId) {
       where.taskId = input.taskId;
@@ -134,11 +166,12 @@ export class ActivitiesService {
     };
   }
 
-  async findAll(input: { limit?: number }) {
-    const result = await this.queryActivities({ limit: input.limit });
+  async findAll(input: { limit?: number; userId?: string }) {
+    const result = await this.queryActivities({ limit: input.limit, userId: input.userId });
     return result.data.map((item) => ({
       id: item.id,
-      kind: 'task_update',
+      action: item.action,
+      kind: MILESTONE_ACTIONS.has(item.action as any) ? 'project_milestone' : 'task_update',
       user: item.actor,
       messageSegments: [{ type: 'text', value: item.summary }],
       occurredAt: item.occurredAt,
@@ -146,7 +179,9 @@ export class ActivitiesService {
       individualEligible: true,
       monthIndex: new Date(item.occurredAt).getMonth(),
       year: new Date(item.occurredAt).getFullYear(),
-      priority: item.severity === 'warning' ? 'high' : 'normal',
+      priority: item.task?.priority ? item.task.priority.toLowerCase() : 'normal',
+      project: item.project?.name ?? null,
+      team: null,
     }));
   }
 
