@@ -34,7 +34,14 @@ async function request<T>(path: string, init?: RequestInit): Promise<T> {
   // Use a date-aware reviver so ISO strings are automatically parsed into
   // Date objects — this keeps all date fields as Date throughout the app.
   const text = await response.text();
-  return JSON.parse(text, dateReviver) as T;
+  if (!text.trim()) {
+    throw new Error(`Empty response from server (${response.status})`);
+  }
+  try {
+    return JSON.parse(text, dateReviver) as T;
+  } catch {
+    throw new Error(`Invalid JSON response from server: ${text.slice(0, 200)}`);
+  }
 }
 
 export const apiClient = {

@@ -15,6 +15,23 @@ function isUuidString(value) {
   return UUID_RE.test(String(value ?? "").trim());
 }
 
+function formatTaskOptionLabel(task) {
+  const title = String(task?.title ?? task?.name ?? "").trim();
+  const taskNo = String(task?.taskNo ?? "").trim();
+  const opNo = String(task?.opNo ?? "").trim();
+  if (title && taskNo) return `${title} (${taskNo})`;
+  if (title) return title;
+  if (taskNo) return taskNo;
+  if (opNo) return opNo;
+  return "Task";
+}
+
+function displayTaskName(req) {
+  const name = String(req?.taskName ?? "").trim();
+  if (name && name !== "—") return name;
+  return "—";
+}
+
 export default function RequestsClient() {
   const router = useRouter();
   const searchParams = useSearchParams();
@@ -78,6 +95,8 @@ export default function RequestsClient() {
   const [idleRequests, setIdleRequests] = useState([]);
   const [regularizationError, setRegularizationError] = useState(null);
   const [regularizationLoading, setRegularizationLoading] = useState(false);
+  const [regTaskOptions, setRegTaskOptions] = useState([]);
+  const [regTasksLoading, setRegTasksLoading] = useState(false);
 
   const [previousOtRequests, setPreviousOtRequests] = useState([]);
   const [overtimeError, setOvertimeError] = useState(null);
@@ -87,7 +106,7 @@ export default function RequestsClient() {
     if (erpDesignerId == null) {
       setIdleRequests([]);
       setRegularizationError(
-        "Set erpDesignerId to the designer’s SQL uniqueidentifier (UUID string) in designer JSON or the requests page fallback — it must match ErpTSRegularizationRequest.designerId.",
+        "Your designer account is not linked to ERP. Sign in again or contact an administrator.",
       );
       return;
     }
@@ -125,9 +144,46 @@ export default function RequestsClient() {
     }
   };
 
+  const loadRegTaskOptions = async () => {
+    if (erpDesignerId == null) {
+      setRegTaskOptions([]);
+      return;
+    }
+    setRegTasksLoading(true);
+    try {
+      let rows = await apiClient.get(
+        `/regularization-requests/task-options?designerId=${encodeURIComponent(erpDesignerId)}`,
+      );
+      let list = Array.isArray(rows) ? rows : [];
+      if (list.length === 0) {
+        const tasksRes = await apiClient.get("/tasks?limit=200");
+        const taskRows = Array.isArray(tasksRes)
+          ? tasksRes
+          : Array.isArray(tasksRes?.data)
+            ? tasksRes.data
+            : [];
+        list = taskRows.map((t) => ({
+          id: t.id,
+          name: formatTaskOptionLabel(t),
+        }));
+      }
+      setRegTaskOptions(
+        list.map((t) => ({
+          id: t.id,
+          label: String(t.name ?? "").trim() || formatTaskOptionLabel(t),
+        })),
+      );
+    } catch {
+      setRegTaskOptions([]);
+    } finally {
+      setRegTasksLoading(false);
+    }
+  };
+
   useEffect(() => {
     void loadRegularization();
     void loadOvertime();
+    void loadRegTaskOptions();
     // eslint-disable-next-line react-hooks/exhaustive-deps -- reload when ERP designer id changes
   }, [erpDesignerId]);
 
@@ -152,6 +208,17 @@ export default function RequestsClient() {
     setIdleRequests((prev) => prev.map((req) => (req.id === id ? { ...req, [field]: value } : req)));
   };
 
+  const handleIdleTaskSelect = (id, taskId) => {
+    const selected = regTaskOptions.find((t) => t.id === taskId);
+    setIdleRequests((prev) =>
+      prev.map((req) =>
+        req.id === id
+          ? { ...req, taskId, taskName: selected?.label ?? "" }
+          : req,
+      ),
+    );
+  };
+
   const handleSubmitIdleRow = async (id) => {
     const req = idleRequests.find((r) => r.id === id);
     if (!req || erpDesignerId == null) return;
@@ -161,7 +228,7 @@ export default function RequestsClient() {
     }
     const taskId = String(req.taskId ?? "").trim();
     if (!isUuidString(taskId)) {
-      toast.warning("Please enter a valid Task UUID (same type as ErpTSRegularizationRequest.taskId).");
+      toast.warning("Please select a task.");
       return;
     }
     try {
@@ -217,7 +284,7 @@ export default function RequestsClient() {
       return;
     }
     if (drafts.some((r) => !isUuidString(String(r.taskId ?? "").trim()))) {
-      toast.warning("Please enter a valid Task UUID for every draft row.");
+      toast.warning("Please select a task for every draft row.");
       return;
     }
     if (erpDesignerId == null) return;
@@ -241,8 +308,14 @@ export default function RequestsClient() {
     }
   };
 
+  const [projects, setProjects] = useState([]);
+  const [projectTasks, setProjectTasks] = useState([]);
+  const [projectsLoading, setProjectsLoading] = useState(false);
+  const [tasksLoading, setTasksLoading] = useState(false);
+
   // --- Overtime Request State ---
   const [otForm, setOtForm] = useState({
+    projectId: "",
     taskId: "",
     date: "",
     estimatedRemaining: "2 hours",
@@ -250,17 +323,60 @@ export default function RequestsClient() {
     reason: "",
   });
 
+  useEffect(() => {
+    setProjectsLoading(true);
+    apiClient
+      .get("/projects?status=ACTIVE&limit=200")
+      .then((res) => {
+        const rows = Array.isArray(res) ? res : (Array.isArray(res?.data) ? res.data : []);
+        setProjects(
+          rows.map((p) => ({
+            id: p.id,
+            name: String(p.name ?? p.projectNo ?? "").trim() || "Unnamed project",
+          })),
+        );
+      })
+      .catch(() => setProjects([]))
+      .finally(() => setProjectsLoading(false));
+  }, []);
+
+  useEffect(() => {
+    const projectId = String(otForm.projectId ?? "").trim();
+    if (!projectId) {
+      setProjectTasks([]);
+      return;
+    }
+    setTasksLoading(true);
+    apiClient
+      .get(`/tasks?projectId=${encodeURIComponent(projectId)}&limit=200`)
+      .then((res) => {
+        const rows = Array.isArray(res) ? res : (Array.isArray(res?.data) ? res.data : []);
+        setProjectTasks(
+          rows.map((t) => {
+            const title = String(t.title ?? "").trim();
+            const taskNo = String(t.taskNo ?? "").trim();
+            const label = title && taskNo ? `${title} (${taskNo})` : title || taskNo || "Task";
+            return { id: t.id, label };
+          }),
+        );
+      })
+      .catch(() => setProjectTasks([]))
+      .finally(() => setTasksLoading(false));
+  }, [otForm.projectId]);
+
   // Pre-fill OT form when navigated from SchedulerGrid OT button
   useEffect(() => {
     if (prefillApplied.current) return;
     const taskId = searchParams?.get("taskId") || "";
+    const projectId = searchParams?.get("projectId") || "";
     const date = searchParams?.get("date") || "";
     const estimated = searchParams?.get("estimated") || "";
-    if (taskId) {
+    if (taskId || projectId) {
       prefillApplied.current = true;
       setOtForm((f) => ({
         ...f,
-        taskId,
+        projectId: projectId || f.projectId,
+        taskId: taskId || f.taskId,
         date: date || f.date,
         estimatedRemaining: estimated ? `${estimated} hours` : f.estimatedRemaining,
       }));
@@ -277,8 +393,16 @@ export default function RequestsClient() {
       toast.warning("Designer UUID is not configured.");
       return;
     }
+    if (!String(otForm.projectId ?? "").trim()) {
+      toast.warning("Please select a project.");
+      return;
+    }
     if (!isUuidString(String(otForm.taskId ?? "").trim())) {
-      toast.warning("Please enter a valid Task UUID (ErpTSOvertimeRequest.taskId).");
+      toast.warning("Please select a task for the chosen project.");
+      return;
+    }
+    if (!otForm.reason?.trim()) {
+      toast.warning("Please select a reason for overtime.");
       return;
     }
     const m = /^(\d+)/.exec(otForm.requestedHours);
@@ -302,7 +426,7 @@ export default function RequestsClient() {
       });
       await loadOvertime();
       toast.success("Overtime request submitted successfully!");
-      setOtForm((f) => ({ ...f, taskId: "", date: "" }));
+      setOtForm((f) => ({ ...f, projectId: "", taskId: "", date: "", reason: "" }));
     } catch (err) {
       toast.error(err?.message || "Submit failed");
     }
@@ -469,21 +593,30 @@ export default function RequestsClient() {
                     <tr key={req.id} className="transition-colors hover:bg-slate-50">
                       <td className="px-4 py-3 font-medium text-slate-800">
                         {req.status === "unsubmitted" ? (
-                          <div className="flex max-w-[220px] flex-col gap-1">
-                            <label className="text-[10px] font-semibold uppercase text-slate-500">Task UUID (ERP)</label>
-                            <input
-                              type="text"
-                              placeholder="xxxxxxxx-xxxx-xxxx-xxxx-xxxxxxxxxxxx"
+                          <div className="flex max-w-[260px] flex-col gap-1">
+                            <label className="text-[10px] font-semibold uppercase text-slate-500">Task Name</label>
+                            <select
                               value={req.taskId === "" || req.taskId == null ? "" : req.taskId}
-                              onChange={(e) => handleIdleChange(req.id, "taskId", e.target.value)}
-                              className="w-full rounded-lg border border-slate-300 bg-white px-2 py-1.5 text-xs text-slate-800 outline-none focus:border-blue-500 focus:ring-2 focus:ring-blue-500/25"
-                            />
-                            <span className="text-xs font-normal text-slate-500">
-                              {req.taskName || (req.taskId ? `Task #${req.taskId}` : "Shown after save")}
-                            </span>
+                              onChange={(e) => handleIdleTaskSelect(req.id, e.target.value)}
+                              className={inputClass}
+                              disabled={regTasksLoading}
+                            >
+                              <option value="" disabled>
+                                {regTasksLoading
+                                  ? "Loading tasks…"
+                                  : regTaskOptions.length === 0
+                                    ? "No tasks assigned"
+                                    : "Select a task"}
+                              </option>
+                              {regTaskOptions.map((task) => (
+                                <option key={task.id} value={task.id}>
+                                  {task.label}
+                                </option>
+                              ))}
+                            </select>
                           </div>
                         ) : (
-                          req.taskName || `Task #${req.taskId}`
+                          displayTaskName(req)
                         )}
                       </td>
                       <td className="px-4 py-3 text-center">
@@ -610,17 +743,51 @@ export default function RequestsClient() {
 
             <form onSubmit={(e) => void handleOtSubmit(e)} className="space-y-5 p-4 sm:p-5">
                 <div className="grid grid-cols-1 gap-4 md:grid-cols-2 xl:grid-cols-4">
-                  <div className="md:col-span-2">
-                    <label className="mb-1.5 block text-sm font-medium text-slate-700">Task UUID (ERP)</label>
-                    <input
-                      type="text"
-                      placeholder="xxxxxxxx-xxxx-xxxx-xxxx-xxxxxxxxxxxx"
+                  <div>
+                    <label className="mb-1.5 block text-sm font-medium text-slate-700">Project</label>
+                    <select
+                      value={otForm.projectId}
+                      onChange={(e) =>
+                        setOtForm({ ...otForm, projectId: e.target.value, taskId: "" })
+                      }
+                      className={inputClass}
+                      required
+                      disabled={projectsLoading}
+                    >
+                      <option value="" disabled>
+                        {projectsLoading ? "Loading projects…" : "Select a project"}
+                      </option>
+                      {projects.map((project) => (
+                        <option key={project.id} value={project.id}>
+                          {project.name}
+                        </option>
+                      ))}
+                    </select>
+                  </div>
+                  <div>
+                    <label className="mb-1.5 block text-sm font-medium text-slate-700">Task</label>
+                    <select
                       value={otForm.taskId}
                       onChange={(e) => setOtForm({ ...otForm, taskId: e.target.value })}
                       className={inputClass}
                       required
-                    />
-                    <p className="mt-1 text-xs text-slate-500">Must match ErpTSOvertimeRequest.taskId (uniqueidentifier).</p>
+                      disabled={!otForm.projectId || tasksLoading}
+                    >
+                      <option value="" disabled>
+                        {!otForm.projectId
+                          ? "Select a project first"
+                          : tasksLoading
+                            ? "Loading tasks…"
+                            : projectTasks.length === 0
+                              ? "No tasks for this project"
+                              : "Select a task"}
+                      </option>
+                      {projectTasks.map((task) => (
+                        <option key={task.id} value={task.id}>
+                          {task.label}
+                        </option>
+                      ))}
+                    </select>
                   </div>
                   <div>
                     <label className="mb-1.5 block text-sm font-medium text-slate-700">Date</label>

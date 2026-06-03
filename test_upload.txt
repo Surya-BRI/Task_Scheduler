@@ -1,0 +1,1 @@
+Manual upload smoke-test placeholder (not used by the app).

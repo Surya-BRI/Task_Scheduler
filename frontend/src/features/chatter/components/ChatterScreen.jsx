@@ -170,19 +170,54 @@ function LinkAttachmentPreview({ link }) {
 }
 
 function ChatterPostAttachments({ post }) {
-  const fileAttachments = post.fileAttachments?.length
-    ? post.fileAttachments
-    : post.attachment
-      ? [post.attachment]
-      : [];
+  const serverAttachments = post.fileAttachments ?? [];
   const linkAttachments = post.linkAttachments ?? [];
+  // localFiles: File objects only present for optimistic UI right after creating a post (before refresh)
+  const localFiles = post._localFiles ?? [];
 
-  if (fileAttachments.length === 0 && linkAttachments.length === 0) return null;
+  const hasContent = serverAttachments.length > 0 || localFiles.length > 0 || linkAttachments.length > 0;
+  if (!hasContent) return null;
 
   return (
     <div className="mt-3 space-y-2">
-      {fileAttachments.map((file, index) => (
-        <div key={`${file.name}-${index}`}>
+      {/* Server-side attachments (from S3 with signed URLs) */}
+      {serverAttachments.map((att, index) => {
+        const isImage = att.mimeType?.startsWith("image/");
+        const displayName = att.fileName || `Attachment ${index + 1}`;
+        const sizeKb = att.sizeBytes ? (att.sizeBytes / 1024).toFixed(1) : null;
+
+        return (
+          <div key={att.id || `server-${index}`}>
+            {isImage && att.url ? (
+              <a href={att.url} target="_blank" rel="noopener noreferrer">
+                <img
+                  src={att.url}
+                  alt={displayName}
+                  className="max-h-48 rounded-md border border-slate-200 object-contain cursor-pointer hover:opacity-90 transition-opacity"
+                />
+              </a>
+            ) : (
+              <a
+                href={att.url}
+                target="_blank"
+                rel="noopener noreferrer"
+                className="inline-flex w-full max-w-sm items-center gap-3 rounded-md border border-slate-200 bg-slate-50 p-2 hover:bg-slate-100 transition-colors"
+              >
+                <div className="flex h-10 w-10 items-center justify-center rounded border border-slate-200 bg-white text-lg">
+                  {att.mimeType === "application/pdf" ? "📕" : "📄"}
+                </div>
+                <div className="min-w-0 flex-1">
+                  <p className="truncate text-sm font-medium text-slate-700">{displayName}</p>
+                  {sizeKb ? <p className="text-xs text-slate-500">{sizeKb} KB</p> : null}
+                </div>
+              </a>
+            )}
+          </div>
+        );
+      })}
+      {/* Local File objects (optimistic UI before server returns attachment data) */}
+      {localFiles.map((file, index) => (
+        <div key={`local-${file.name}-${index}`}>
           {file.type?.startsWith("image/") ? (
             <img
               src={URL.createObjectURL(file)}
@@ -247,7 +282,11 @@ function CreatePostModal({ isOpen, onClose, onSubmit, isSubmitting }) {
 
   const addFiles = (fileList) => {
     if (!fileList?.length) return;
-    setFileAttachments((prev) => [...prev, ...Array.from(fileList)]);
+    const picked = Array.from(fileList);
+    for (const file of picked) {
+      console.info("[Chatter] File selected:", file.name, file.type || "unknown", `${file.size}b`);
+    }
+    setFileAttachments((prev) => [...prev, ...picked]);
   };
 
   const removeFileAttachment = (index) => {
@@ -853,6 +892,11 @@ export function ChatterScreen() {
   };
 
   const handleCreatePost = async (postData) => {
+    const fileCount = postData.fileAttachments?.length ?? 0;
+    const linkCount = postData.linkAttachments?.length ?? 0;
+    if (fileCount > 0) {
+      console.info("[Chatter] Submitting post with", fileCount, "file(s) and", linkCount, "link(s)");
+    }
     setIsSubmitting(true);
     try {
       const createdDto = await createChatterPost({
@@ -861,8 +905,21 @@ export function ChatterScreen() {
         postType: postData.postType,
         priority: postData.priority,
         mentionUserId: postData.mentionUserId || null,
-        // authorId: ... (should be from auth context if available)
-      }, postData.fileAttachments);
+      }, postData.fileAttachments, postData.linkAttachments);
+
+      const expectedFiles = postData.fileAttachments?.length ?? 0;
+      const savedFiles = createdDto.attachments?.length ?? 0;
+      if (expectedFiles > 0 && savedFiles === 0) {
+        console.error(
+          "[Chatter] Post saved but server returned no attachments (attachmentCount=",
+          createdDto.attachmentCount,
+          ")",
+        );
+        toast.error(
+          "Post was saved but files were not stored. The API may be outdated — deploy the latest backend or confirm NEXT_PUBLIC_API_BASE_URL points to it.",
+        );
+        return;
+      }
 
       const newFeedPost = mapChatterPostDtoToFeedPost(createdDto, currentUserId);
       if (postData.mention?.trim()) {
@@ -870,13 +927,19 @@ export function ChatterScreen() {
           ? postData.mention.trim()
           : `@${postData.mention.trim()}`;
       }
+      // Keep local File objects as fallback for optimistic rendering
+      // (in case the server response doesn't include signed URLs yet)
+      if (postData.fileAttachments?.length && (!newFeedPost.fileAttachments || newFeedPost.fileAttachments.length === 0)) {
+        newFeedPost._localFiles = postData.fileAttachments;
+      }
       setPosts((prev) => [newFeedPost, ...prev]);
       setIsCreatePostOpen(false);
       setActiveTab("posts");
       toast.success("Post created successfully");
     } catch (err) {
       console.error("Failed to create post:", err);
-      toast.error("Could not save post. Please try again.");
+      const detail = err instanceof Error ? err.message : "Could not save post.";
+      toast.error(detail);
     } finally {
       setIsSubmitting(false);
     }
