@@ -16,6 +16,7 @@ function projectListTaskHref(row) {
     {
       from: FROM_PROJECTS_LIST,
       projectCode,
+      designType: row.category,
     },
   );
 }

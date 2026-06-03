@@ -17,7 +17,7 @@ export default function DesignListPage() {
     }
     if (session.role === 'DESIGNER') {
       // Designers always see their own work list
-      router.replace('/design-list/my-work')
+      router.replace('/design-list/tasks')
       return
     }
     // HOD — show full list

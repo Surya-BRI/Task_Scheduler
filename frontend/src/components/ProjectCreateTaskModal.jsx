@@ -282,6 +282,20 @@ export function ProjectCreateTaskModal({ open, onClose, onCreated, submissionDat
     return count + c
   }, 0)
 
+  useEffect(() => {
+    if (!open || !record) return
+    const opNo = String(record.opNo ?? '').trim()
+    const projectNo = String(record.projectNo ?? record.projectId ?? '').trim()
+    if (!opNo || !projectNo) return
+    const qs = new URLSearchParams({ opNo, projectNo, designType: 'Project' }).toString()
+    apiClient
+      .get(`/tasks/next-revision?${qs}`)
+      .then((res) => {
+        if (!revisionCode.trim()) setRevisionCode(res?.revisionCode ?? 'R0')
+      })
+      .catch(() => {})
+  }, [open, record, revisionCode])
+
   if (!open) return null
 
   function toggleExpand(id) {
@@ -356,20 +370,6 @@ export function ProjectCreateTaskModal({ open, onClose, onCreated, submissionDat
       String(r.asBuiltHours ?? '').trim() !== ''
     )
   }
-
-  useEffect(() => {
-    if (!open || !record) return
-    const opNo = String(record.opNo ?? '').trim()
-    const projectNo = String(record.projectNo ?? record.projectId ?? '').trim()
-    if (!opNo || !projectNo) return
-    const qs = new URLSearchParams({ opNo, projectNo, designType: 'Project' }).toString()
-    apiClient
-      .get(`/tasks/next-revision?${qs}`)
-      .then((res) => {
-        if (!revisionCode.trim()) setRevisionCode(res?.revisionCode ?? 'R0')
-      })
-      .catch(() => {})
-  }, [open, record, revisionCode])
 
   async function handleCreateTasks() {
     if (!record) return
