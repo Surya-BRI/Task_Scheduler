@@ -1,7 +1,16 @@
-import { IsNotEmpty, IsOptional, IsString, IsUUID } from 'class-validator';
+import { Transform } from 'class-transformer';
+import { IsNotEmpty, IsOptional, IsString, IsUUID, ValidateIf } from 'class-validator';
+
+function emptyToUndefined(value: unknown): unknown {
+  if (value === null || value === undefined) return undefined;
+  if (typeof value === 'string' && !value.trim()) return undefined;
+  return value;
+}
 
 export class CreateChatterPostDto {
   @IsOptional()
+  @Transform(({ value }) => emptyToUndefined(value))
+  @ValidateIf((_, v) => v !== undefined)
   @IsUUID()
   taskId?: string;
 
@@ -18,6 +27,8 @@ export class CreateChatterPostDto {
   postType?: string;
 
   @IsOptional()
+  @Transform(({ value }) => emptyToUndefined(value))
+  @ValidateIf((_, v) => v !== undefined)
   @IsUUID()
   mentionUserId?: string;
 
@@ -28,4 +39,9 @@ export class CreateChatterPostDto {
   @IsOptional()
   @IsString()
   visibility?: string;
+
+  /** JSON array of { url, displayName?, platform? } for external link attachments */
+  @IsOptional()
+  @IsString()
+  linkAttachmentsJson?: string;
 }

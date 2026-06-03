@@ -7,6 +7,7 @@ import {
   Logger,
 } from '@nestjs/common';
 import { Prisma } from '@prisma/client';
+import { MulterError } from 'multer';
 
 @Catch()
 export class HttpExceptionFilter implements ExceptionFilter {
@@ -23,6 +24,21 @@ export class HttpExceptionFilter implements ExceptionFilter {
     if (exception instanceof HttpException) {
       status = exception.getStatus();
       message = exception.getResponse();
+    } else if (exception instanceof MulterError) {
+      status = HttpStatus.BAD_REQUEST;
+      message =
+        exception.code === 'LIMIT_FILE_SIZE'
+          ? 'File size exceeds the 20MB limit'
+          : exception.message;
+      this.logger.warn(`MulterError — ${request.method} ${request.url}: ${exception.message}`);
+    } else if (
+      exception instanceof Error &&
+      (exception.message.includes('Unsupported file type') ||
+        exception.message.includes('Unexpected field'))
+    ) {
+      status = HttpStatus.BAD_REQUEST;
+      message = exception.message;
+      this.logger.warn(`Upload rejected — ${request.method} ${request.url}: ${exception.message}`);
     } else if (exception instanceof Prisma.PrismaClientKnownRequestError) {
       // Translate known Prisma error codes to meaningful HTTP responses
       switch (exception.code) {

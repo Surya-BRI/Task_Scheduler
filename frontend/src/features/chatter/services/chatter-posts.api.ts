@@ -1,4 +1,5 @@
 import { apiClient } from '@/lib/api-client';
+import { getAccessToken } from '@/lib/auth-token';
 
 export type ChatterCommentDto = {
   id: string;
@@ -10,12 +11,30 @@ export type ChatterCommentDto = {
   createdAt: string;
 };
 
+export type ChatterAttachmentDto = {
+  id: string;
+  fileName: string;
+  filePath: string;
+  mimeType: string | null;
+  sizeBytes: number;
+  url: string;
+};
+
+export type ChatterLinkAttachmentDto = {
+  id: string;
+  url: string;
+  displayName: string | null;
+  platform: string | null;
+};
+
 export type ChatterPostDto = {
   id: string;
   taskId: string | null;
   authorId: string | null;
   authorName?: string | null;
   authorRole?: string | null;
+  mentionUserName?: string | null;
+  projectName?: string | null;
   title: string;
   message: string;
   postType: string | null;
@@ -29,6 +48,8 @@ export type ChatterPostDto = {
   createdAt: string;
   updatedAt: string;
   comments?: ChatterCommentDto[];
+  attachments?: ChatterAttachmentDto[];
+  linkAttachments?: ChatterLinkAttachmentDto[];
 };
 
 /** Shape expected by `ChatterScreen` / `ChatterCard` for the main feed */
@@ -46,16 +67,10 @@ export type ChatterFeedPost = {
   comments: Array<{ id: string; message: string; author: string; createdAt: string }>;
   updatedAt: string;
   postType?: string;
-  attachment?: File | null;
+  fileAttachments?: Array<{ id: string; fileName: string; mimeType: string | null; sizeBytes: number; url: string }>;
+  linkAttachments?: Array<{ id: string; name: string; url: string; platformLabel: string; platformIcon: string; platformBadgeClass: string }>;
   taskId?: string | null;
 };
-
-function shortId(value: string | null | undefined, max = 12): string {
-  if (value == null || !String(value).trim()) return '—';
-  const t = String(value).trim();
-  if (t.length <= max) return t;
-  return `${t.slice(0, max)}…`;
-}
 
 function normalizePriority(p: string | number | null | undefined): 'low' | 'medium' | 'high' {
   if (p == null) return 'medium';
@@ -104,7 +119,7 @@ export function mapCommentDtoToFeedComment(
   const authorLabel =
     dto.authorId && currentUserId && dto.authorId === currentUserId
       ? 'You'
-      : pretty ?? (dto.authorId ? `User ${shortId(dto.authorId, 14)}` : 'Unknown');
+      : pretty ?? 'Unknown';
   return {
     id: dto.id,
     message: dto.message || '',
@@ -121,15 +136,33 @@ export function mapChatterPostDtoToFeedPost(
   const created = dto.createdAt ? new Date(dto.createdAt) : null;
   const full = dto.authorName?.trim();
   const role = dto.authorRole?.trim();
-  const authorLabel = full ? `${full}${role ? ` (${role})` : ''}` : (dto.authorId ? `User ${shortId(dto.authorId, 14)}` : 'Unknown');
+  const authorLabel = full ? `${full}${role ? ` (${role})` : ''}` : 'Unknown';
+  const mentionName = dto.mentionUserName?.trim();
   const mention =
-    dto.mentionUserId != null && String(dto.mentionUserId).trim()
-      ? `@${shortId(dto.mentionUserId, 18)}`
+    mentionName
+      ? `@${mentionName}`
       : '—';
 
   const rawType = (dto.postType ?? '').trim();
   const lower = rawType.toLowerCase();
   const isGenericPosts = !rawType || lower === 'posts' || lower === 'post';
+
+  const fileAttachments = (dto.attachments ?? []).map((a) => ({
+    id: a.id,
+    fileName: a.fileName,
+    mimeType: a.mimeType,
+    sizeBytes: a.sizeBytes,
+    url: a.url,
+  }));
+
+  const linkAttachments = (dto.linkAttachments ?? []).map((link) => ({
+    id: link.id,
+    name: link.displayName?.trim() || link.url,
+    url: link.url,
+    platformLabel: link.platform?.trim() || 'Link',
+    platformIcon: '🔗',
+    platformBadgeClass: 'border-slate-200 bg-white text-slate-600',
+  }));
 
   const base: ChatterFeedPost = {
     id: dto.id,
@@ -138,13 +171,15 @@ export function mapChatterPostDtoToFeedPost(
     time: formatChatterTime(created),
     mention,
     message: dto.message || '',
-    projectName: dto.taskId ? `Task ${shortId(dto.taskId, 40)}` : dto.title || '—',
+    projectName: dto.projectName?.trim() || dto.title?.trim() || '—',
     responsibleUser: authorLabel,
     priority: normalizePriority(dto.priority),
     seenBy: dto.seenByCount,
     comments: (dto.comments ?? []).map((c) => mapCommentDtoToFeedComment(c, currentUserId)),
     updatedAt: dto.updatedAt || dto.createdAt || new Date(0).toISOString(),
     taskId: dto.taskId,
+    fileAttachments: fileAttachments.length > 0 ? fileAttachments : undefined,
+    linkAttachments: linkAttachments.length > 0 ? linkAttachments : undefined,
   };
 
   if (!isGenericPosts) {
@@ -182,18 +217,53 @@ export function createChatterComment(postId: string, message: string) {
   });
 }
 
-export function createChatterPost(data: Partial<ChatterPostDto>, files?: File[]) {
+export function createChatterPost(
+  data: Partial<ChatterPostDto>,
+  files?: File[],
+  linkAttachments?: Array<{ url: string; name?: string; platformLabel?: string }>,
+) {
+  if (!getAccessToken()) {
+    return Promise.reject(
+      new Error('You are not signed in. Please log in again before posting or uploading files.'),
+    );
+  }
+
+  const payload: Record<string, unknown> = { ...data };
+  const fileCount = files?.length ?? 0;
+  if (fileCount > 0 && typeof process !== 'undefined' && process.env.NODE_ENV === 'development') {
+    console.info('[Chatter] Uploading post with files:', files!.map((f) => `${f.name} (${f.type}, ${f.size}b)`));
+  }
+  if (linkAttachments?.length) {
+    payload.linkAttachmentsJson = JSON.stringify(
+      linkAttachments.map((link) => ({
+        url: link.url,
+        displayName: link.name,
+        platform: link.platformLabel,
+      })),
+    );
+  }
+
   if (files && files.length > 0) {
+    const invalid = files.filter((f) => !f?.size);
+    if (invalid.length > 0) {
+      return Promise.reject(
+        new Error(`Cannot upload empty file(s): ${invalid.map((f) => f.name).join(', ')}`),
+      );
+    }
+
     const formData = new FormData();
-    Object.entries(data).forEach(([key, value]) => {
+    Object.entries(payload).forEach(([key, value]) => {
       if (value !== undefined && value !== null) {
         formData.append(key, String(value));
       }
     });
-    files.forEach(file => {
-      formData.append('files', file);
+    files.forEach((file) => {
+      // Preserve filename and binary Blob; never stringify File objects.
+      formData.append('files', file, file.name);
     });
+    console.info('[Chatter] FormData created:', [...formData.keys()].join(', '));
+    console.info('[Chatter] Request sent: POST /chatter-posts');
     return apiClient.post<ChatterPostDto>('/chatter-posts', formData);
   }
-  return apiClient.post<ChatterPostDto>('/chatter-posts', data);
+  return apiClient.post<ChatterPostDto>('/chatter-posts', payload);
 }
