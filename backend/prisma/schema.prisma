@@ -49,6 +49,7 @@ model User {
   chatterPosts             ChatterPost[]              @relation("PostAuthor")
   chatterMentions          ChatterPost[]              @relation("MentionedUser")
   chatterComments          ChatterComment[]           @relation("CommentAuthor")
+  chatterCommentMentions   ChatterComment[]           @relation("CommentMentionedUser")
   activities               ActivityLog[]
   leaveRequests            LeaveRequest[]
   notifications            Notification[]
@@ -344,6 +345,8 @@ model ChatterComment {
   post     ChatterPost? @relation(fields: [postId], references: [id], onDelete: Cascade, onUpdate: NoAction)
   authorId String?   @db.UniqueIdentifier
   author   User?     @relation("CommentAuthor", fields: [authorId], references: [id], onDelete: NoAction, onUpdate: NoAction)
+  mentionUserId String? @db.UniqueIdentifier
+  mentionUser   User? @relation("CommentMentionedUser", fields: [mentionUserId], references: [id], onDelete: NoAction, onUpdate: NoAction)
   message  String?   @db.NVarChar(Max)
   createdAt DateTime? @default(now()) @db.DateTime
 
@@ -407,6 +410,8 @@ model RegularizationRequest {
   status     String?   @db.NVarChar(50)
   approverId String?   @db.UniqueIdentifier
   approver   User?     @relation("RegularizationApprover", fields: [approverId], references: [id], onDelete: NoAction, onUpdate: NoAction)
+  approverRemarks String? @db.NVarChar(Max)
+  reviewedAt DateTime? @db.DateTime
   createdAt  DateTime? @default(now())
 
   @@map("ErpTSRegularizationRequest")

@@ -1,6 +1,7 @@
 import { BadRequestException, Injectable } from '@nestjs/common';
 import { PrismaService } from '../prisma/prisma.service';
 import { ActivityAction } from '../activities/activity-events';
+import { UserRole } from '../common/constants/roles.enum';
 import {
   ProjectsOverviewResponseDto,
   ScheduledTaskItem,
@@ -24,13 +25,20 @@ const INBOX_ACTION_LABELS: Record<string, string> = {
   [ActivityAction.CREATED_CHATTER_POST]: 'Chatter post created',
   [ActivityAction.CREATED_CHATTER_COMMENT]: 'Comment added',
   [ActivityAction.TASK_WORK_SUBMITTED]: 'Work submitted',
+  [ActivityAction.REGULARIZATION_SUBMITTED]: 'Regularization submitted',
+  [ActivityAction.REGULARIZATION_APPROVED]: 'Regularization approved',
+  [ActivityAction.REGULARIZATION_REJECTED]: 'Regularization rejected',
 };
 
 @Injectable()
 export class DashboardService {
   constructor(private readonly prisma: PrismaService) {}
 
-  async getProjectsOverview(weekStart?: string): Promise<ProjectsOverviewResponseDto> {
+  async getProjectsOverview(
+    weekStart?: string,
+    viewerId?: string,
+    viewerRole?: UserRole,
+  ): Promise<ProjectsOverviewResponseDto> {
     const ws = this.parseWeekStart(weekStart ?? this.getCurrentMonday());
     const we = new Date(ws);
     we.setUTCDate(we.getUTCDate() + 6);
@@ -193,8 +201,9 @@ export class DashboardService {
       });
     }
 
-    // --- Inbox ---
-    const inbox: InboxItem[] = activityRows.map((row) => {
+    // --- Inbox: pending approvals (HOD) + recent activity ---
+    const approvalInbox = await this.buildApprovalInbox(viewerId, viewerRole);
+    const activityInbox: InboxItem[] = activityRows.map((row) => {
       const label = INBOX_ACTION_LABELS[row.action] ?? row.action;
       const actor = row.user?.fullName ?? 'System';
       return {
@@ -202,8 +211,21 @@ export class DashboardService {
         summary: `${actor} — ${label}`,
         occurredAt: row.createdAt.toISOString(),
         taskNo: row.task?.taskNo ?? null,
+        requestType: 'activity',
+        requiresAction: false,
       };
     });
+
+    const seenInbox = new Set<string>();
+    const inbox: InboxItem[] = [];
+    for (const item of [...approvalInbox, ...activityInbox]) {
+      const key = `${item.requestType ?? 'activity'}-${item.id}`;
+      if (seenInbox.has(key)) continue;
+      seenInbox.add(key);
+      inbox.push(item);
+    }
+    inbox.sort((a, b) => new Date(b.occurredAt).getTime() - new Date(a.occurredAt).getTime());
+    const trimmedInbox = inbox.slice(0, 50);
 
     // --- Summary ---
     const counts = statusGroups.reduce((acc, r) => {
@@ -238,7 +260,7 @@ export class DashboardService {
       completedTasks,
       onHoldTasks,
       reallocatedTasks,
-      inbox,
+      inbox: trimmedInbox,
       summary: {
         total,
         active,
@@ -255,6 +277,83 @@ export class DashboardService {
         },
       },
     };
+  }
+
+  private async buildApprovalInbox(
+    viewerId?: string,
+    viewerRole?: UserRole,
+  ): Promise<InboxItem[]> {
+    if (!viewerId || (viewerRole !== UserRole.HOD && viewerRole !== UserRole.ADMIN)) {
+      return [];
+    }
+
+    const deptFilter: Record<string, unknown> = {};
+    if (viewerRole === UserRole.HOD) {
+      const viewer = await this.prisma.user.findUnique({
+        where: { id: viewerId },
+        select: { departmentId: true },
+      });
+      if (viewer?.departmentId) {
+        deptFilter.designer = { departmentId: viewer.departmentId };
+      }
+    }
+
+    const [regRows, otRows] = await Promise.all([
+      this.prisma.regularizationRequest.findMany({
+        where: { status: 'Pending', ...deptFilter },
+        orderBy: { createdAt: 'desc' },
+        take: 30,
+        include: {
+          designer: { select: { id: true, fullName: true } },
+          task: { select: { taskNo: true, title: true } },
+        },
+      }),
+      this.prisma.overtimeRequest.findMany({
+        where: { status: 'SUBMITTED', ...deptFilter },
+        orderBy: { createdAt: 'desc' },
+        take: 30,
+        include: {
+          designer: { select: { id: true, fullName: true } },
+          task: { select: { taskNo: true, title: true, project: { select: { name: true } } } },
+        },
+      }),
+    ]);
+
+    const regItems: InboxItem[] = regRows.map((row) => {
+      const requester = row.designer?.fullName?.trim() || 'Designer';
+      const taskLabel = row.task?.title?.trim() || row.task?.taskNo?.trim() || 'task';
+      const designerId = row.designer?.id ?? row.designerId ?? '';
+      return {
+        id: row.id,
+        summary: `${requester} — Regularization for ${taskLabel}`,
+        occurredAt: (row.createdAt ?? row.date ?? new Date()).toISOString(),
+        taskNo: row.task?.taskNo ?? null,
+        requestType: 'regularization',
+        linkUrl: `/designer/requests?regularizationId=${encodeURIComponent(row.id)}#regularization`,
+        requiresAction: true,
+        requesterName: requester,
+        status: 'Pending',
+      };
+    });
+
+    const otItems: InboxItem[] = otRows.map((row) => {
+      const requester = row.designer?.fullName?.trim() || 'Designer';
+      const taskLabel = row.task?.title?.trim() || row.task?.taskNo?.trim() || 'task';
+      const projectName = row.task?.project?.name?.trim();
+      return {
+        id: row.id,
+        summary: `${requester} — Overtime${projectName ? ` (${projectName})` : ''} · ${taskLabel}`,
+        occurredAt: (row.createdAt ?? row.date ?? new Date()).toISOString(),
+        taskNo: row.task?.taskNo ?? null,
+        requestType: 'overtime',
+        linkUrl: `/designer/requests?overtimeId=${encodeURIComponent(row.id)}#overtime`,
+        requiresAction: true,
+        requesterName: requester,
+        status: 'Pending Approval',
+      };
+    });
+
+    return [...regItems, ...otItems];
   }
 
   private getInitials(name: string): string {

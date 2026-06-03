@@ -8,5 +8,6 @@ import { RegularizationRequestsService } from './regularization-requests.service
   imports: [PrismaModule, ActivitiesModule],
   controllers: [RegularizationRequestsController],
   providers: [RegularizationRequestsService],
+  exports: [RegularizationRequestsService],
 })
 export class RegularizationRequestsModule {}
