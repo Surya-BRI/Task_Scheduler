@@ -137,6 +137,95 @@ export class OvertimeRequestsService {
     }
   }
 
+  private parseHoursFromLabel(label: string): number {
+    const match = /^(\d+(?:\.\d+)?)/.exec(String(label ?? '').trim());
+    const hours = match ? Number(match[1]) : NaN;
+    if (!Number.isFinite(hours) || hours <= 0) {
+      throw new BadRequestException('requestedHours must include a positive number of hours');
+    }
+    return hours;
+  }
+
+  private resolveSchedule(dto: CreateOvertimeRequestDto): {
+    startTime: string;
+    endTime: string;
+    requestedHours: Decimal;
+  } {
+    const hours = this.parseHoursFromLabel(dto.requestedHours);
+    if (dto.startTime && dto.endTime) {
+      return {
+        startTime: dto.startTime,
+        endTime: dto.endTime,
+        requestedHours: new Decimal(hours),
+      };
+    }
+    const startTime = '18:00';
+    const endMinutes = this.timeToMinutes(startTime) + Math.round(hours * 60);
+    const endTime = `${String(Math.floor(endMinutes / 60)).padStart(2, '0')}:${String(endMinutes % 60).padStart(2, '0')}`;
+    return { startTime, endTime, requestedHours: new Decimal(hours) };
+  }
+
+  private normalizeCreateStatus(status?: string): string {
+    const normalized = (status ?? '').trim().toUpperCase();
+    if (normalized === 'PENDING') return 'SUBMITTED';
+    if (normalized === 'SUBMITTED' || normalized === 'DRAFT') return normalized;
+    return 'DRAFT';
+  }
+
+  private mapStatusForUi(status: string | null | undefined): string {
+    const normalized = (status ?? '').trim().toUpperCase();
+    if (normalized === 'SUBMITTED') return 'Pending Approval';
+    if (normalized === 'APPROVED' || normalized === 'APPROVED_BY_MANAGER') return 'Approved';
+    if (normalized.startsWith('REJECTED')) return 'Rejected';
+    if (normalized === 'DRAFT') return 'Draft';
+    return status?.trim() || 'Pending';
+  }
+
+  private mapRowForDesignerView(row: {
+    id: string;
+    date: Date | null;
+    requestedHours: Decimal | null;
+    approvedHours: Decimal | null;
+    status: string | null;
+    task: { title: string | null; taskNo: string; project?: { name: string } | null } | null;
+  }) {
+    const taskLabel =
+      row.task?.title?.trim() ||
+      row.task?.taskNo?.trim() ||
+      '—';
+    const projectName = row.task?.project?.name?.trim() || '—';
+    return {
+      id: row.id,
+      date: row.date ? row.date.toISOString().split('T')[0] : '',
+      taskName: projectName !== '—' ? `${projectName} — ${taskLabel}` : taskLabel,
+      projectName,
+      requested: row.requestedHours != null ? `${row.requestedHours} hours` : '—',
+      approved: row.approvedHours != null ? `${row.approvedHours} hours` : '—',
+      status: this.mapStatusForUi(row.status),
+    };
+  }
+
+  async findByDesignerForView(designerId: string) {
+    const rows = await this.prisma.overtimeRequest.findMany({
+      where: { designerId },
+      orderBy: { createdAt: 'desc' },
+      include: {
+        task: {
+          select: {
+            title: true,
+            taskNo: true,
+            project: { select: { name: true } },
+          },
+        },
+      },
+    });
+    return rows.map((row) => this.mapRowForDesignerView(row));
+  }
+
+  async findOwnRequestsForView(userId: string) {
+    return this.findByDesignerForView(userId);
+  }
+
   /**
    * Creates a new Overtime Request.
    */
@@ -148,21 +237,31 @@ export class OvertimeRequestsService {
       throw new ForbiddenException('You are not authorized to create request for this designer');
     }
 
-    // Validate rules
-    await this.validatePolicyRules(designerId, dto.date, dto.startTime, dto.endTime, dto.taskId);
+    const schedule = this.resolveSchedule(dto);
 
-    const totalHours = new Decimal((this.timeToMinutes(dto.endTime) - this.timeToMinutes(dto.startTime)) / 60);
-    const status = dto.status || 'DRAFT';
+    await this.validatePolicyRules(
+      designerId,
+      dto.date,
+      schedule.startTime,
+      schedule.endTime,
+      dto.taskId,
+    );
+
+    const totalHours = new Decimal(
+      (this.timeToMinutes(schedule.endTime) - this.timeToMinutes(schedule.startTime)) / 60,
+    );
+    const status = this.normalizeCreateStatus(dto.status);
 
     const request = await this.prisma.overtimeRequest.create({
       data: {
         designerId,
         taskId: dto.taskId,
         date: new Date(dto.date),
-        startTime: dto.startTime,
-        endTime: dto.endTime,
+        startTime: schedule.startTime,
+        endTime: schedule.endTime,
         totalHours,
-        requestedHours: new Decimal(dto.requestedHours),
+        requestedHours: schedule.requestedHours,
+        estimatedRemaining: dto.estimatedRemaining?.trim() || null,
         reason: dto.reason,
         status,
       },

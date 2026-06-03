@@ -241,8 +241,14 @@ export default function RequestsClient() {
     }
   };
 
+  const [projects, setProjects] = useState([]);
+  const [projectTasks, setProjectTasks] = useState([]);
+  const [projectsLoading, setProjectsLoading] = useState(false);
+  const [tasksLoading, setTasksLoading] = useState(false);
+
   // --- Overtime Request State ---
   const [otForm, setOtForm] = useState({
+    projectId: "",
     taskId: "",
     date: "",
     estimatedRemaining: "2 hours",
@@ -250,17 +256,60 @@ export default function RequestsClient() {
     reason: "",
   });
 
+  useEffect(() => {
+    setProjectsLoading(true);
+    apiClient
+      .get("/projects?status=ACTIVE&limit=200")
+      .then((res) => {
+        const rows = Array.isArray(res) ? res : (Array.isArray(res?.data) ? res.data : []);
+        setProjects(
+          rows.map((p) => ({
+            id: p.id,
+            name: String(p.name ?? p.projectNo ?? "").trim() || "Unnamed project",
+          })),
+        );
+      })
+      .catch(() => setProjects([]))
+      .finally(() => setProjectsLoading(false));
+  }, []);
+
+  useEffect(() => {
+    const projectId = String(otForm.projectId ?? "").trim();
+    if (!projectId) {
+      setProjectTasks([]);
+      return;
+    }
+    setTasksLoading(true);
+    apiClient
+      .get(`/tasks?projectId=${encodeURIComponent(projectId)}&limit=200`)
+      .then((res) => {
+        const rows = Array.isArray(res) ? res : (Array.isArray(res?.data) ? res.data : []);
+        setProjectTasks(
+          rows.map((t) => {
+            const title = String(t.title ?? "").trim();
+            const taskNo = String(t.taskNo ?? "").trim();
+            const label = title && taskNo ? `${title} (${taskNo})` : title || taskNo || "Task";
+            return { id: t.id, label };
+          }),
+        );
+      })
+      .catch(() => setProjectTasks([]))
+      .finally(() => setTasksLoading(false));
+  }, [otForm.projectId]);
+
   // Pre-fill OT form when navigated from SchedulerGrid OT button
   useEffect(() => {
     if (prefillApplied.current) return;
     const taskId = searchParams?.get("taskId") || "";
+    const projectId = searchParams?.get("projectId") || "";
     const date = searchParams?.get("date") || "";
     const estimated = searchParams?.get("estimated") || "";
-    if (taskId) {
+    if (taskId || projectId) {
       prefillApplied.current = true;
       setOtForm((f) => ({
         ...f,
-        taskId,
+        projectId: projectId || f.projectId,
+        taskId: taskId || f.taskId,
         date: date || f.date,
         estimatedRemaining: estimated ? `${estimated} hours` : f.estimatedRemaining,
       }));
@@ -277,8 +326,16 @@ export default function RequestsClient() {
       toast.warning("Designer UUID is not configured.");
       return;
     }
+    if (!String(otForm.projectId ?? "").trim()) {
+      toast.warning("Please select a project.");
+      return;
+    }
     if (!isUuidString(String(otForm.taskId ?? "").trim())) {
-      toast.warning("Please enter a valid Task UUID (ErpTSOvertimeRequest.taskId).");
+      toast.warning("Please select a task for the chosen project.");
+      return;
+    }
+    if (!otForm.reason?.trim()) {
+      toast.warning("Please select a reason for overtime.");
       return;
     }
     const m = /^(\d+)/.exec(otForm.requestedHours);
@@ -302,7 +359,7 @@ export default function RequestsClient() {
       });
       await loadOvertime();
       toast.success("Overtime request submitted successfully!");
-      setOtForm((f) => ({ ...f, taskId: "", date: "" }));
+      setOtForm((f) => ({ ...f, projectId: "", taskId: "", date: "", reason: "" }));
     } catch (err) {
       toast.error(err?.message || "Submit failed");
     }
@@ -610,17 +667,51 @@ export default function RequestsClient() {
 
             <form onSubmit={(e) => void handleOtSubmit(e)} className="space-y-5 p-4 sm:p-5">
                 <div className="grid grid-cols-1 gap-4 md:grid-cols-2 xl:grid-cols-4">
-                  <div className="md:col-span-2">
-                    <label className="mb-1.5 block text-sm font-medium text-slate-700">Task UUID (ERP)</label>
-                    <input
-                      type="text"
-                      placeholder="xxxxxxxx-xxxx-xxxx-xxxx-xxxxxxxxxxxx"
+                  <div>
+                    <label className="mb-1.5 block text-sm font-medium text-slate-700">Project</label>
+                    <select
+                      value={otForm.projectId}
+                      onChange={(e) =>
+                        setOtForm({ ...otForm, projectId: e.target.value, taskId: "" })
+                      }
+                      className={inputClass}
+                      required
+                      disabled={projectsLoading}
+                    >
+                      <option value="" disabled>
+                        {projectsLoading ? "Loading projects…" : "Select a project"}
+                      </option>
+                      {projects.map((project) => (
+                        <option key={project.id} value={project.id}>
+                          {project.name}
+                        </option>
+                      ))}
+                    </select>
+                  </div>
+                  <div>
+                    <label className="mb-1.5 block text-sm font-medium text-slate-700">Task</label>
+                    <select
                       value={otForm.taskId}
                       onChange={(e) => setOtForm({ ...otForm, taskId: e.target.value })}
                       className={inputClass}
                       required
-                    />
-                    <p className="mt-1 text-xs text-slate-500">Must match ErpTSOvertimeRequest.taskId (uniqueidentifier).</p>
+                      disabled={!otForm.projectId || tasksLoading}
+                    >
+                      <option value="" disabled>
+                        {!otForm.projectId
+                          ? "Select a project first"
+                          : tasksLoading
+                            ? "Loading tasks…"
+                            : projectTasks.length === 0
+                              ? "No tasks for this project"
+                              : "Select a task"}
+                      </option>
+                      {projectTasks.map((task) => (
+                        <option key={task.id} value={task.id}>
+                          {task.label}
+                        </option>
+                      ))}
+                    </select>
                   </div>
                   <div>
                     <label className="mb-1.5 block text-sm font-medium text-slate-700">Date</label>

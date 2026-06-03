@@ -354,6 +354,7 @@ model Attachment {
   id            String      @id @default(dbgenerated("newid()")) @db.UniqueIdentifier
   fileName      String      @db.NVarChar(255)
   filePath      String
+  fileUrl       String?     @db.NVarChar(2000)
   mimeType      String?     @db.NVarChar(100)
   sizeBytes     BigInt?
   chatterPostId String      @db.UniqueIdentifier

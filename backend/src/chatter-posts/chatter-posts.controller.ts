@@ -1,16 +1,31 @@
-import { Body, Controller, Get, Param, Post, Query, UploadedFiles, UseGuards, UseInterceptors } from '@nestjs/common';
+import {
+  Body,
+  Controller,
+  Get,
+  Logger,
+  Param,
+  Post,
+  Query,
+  UploadedFiles,
+  UseGuards,
+  UseInterceptors,
+} from '@nestjs/common';
 import { FilesInterceptor } from '@nestjs/platform-express';
-import { diskStorage } from 'multer';
-import { extname } from 'path';
+import { memoryStorage } from 'multer';
 import { CreateChatterCommentDto } from './dto/create-chatter-comment.dto';
 import { CreateChatterPostDto } from './dto/create-chatter-post.dto';
 import { ChatterPostsService } from './chatter-posts.service';
 import { JwtAuthGuard } from '../common/guards/jwt-auth.guard';
 import { CurrentUser } from '../common/decorators/current-user.decorator';
+import { isAllowedUploadMime } from '../common/utils/allowed-file-mime';
+
+const MAX_FILE_SIZE = 20 * 1024 * 1024; // 20 MB
 
 @UseGuards(JwtAuthGuard)
 @Controller('chatter-posts')
 export class ChatterPostsController {
+  private readonly logger = new Logger(ChatterPostsController.name);
+
   constructor(private readonly chatterPostsService: ChatterPostsService) {}
 
   @Get('mention-users')
@@ -43,19 +58,34 @@ export class ChatterPostsController {
 
   @Post()
   @UseInterceptors(FilesInterceptor('files', 10, {
-    storage: diskStorage({
-      destination: './uploads/chatter',
-      filename: (req, file, cb) => {
-        const uniqueSuffix = Date.now() + '-' + Math.round(Math.random() * 1e9);
-        cb(null, `${uniqueSuffix}${extname(file.originalname)}`);
+    storage: memoryStorage(),
+    limits: { fileSize: MAX_FILE_SIZE },
+    fileFilter: (_req, file, cb) => {
+      if (isAllowedUploadMime(file.mimetype, file.originalname)) {
+        cb(null, true);
+      } else {
+        cb(new Error(`Unsupported file type: ${file.mimetype || 'unknown'} (${file.originalname})`), false);
       }
-    })
+    },
   }))
   create(
     @Body() createChatterPostDto: CreateChatterPostDto,
     @CurrentUser() user: any,
     @UploadedFiles() files?: Express.Multer.File[]
   ) {
+    this.logger.log('Request received: POST /chatter-posts');
+    const fileCount = files?.length ?? 0;
+    if (fileCount > 0) {
+      for (const f of files!) {
+        const bufLen = Buffer.isBuffer(f.buffer) ? f.buffer.length : 0;
+        this.logger.log(
+          `File parsed: name=${f.originalname} mime=${f.mimetype} size=${f.size} bufferBytes=${bufLen}`,
+        );
+      }
+    } else {
+      this.logger.log('File parsed: no files in multipart payload');
+    }
     return this.chatterPostsService.create(createChatterPostDto, user.sub, files);
   }
 }
+

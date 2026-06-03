@@ -18,15 +18,20 @@ export class CreateOvertimeRequestDto {
   @Matches(/^\d{4}-\d{2}-\d{2}$/, { message: 'date must be in YYYY-MM-DD format' })
   date!: string;
 
-  @IsNotEmpty()
+  @IsOptional()
   @IsString()
   @Matches(/^([01]\d|2[0-3]):[0-5]\d$/, { message: 'startTime must be in HH:mm format' })
-  startTime!: string;
+  startTime?: string;
 
-  @IsNotEmpty()
+  @IsOptional()
   @IsString()
   @Matches(/^([01]\d|2[0-3]):[0-5]\d$/, { message: 'endTime must be in HH:mm format' })
-  endTime!: string;
+  endTime?: string;
+
+  @IsOptional()
+  @IsString()
+  @MaxLength(255)
+  estimatedRemaining?: string;
 
   @IsNotEmpty()
   @IsString()

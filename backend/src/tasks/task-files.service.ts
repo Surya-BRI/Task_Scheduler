@@ -1,17 +1,25 @@
-import { BadRequestException, Injectable, InternalServerErrorException } from '@nestjs/common';
+import { BadRequestException, Injectable, InternalServerErrorException, Logger } from '@nestjs/common';
 import { ConfigService } from '@nestjs/config';
 import { DeleteObjectCommand, GetObjectCommand, HeadObjectCommand, PutObjectCommand, S3Client } from '@aws-sdk/client-s3';
 import { getSignedUrl } from '@aws-sdk/s3-request-presigner';
+import { isAllowedUploadMime, resolveUploadMimeType } from '../common/utils/allowed-file-mime';
+import {
+  assertBufferSizeConsistent,
+  assertImageBinaryValid,
+  resolveUploadBuffer,
+} from '../common/utils/file-binary.util';
 
 type UploadResult = {
   key: string;
   fileName: string;
   mimeType: string;
   size: number;
+  url: string;
 };
 
 @Injectable()
 export class TaskFilesService {
+  private readonly logger = new Logger(TaskFilesService.name);
   private readonly bucket: string;
   private readonly region: string;
   private readonly folder: string;
@@ -28,6 +36,9 @@ export class TaskFilesService {
       this.config.get<string>('aws.secretAccessKey') ?? process.env.AWS_SECRET_ACCESS_KEY ?? '';
 
     if (!this.bucket || !this.region || !accessKeyId || !secretAccessKey) {
+      this.logger.error(
+        'AWS S3 configuration is incomplete (need AWS_BUCKET, AWS_REGION, AWS_ACCESS_KEY_ID, AWS_SECRET_ACCESS_KEY)',
+      );
       throw new Error('AWS S3 configuration is incomplete');
     }
 
@@ -38,55 +49,79 @@ export class TaskFilesService {
         secretAccessKey,
       },
     });
+    this.logger.log(`S3 client ready (bucket=${this.bucket}, region=${this.region}, folder=${this.folder})`);
   }
 
   private sanitizeFileName(fileName: string): string {
     return fileName.replace(/[^a-zA-Z0-9._-]/g, '_');
   }
 
-  private isAllowedMimeType(mimeType: string): boolean {
-    if (!mimeType) return false;
-    return (
-      mimeType.startsWith('image/') ||
-      mimeType.startsWith('audio/') ||
-      mimeType === 'video/mp4' ||
-      mimeType === 'application/pdf'
-    );
-  }
-
   async uploadTaskFile(file: Express.Multer.File, userId: string): Promise<UploadResult> {
-    if (!file) throw new BadRequestException('No file uploaded');
-    if (file.size > 20 * 1024 * 1024) {
+    const originalName = file?.originalname || 'upload';
+    this.logger.log(
+      `Upload start: name=${originalName} mime=${file?.mimetype ?? 'unknown'} reportedSize=${file?.size ?? 0}`,
+    );
+    const buffer = resolveUploadBuffer(file);
+    const byteLength = buffer.length;
+    assertBufferSizeConsistent(buffer, file.size ?? 0, originalName);
+
+    if (byteLength > 20 * 1024 * 1024) {
       throw new BadRequestException('File size exceeds 20MB limit');
     }
-    if (!this.isAllowedMimeType(file.mimetype || '')) {
-      throw new BadRequestException('Unsupported file type');
+
+    const resolvedMime = resolveUploadMimeType(file.mimetype || '', originalName);
+    if (!isAllowedUploadMime(resolvedMime, originalName)) {
+      throw new BadRequestException(
+        `Unsupported file type: ${file.mimetype || 'unknown'} (${originalName})`,
+      );
     }
+
+    assertImageBinaryValid(buffer, resolvedMime, originalName);
 
     const now = new Date();
     const stamp = now.toISOString().replace(/[-:.TZ]/g, '').slice(0, 14);
     const random = Math.floor(Math.random() * 100000).toString().padStart(5, '0');
-    const safeName = this.sanitizeFileName(file.originalname);
+    const safeName = this.sanitizeFileName(originalName);
     const key = `${this.folder}/${userId}/${stamp}-${random}-${safeName}`;
 
     try {
-      await this.client.send(
+      const putResult = await this.client.send(
         new PutObjectCommand({
           Bucket: this.bucket,
           Key: key,
-          Body: file.buffer,
-          ContentType: file.mimetype || 'application/octet-stream',
+          Body: buffer,
+          ContentLength: byteLength,
+          ContentType: resolvedMime,
         }),
+      );
+
+      const head = await this.client.send(
+        new HeadObjectCommand({
+          Bucket: this.bucket,
+          Key: key,
+        }),
+      );
+
+      const url = `https://${this.bucket}.s3.${this.region}.amazonaws.com/${key}`;
+      this.logger.log(
+        `Upload success: name=${originalName} key=${key} bytes=${byteLength} ContentType=${head.ContentType ?? resolvedMime} S3 Length=${head.ContentLength ?? 'n/a'} ETag=${putResult.ETag ?? 'n/a'}`,
       );
 
       return {
         key,
-        fileName: file.originalname,
-        mimeType: file.mimetype || 'application/octet-stream',
-        size: file.size,
+        fileName: originalName,
+        mimeType: resolvedMime,
+        size: byteLength,
+        url,
       };
-    } catch {
-      throw new InternalServerErrorException('Failed to upload file to S3');
+    } catch (error) {
+      if (error instanceof BadRequestException) {
+        throw error;
+      }
+      this.logger.error(
+        `S3 upload failed for "${originalName}" (bucket=${this.bucket}, bytes=${byteLength}): ${error instanceof Error ? error.message : error}`,
+      );
+      throw new InternalServerErrorException(`Failed to upload file to S3: ${error instanceof Error ? error.message : 'Unknown error'}`);
     }
   }
 

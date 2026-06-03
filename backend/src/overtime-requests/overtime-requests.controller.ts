@@ -187,6 +187,18 @@ export class OvertimeRequestsController {
 
   // --- Common APIs ---
 
+  /** GET /overtime-requests?designerId= — list for designer requests page */
+  @Get()
+  @Roles(UserRole.DESIGNER, UserRole.HOD, UserRole.ADMIN)
+  findForDesigner(
+    @Query('designerId') designerId?: string,
+    @CurrentUser() user?: JwtPayload,
+  ) {
+    const id = designerId?.trim() || user?.sub;
+    if (!id) return [];
+    return this.service.findByDesignerForView(id);
+  }
+
   @Get(':id')
   @Roles(UserRole.DESIGNER, UserRole.HOD, UserRole.ADMIN)
   findOne(@Param('id') id: string, @CurrentUser() user: JwtPayload) {
