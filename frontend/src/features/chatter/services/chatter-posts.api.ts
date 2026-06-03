@@ -35,6 +35,7 @@ export type ChatterPostDto = {
   authorRole?: string | null;
   mentionUserName?: string | null;
   projectName?: string | null;
+  assigneeName?: string | null;
   title: string;
   message: string;
   postType: string | null;
@@ -64,13 +65,26 @@ export type ChatterFeedPost = {
   responsibleUser: string;
   priority: 'low' | 'medium' | 'high';
   seenBy: number;
-  comments: Array<{ id: string; message: string; author: string; createdAt: string }>;
+  authorId?: string | null;
+  designerName?: string | null;
+  comments: Array<{ id: string; message: string; author: string; authorId?: string | null; createdAt: string }>;
   updatedAt: string;
   postType?: string;
   fileAttachments?: Array<{ id: string; fileName: string; mimeType: string | null; sizeBytes: number; url: string }>;
   linkAttachments?: Array<{ id: string; name: string; url: string; platformLabel: string; platformIcon: string; platformBadgeClass: string }>;
   taskId?: string | null;
 };
+
+const UUID_PATTERN = /^[0-9a-f]{8}-[0-9a-f]{4}-[1-5][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i;
+
+function isUuidLike(value: string): boolean {
+  return UUID_PATTERN.test(value.trim()) || /^(Task|User)\s+[0-9a-f-]{36}/i.test(value.trim());
+}
+
+function safeDisplayValue(value: string | null | undefined, fallback = '—'): string {
+  if (!value?.trim()) return fallback;
+  return isUuidLike(value.trim()) ? fallback : value.trim();
+}
 
 function normalizePriority(p: string | number | null | undefined): 'low' | 'medium' | 'high' {
   if (p == null) return 'medium';
@@ -134,14 +148,12 @@ export function mapChatterPostDtoToFeedPost(
   currentUserId?: string | null,
 ): ChatterFeedPost {
   const created = dto.createdAt ? new Date(dto.createdAt) : null;
-  const full = dto.authorName?.trim();
+  const rawFull = dto.authorName?.trim();
+  const full = rawFull && !isUuidLike(rawFull) ? rawFull : null;
   const role = dto.authorRole?.trim();
   const authorLabel = full ? `${full}${role ? ` (${role})` : ''}` : 'Unknown';
   const mentionName = dto.mentionUserName?.trim();
-  const mention =
-    mentionName
-      ? `@${mentionName}`
-      : '—';
+  const mention = mentionName && !isUuidLike(mentionName) ? `@${mentionName}` : '—';
 
   const rawType = (dto.postType ?? '').trim();
   const lower = rawType.toLowerCase();
@@ -167,11 +179,13 @@ export function mapChatterPostDtoToFeedPost(
   const base: ChatterFeedPost = {
     id: dto.id,
     title: dto.title || '(No title)',
+    authorId: dto.authorId,
     author: authorLabel,
     time: formatChatterTime(created),
     mention,
     message: dto.message || '',
-    projectName: dto.projectName?.trim() || dto.title?.trim() || '—',
+    projectName: safeDisplayValue(dto.projectName),
+    designerName: safeDisplayValue(dto.assigneeName),
     responsibleUser: authorLabel,
     priority: normalizePriority(dto.priority),
     seenBy: dto.seenByCount,
