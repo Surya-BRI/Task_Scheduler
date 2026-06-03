@@ -732,7 +732,7 @@ export function DesignSchedulerScreen() {
         const taskId = e.dataTransfer.getData("taskId");
         const sourceId = e.dataTransfer.getData("sourceId");
         const sourceDay = e.dataTransfer.getData("sourceDay");
-        const targetDayStr = targetDayIndex.toString();
+        let targetDayStr = targetDayIndex.toString();
         if (!taskId)
             return;
         if (sourceDay &&
@@ -743,6 +743,14 @@ export function DesignSchedulerScreen() {
         const droppedTask = tasks[taskId];
         if (!droppedTask)
             return;
+        // Always start from the first unfilled weekday so no day is left idle
+        if (sourceId === "unassigned" || sourceId === "ON_HOLD") {
+            const firstUnfilled = WEEKDAY_INDICES.find((d) => getDayHours(targetDesignerId, d) < DAILY_CAPACITY);
+            if (firstUnfilled !== undefined && firstUnfilled < targetDayIndex) {
+                targetDayIndex = firstUnfilled;
+                targetDayStr = targetDayIndex.toString();
+            }
+        }
         const targetList = schedules[targetDesignerId]?.[targetDayStr] ?? [];
         const rawInsertIndex = targetTaskIndex === undefined
             ? targetList.length
@@ -790,25 +798,63 @@ export function DesignSchedulerScreen() {
     };
     const commitPanelDrop = (taskId, sourceId, sourceDay, newStatus) => {
         setLoadedFromErp(false);
+        const taskBefore = tasks[taskId];
+        const parentId = taskBefore?.parentId;
+        const isSplitPart = taskBefore?.totalParts > 1 && parentId && newStatus === 'unassigned';
+
+        // Collect all sibling split IDs sharing the same parentId
+        const siblingIds = isSplitPart
+            ? Object.keys(tasks).filter(id => id !== taskId && tasks[id]?.parentId === parentId)
+            : [];
+
         const newSchedules = (sourceId === 'unassigned' || sourceId === 'ON_HOLD')
             ? schedules
             : (() => {
                 const s = cloneState(schedules);
+                // Remove the dragged task from its day
                 if (s[sourceId]?.[sourceDay]) {
                     s[sourceId][sourceDay] = s[sourceId][sourceDay].filter(id => id !== taskId);
+                }
+                // Remove all orphaned sibling splits from every day
+                if (siblingIds.length > 0) {
+                    for (const dId of Object.keys(s)) {
+                        for (const dKey of Object.keys(s[dId])) {
+                            s[dId][dKey] = s[dId][dKey].filter(id => !siblingIds.includes(id));
+                        }
+                    }
                 }
                 return s;
             })();
         setSchedules(newSchedules);
-        const taskBefore = tasks[taskId];
-        const nextTask = {
-            ...taskBefore,
-            status: newStatus,
-            holdStartedAt: newStatus === "ON_HOLD" ? new Date() : undefined,
-        };
+
+        let nextTasks = { ...tasks };
+        if (isSplitPart) {
+            // Sum hours across all parts (including this one) to restore original task
+            const allPartIds = [taskId, ...siblingIds];
+            const totalHours = allPartIds.reduce((acc, id) => acc + (tasks[id]?.estimatedHours ?? 0), 0);
+            // Remove all split IDs
+            for (const id of allPartIds) delete nextTasks[id];
+            // Restore the original task at full hours as unassigned
+            nextTasks[parentId] = {
+                ...(tasks[parentId] ?? taskBefore),
+                id: parentId,
+                estimatedHours: totalHours,
+                splitIndex: undefined,
+                totalParts: undefined,
+                status: 'unassigned',
+                holdStartedAt: undefined,
+            };
+        } else {
+            const nextTask = {
+                ...taskBefore,
+                status: newStatus,
+                holdStartedAt: newStatus === "ON_HOLD" ? new Date() : undefined,
+            };
+            nextTasks[taskId] = nextTask;
+        }
+
         const backendStatus = newStatus === "ON_HOLD" ? "ON_HOLD" : "PENDING";
-        const nextTasks = { ...tasks, [taskId]: nextTask };
-        setTasks(prev => ({ ...prev, [taskId]: nextTask }));
+        setTasks(nextTasks);
         if (!isUuid(taskId)) {
             persistWeekSnapshot(newSchedules, nextTasks);
             return;
@@ -1120,7 +1166,7 @@ export function DesignSchedulerScreen() {
                       <div className="w-[180px] shrink-0 py-1.5 px-3 flex items-center gap-2 border-r border-slate-200 bg-white z-10 transition-colors group-hover:bg-blue-50 cursor-pointer" onClick={() => {
                           const routeData = buildDesignerSnapshot(tasks, designerDays);
                           sessionStorage.setItem(`designer_data_${designer.id}`, JSON.stringify(routeData));
-                          router.push(`/designer/dashboard`);
+                          router.push(`/designer/${designer.id}`);
                       }} title={`Open ${designer.name}'s dashboard`}>
                         <div className="w-6 h-6 rounded-full bg-slate-800 text-white flex items-center justify-center text-[10px] font-bold leading-none shrink-0 shadow-sm">
                           {designer.initials}

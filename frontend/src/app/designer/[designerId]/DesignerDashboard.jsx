@@ -232,7 +232,7 @@ const DEFAULT_DONUT = {
   centerTotal: 0,
 };
 
-export default function DesignerDashboard() {
+export default function DesignerDashboard({ designer: designerProp } = {}) {
   const router = useRouter();
   const searchParams = useSearchParams();
   const fromHome = searchParams?.get("from") === "home";
@@ -241,6 +241,10 @@ export default function DesignerDashboard() {
   const [isHOD, setIsHOD] = useState(false);
   const [sessionName, setSessionName] = useState(null);
   const [sessionUser, setSessionUser] = useState(null);
+  const [viewedDesignerName, setViewedDesignerName] = useState(null);
+
+  // When HOD views a specific designer, fetch that designer's name
+  const propErpId = designerProp?.erpDesignerId ?? (UUID_RE.test(designerProp?.id ?? '') ? designerProp?.id : null);
 
   useEffect(() => {
     const session = getSession();
@@ -250,10 +254,19 @@ export default function DesignerDashboard() {
     if (session) setSessionUser(session);
   }, [fromHome]);
 
+  useEffect(() => {
+    if (!propErpId) return;
+    apiClient.get(`/users/${propErpId}`)
+      .then((u) => { if (u?.fullName) setViewedDesignerName(u.fullName); })
+      .catch(() => {});
+  }, [propErpId]);
+
+  const isViewingOther = !!(propErpId && propErpId !== sessionUser?.id);
+
   const designer = {
-    id: sessionUser?.id ?? '',
-    erpDesignerId: sessionUser?.erpDesignerId ?? sessionUser?.id ?? null,
-    name: sessionUser?.name ?? 'Designer',
+    id: isViewingOther ? propErpId : (sessionUser?.id ?? ''),
+    erpDesignerId: isViewingOther ? propErpId : (sessionUser?.erpDesignerId ?? sessionUser?.id ?? null),
+    name: isViewingOther ? (viewedDesignerName ?? 'Designer') : (sessionUser?.name ?? 'Designer'),
     designation: 'Designer',
     avatar: null,
     stats: DEFAULT_STATS,
@@ -476,13 +489,13 @@ export default function DesignerDashboard() {
         <div className="flex w-64 items-center gap-3 border-r border-slate-200 pr-4">
           <div className="w-8 h-8 rounded-full bg-slate-800 text-white flex items-center justify-center text-xs font-bold leading-none shrink-0 shadow-sm">
             {designer.avatar ? (
-              <img src={designer.avatar} alt={sessionName ?? designer.name} className="h-full w-full object-cover rounded-full" />
+              <img src={designer.avatar} alt={designer.name} className="h-full w-full object-cover rounded-full" />
             ) : (
-              <span>{(sessionName ?? designer.name).split(" ").map((n) => n[0]).join("").slice(0, 2)}</span>
+              <span>{designer.name.split(" ").map((n) => n[0]).join("").slice(0, 2)}</span>
             )}
           </div>
           <div className="flex flex-col">
-            <span className="text-xs font-bold leading-tight text-slate-900">{sessionName ?? designer.name}</span>
+            <span className="text-xs font-bold leading-tight text-slate-900">{isViewingOther ? designer.name : (sessionName ?? designer.name)}</span>
             <span className="text-[10px] leading-tight text-slate-500">{designer.designation}</span>
           </div>
         </div>
