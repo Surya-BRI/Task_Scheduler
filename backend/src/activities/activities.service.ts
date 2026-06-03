@@ -25,8 +25,14 @@ export class ActivitiesService {
     if (msg === 'project_file_uploaded') return `${actorName} uploaded ${details?.fileMeta?.fileName ?? 'a file'}`;
     if (msg === 'project_file_deleted') return `${actorName} deleted ${details?.fileMeta?.fileName ?? 'a file'}`;
     if (msg === 'task_file_uploaded') return `${actorName} uploaded ${details?.fileMeta?.fileName ?? 'a file'} to task files`;
-    if (msg === 'chatter_post_created') return `${actorName} posted in chatter`;
+    if (msg === 'chatter_post_created') {
+      const title = details?.changes?.title?.trim();
+      return title ? `${actorName} posted in chatter: ${title}` : `${actorName} posted in chatter`;
+    }
     if (msg === 'chatter_comment_created') return `${actorName} commented on chatter`;
+    if (msg === 'regularization_submitted') return `${actorName} submitted a regularization request`;
+    if (msg === 'regularization_approved') return `${actorName} approved a regularization request`;
+    if (msg === 'regularization_rejected') return `${actorName} rejected a regularization request`;
     return `${actorName} performed ${action}`;
   }
 

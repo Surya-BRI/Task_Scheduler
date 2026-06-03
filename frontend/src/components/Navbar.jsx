@@ -4,6 +4,11 @@ import { useEffect, useRef, useState } from 'react'
 import { usePathname, useRouter } from 'next/navigation'
 import { Bell, Calendar, ClipboardList, Clock, Home, LogOut, MessageSquareText, Users } from 'lucide-react'
 import { getSession, mockLogout } from '@/lib/mock-auth'
+import {
+  listNotifications,
+  markAllNotificationsRead,
+  markNotificationRead,
+} from '@/features/notifications/services/notifications.api'
 
 const NAV_ITEMS = [
   'Activities',
@@ -97,6 +102,145 @@ function ProfileDropdown({ session }) {
           </button>
         </div>
       )}
+    </div>
+  )
+}
+
+// ─── Notifications Dropdown ──────────────────────────────────────────────────
+function NotificationDropdown({ session }) {
+  const router = useRouter()
+  const [open, setOpen] = useState(false)
+  const [items, setItems] = useState([])
+  const [loading, setLoading] = useState(false)
+  const rootRef = useRef(null)
+
+  const unreadCount = items.filter((n) => !n.isRead).length
+
+  const loadNotifications = async () => {
+    if (!session) return
+    setLoading(true)
+    try {
+      const rows = await listNotifications(30)
+      setItems(Array.isArray(rows) ? rows : [])
+    } catch {
+      setItems([])
+    } finally {
+      setLoading(false)
+    }
+  }
+
+  useEffect(() => {
+    if (!session) return
+    void loadNotifications()
+    const interval = setInterval(() => void loadNotifications(), 30000)
+    return () => clearInterval(interval)
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [session?.id, session?.role])
+
+  useEffect(() => {
+    if (!open) return undefined
+    void loadNotifications()
+    function handlePointerDown(e) {
+      if (rootRef.current && !rootRef.current.contains(e.target)) setOpen(false)
+    }
+    function handleKey(e) {
+      if (e.key === 'Escape') setOpen(false)
+    }
+    document.addEventListener('mousedown', handlePointerDown)
+    document.addEventListener('keydown', handleKey)
+    return () => {
+      document.removeEventListener('mousedown', handlePointerDown)
+      document.removeEventListener('keydown', handleKey)
+    }
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [open])
+
+  const handleOpenNotification = async (notification) => {
+    try {
+      if (!notification.isRead) {
+        await markNotificationRead(notification.id)
+      }
+    } catch {
+      // ignore
+    }
+    setOpen(false)
+    if (notification.linkUrl?.trim()) {
+      router.push(notification.linkUrl)
+    }
+  }
+
+  const handleMarkAllRead = async () => {
+    try {
+      await markAllNotificationsRead()
+      await loadNotifications()
+    } catch {
+      // ignore
+    }
+  }
+
+  if (!session) return null
+
+  return (
+    <div className="relative" ref={rootRef}>
+      <button
+        type="button"
+        onClick={() => setOpen((v) => !v)}
+        className={`relative ${'ui-icon-button'}`}
+        aria-expanded={open}
+        aria-haspopup="menu"
+        aria-label="Notifications"
+      >
+        <Bell className="h-5 w-5" strokeWidth={1.75} aria-hidden />
+        {unreadCount > 0 ? (
+          <span className="pointer-events-none absolute right-1 top-1 h-2 w-2 rounded-full bg-red-500 ring-2 ring-white" />
+        ) : null}
+      </button>
+
+      {open ? (
+        <div
+          className="absolute right-0 z-50 mt-2 w-80 origin-top-right rounded-xl border border-slate-200 bg-white shadow-xl ring-1 ring-black/5"
+          role="menu"
+          aria-label="Notifications"
+        >
+          <div className="flex items-center justify-between border-b border-slate-100 px-4 py-3">
+            <p className="text-sm font-semibold text-slate-900">Notifications</p>
+            {unreadCount > 0 ? (
+              <button
+                type="button"
+                onClick={() => void handleMarkAllRead()}
+                className="text-xs font-semibold text-blue-600 hover:underline"
+              >
+                Mark all read
+              </button>
+            ) : null}
+          </div>
+          <div className="max-h-80 overflow-y-auto">
+            {loading ? (
+              <p className="px-4 py-6 text-sm text-slate-500">Loading…</p>
+            ) : items.length === 0 ? (
+              <p className="px-4 py-6 text-sm text-slate-500">No notifications yet.</p>
+            ) : (
+              items.map((item) => (
+                <button
+                  key={item.id}
+                  type="button"
+                  role="menuitem"
+                  onClick={() => void handleOpenNotification(item)}
+                  className={`w-full border-b border-slate-100 px-4 py-3 text-left transition hover:bg-slate-50 ${
+                    item.isRead ? 'bg-white' : 'bg-blue-50/40'
+                  }`}
+                >
+                  <p className="text-sm font-semibold text-slate-900">{item.title}</p>
+                  <p className="mt-1 line-clamp-2 text-xs text-slate-600">{item.message}</p>
+                  <p className="mt-1 text-[10px] text-slate-400">
+                    {item.createdAt ? new Date(item.createdAt).toLocaleString() : ''}
+                  </p>
+                </button>
+              ))
+            )}
+          </div>
+        </div>
+      ) : null}
     </div>
   )
 }
@@ -267,14 +411,7 @@ export function Navbar({ currentDate, onCalendarChange, dateRangeText }) {
             </button>
 
             {/* Notifications */}
-            <button
-              type="button"
-              className={`relative ${utilityIconClass}`}
-              aria-label="Notifications"
-            >
-              <Bell className="h-5 w-5" strokeWidth={1.75} aria-hidden />
-              <span className="pointer-events-none absolute right-1 top-1 h-2 w-2 rounded-full bg-red-500 ring-2 ring-white" />
-            </button>
+            <NotificationDropdown session={session} />
 
             {/* Profile */}
             <ProfileDropdown session={session} />

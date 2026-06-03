@@ -10,6 +10,7 @@ import { dummyProjects } from '../features/projects/data/dummy-projects'
 import { apiClient } from '@/lib/api-client'
 import { fetchProjectActivities, fetchTaskActivities } from '@/features/team-activity/services/activities.api'
 import { createChatterComment, createChatterPost, listChatterPosts } from '@/features/chatter/services/chatter-posts.api'
+import { emitChatterRefresh, onChatterRefresh } from '@/features/chatter/utils/chatter-events'
 
 function isValidHttpUrl(value) {
   try {
@@ -18,6 +19,10 @@ function isValidHttpUrl(value) {
   } catch {
     return false
   }
+}
+
+function isUuid(value) {
+  return /^[0-9a-f]{8}-[0-9a-f]{4}-[1-5][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i.test(String(value ?? '').trim())
 }
 
 function deriveFileNameFromUrl(value) {
@@ -514,15 +519,18 @@ export function RetailProjectPage() {
     }
   }, [projectId])
 
-  const fetchChatterPosts = useCallback(async () => {
-    if (!projectId) {
+  const fetchChatterPosts = useCallback(async ({ silent = false } = {}) => {
+    const queryTaskId = taskId && isUuid(taskId) ? taskId : null
+    if (!queryTaskId && !projectId) {
       setChatterPosts([])
       return
     }
-    setChatterLoading(true)
+    if (!silent) setChatterLoading(true)
     setChatterError('')
     try {
-      const posts = await listChatterPosts({ projectId, limit: 200 })
+      const posts = queryTaskId
+        ? await listChatterPosts({ taskId: queryTaskId, limit: 200 })
+        : await listChatterPosts({ projectId, limit: 200 })
       const normalized = Array.isArray(posts) ? [...posts] : []
       normalized.sort((a, b) => new Date(b.createdAt).getTime() - new Date(a.createdAt).getTime())
       setChatterPosts(normalized)
@@ -530,14 +538,24 @@ export function RetailProjectPage() {
       setChatterError(error instanceof Error ? error.message : 'Failed to load chatter')
       setChatterPosts([])
     } finally {
-      setChatterLoading(false)
+      if (!silent) setChatterLoading(false)
     }
-  }, [projectId])
+  }, [projectId, taskId])
 
   useEffect(() => {
     if (activeTab !== 'chatter') return
     fetchChatterPosts()
   }, [activeTab, fetchChatterPosts])
+
+  useEffect(() => {
+    return onChatterRefresh((detail) => {
+      if (detail.taskId && taskId && detail.taskId !== taskId) return
+      if (detail.projectId && projectId && detail.projectId !== projectId) return
+      if (activeTab === 'chatter') {
+        void fetchChatterPosts({ silent: true })
+      }
+    })
+  }, [activeTab, fetchChatterPosts, projectId, taskId])
 
   const fetchProjectFiles = useCallback(async () => {
     if (!projectId) {
@@ -592,17 +610,22 @@ export function RetailProjectPage() {
 
   async function handlePostChatter() {
     const message = chatterMessage.trim()
-    if (!message || !projectId) return
+    if (!message || (!taskId && !projectId)) return
     setChatterSubmitting(true)
     setChatterError('')
     try {
-      await createChatterPost({
+      const created = await createChatterPost({
         message,
         postType: 'Posts',
         taskId: taskId || undefined,
       })
       setChatterMessage('')
-      await fetchChatterPosts()
+      setChatterPosts((prev) => {
+        const next = [created, ...prev.filter((p) => p.id !== created.id)]
+        next.sort((a, b) => new Date(b.createdAt).getTime() - new Date(a.createdAt).getTime())
+        return next
+      })
+      emitChatterRefresh({ taskId, projectId, postId: created.id })
     } catch (error) {
       toast.error(error instanceof Error ? error.message : 'Failed to post chatter')
     } finally {
@@ -616,9 +639,20 @@ export function RetailProjectPage() {
     setCommentSubmittingPostId(postId)
     setChatterError('')
     try {
-      await createChatterComment(postId, message)
+      const created = await createChatterComment(postId, message)
       setCommentByPostId((prev) => ({ ...prev, [postId]: '' }))
-      await fetchChatterPosts()
+      setChatterPosts((prev) =>
+        prev.map((post) =>
+          post.id === postId
+            ? {
+                ...post,
+                updatedAt: new Date().toISOString(),
+                comments: [created, ...(post.comments ?? []).filter((c) => c.id !== created.id)],
+              }
+            : post,
+        ),
+      )
+      emitChatterRefresh({ taskId, projectId, postId })
     } catch (error) {
       toast.error(error instanceof Error ? error.message : 'Failed to post comment')
     } finally {

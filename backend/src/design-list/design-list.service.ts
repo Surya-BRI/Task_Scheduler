@@ -1,4 +1,4 @@
-import { Injectable, Logger } from '@nestjs/common';
+import { Injectable, Logger, ServiceUnavailableException } from '@nestjs/common';
 import { PrismaService } from '../prisma/prisma.service';
 
 type DesignListRow = {
@@ -42,12 +42,30 @@ function toDdMmYyyy(value: Date): string {
 
 const RETAIL_UNIT_CODES = new Set<string>(['retail', 'rtl', 'r', 'prosigns-retail']);
 const PROJECT_UNIT_CODES = new Set<string>(['project', 'normal', 'prosigns-projects']);
+const DEFAULT_UNPAGINATED_LIMIT = 500;
 
 @Injectable()
 export class DesignListService {
   private readonly logger = new Logger(DesignListService.name);
 
   constructor(private readonly prisma: PrismaService) {}
+
+  private async queryLive<T>(label: string, run: () => Promise<T>): Promise<T> {
+    try {
+      return await run();
+    } catch (err) {
+      const message = err instanceof Error ? err.message : String(err);
+      this.logger.error(`Live ERP query failed (${label}): ${message}`);
+      if (message.includes('connection pool') || message.includes('Timed out fetching')) {
+        throw new ServiceUnavailableException(
+          'The ERP project database is busy or unavailable. Please retry in a moment.',
+        );
+      }
+      throw new ServiceUnavailableException(
+        'Unable to load project design records from the ERP database.',
+      );
+    }
+  }
 
   private resolveDesignType(businessUnitCode: string | null): 'Retail' | 'Project' {
     const normalized = (businessUnitCode ?? '').trim().toLowerCase();
@@ -194,7 +212,8 @@ export class DesignListService {
   }
 
   async findAll() {
-    const rows = await this.prisma.live.$queryRaw<DesignListRow[]>`
+    const rows = await this.queryLive('findAll', () =>
+      this.prisma.live.$queryRaw<DesignListRow[]>`
       SELECT
         mp.projectid AS projectId,
         CAST(NULL AS NVARCHAR(36)) AS taskId,
@@ -218,7 +237,10 @@ export class DesignListService {
       LEFT JOIN ErpMasterEmployee meee ON meee.employeeId = mp.projectOwnerId
       WHERE mp.isActive = 1
       ORDER BY mp.createdOn DESC
-    `;
+      OFFSET 0 ROWS
+      FETCH NEXT ${DEFAULT_UNPAGINATED_LIMIT} ROWS ONLY
+    `,
+    );
 
     return this.dedupeMappedRows(rows.map((row: DesignListRow) => this.mapRow(row)));
   }
@@ -241,25 +263,28 @@ export class DesignListService {
       : '';
 
     const baseQuery = this.buildBaseQuery(whereSearchClause);
-    const rows = await this.prisma.live.$queryRawUnsafe<DesignListRow[]>(`
+    const rows = await this.queryLive('findProjectsListPage', async () => {
+      const pageRows = await this.prisma.live.$queryRawUnsafe<DesignListRow[]>(`
       ${baseQuery}
       ORDER BY mp.createdOn DESC
       OFFSET ${offset} ROWS
       FETCH NEXT ${safeLimit} ROWS ONLY
     `);
 
-    const totalRows = await this.prisma.live.$queryRawUnsafe<Array<{ total: number }>>(`
+      const totalRows = await this.prisma.live.$queryRawUnsafe<Array<{ total: number }>>(`
       SELECT COUNT(*) AS total
       FROM (${baseQuery}) AS q
     `);
-    const total = Number(totalRows[0]?.total ?? 0);
+
+      return { pageRows, total: Number(totalRows[0]?.total ?? 0) };
+    });
 
     return {
-      data: this.dedupeMappedRows(rows.map((row) => this.mapRow(row, true))),
+      data: this.dedupeMappedRows(rows.pageRows.map((row) => this.mapRow(row, true))),
       page: safePage,
       limit: safeLimit,
-      total,
-      totalPages: Math.max(1, Math.ceil(total / safeLimit)),
+      total: rows.total,
+      totalPages: Math.max(1, Math.ceil(rows.total / safeLimit)),
     };
   }
 
@@ -275,25 +300,28 @@ export class DesignListService {
     const whereClause = this.buildDesignListWhereClause(filters);
     const baseQuery = this.buildBaseQuery(whereClause);
 
-    const rows = await this.prisma.live.$queryRawUnsafe<DesignListRow[]>(`
+    const result = await this.queryLive('findDesignListPage', async () => {
+      const pageRows = await this.prisma.live.$queryRawUnsafe<DesignListRow[]>(`
       ${baseQuery}
       ORDER BY mp.createdOn DESC
       OFFSET ${offset} ROWS
       FETCH NEXT ${safeLimit} ROWS ONLY
     `);
 
-    const totalRows = await this.prisma.live.$queryRawUnsafe<Array<{ total: number }>>(`
+      const totalRows = await this.prisma.live.$queryRawUnsafe<Array<{ total: number }>>(`
       SELECT COUNT(*) AS total
       FROM (${baseQuery}) AS q
     `);
-    const total = Number(totalRows[0]?.total ?? 0);
+
+      return { pageRows, total: Number(totalRows[0]?.total ?? 0) };
+    });
 
     return {
-      data: rows.map((row) => this.mapRow(row)),
+      data: result.pageRows.map((row) => this.mapRow(row)),
       page: safePage,
       limit: safeLimit,
-      total,
-      totalPages: Math.max(1, Math.ceil(total / safeLimit)),
+      total: result.total,
+      totalPages: Math.max(1, Math.ceil(result.total / safeLimit)),
     };
   }
 }

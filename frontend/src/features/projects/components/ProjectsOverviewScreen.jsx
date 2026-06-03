@@ -1,6 +1,7 @@
 'use client';
 
-import { useEffect, useMemo, useState } from 'react';
+import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
+import { useRouter } from 'next/navigation';
 import { CalendarDays, CheckCircle2, ChevronLeft, ChevronRight, Ellipsis, Inbox, Search, UserRound } from 'lucide-react';
 import { Navbar } from '@/components/Navbar';
 import { getProjectsOverview } from '../services/projects-overview.api';
@@ -20,21 +21,24 @@ function fmt(isoString) {
 
 function CompactCard({ title, children, className = '' }) {
   return (
-    <section className={`ui-surface ui-card-pad flex flex-col ${className}`}>
-      <h2 className="mb-3 text-sm font-semibold text-slate-900">{title}</h2>
-      {children}
+    <section className={`ui-surface ui-card-pad flex min-w-0 flex-col ${className}`}>
+      <h2 className="mb-3 shrink-0 text-sm font-semibold text-slate-900">{title}</h2>
+      <div className="min-w-0 flex-1">{children}</div>
     </section>
   );
 }
 
-function MiniTable({ headers, rows, renderRow }) {
+function ResponsiveTable({ headers, rows, renderRow, emptyMessage }) {
+  if (!rows.length) {
+    return <p className="py-4 text-center text-xs text-slate-400">{emptyMessage}</p>;
+  }
   return (
-    <div className="ui-surface overflow-hidden rounded-lg">
-      <table className="w-full text-left text-xs text-slate-700">
+    <div className="min-w-0 overflow-hidden rounded-lg">
+      <table className="w-full table-fixed text-left text-xs text-slate-700">
         <thead className="ui-table-header border-b border-slate-200">
           <tr>
             {headers.map((header) => (
-              <th key={header} className="px-3 py-2 font-semibold">
+              <th key={header} className="truncate px-2 py-2 font-semibold sm:px-3">
                 {header}
               </th>
             ))}
@@ -46,65 +50,104 @@ function MiniTable({ headers, rows, renderRow }) {
   );
 }
 
-function EmptyRow({ cols }) {
-  return (
-    <tr>
-      <td colSpan={cols} className="px-3 py-4 text-center text-xs text-slate-400">
-        No data for this week
-      </td>
-    </tr>
-  );
-}
-
-const INBOX_PAGE_SIZE = 3;
-
-function InboxCard({ inbox, fmt }) {
+function InboxCard({ inbox, fmt, onNavigate }) {
+  const containerRef = useRef(null);
   const [page, setPage] = useState(0);
-  const totalPages = Math.max(1, Math.ceil(inbox.length / INBOX_PAGE_SIZE));
-  const slice = inbox.slice(page * INBOX_PAGE_SIZE, page * INBOX_PAGE_SIZE + INBOX_PAGE_SIZE);
+  const [pageSize, setPageSize] = useState(8);
 
-  useEffect(() => { setPage(0); }, [inbox]);
+  const recalcPageSize = useCallback(() => {
+    const height = containerRef.current?.clientHeight ?? 320;
+    setPageSize(Math.max(6, Math.min(20, Math.floor(height / 52))));
+  }, []);
+
+  useEffect(() => {
+    recalcPageSize();
+    window.addEventListener('resize', recalcPageSize);
+    return () => window.removeEventListener('resize', recalcPageSize);
+  }, [recalcPageSize]);
+
+  useEffect(() => {
+    setPage(0);
+  }, [inbox, pageSize]);
+
+  const totalPages = Math.max(1, Math.ceil(inbox.length / pageSize));
+  const slice = inbox.slice(page * pageSize, page * pageSize + pageSize);
+  const actionCount = inbox.filter((item) => item.requiresAction).length;
 
   return (
-    <CompactCard title="Inbox" className="h-full">
-      <div className="flex items-center justify-between border-b border-slate-100 pb-2 text-xs font-semibold text-slate-500">
-        <Inbox className="h-4 w-4" />
-        <span>{inbox.length}</span>
+    <CompactCard title="Inbox" className="h-full min-h-[280px]">
+      <div className="mb-2 flex shrink-0 items-center justify-between border-b border-slate-100 pb-2 text-xs font-semibold text-slate-500">
+        <div className="flex items-center gap-2">
+          <Inbox className="h-4 w-4" />
+          <span>{inbox.length} items</span>
+          {actionCount > 0 ? (
+            <span className="rounded-full bg-orange-100 px-2 py-0.5 text-[10px] font-bold text-orange-700">
+              {actionCount} need action
+            </span>
+          ) : null}
+        </div>
       </div>
+
       {inbox.length === 0 ? (
-        <div className="flex-1 grid place-items-center text-sm font-medium text-slate-400 min-h-[120px]">EMPTY</div>
+        <div className="grid min-h-[120px] flex-1 place-items-center text-sm font-medium text-slate-400">No inbox items</div>
       ) : (
         <>
-          <ul className="divide-y divide-slate-100 h-[192px]">
-            {slice.map((item) => (
-              <li key={item.id} className="px-1 h-16 flex flex-col justify-center">
-                <p className="text-xs text-slate-700 leading-snug">{item.summary}</p>
-                {item.taskNo && (
-                  <p className="text-[10px] text-slate-400 mt-0.5 font-mono">{item.taskNo}</p>
-                )}
-                <p className="text-[10px] text-slate-400 mt-0.5">{fmt(item.occurredAt)}</p>
-              </li>
-            ))}
-          </ul>
-          <div className="flex items-center justify-between pt-2 border-t border-slate-100 mt-auto">
-            <button
-              onClick={() => setPage((p) => Math.max(0, p - 1))}
-              disabled={page === 0}
-              className="rounded p-1 text-slate-400 hover:text-slate-700 disabled:opacity-30 disabled:cursor-not-allowed transition"
-            >
-              <ChevronLeft className="h-4 w-4" />
-            </button>
-            <span className="text-[10px] text-slate-400 font-medium">
-              {page + 1} / {totalPages}
-            </span>
-            <button
-              onClick={() => setPage((p) => Math.min(totalPages - 1, p + 1))}
-              disabled={page === totalPages - 1}
-              className="rounded p-1 text-slate-400 hover:text-slate-700 disabled:opacity-30 disabled:cursor-not-allowed transition"
-            >
-              <ChevronRight className="h-4 w-4" />
-            </button>
+          <div ref={containerRef} className="min-h-[200px] flex-1 overflow-y-auto lg:min-h-[240px]">
+            <ul className="divide-y divide-slate-100">
+              {slice.map((item) => (
+                <li key={`${item.requestType ?? 'activity'}-${item.id}`}>
+                  <button
+                    type="button"
+                    onClick={() => item.linkUrl && onNavigate(item.linkUrl)}
+                    disabled={!item.linkUrl}
+                    className={`flex w-full flex-col px-1 py-2.5 text-left transition-colors ${
+                      item.linkUrl ? 'cursor-pointer hover:bg-slate-50' : 'cursor-default'
+                    } ${item.requiresAction ? 'border-l-2 border-orange-400 pl-2' : ''}`}
+                  >
+                    <div className="flex items-start justify-between gap-2">
+                      <p className="line-clamp-2 text-xs leading-snug text-slate-700">{item.summary}</p>
+                      {item.requestType && item.requestType !== 'activity' ? (
+                        <span className="shrink-0 rounded bg-slate-100 px-1.5 py-0.5 text-[9px] font-bold uppercase text-slate-600">
+                          {item.requestType === 'regularization' ? 'Reg' : 'OT'}
+                        </span>
+                      ) : null}
+                    </div>
+                    <div className="mt-1 flex flex-wrap items-center gap-2 text-[10px] text-slate-400">
+                      {item.requesterName ? <span>{item.requesterName}</span> : null}
+                      {item.taskNo ? <span className="font-mono">{item.taskNo}</span> : null}
+                      <span>{fmt(item.occurredAt)}</span>
+                      {item.requiresAction ? (
+                        <span className="font-semibold text-orange-600">Action required</span>
+                      ) : null}
+                    </div>
+                  </button>
+                </li>
+              ))}
+            </ul>
           </div>
+          {totalPages > 1 ? (
+            <div className="mt-auto flex shrink-0 items-center justify-between border-t border-slate-100 pt-2">
+              <button
+                type="button"
+                onClick={() => setPage((p) => Math.max(0, p - 1))}
+                disabled={page === 0}
+                className="rounded p-1 text-slate-400 transition hover:text-slate-700 disabled:cursor-not-allowed disabled:opacity-30"
+              >
+                <ChevronLeft className="h-4 w-4" />
+              </button>
+              <span className="text-[10px] font-medium text-slate-400">
+                {page + 1} / {totalPages} · {pageSize} per page
+              </span>
+              <button
+                type="button"
+                onClick={() => setPage((p) => Math.min(totalPages - 1, p + 1))}
+                disabled={page === totalPages - 1}
+                className="rounded p-1 text-slate-400 transition hover:text-slate-700 disabled:cursor-not-allowed disabled:opacity-30"
+              >
+                <ChevronRight className="h-4 w-4" />
+              </button>
+            </div>
+          ) : null}
         </>
       )}
     </CompactCard>
@@ -112,6 +155,7 @@ function InboxCard({ inbox, fmt }) {
 }
 
 export function ProjectsOverviewScreen() {
+  const router = useRouter();
   const [currentDate, setCurrentDate] = useState(() => new Date());
   const [overview, setOverview] = useState(null);
   const [loading, setLoading] = useState(false);
@@ -171,224 +215,173 @@ export function ProjectsOverviewScreen() {
   } : { background: '#e2e8f0' };
 
   return (
-    <div className="app-shell">
+    <div className="app-shell overflow-x-hidden">
       <Navbar />
-      <main className="h-[calc(100vh-165px)] w-full overflow-y-auto px-4 py-4 sm:px-6">
-        <div className="mb-4 flex flex-col sm:flex-row sm:items-center sm:justify-between gap-3">
-          <h1 className="text-xl font-semibold tracking-tight text-slate-900 sm:text-2xl">
-            Projects Overview
-          </h1>
-          <div className="flex items-center gap-3">
-            <div className="relative w-48 max-w-full">
-              <div className="pointer-events-none absolute inset-y-0 left-0 flex items-center pl-3">
-                <Search className="h-4 w-4 text-slate-400" />
+      <main className="h-[calc(100vh-165px)] w-full overflow-x-hidden overflow-y-auto px-3 py-4 sm:px-5 lg:px-6">
+        <div className="mx-auto flex max-w-[1600px] flex-col gap-4">
+          <div className="flex flex-col gap-3 sm:flex-row sm:items-center sm:justify-between">
+            <h1 className="text-xl font-semibold tracking-tight text-slate-900 sm:text-2xl">
+              Projects Overview
+            </h1>
+            <div className="flex min-w-0 flex-wrap items-center gap-2 sm:gap-3">
+              <div className="relative min-w-0 flex-1 sm:w-48 sm:flex-none">
+                <div className="pointer-events-none absolute inset-y-0 left-0 flex items-center pl-3">
+                  <Search className="h-4 w-4 text-slate-400" />
+                </div>
+                <input
+                  type="text"
+                  placeholder="Project Filter"
+                  value={searchTerm}
+                  onChange={(e) => setSearchTerm(e.target.value)}
+                  className="w-full rounded-md border border-slate-300 bg-white py-1.5 pl-9 pr-3 text-sm text-slate-900 outline-none transition focus:border-blue-500 focus:ring-2 focus:ring-blue-500/25"
+                />
               </div>
-              <input
-                type="text"
-                placeholder="Project Filter"
-                value={searchTerm}
-                onChange={(e) => setSearchTerm(e.target.value)}
-                className="w-full rounded-md border border-slate-300 bg-white py-1.5 pl-9 pr-3 text-sm text-slate-900 outline-none transition focus:border-blue-500 focus:ring-2 focus:ring-blue-500/25"
-              />
-            </div>
-            <div className="relative">
-              <button type="button" className="ui-chip-button flex items-center gap-2">
-                {weekLabel}
-                <CalendarDays className="h-4 w-4 text-slate-500" />
-              </button>
-              <input
-                type="date"
-                aria-label="Select date range reference"
-                className="absolute inset-0 h-full w-full cursor-pointer opacity-0"
-                value={currentDate.toISOString().split('T')[0]}
-                onChange={handleDateChange}
-                onClick={(event) => {
-                  if ('showPicker' in event.currentTarget) {
-                    try { event.currentTarget.showPicker(); } catch {}
-                  }
-                }}
-              />
-            </div>
-          </div>
-        </div>
-
-        {loading && (
-          <div className="flex items-center justify-center h-40 text-slate-400 text-sm">
-            Loading…
-          </div>
-        )}
-
-        {!loading && (
-          <div className="grid min-h-[calc(100%-36px)] gap-1.5 lg:grid-cols-[1fr_0.8fr_270px]">
-            {/* Scheduled Tasks */}
-            <CompactCard title="Scheduled Tasks">
-              <MiniTable
-                headers={['Task No', 'Title', 'Rev', 'Assignee', 'Due Date']}
-                rows={data?.scheduledTasks ?? []}
-                renderRow={(row) => (
-                  <tr key={row.taskNo}>
-                    <td className="px-3 py-2 font-mono whitespace-nowrap">{row.taskNo}</td>
-                    <td className="px-3 py-2 max-w-[160px]">
-                      <div className="flex items-start gap-1.5 min-w-0">
-                        {row.title && <span className="truncate" title={row.title}>{row.title}</span>}
-                        {row.designType && (
-                          <span className="shrink-0 rounded bg-blue-50 px-1 py-0.5 text-[10px] font-medium text-blue-600 leading-none">
-                            {row.designType}
-                          </span>
-                        )}
-                      </div>
-                    </td>
-                    <td className="px-3 py-2 whitespace-nowrap font-mono text-slate-500">
-                      {row.revisionCode || '—'}
-                    </td>
-                    <td className="px-3 py-2 max-w-[100px] truncate" title={row.assigneeName}>
-                      {row.assigneeName || '—'}
-                    </td>
-                    <td className="px-3 py-2 whitespace-nowrap">{fmt(row.dueDate)}</td>
-                  </tr>
-                )}
-              />
-              {(data?.scheduledTasks?.length ?? 0) === 0 && !loading && (
-                <p className="text-xs text-slate-400 text-center py-4">No scheduled tasks this week</p>
-              )}
-            </CompactCard>
-
-            {/* Completed Tasks */}
-            <CompactCard title="Completed Tasks">
-              <MiniTable
-                headers={['Task No', 'Title', 'Rev', 'Completed', '']}
-                rows={data?.completedTasks ?? []}
-                renderRow={(row) => (
-                  <tr key={row.taskNo}>
-                    <td className="px-3 py-2 font-mono whitespace-nowrap">{row.taskNo}</td>
-                    <td className="px-3 py-2 max-w-[160px]">
-                      <div className="flex items-start gap-1.5 min-w-0">
-                        {row.title && <span className="truncate" title={row.title}>{row.title}</span>}
-                        {row.designType && (
-                          <span className="shrink-0 rounded bg-blue-50 px-1 py-0.5 text-[10px] font-medium text-blue-600 leading-none">
-                            {row.designType}
-                          </span>
-                        )}
-                      </div>
-                    </td>
-                    <td className="px-3 py-2 whitespace-nowrap font-mono text-slate-500">{row.revisionCode || '—'}</td>
-                    <td className="px-3 py-2 whitespace-nowrap">{fmt(row.completedAt)}</td>
-                    <td className="px-3 py-2 text-right">
-                      <CheckCircle2 className="h-4 w-4 inline-block text-emerald-600" />
-                    </td>
-                  </tr>
-                )}
-              />
-              {(data?.completedTasks?.length ?? 0) === 0 && !loading && (
-                <p className="text-xs text-slate-400 text-center py-4">No completions this week</p>
-              )}
-            </CompactCard>
-
-            {/* Inbox */}
-            <InboxCard inbox={data?.inbox ?? []} fmt={fmt} />
-
-            {/* On Hold Tasks */}
-            <CompactCard title="On Hold Tasks">
-              <MiniTable
-                headers={['Task No', 'Title', 'Rev', 'Hold Date', 'Reason']}
-                rows={data?.onHoldTasks ?? []}
-                renderRow={(row) => (
-                  <tr key={row.taskNo}>
-                    <td className="px-3 py-2 font-mono whitespace-nowrap">{row.taskNo}</td>
-                    <td className="px-3 py-2 max-w-[140px]">
-                      <div className="flex items-start gap-1.5 min-w-0">
-                        {row.title && <span className="truncate" title={row.title}>{row.title}</span>}
-                        {row.designType && (
-                          <span className="shrink-0 rounded bg-blue-50 px-1 py-0.5 text-[10px] font-medium text-blue-600 leading-none">
-                            {row.designType}
-                          </span>
-                        )}
-                      </div>
-                    </td>
-                    <td className="px-3 py-2 whitespace-nowrap font-mono text-slate-500">{row.revisionCode || '—'}</td>
-                    <td className="px-3 py-2 whitespace-nowrap">{fmt(row.holdDate)}</td>
-                    <td className="px-3 py-2 text-slate-500">{row.reason ?? 'Pending approval'}</td>
-                  </tr>
-                )}
-              />
-              {(data?.onHoldTasks?.length ?? 0) === 0 && !loading && (
-                <p className="text-xs text-slate-400 text-center py-4">No tasks on hold</p>
-              )}
-            </CompactCard>
-
-            {/* Reallocated Tasks */}
-            <CompactCard title="Reallocated Tasks">
-              <MiniTable
-                headers={['Task No', 'Title', 'Rev', 'Assigned From', 'Reassigned To']}
-                rows={data?.reallocatedTasks ?? []}
-                renderRow={(row) => (
-                  <tr key={row.taskNo + row.reassignedAt}>
-                    <td className="px-3 py-2 font-mono whitespace-nowrap">{row.taskNo}</td>
-                    <td className="px-3 py-2 max-w-[130px]">
-                      <div className="flex items-start gap-1.5 min-w-0">
-                        {row.title && <span className="truncate" title={row.title}>{row.title}</span>}
-                        {row.designType && (
-                          <span className="shrink-0 rounded bg-blue-50 px-1 py-0.5 text-[10px] font-medium text-blue-600 leading-none">
-                            {row.designType}
-                          </span>
-                        )}
-                      </div>
-                    </td>
-                    <td className="px-3 py-2 whitespace-nowrap font-mono text-slate-500">{row.revisionCode || '—'}</td>
-                    <td className="px-3 py-2 max-w-[90px] truncate text-slate-400" title={row.fromAssigneeName ?? ''}>{row.fromAssigneeName || '—'}</td>
-                    <td className="px-3 py-2 max-w-[90px] truncate text-slate-700" title={row.newAssigneeName}>{row.newAssigneeName}</td>
-                  </tr>
-                )}
-              />
-              {(data?.reallocatedTasks?.length ?? 0) === 0 && !loading && (
-                <p className="text-xs text-slate-400 text-center py-4">No reallocations this week</p>
-              )}
-            </CompactCard>
-
-            {/* Task Summary */}
-            <section className="ui-surface ui-card-pad flex flex-col space-y-4">
-              <div className="flex items-center justify-between">
-                <h2 className="text-sm font-semibold text-slate-900">Task Summary</h2>
-                <button className="text-slate-400 hover:text-slate-600 transition">
-                  <Ellipsis className="h-4 w-4" />
+              <div className="relative shrink-0">
+                <button type="button" className="ui-chip-button flex items-center gap-2">
+                  <span className="max-w-[180px] truncate sm:max-w-none">{weekLabel}</span>
+                  <CalendarDays className="h-4 w-4 shrink-0 text-slate-500" />
                 </button>
+                <input
+                  type="date"
+                  aria-label="Select date range reference"
+                  className="absolute inset-0 h-full w-full cursor-pointer opacity-0"
+                  value={currentDate.toISOString().split('T')[0]}
+                  onChange={handleDateChange}
+                  onClick={(event) => {
+                    if ('showPicker' in event.currentTarget) {
+                      try { event.currentTarget.showPicker(); } catch {}
+                    }
+                  }}
+                />
               </div>
-
-              {hasDonut ? (
-                <div className="flex justify-center">
-                  <DonutChart donut={summary.donut} />
-                </div>
-              ) : (
-                <div className="mx-auto h-24 w-24 rounded-full bg-slate-100 flex items-center justify-center">
-                  <span className="text-xs text-slate-400">No data</span>
-                </div>
-              )}
-
-              <div className="grid grid-cols-2 gap-2 text-xs">
-                <div className="rounded-lg border border-slate-100 bg-slate-50 p-2 shadow-sm text-center">
-                  <p className="text-slate-500 font-medium mb-0.5">On-Time %</p>
-                  <p className="text-lg font-bold text-emerald-600">{summary?.onTimePct ?? 0}%</p>
-                </div>
-                <div className="rounded-lg border border-slate-100 bg-slate-50 p-2 shadow-sm text-center">
-                  <p className="text-slate-500 font-medium mb-0.5">Reallocated</p>
-                  <p className="text-lg font-bold text-slate-900">{summary?.reallocatedPct ?? 0}%</p>
-                </div>
-              </div>
-
-              <div className="flex-1 mt-2">
-                <p className="mb-1.5 text-xs font-semibold text-slate-500 uppercase tracking-wider">Overall Task Status</p>
-                <div className="h-2.5 overflow-hidden rounded-full bg-slate-100 shadow-inner">
-                  <div className="h-full w-full" style={progressStyle} />
-                </div>
-              </div>
-
-              <div className="mt-auto flex items-center justify-end gap-1.5 text-xs font-medium text-slate-400">
-                <UserRound className="h-3.5 w-3.5" />
-                {updatedAt ? `Updated ${updatedAt.toLocaleTimeString('en-GB', { hour: '2-digit', minute: '2-digit' })}` : 'Updated just now'}
-              </div>
-            </section>
+            </div>
           </div>
-        )}
+
+          {loading ? (
+            <div className="flex h-40 items-center justify-center text-sm text-slate-400">
+              Loading…
+            </div>
+          ) : (
+            <div className="grid min-w-0 grid-cols-1 gap-3 md:grid-cols-2 xl:grid-cols-3 xl:grid-rows-2 xl:auto-rows-[minmax(280px,1fr)]">
+              <CompactCard title="Scheduled Tasks" className="h-full min-h-[280px]">
+                <ResponsiveTable
+                  headers={['Task No', 'Title', 'Rev', 'Assignee', 'Due']}
+                  rows={data?.scheduledTasks ?? []}
+                  emptyMessage="No scheduled tasks this week"
+                  renderRow={(row) => (
+                    <tr key={row.taskNo}>
+                      <td className="truncate px-2 py-2 font-mono sm:px-3">{row.taskNo}</td>
+                      <td className="truncate px-2 py-2 sm:px-3" title={row.title}>{row.title || '—'}</td>
+                      <td className="truncate px-2 py-2 font-mono text-slate-500 sm:px-3">{row.revisionCode || '—'}</td>
+                      <td className="truncate px-2 py-2 sm:px-3" title={row.assigneeName}>{row.assigneeName || '—'}</td>
+                      <td className="truncate px-2 py-2 sm:px-3">{fmt(row.dueDate)}</td>
+                    </tr>
+                  )}
+                />
+              </CompactCard>
+
+              <CompactCard title="Completed Tasks" className="h-full min-h-[280px]">
+                <ResponsiveTable
+                  headers={['Task No', 'Title', 'Rev', 'Completed', '']}
+                  rows={data?.completedTasks ?? []}
+                  emptyMessage="No completions this week"
+                  renderRow={(row) => (
+                    <tr key={row.taskNo}>
+                      <td className="truncate px-2 py-2 font-mono sm:px-3">{row.taskNo}</td>
+                      <td className="truncate px-2 py-2 sm:px-3" title={row.title}>{row.title || '—'}</td>
+                      <td className="truncate px-2 py-2 font-mono text-slate-500 sm:px-3">{row.revisionCode || '—'}</td>
+                      <td className="truncate px-2 py-2 sm:px-3">{fmt(row.completedAt)}</td>
+                      <td className="px-2 py-2 text-right sm:px-3">
+                        <CheckCircle2 className="inline-block h-4 w-4 text-emerald-600" />
+                      </td>
+                    </tr>
+                  )}
+                />
+              </CompactCard>
+
+              <InboxCard
+                inbox={data?.inbox ?? []}
+                fmt={fmt}
+                onNavigate={(url) => router.push(url)}
+              />
+
+              <CompactCard title="On Hold Tasks" className="h-full min-h-[280px]">
+                <ResponsiveTable
+                  headers={['Task No', 'Title', 'Rev', 'Hold Date', 'Reason']}
+                  rows={data?.onHoldTasks ?? []}
+                  emptyMessage="No tasks on hold"
+                  renderRow={(row) => (
+                    <tr key={row.taskNo}>
+                      <td className="truncate px-2 py-2 font-mono sm:px-3">{row.taskNo}</td>
+                      <td className="truncate px-2 py-2 sm:px-3" title={row.title}>{row.title || '—'}</td>
+                      <td className="truncate px-2 py-2 font-mono text-slate-500 sm:px-3">{row.revisionCode || '—'}</td>
+                      <td className="truncate px-2 py-2 sm:px-3">{fmt(row.holdDate)}</td>
+                      <td className="truncate px-2 py-2 text-slate-500 sm:px-3">{row.reason ?? 'Pending approval'}</td>
+                    </tr>
+                  )}
+                />
+              </CompactCard>
+
+              <CompactCard title="Reallocated Tasks" className="h-full min-h-[280px]">
+                <ResponsiveTable
+                  headers={['Task No', 'Title', 'From', 'To']}
+                  rows={data?.reallocatedTasks ?? []}
+                  emptyMessage="No reallocations this week"
+                  renderRow={(row) => (
+                    <tr key={`${row.taskNo}-${row.reassignedAt}`}>
+                      <td className="truncate px-2 py-2 font-mono sm:px-3">{row.taskNo}</td>
+                      <td className="truncate px-2 py-2 sm:px-3" title={row.title}>{row.title || '—'}</td>
+                      <td className="truncate px-2 py-2 text-slate-400 sm:px-3" title={row.fromAssigneeName ?? ''}>{row.fromAssigneeName || '—'}</td>
+                      <td className="truncate px-2 py-2 sm:px-3" title={row.newAssigneeName}>{row.newAssigneeName}</td>
+                    </tr>
+                  )}
+                />
+              </CompactCard>
+
+              <section className="ui-surface ui-card-pad flex h-full min-h-[280px] min-w-0 flex-col space-y-4">
+                <div className="flex items-center justify-between">
+                  <h2 className="text-sm font-semibold text-slate-900">Task Summary</h2>
+                  <button type="button" className="text-slate-400 transition hover:text-slate-600">
+                    <Ellipsis className="h-4 w-4" />
+                  </button>
+                </div>
+
+                {hasDonut ? (
+                  <div className="flex justify-center">
+                    <DonutChart donut={summary.donut} />
+                  </div>
+                ) : (
+                  <div className="mx-auto flex h-24 w-24 items-center justify-center rounded-full bg-slate-100">
+                    <span className="text-xs text-slate-400">No data</span>
+                  </div>
+                )}
+
+                <div className="grid grid-cols-2 gap-2 text-xs">
+                  <div className="rounded-lg border border-slate-100 bg-slate-50 p-2 text-center shadow-sm">
+                    <p className="mb-0.5 font-medium text-slate-500">On-Time %</p>
+                    <p className="text-lg font-bold text-emerald-600">{summary?.onTimePct ?? 0}%</p>
+                  </div>
+                  <div className="rounded-lg border border-slate-100 bg-slate-50 p-2 text-center shadow-sm">
+                    <p className="mb-0.5 font-medium text-slate-500">Reallocated</p>
+                    <p className="text-lg font-bold text-slate-900">{summary?.reallocatedPct ?? 0}%</p>
+                  </div>
+                </div>
+
+                <div className="mt-2 flex-1">
+                  <p className="mb-1.5 text-xs font-semibold uppercase tracking-wider text-slate-500">Overall Task Status</p>
+                  <div className="h-2.5 overflow-hidden rounded-full bg-slate-100 shadow-inner">
+                    <div className="h-full w-full" style={progressStyle} />
+                  </div>
+                </div>
+
+                <div className="mt-auto flex items-center justify-end gap-1.5 text-xs font-medium text-slate-400">
+                  <UserRound className="h-3.5 w-3.5" />
+                  {updatedAt ? `Updated ${updatedAt.toLocaleTimeString('en-GB', { hour: '2-digit', minute: '2-digit' })}` : 'Updated just now'}
+                </div>
+              </section>
+            </div>
+          )}
+        </div>
       </main>
     </div>
   );

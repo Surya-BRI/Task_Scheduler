@@ -40,6 +40,11 @@ export interface InboxItem {
   summary: string;
   occurredAt: string;
   taskNo: string | null;
+  requestType?: 'regularization' | 'overtime' | 'activity';
+  linkUrl?: string | null;
+  requiresAction?: boolean;
+  requesterName?: string | null;
+  status?: string | null;
 }
 
 export interface DonutSegment {

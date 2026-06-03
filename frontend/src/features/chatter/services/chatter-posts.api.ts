@@ -7,6 +7,7 @@ export type ChatterCommentDto = {
   authorId: string | null;
   authorName?: string | null;
   authorRole?: string | null;
+  mentionUserId?: string | null;
   message: string;
   createdAt: string;
 };
@@ -30,6 +31,8 @@ export type ChatterLinkAttachmentDto = {
 export type ChatterPostDto = {
   id: string;
   taskId: string | null;
+  taskName?: string | null;
+  projectId?: string | null;
   authorId: string | null;
   authorName?: string | null;
   authorRole?: string | null;
@@ -57,14 +60,25 @@ export type ChatterFeedPost = {
   id: string;
   title: string;
   author: string;
+  authorId?: string | null;
   time: string;
   mention: string;
+  mentionUserId?: string | null;
   message: string;
   projectName: string;
+  projectId?: string | null;
+  taskName?: string | null;
   responsibleUser: string;
   priority: 'low' | 'medium' | 'high';
   seenBy: number;
-  comments: Array<{ id: string; message: string; author: string; createdAt: string }>;
+  comments: Array<{
+    id: string;
+    message: string;
+    author: string;
+    authorId: string | null;
+    mentionUserId?: string | null;
+    createdAt: string;
+  }>;
   updatedAt: string;
   postType?: string;
   fileAttachments?: Array<{ id: string; fileName: string; mimeType: string | null; sizeBytes: number; url: string }>;
@@ -84,7 +98,7 @@ function normalizePriority(p: string | number | null | undefined): 'low' | 'medi
   return 'medium';
 }
 
-function formatChatterTime(value: Date | string | null | undefined): string {
+export function formatChatterTime(value: Date | string | null | undefined): string {
   if (value == null) return '—';
   const d = value instanceof Date ? value : new Date(value);
   if (isNaN(d.getTime())) return '—';
@@ -109,10 +123,18 @@ function normalizePostType(raw: string | null | undefined): string {
   return t;
 }
 
+function resolveDisplayTitle(dto: ChatterPostDto): string {
+  const title = dto.title?.trim() ?? '';
+  const taskName = dto.taskName?.trim() ?? '';
+  if (title && title.toLowerCase() !== 'chatter post') return title;
+  if (taskName) return taskName;
+  return title || '(No title)';
+}
+
 export function mapCommentDtoToFeedComment(
   dto: ChatterCommentDto,
   currentUserId?: string | null,
-): { id: string; message: string; author: string; authorId: string | null; createdAt: string } {
+): { id: string; message: string; author: string; authorId: string | null; mentionUserId?: string | null; createdAt: string } {
   const full = dto.authorName?.trim();
   const role = dto.authorRole?.trim();
   const pretty = full ? `${full}${role ? ` (${role})` : ''}` : null;
@@ -125,6 +147,7 @@ export function mapCommentDtoToFeedComment(
     message: dto.message || '',
     author: authorLabel,
     authorId: dto.authorId,
+    mentionUserId: dto.mentionUserId ?? null,
     createdAt: dto.createdAt,
   };
 }
@@ -136,7 +159,11 @@ export function mapChatterPostDtoToFeedPost(
   const created = dto.createdAt ? new Date(dto.createdAt) : null;
   const full = dto.authorName?.trim();
   const role = dto.authorRole?.trim();
-  const authorLabel = full ? `${full}${role ? ` (${role})` : ''}` : 'Unknown';
+  const pretty = full ? `${full}${role ? ` (${role})` : ''}` : null;
+  const authorLabel =
+    dto.authorId && currentUserId && dto.authorId === currentUserId
+      ? 'You'
+      : pretty ?? 'Unknown';
   const mentionName = dto.mentionUserName?.trim();
   const mention =
     mentionName
@@ -166,12 +193,16 @@ export function mapChatterPostDtoToFeedPost(
 
   const base: ChatterFeedPost = {
     id: dto.id,
-    title: dto.title || '(No title)',
+    title: resolveDisplayTitle(dto),
     author: authorLabel,
+    authorId: dto.authorId,
     time: formatChatterTime(created),
     mention,
+    mentionUserId: dto.mentionUserId,
     message: dto.message || '',
-    projectName: dto.projectName?.trim() || dto.title?.trim() || '—',
+    projectName: dto.projectName?.trim() || '—',
+    projectId: dto.projectId ?? null,
+    taskName: dto.taskName?.trim() || null,
     responsibleUser: authorLabel,
     priority: normalizePriority(dto.priority),
     seenBy: dto.seenByCount,
@@ -198,11 +229,21 @@ export function listChatterMentionUsers() {
   return apiClient.get<ChatterMentionUser[]>('/chatter-posts/mention-users');
 }
 
-export function listChatterPosts(params?: { limit?: number; taskId?: string; projectId?: string }) {
+export function listChatterPosts(params?: {
+  limit?: number;
+  taskId?: string;
+  projectId?: string;
+  mentionUserId?: string;
+  commentedByUserId?: string;
+  postType?: string;
+}) {
   const qs = new URLSearchParams();
   if (params?.limit != null) qs.set('limit', String(params.limit));
   if (params?.taskId?.trim()) qs.set('taskId', params.taskId.trim());
   if (params?.projectId?.trim()) qs.set('projectId', params.projectId.trim());
+  if (params?.mentionUserId?.trim()) qs.set('mentionUserId', params.mentionUserId.trim());
+  if (params?.commentedByUserId?.trim()) qs.set('commentedByUserId', params.commentedByUserId.trim());
+  if (params?.postType?.trim()) qs.set('postType', params.postType.trim());
   const suffix = qs.toString() ? `?${qs.toString()}` : '';
   return apiClient.get<ChatterPostDto[]>(`/chatter-posts${suffix}`);
 }
@@ -211,9 +252,10 @@ export function listChatterComments(postId: string) {
   return apiClient.get<ChatterCommentDto[]>(`/chatter-posts/${encodeURIComponent(postId)}/comments`);
 }
 
-export function createChatterComment(postId: string, message: string) {
+export function createChatterComment(postId: string, message: string, mentionUserId?: string | null) {
   return apiClient.post<ChatterCommentDto>(`/chatter-posts/${encodeURIComponent(postId)}/comments`, {
     message,
+    ...(mentionUserId ? { mentionUserId } : {}),
   });
 }
 

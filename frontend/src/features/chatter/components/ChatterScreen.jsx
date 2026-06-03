@@ -7,11 +7,14 @@ import { Navbar } from "@/components/Navbar";
 import {
   createChatterComment,
   createChatterPost,
+  formatChatterTime,
   listChatterMentionUsers,
   listChatterPosts,
   mapChatterPostDtoToFeedPost,
   mapCommentDtoToFeedComment,
 } from "@/features/chatter/services/chatter-posts.api";
+import { emitChatterRefresh, onChatterRefresh } from "@/features/chatter/utils/chatter-events";
+import { apiClient } from "@/lib/api-client";
 import { getSession } from "@/lib/mock-auth";
 import {
   createLinkAttachment,
@@ -19,107 +22,21 @@ import {
   normalizeExternalUrl,
 } from "../utils/chatterLinkAttachments";
 
-const CURRENT_USER = "Delbin Delbin";
-
 const PRIORITY_STYLES = {
   low: "bg-emerald-500",
   medium: "bg-amber-400",
   high: "bg-red-500",
 };
 
-const PRIVATE_MENTION_SEED = [
-  {
-    id: "pm1",
-    title: "RAMADA SIGNAGE FOR WORD OF ART @ JADDAF",
-    projectName: "Ramada Signage",
-    message: "Please find the attached BRI design and prepare the quote.",
-    time: "6m ago",
-  },
-  {
-    id: "pm2",
-    title: "DUBAI HILLS KIOSK SIGNAGE UPDATE",
-    projectName: "Dubai Hills Kiosk",
-    message: "Client requested revised finish sample. Share options by EOD.",
-    time: "2h ago",
-  },
-  {
-    id: "pm3",
-    title: "BUS SHELTER CAMPAIGN - PHASE 2",
-    projectName: "Bus Shelter Campaign",
-    message: "Media file package uploaded. Awaiting final QA check.",
-    time: "2 days ago",
-  },
-  {
-    id: "pm4",
-    title: "JEBEL ALI YARD SAFETY BOARD",
-    projectName: "Jebel Ali Yard",
-    message: "Please replace icons with approved HSE set from library.",
-    time: "2 days ago",
-  },
-];
-
-const PRIVATE_COMMENT_SEED = [
-  {
-    id: "pc1",
-    title: "SHARJAH MALL WAYFINDING PANEL",
-    projectName: "Sharjah Mall",
-    message: "Best price draft already sent for confirmation.",
-    time: "1 day ago",
-  },
-  {
-    id: "pc2",
-    title: "EYE ZONE REVOLI SIGNAGE @ DUBAI MALL",
-    projectName: "Eye Zone Revoli",
-    message: "Quotation shared with alternate material option.",
-    time: "1 day ago",
-  },
-  {
-    id: "pc3",
-    title: "MARINA DIGITAL SCREEN CONTENT",
-    projectName: "Marina Digital Screen",
-    message: "Copy lock done. Proceeding with animation export.",
-    time: "2 days ago",
-  },
-];
-
-const TASK_NAMES = [
-  "Retail Store Redesign",
-  "Office Complex Phase 1",
-  "Boutique Showroom",
-  "Residential Tower A",
-  "Mall Kiosk Design",
-  "Public Library Renovation",
-  "Flagship Store",
-  "Commercial Plaza",
-  "Spa & Fitness Facility",
-  "University Campus Building",
-  "Outlet Wayfinding Upgrade",
-  "Corporate HQ Lobby Fitout",
-  "Window Display Concepts",
-  "Waterfront Visitor Center",
-  "Experience Zone Counters",
-  "Specialty Clinic Expansion",
-  "Seasonal Promotion Fixtures",
-  "Resort Signage Masterplan",
-];
-
-function buildTaskChatterRecords(taskName, taskIndex) {
-  const samples = [
-    "Initial brief reviewed and ownership assigned.",
-    "First draft posted for internal review.",
-    "Client feedback received and noted.",
-    "Revisions completed and updated artwork shared.",
-    "Material/production details validated with vendor.",
-    "Final approval pending sign-off from project lead.",
-  ];
-
-  return samples.map((message, idx) => ({
-    id: `${taskName}-${idx}`,
-    title: `${taskName} - Update ${idx + 1}`,
-    message,
-    author: idx % 2 === 0 ? "Aneesh Raghu" : "Delbin Delbin",
-    time: `${(taskIndex % 3) + idx + 1}h ago`,
-  }));
+function formatTaskCatalogLabel(task) {
+  const title = String(task?.title ?? "").trim();
+  const taskNo = String(task?.taskNo ?? "").trim();
+  const opNo = String(task?.opNo ?? "").trim();
+  if (title && taskNo) return `${title} (${taskNo})`;
+  if (title) return title;
+  if (taskNo) return taskNo;
+  if (opNo) return opNo;
+  return "Task";
 }
 
 function SegmentButton({ label, isActive, onClick }) {
@@ -734,39 +651,65 @@ export function ChatterScreen() {
   const [draftByPostId, setDraftByPostId] = useState({});
   const [activeTab, setActiveTab] = useState("posts");
   const [openTaskId, setOpenTaskId] = useState(null);
-  const [currentDate, setCurrentDate] = useState(new Date(2026, 2, 3));
+  const [focusedPostId, setFocusedPostId] = useState(null);
+  const [currentDate, setCurrentDate] = useState(new Date());
+  const [taskCatalog, setTaskCatalog] = useState([]);
   
   const [isCreatePostOpen, setIsCreatePostOpen] = useState(false);
   const [isSubmitting, setIsSubmitting] = useState(false);
   const [postsLoadError, setPostsLoadError] = useState(null);
+  const [postsLoading, setPostsLoading] = useState(false);
   const [submittingCommentPostId, setSubmittingCommentPostId] = useState(null);
 
   const currentUserId = useMemo(() => getSession()?.id ?? null, []);
 
-  useEffect(() => {
-    let cancelled = false;
-    listChatterPosts({ limit: 500 })
-      .then((rows) => {
-        if (cancelled) return;
-        if (!Array.isArray(rows)) {
-          setPosts([]);
-          setPostsLoadError(
-            `Unexpected response: expected a JSON array, received ${rows === null || rows === undefined ? String(rows) : typeof rows}`,
-          );
-          return;
-        }
-        setPostsLoadError(null);
-        const userId = getSession()?.id ?? null;
-        setPosts(rows.map((row) => mapChatterPostDtoToFeedPost(row, userId)));
-      })
-      .catch((err) => {
-        if (cancelled) return;
+  const reloadPosts = async () => {
+    setPostsLoading(true);
+    try {
+      const rows = await listChatterPosts({ limit: 500 });
+      if (!Array.isArray(rows)) {
         setPosts([]);
-        setPostsLoadError(err instanceof Error ? err.message : String(err));
-      });
-    return () => {
-      cancelled = true;
-    };
+        setPostsLoadError(
+          `Unexpected response: expected a JSON array, received ${rows === null || rows === undefined ? String(rows) : typeof rows}`,
+        );
+        return;
+      }
+      setPostsLoadError(null);
+      setPosts(rows.map((row) => mapChatterPostDtoToFeedPost(row, currentUserId)));
+    } catch (err) {
+      setPosts([]);
+      setPostsLoadError(err instanceof Error ? err.message : String(err));
+    } finally {
+      setPostsLoading(false);
+    }
+  };
+
+  useEffect(() => {
+    void reloadPosts();
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [currentUserId]);
+
+  useEffect(() => {
+    return onChatterRefresh(() => {
+      void reloadPosts();
+    });
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [currentUserId]);
+
+  useEffect(() => {
+    apiClient
+      .get("/tasks?limit=500")
+      .then((res) => {
+        const rows = Array.isArray(res) ? res : Array.isArray(res?.data) ? res.data : [];
+        setTaskCatalog(
+          rows.map((task) => ({
+            id: String(task.id),
+            label: formatTaskCatalogLabel(task),
+            projectName: task?.project?.name?.trim() || "—",
+          })),
+        );
+      })
+      .catch(() => setTaskCatalog([]));
   }, []);
 
   const weekLabel = useMemo(() => {
@@ -788,63 +731,107 @@ export function ChatterScreen() {
   );
 
   const privateMentions = useMemo(() => {
-    const dynamicMentions = sortedPosts
-      .filter((post) =>
-        String(post.mention ?? "").toLowerCase().includes(`@${CURRENT_USER}`.toLowerCase()),
-      )
-      .map((post) => ({
-        id: `mention-${post.id}`,
-        title: post.title,
-        projectName: post.projectName,
-        message: post.message,
-        time: post.time,
-      }));
-
-    return [...dynamicMentions, ...PRIVATE_MENTION_SEED];
-  }, [sortedPosts]);
+    if (!currentUserId) return [];
+    return sortedPosts
+      .filter((post) => {
+        if (post.mentionUserId === currentUserId) return true;
+        return (post.comments ?? []).some((comment) => comment.mentionUserId === currentUserId);
+      })
+      .map((post) => {
+        const mentionedComment = (post.comments ?? []).find((c) => c.mentionUserId === currentUserId);
+        const isPostMention = post.mentionUserId === currentUserId;
+        return {
+          id: `${post.id}-${mentionedComment?.id ?? "post"}`,
+          postId: post.id,
+          title: post.title,
+          taskName: post.taskName,
+          projectName: post.projectName,
+          message: mentionedComment?.message ?? post.message,
+          time: isPostMention ? post.time : formatChatterTime(mentionedComment?.createdAt),
+          updatedAt: post.updatedAt,
+        };
+      })
+      .sort(
+        (a, b) =>
+          new Date(b.updatedAt ?? 0).getTime() - new Date(a.updatedAt ?? 0).getTime(),
+      );
+  }, [sortedPosts, currentUserId]);
 
   const privateComments = useMemo(() => {
-    const commentedPosts = sortedPosts
-      .filter((post) =>
-        (post.comments ?? []).some(
-          (comment) => String(comment.author ?? "").toLowerCase() === "you",
-        ),
-      )
+    if (!currentUserId) return [];
+    return sortedPosts
+      .filter((post) => (post.comments ?? []).some((comment) => comment.authorId === currentUserId))
       .map((post) => {
-        const latestMyComment = (post.comments ?? []).find(
-          (comment) => String(comment.author ?? "").toLowerCase() === "you",
-        );
+        const myComments = (post.comments ?? []).filter((comment) => comment.authorId === currentUserId);
+        const latestMyComment = [...myComments].sort(
+          (a, b) => new Date(b.createdAt ?? 0).getTime() - new Date(a.createdAt ?? 0).getTime(),
+        )[0];
         return {
-          id: post.id,
+          id: `${post.id}-${latestMyComment?.id ?? post.id}`,
+          postId: post.id,
           title: post.title,
+          taskName: post.taskName,
           projectName: post.projectName,
-          message: latestMyComment?.message ?? "",
-          time: "just now",
+          message: latestMyComment?.message ?? post.message,
+          time: formatChatterTime(latestMyComment?.createdAt ?? post.updatedAt),
+          updatedAt: latestMyComment?.createdAt ?? post.updatedAt,
         };
-      });
+      })
+      .sort(
+        (a, b) =>
+          new Date(b.updatedAt ?? 0).getTime() - new Date(a.updatedAt ?? 0).getTime(),
+      );
+  }, [sortedPosts, currentUserId]);
 
-    const directCommentRecords = sortedPosts
-      .filter((post) => String(post.author ?? "").toLowerCase() === "you")
-      .map((post) => ({
-        id: `${post.id}-direct`,
+  const taskUpdates = useMemo(() => {
+    const byTask = new Map();
+    for (const post of sortedPosts) {
+      if (!post.taskId) continue;
+      const key = post.taskId;
+      const taskName = post.taskName || post.title || "Task";
+      if (!byTask.has(key)) {
+        byTask.set(key, {
+          id: key,
+          taskId: key,
+          taskName,
+          projectName: post.projectName,
+          chats: [],
+        });
+      }
+      byTask.get(key).chats.push({
+        id: post.id,
         title: post.title,
-        projectName: post.projectName,
         message: post.message,
+        author: post.author,
+        mention: post.mention,
         time: post.time,
-      }));
-
-    return [...directCommentRecords, ...commentedPosts, ...PRIVATE_COMMENT_SEED];
-  }, [sortedPosts]);
-
-  const taskUpdates = useMemo(
-    () =>
-      TASK_NAMES.map((taskName, taskIndex) => ({
-        id: taskName,
-        taskName,
-        chats: buildTaskChatterRecords(taskName, taskIndex),
-      })),
-    [],
-  );
+        createdAt: post.updatedAt,
+        updatedAt: post.updatedAt,
+        comments: [...(post.comments ?? [])].sort(
+          (a, b) => new Date(a.createdAt ?? 0).getTime() - new Date(b.createdAt ?? 0).getTime(),
+        ),
+      });
+    }
+    for (const task of taskCatalog) {
+      if (!byTask.has(task.id)) {
+        byTask.set(task.id, {
+          id: task.id,
+          taskId: task.id,
+          taskName: task.label,
+          projectName: task.projectName,
+          chats: [],
+        });
+      }
+    }
+    return [...byTask.values()]
+      .map((task) => ({
+        ...task,
+        chats: [...task.chats].sort(
+          (a, b) => new Date(a.createdAt ?? 0).getTime() - new Date(b.createdAt ?? 0).getTime(),
+        ),
+      }))
+      .sort((a, b) => a.taskName.localeCompare(b.taskName));
+  }, [sortedPosts, taskCatalog]);
 
   const openComposer = (postId) => {
     setOpenComposerPostId((current) => (current === postId ? null : postId));
@@ -859,6 +846,12 @@ export function ChatterScreen() {
       return;
     const [yyyy, mm, dd] = event.target.value.split("-");
     setCurrentDate(new Date(Number(yyyy), Number(mm) - 1, Number(dd)));
+  };
+
+  const openDiscussion = (postId) => {
+    setFocusedPostId(postId);
+    setActiveTab("posts");
+    setOpenComposerPostId(postId);
   };
 
   const submitComment = async (postId) => {
@@ -883,6 +876,7 @@ export function ChatterScreen() {
       );
       setDraftByPostId((prev) => ({ ...prev, [postId]: "" }));
       setOpenComposerPostId(null);
+      emitChatterRefresh({ postId });
     } catch (err) {
       console.error("Failed to save comment:", err);
       toast.error("Could not save comment. Please try again.");
@@ -934,7 +928,14 @@ export function ChatterScreen() {
       }
       setPosts((prev) => [newFeedPost, ...prev]);
       setIsCreatePostOpen(false);
-      setActiveTab("posts");
+      const targetTab =
+        postData.postType === "Private"
+          ? "private"
+          : postData.postType === "Task Updates"
+            ? "task-updates"
+            : "posts";
+      setActiveTab(targetTab);
+      emitChatterRefresh({ taskId: createdDto.taskId, postId: createdDto.id });
       toast.success("Post created successfully");
     } catch (err) {
       console.error("Failed to create post:", err);
@@ -1008,7 +1009,12 @@ export function ChatterScreen() {
 
         {activeTab === "posts" ? (
           <section className="mt-3 space-y-2.5">
-            {sortedPosts.length === 0 ? (
+            {postsLoading ? (
+              <div className="rounded-lg border border-slate-200 bg-slate-50 px-4 py-6 text-center text-sm text-slate-600">
+                Loading chatter…
+              </div>
+            ) : null}
+            {!postsLoading && sortedPosts.length === 0 ? (
               <div className="rounded-lg border border-slate-200 bg-slate-50 px-4 py-8 text-center text-sm text-slate-600">
                 <p>
                   No chatter posts loaded. Ensure the backend is running,{" "}
@@ -1024,8 +1030,11 @@ export function ChatterScreen() {
               </div>
             ) : null}
             {sortedPosts.map((post, postIndex) => (
-              <ChatterCard
+              <div
                 key={`${post.id}-${postIndex}`}
+                className={focusedPostId === post.id ? "rounded-xl ring-2 ring-blue-400 ring-offset-2" : ""}
+              >
+              <ChatterCard
                 post={post}
                 isComposerOpen={openComposerPostId === post.id}
                 draftComment={draftByPostId[post.id] ?? ""}
@@ -1034,6 +1043,7 @@ export function ChatterScreen() {
                 onDraftChange={(value) => changeDraft(post.id, value)}
                 onSubmitComment={() => submitComment(post.id)}
               />
+              </div>
             ))}
           </section>
         ) : null}
@@ -1044,14 +1054,22 @@ export function ChatterScreen() {
               <h2 className="mb-2 text-sm font-semibold text-slate-900">Mentioned to You</h2>
               <div className="space-y-2">
                 {privateMentions.length === 0 ? (
-                  <p className="text-sm text-slate-500">No mentions for @{CURRENT_USER}.</p>
+                  <p className="text-sm text-slate-500">No mentions for you yet.</p>
                 ) : (
                   privateMentions.map((item) => (
-                    <div key={`mention-${item.id}`} className="rounded-lg border border-slate-200 bg-slate-50 p-3 shadow-sm">
+                    <button
+                      type="button"
+                      key={`mention-${item.id}`}
+                      onClick={() => openDiscussion(item.postId)}
+                      className="w-full rounded-lg border border-slate-200 bg-slate-50 p-3 text-left shadow-sm transition-colors hover:border-blue-200 hover:bg-blue-50/40"
+                    >
                       <p className="text-sm font-semibold text-slate-900">{item.title}</p>
+                      {item.taskName ? (
+                        <p className="mt-0.5 text-xs font-medium text-blue-600">{item.taskName}</p>
+                      ) : null}
                       <p className="mt-1 text-sm text-slate-700">{item.message}</p>
-                      <p className="mt-2 text-xs text-slate-500">{item.time}</p>
-                    </div>
+                      <p className="mt-2 text-xs text-slate-500">{item.projectName} · {item.time}</p>
+                    </button>
                   ))
                 )}
               </div>
@@ -1064,11 +1082,19 @@ export function ChatterScreen() {
                   <p className="text-sm text-slate-500">No comments posted yet.</p>
                 ) : (
                   privateComments.map((item) => (
-                    <div key={`my-comment-${item.id}`} className="rounded-lg border border-slate-200 bg-slate-50 p-3 shadow-sm">
+                    <button
+                      type="button"
+                      key={`my-comment-${item.id}`}
+                      onClick={() => openDiscussion(item.postId)}
+                      className="w-full rounded-lg border border-slate-200 bg-slate-50 p-3 text-left shadow-sm transition-colors hover:border-blue-200 hover:bg-blue-50/40"
+                    >
                       <p className="text-sm font-semibold text-slate-900">{item.title}</p>
+                      {item.taskName ? (
+                        <p className="mt-0.5 text-xs font-medium text-blue-600">{item.taskName}</p>
+                      ) : null}
                       <p className="mt-1 text-sm text-slate-700">{item.message}</p>
-                      <p className="mt-2 text-xs font-medium text-blue-600">{item.projectName}</p>
-                    </div>
+                      <p className="mt-2 text-xs font-medium text-blue-600">{item.projectName} · {item.time}</p>
+                    </button>
                   ))
                 )}
               </div>
@@ -1080,6 +1106,9 @@ export function ChatterScreen() {
           <section className="ui-surface mt-3 p-3">
             <h2 className="mb-3 text-sm font-semibold text-slate-900">Task Updates</h2>
             <div className="space-y-3">
+              {taskUpdates.length === 0 ? (
+                <p className="text-sm text-slate-500">No tasks with chatter activity yet.</p>
+              ) : null}
               {taskUpdates.map((task) => {
                 const isOpen = openTaskId === task.id;
                 return (
@@ -1089,22 +1118,54 @@ export function ChatterScreen() {
                       onClick={() => setOpenTaskId((prev) => (prev === task.id ? null : task.id))}
                       className="flex w-full items-center justify-between bg-slate-50 px-4 py-3 text-left hover:bg-slate-100 transition-colors"
                     >
-                      <span className="text-sm font-semibold text-slate-800">{task.taskName}</span>
+                      <div>
+                        <span className="text-sm font-semibold text-slate-800">{task.taskName}</span>
+                        <p className="text-xs text-slate-500">{task.projectName}</p>
+                      </div>
                       <span className="text-xs font-medium text-slate-500 bg-white border border-slate-200 px-2 py-0.5 rounded-full">
-                        {task.chats.length} chatter {task.chats.length > 1 ? "items" : "item"}
+                        {task.chats.length} chatter {task.chats.length === 1 ? "item" : "items"}
                       </span>
                     </button>
                     {isOpen ? (
                       <div className="space-y-2 p-3 bg-white">
-                        {task.chats.map((chat) => (
-                          <div key={chat.id} className="rounded-md border border-slate-100 bg-slate-50 p-3">
-                            <p className="text-sm font-semibold text-slate-900">{chat.title}</p>
-                            <p className="mt-1.5 text-sm text-slate-700">{chat.message}</p>
-                            <p className="mt-2 text-xs text-slate-500 font-medium">
-                              {chat.author} - {chat.time}
-                            </p>
-                          </div>
-                        ))}
+                        {task.chats.length === 0 ? (
+                          <p className="text-sm text-slate-500">No chatter posts for this task yet.</p>
+                        ) : (
+                          task.chats.map((chat) => (
+                            <div
+                              key={chat.id}
+                              className="rounded-md border border-slate-100 bg-slate-50 p-3"
+                            >
+                              <button
+                                type="button"
+                                onClick={() => openDiscussion(chat.id)}
+                                className="w-full text-left transition-colors hover:text-blue-700"
+                              >
+                                <p className="text-sm font-semibold text-slate-900">{chat.title}</p>
+                                {chat.mention && chat.mention !== "—" ? (
+                                  <p className="mt-0.5 text-xs font-medium text-blue-600">{chat.mention}</p>
+                                ) : null}
+                                <p className="mt-1.5 text-sm text-slate-700">{chat.message}</p>
+                                <p className="mt-2 text-xs text-slate-500 font-medium">
+                                  {chat.author} · {chat.time}
+                                </p>
+                              </button>
+                              {(chat.comments?.length ?? 0) > 0 ? (
+                                <ul className="mt-3 space-y-2 border-t border-slate-200 pt-3">
+                                  {chat.comments.map((comment) => (
+                                    <li key={comment.id} className="rounded border border-slate-200 bg-white px-2.5 py-2">
+                                      <p className="text-xs font-semibold text-slate-800">{comment.author}</p>
+                                      <p className="mt-1 text-sm text-slate-700">{comment.message}</p>
+                                      <p className="mt-1 text-[10px] text-slate-500">
+                                        {formatChatterTime(comment.createdAt)}
+                                      </p>
+                                    </li>
+                                  ))}
+                                </ul>
+                              ) : null}
+                            </div>
+                          ))
+                        )}
                       </div>
                     ) : null}
                   </div>

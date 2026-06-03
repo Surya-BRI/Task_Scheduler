@@ -4,12 +4,17 @@ import { PrismaClient } from '@prisma/client';
 
 @Injectable()
 export class PrismaService extends PrismaClient implements OnModuleInit, OnModuleDestroy {
-  readonly live: PrismaClient;
+  private liveClient: PrismaClient;
+  private liveIsDedicated: boolean;
+
+  /** ERP / reporting reads (`ErpMaster*` tables). Shares the app pool when URLs match. */
+  get live(): PrismaClient {
+    return this.liveClient;
+  }
 
   constructor(configService: ConfigService) {
-    // Use the primary application database URL for Prisma models/migrations.
     const databaseUrl = configService.get<string>('database.url') ?? process.env.DATABASE_URL;
-    const liveDatabaseUrl = process.env.LIVE_DATABASE_URL;
+    const liveDatabaseUrl = process.env.LIVE_DATABASE_URL?.trim();
 
     super(
       databaseUrl
@@ -23,30 +28,44 @@ export class PrismaService extends PrismaClient implements OnModuleInit, OnModul
         : undefined,
     );
 
-    this.live = new PrismaClient(
-      liveDatabaseUrl
-        ? {
-            datasources: {
-              db: {
-                url: liveDatabaseUrl,
-              },
-            },
-          }
-        : undefined,
-    );
+    const sharePrimaryPool =
+      !liveDatabaseUrl || !databaseUrl || liveDatabaseUrl === databaseUrl;
+
+    if (sharePrimaryPool) {
+      this.liveClient = this;
+      this.liveIsDedicated = false;
+    } else {
+      this.liveClient = new PrismaClient({
+        datasources: {
+          db: {
+            url: liveDatabaseUrl,
+          },
+        },
+      });
+      this.liveIsDedicated = true;
+    }
   }
 
   async onModuleInit(): Promise<void> {
     await this.$connect();
+    if (!this.liveIsDedicated) return;
+
     try {
-      await this.live.$connect();
+      await this.liveClient.$connect();
     } catch (err) {
-      console.warn('[PrismaService] Live DB unavailable — live queries will fail until it recovers:', (err as Error).message);
+      console.warn(
+        '[PrismaService] Dedicated live DB unavailable — ERP master queries will use the primary database pool:',
+        (err as Error).message,
+      );
+      this.liveClient = this;
+      this.liveIsDedicated = false;
     }
   }
 
   async onModuleDestroy(): Promise<void> {
-    await this.live.$disconnect();
+    if (this.liveIsDedicated) {
+      await this.liveClient.$disconnect();
+    }
     await this.$disconnect();
   }
 }

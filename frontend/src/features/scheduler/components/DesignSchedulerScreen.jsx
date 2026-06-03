@@ -2,8 +2,8 @@
 
 import { useState, useEffect, useRef, useMemo, useCallback } from "react";
 import { toast } from "sonner";
-import { Search, Plus, PauseCircle, AlertTriangle } from "lucide-react";
-import { useRouter } from "next/navigation";
+import { Search, Plus, PauseCircle, AlertTriangle, LayoutDashboard } from "lucide-react";
+import { useRouter, useSearchParams } from "next/navigation";
 import { Navbar } from "@/components/Navbar";
 import {
     SCHEDULER_DASHBOARD_SYNC_EVENT,
@@ -25,6 +25,12 @@ import {
 import { FROM_DESIGN_SCHEDULER, taskViewPathForRecord } from "@/lib/design-list-routes";
 import { apiClient } from "@/lib/api-client";
 import { mapTaskToDesignRow } from "@/features/design-list/task-view-model";
+import {
+    resolveSchedulerNavState,
+    snapshotSchedulerNavState,
+    parseWeekStartDate,
+    writeSchedulerNavState,
+} from "../utils/schedulerNavigationState";
 // Capacity constants
 const DAILY_CAPACITY = 8; // 8hrs per day = normal capacity (green/blue)
 const MAX_DAILY_HOURS = 12; // absolute max assignable per day
@@ -424,6 +430,7 @@ function useStateRef(initial) {
 
 export function DesignSchedulerScreen() {
     const router = useRouter();
+    const searchParams = useSearchParams();
     const [designers, setDesigners] = useState([]);
     const [queueRecords, setQueueRecords] = useState([]);
 
@@ -445,6 +452,38 @@ export function DesignSchedulerScreen() {
     
     // Custom Date selection state
     const [currentDate, setCurrentDate] = useState(DEFAULT_SCHEDULER_REFERENCE_DATE);
+    const [navStateReady, setNavStateReady] = useState(false);
+
+    useEffect(() => {
+        const restored = resolveSchedulerNavState(searchParams);
+        if (!restored) {
+            setNavStateReady(true);
+            return;
+        }
+
+        const weekDate = restored.weekStart ? parseWeekStartDate(restored.weekStart) : null;
+        if (weekDate) setCurrentDate(weekDate);
+        if (restored.viewMode === "custom") {
+            setViewMode("custom");
+            if (restored.selectedDays?.length) {
+                setSelectedDays(restored.selectedDays);
+                setCurrentDay(restored.selectedDays[0]);
+            }
+        }
+        if (restored.searchQuery != null) setSearchQuery(restored.searchQuery);
+        setNavStateReady(true);
+    }, [searchParams]);
+
+    useEffect(() => {
+        if (!navStateReady) return;
+        writeSchedulerNavState(snapshotSchedulerNavState({
+            currentDate,
+            viewMode,
+            selectedDays,
+            searchQuery,
+        }));
+    }, [navStateReady, currentDate, viewMode, selectedDays, searchQuery]);
+
     useEffect(() => {
         let cancelled = false;
         apiClient.get("/users?role=DESIGNER")
@@ -963,6 +1002,13 @@ export function DesignSchedulerScreen() {
         return sumTaskHours(tasks, dayTasks) > DAILY_CAPACITY;
     })).length, [schedules, tasks]);
     const totalScheduledTaskCount = useMemo(() => Object.values(schedules).reduce((acc, curr) => acc + Object.values(curr).flat().length, 0), [schedules]);
+
+    const openDesignerDashboard = useCallback((designerId, designerDays) => {
+        const routeData = buildDesignerSnapshot(tasks, designerDays);
+        sessionStorage.setItem(`designer_data_${designerId}`, JSON.stringify(routeData));
+        router.push(`/designer/dashboard`);
+    }, [router, tasks]);
+
     return (<div className="app-shell h-screen flex flex-col overflow-hidden font-sans">
       <Navbar 
         currentDate={currentDate}
@@ -1117,15 +1163,15 @@ export function DesignSchedulerScreen() {
             const designerDays = schedules[designer.id] || {};
             return (<div key={designer.id} className="flex border-b border-slate-100 group relative min-h-[56px] items-stretch">
                       {/* Left: Designer Info */}
-                      <div className="w-[180px] shrink-0 py-1.5 px-3 flex items-center gap-2 border-r border-slate-200 bg-white z-10 transition-colors group-hover:bg-blue-50 cursor-pointer" onClick={() => {
-                          const routeData = buildDesignerSnapshot(tasks, designerDays);
-                          sessionStorage.setItem(`designer_data_${designer.id}`, JSON.stringify(routeData));
-                          router.push(`/designer/dashboard`);
-                      }} title={`Open ${designer.name}'s dashboard`}>
+                      <div
+                        className="w-[180px] shrink-0 py-1.5 px-3 flex items-center gap-2 border-r border-slate-200 bg-white z-10 transition-colors group-hover:bg-blue-50 cursor-pointer"
+                        onClick={() => openDesignerDashboard(designer.id, designerDays)}
+                        title={`Open ${designer.name}'s dashboard`}
+                      >
                         <div className="w-6 h-6 rounded-full bg-slate-800 text-white flex items-center justify-center text-[10px] font-bold leading-none shrink-0 shadow-sm">
                           {designer.initials}
                         </div>
-                        <div className="flex flex-col overflow-hidden w-full justify-center">
+                        <div className="flex flex-col overflow-hidden w-full justify-center min-w-0">
                           <span className="text-[11px] font-semibold text-slate-900 truncate tracking-tight">{designer.name}</span>
                           <div className="flex items-center gap-1">
                             <div className="flex-1 h-1 bg-slate-100 border border-slate-200 rounded-full mt-0.5 overflow-hidden">
@@ -1134,6 +1180,7 @@ export function DesignSchedulerScreen() {
                             <span className={`text-[9px] font-bold mt-0.5 ${overloaded ? 'text-red-500' : 'text-slate-400'}`}>{booked}h</span>
                           </div>
                         </div>
+                        <LayoutDashboard className="h-3.5 w-3.5 shrink-0 text-slate-400" />
                       </div>
 
                       {/* Right: Explicit Day Zones */}
