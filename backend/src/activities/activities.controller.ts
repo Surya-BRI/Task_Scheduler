@@ -12,9 +12,9 @@ export class ActivitiesController {
 
   @Get()
   @Roles(UserRole.HOD, UserRole.DESIGNER, UserRole.ADMIN, UserRole.PROJECT_MANAGER)
-  findAll(@Query('limit') limit?: string) {
+  findAll(@Query('limit') limit?: string, @Query('userId') userId?: string) {
     const parsedLimit = limit ? parseInt(limit, 10) : 50;
-    return this.activitiesService.findAll({ limit: parsedLimit });
+    return this.activitiesService.findAll({ limit: parsedLimit, userId });
   }
 
   @Get('task/:taskId')

@@ -53,6 +53,7 @@ export type ChatterPostDto = {
   authorRole: string | null;
   mentionUserName: string | null;
   projectName: string | null;
+  assigneeName: string | null;
   title: string;
   message: string;
   postType: string | null;
@@ -269,6 +270,7 @@ export class ChatterPostsService {
       authorRole: row.authorRole != null ? String(row.authorRole) : null,
       mentionUserName: row.mentionUserName != null ? String(row.mentionUserName) : null,
       projectName: row.projectName != null ? String(row.projectName) : null,
+      assigneeName: row.assigneeName != null ? String(row.assigneeName) : null,
       title: row.title,
       message: row.message,
       postType: row.postType ?? null,
@@ -301,6 +303,7 @@ export class ChatterPostsService {
           SELECT TOP (${limit})
             p.id, p.taskId, p.authorId, u.fullName AS authorName, r.name AS authorRole,
             mu.fullName AS mentionUserName, pr.name AS projectName,
+            assignee.fullName AS assigneeName,
             p.title, p.message, p.postType, p.mentionUserId, p.priority,
             p.seenByCount, p.attachmentCount, p.isPinned, p.editedAt, p.visibility, p.createdAt, p.updatedAt
           FROM ErpTSChatterPost p
@@ -309,6 +312,7 @@ export class ChatterPostsService {
           LEFT JOIN ErpTSUser mu ON mu.id = p.mentionUserId
           LEFT JOIN ErpTSTask t ON t.id = p.taskId
           LEFT JOIN ErpTSProject pr ON pr.id = t.projectId
+          LEFT JOIN ErpTSUser assignee ON assignee.id = t.assigneeId
           WHERE p.taskId = ${taskId}
           ORDER BY p.updatedAt DESC, p.createdAt DESC`
       : projectId
@@ -319,6 +323,7 @@ export class ChatterPostsService {
               p.id, p.taskId, p.authorId, p.title, p.message, p.postType, p.mentionUserId, p.priority,
               u.fullName AS authorName, r.name AS authorRole,
               mu.fullName AS mentionUserName, pr.name AS projectName,
+              assignee.fullName AS assigneeName,
               p.seenByCount, p.attachmentCount, p.isPinned, p.editedAt, p.visibility, p.createdAt, p.updatedAt
             FROM ErpTSChatterPost p
             JOIN ErpTSTask t ON t.id = p.taskId
@@ -326,6 +331,7 @@ export class ChatterPostsService {
             LEFT JOIN ErpTSRole r ON r.id = u.roleId
             LEFT JOIN ErpTSUser mu ON mu.id = p.mentionUserId
             LEFT JOIN ErpTSProject pr ON pr.id = t.projectId
+            LEFT JOIN ErpTSUser assignee ON assignee.id = t.assigneeId
             WHERE t.projectId = ${projectId}
             ORDER BY p.updatedAt DESC, p.createdAt DESC`
         : await this.prisma.$queryRaw<
@@ -334,6 +340,7 @@ export class ChatterPostsService {
             SELECT TOP (${limit})
               p.id, p.taskId, p.authorId, u.fullName AS authorName, r.name AS authorRole,
               mu.fullName AS mentionUserName, pr.name AS projectName,
+              assignee.fullName AS assigneeName,
               p.title, p.message, p.postType, p.mentionUserId, p.priority,
               p.seenByCount, p.attachmentCount, p.isPinned, p.editedAt, p.visibility, p.createdAt, p.updatedAt
             FROM ErpTSChatterPost p
@@ -342,6 +349,7 @@ export class ChatterPostsService {
             LEFT JOIN ErpTSUser mu ON mu.id = p.mentionUserId
             LEFT JOIN ErpTSTask t ON t.id = p.taskId
             LEFT JOIN ErpTSProject pr ON pr.id = t.projectId
+            LEFT JOIN ErpTSUser assignee ON assignee.id = t.assigneeId
             ORDER BY p.updatedAt DESC, p.createdAt DESC`;
 
     const posts = rows.map((r) => ({

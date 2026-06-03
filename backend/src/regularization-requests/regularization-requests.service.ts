@@ -1,6 +1,8 @@
 import { BadRequestException, HttpException, HttpStatus, Injectable, Logger, NotFoundException } from '@nestjs/common';
 import { ConfigService } from '@nestjs/config';
 import { PrismaService } from '../prisma/prisma.service';
+import { ActivityLoggerService } from '../activities/activity-logger.service';
+import { ActivityAction } from '../activities/activity-events';
 import { CreateRegularizationRequestDto } from './dto/create-regularization-request.dto';
 import { UpdateRegularizationStatusDto } from './dto/update-regularization-status.dto';
 import { isUuidString, sqlUniqueIdentifier } from './sql-uuid.util';
@@ -50,6 +52,7 @@ export class RegularizationRequestsService {
   constructor(
     private readonly prisma: PrismaService,
     private readonly config: ConfigService,
+    private readonly activityLogger: ActivityLoggerService,
   ) {
     const catalog = (this.config.get<string>('erp.sqlCatalog') ?? '').trim();
     if (catalog && !/^[\w-]+$/.test(catalog)) {
@@ -276,6 +279,19 @@ export class RegularizationRequestsService {
     }
     const row = rows[0];
     if (!row) throw new NotFoundException('Created row not found');
+
+    await this.activityLogger.log({
+      action: ActivityAction.REGULARIZATION_SUBMITTED,
+      userId: dto.designerId,
+      taskId: dto.taskId,
+      details: {
+        event: ActivityAction.REGULARIZATION_SUBMITTED,
+        messageKey: 'regularization_submitted',
+        taskSnapshot: { id: dto.taskId },
+        context: { date: dto.date, duration: dto.duration, reason: dto.reason },
+      },
+    });
+
     return this.mapRow(row);
   }
 
@@ -316,6 +332,18 @@ export class RegularizationRequestsService {
     }
     const row = rows[0];
     if (!row) throw new NotFoundException('Regularization request not found');
+
+    await this.activityLogger.log({
+      action: ActivityAction.REGULARIZATION_STATUS_CHANGED,
+      userId: dto.approverId ?? row.designerId,
+      details: {
+        event: ActivityAction.REGULARIZATION_STATUS_CHANGED,
+        messageKey: 'regularization_status_changed',
+        changes: { newStatus: dto.status },
+        context: { requestId: id },
+      },
+    });
+
     return this.mapRow(row);
   }
 }
