@@ -60,6 +60,7 @@ export type ChatterPostDto = {
   authorRole: string | null;
   mentionUserName: string | null;
   projectName: string | null;
+  assigneeName: string | null;
   title: string;
   message: string;
   postType: string | null;
@@ -314,6 +315,7 @@ export class ChatterPostsService {
       mu.fullName AS mentionUserName, pr.name AS projectName,
       CONVERT(varchar(36), t.projectId) AS projectId,
       t.title AS taskTitle, t.taskNo AS taskNo, t.opNo AS taskOpNo,
+      assignee.fullName AS assigneeName,
       ${alias}.title, ${alias}.message, ${alias}.postType, ${alias}.mentionUserId, ${alias}.priority,
       ${alias}.seenByCount, ${alias}.attachmentCount, ${alias}.isPinned, ${alias}.editedAt, ${alias}.visibility,
       ${alias}.createdAt, ${alias}.updatedAt
@@ -328,6 +330,7 @@ export class ChatterPostsService {
       LEFT JOIN ErpTSUser mu ON mu.id = ${alias}.mentionUserId
       LEFT JOIN ErpTSTask t ON t.id = ${alias}.taskId
       LEFT JOIN ErpTSProject pr ON pr.id = t.projectId
+      LEFT JOIN ErpTSUser assignee ON assignee.id = t.assigneeId
     `;
   }
 
@@ -370,6 +373,7 @@ export class ChatterPostsService {
       authorRole: row.authorRole != null ? String(row.authorRole) : null,
       mentionUserName: row.mentionUserName != null ? String(row.mentionUserName) : null,
       projectName: row.projectName != null ? String(row.projectName) : null,
+      assigneeName: row.assigneeName != null ? String(row.assigneeName) : null,
       title: displayTitle,
       message: row.message,
       postType: row.postType ?? null,

@@ -267,10 +267,10 @@ export function Navbar({ currentDate, onCalendarChange, dateRangeText }) {
   const onProjects = pathname === '/projects-overview' || pathname.startsWith('/projects-overview')
   const onScheduler = pathname === '/design-scheduler' || pathname.startsWith('/designer')
 
-  // Logo click: HOD → design-list, Designer → their design list (my-work)
+  // Logo click: HOD → design-list, Designer → their design list
   const handleLogoClick = () => {
     if (isDesigner) {
-      router.push(`/design-list/my-work`)
+      router.push(`/design-list/tasks`)
     } else {
       router.push('/design-list')
     }

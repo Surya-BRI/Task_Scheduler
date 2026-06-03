@@ -144,9 +144,9 @@ export function DesignListRecordPage() {
         : from === 'projects-list'
           ? '/projects-list'
           : from === 'designer-queue'
-            ? '/design-list/my-work'
+            ? '/design-list/tasks'
             : from === 'alex-design-list'
-              ? '/design-list/my-work'
+              ? '/design-list/tasks'
             : '/design-list'
 
   const launchAutostart = searchParams.get('autostart') === '1'

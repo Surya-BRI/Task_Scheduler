@@ -28,7 +28,7 @@ export default function AlexLoginPage() {
 
     setError('')
     setAlexSessionActive()
-    router.push('/design-list/my-work')
+    router.push('/design-list/tasks')
   }
 
   return (

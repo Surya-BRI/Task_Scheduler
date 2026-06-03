@@ -1,11 +1,16 @@
 import { Injectable, NotFoundException } from '@nestjs/common';
 import { PrismaService } from '../prisma/prisma.service';
+import { ActivityLoggerService } from '../activities/activity-logger.service';
+import { ActivityAction } from '../activities/activity-events';
 import { CreateLeaveRequestDto } from './dto/create-request.dto';
 import { UpdateRequestStatusDto } from './dto/update-request-status.dto';
 
 @Injectable()
 export class RequestsService {
-  constructor(private readonly prisma: PrismaService) {}
+  constructor(
+    private readonly prisma: PrismaService,
+    private readonly activityLogger: ActivityLoggerService,
+  ) {}
 
   private async resolveDummyId(dummyId: string): Promise<string> {
     if (!dummyId) return dummyId;
@@ -69,6 +74,16 @@ export class RequestsService {
       }
     });
 
+    await this.activityLogger.log({
+      action: ActivityAction.LEAVE_REQUEST_SUBMITTED,
+      userId: resolvedId,
+      details: {
+        event: ActivityAction.LEAVE_REQUEST_SUBMITTED,
+        messageKey: 'leave_request_submitted',
+        context: { type: dto.type, startDate: dto.startDate, endDate: dto.endDate ?? null },
+      },
+    });
+
     return {
       id: req.id,
       designerId: dto.userId, // Return the original dummy ID to the frontend
@@ -91,6 +106,17 @@ export class RequestsService {
       include: {
         user: { select: { id: true, fullName: true, role: { select: { name: true } } } }
       }
+    });
+
+    await this.activityLogger.log({
+      action: ActivityAction.LEAVE_REQUEST_STATUS_CHANGED,
+      userId: req.userId,
+      details: {
+        event: ActivityAction.LEAVE_REQUEST_STATUS_CHANGED,
+        messageKey: 'leave_request_status_changed',
+        changes: { newStatus: dto.status },
+        context: { requestId: id },
+      },
     });
 
     return {

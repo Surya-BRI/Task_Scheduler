@@ -38,6 +38,7 @@ export type ChatterPostDto = {
   authorRole?: string | null;
   mentionUserName?: string | null;
   projectName?: string | null;
+  assigneeName?: string | null;
   title: string;
   message: string;
   postType: string | null;
@@ -71,6 +72,7 @@ export type ChatterFeedPost = {
   responsibleUser: string;
   priority: 'low' | 'medium' | 'high';
   seenBy: number;
+  designerName?: string | null;
   comments: Array<{
     id: string;
     message: string;
@@ -85,6 +87,17 @@ export type ChatterFeedPost = {
   linkAttachments?: Array<{ id: string; name: string; url: string; platformLabel: string; platformIcon: string; platformBadgeClass: string }>;
   taskId?: string | null;
 };
+
+const UUID_PATTERN = /^[0-9a-f]{8}-[0-9a-f]{4}-[1-5][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i;
+
+function isUuidLike(value: string): boolean {
+  return UUID_PATTERN.test(value.trim()) || /^(Task|User)\s+[0-9a-f-]{36}/i.test(value.trim());
+}
+
+function safeDisplayValue(value: string | null | undefined, fallback = '—'): string {
+  if (!value?.trim()) return fallback;
+  return isUuidLike(value.trim()) ? fallback : value.trim();
+}
 
 function normalizePriority(p: string | number | null | undefined): 'low' | 'medium' | 'high' {
   if (p == null) return 'medium';
@@ -157,7 +170,8 @@ export function mapChatterPostDtoToFeedPost(
   currentUserId?: string | null,
 ): ChatterFeedPost {
   const created = dto.createdAt ? new Date(dto.createdAt) : null;
-  const full = dto.authorName?.trim();
+  const rawFull = dto.authorName?.trim();
+  const full = rawFull && !isUuidLike(rawFull) ? rawFull : null;
   const role = dto.authorRole?.trim();
   const pretty = full ? `${full}${role ? ` (${role})` : ''}` : null;
   const authorLabel =
@@ -165,10 +179,7 @@ export function mapChatterPostDtoToFeedPost(
       ? 'You'
       : pretty ?? 'Unknown';
   const mentionName = dto.mentionUserName?.trim();
-  const mention =
-    mentionName
-      ? `@${mentionName}`
-      : '—';
+  const mention = mentionName && !isUuidLike(mentionName) ? `@${mentionName}` : '—';
 
   const rawType = (dto.postType ?? '').trim();
   const lower = rawType.toLowerCase();
@@ -200,9 +211,10 @@ export function mapChatterPostDtoToFeedPost(
     mention,
     mentionUserId: dto.mentionUserId,
     message: dto.message || '',
-    projectName: dto.projectName?.trim() || '—',
+    projectName: safeDisplayValue(dto.projectName),
     projectId: dto.projectId ?? null,
     taskName: dto.taskName?.trim() || null,
+    designerName: safeDisplayValue(dto.assigneeName),
     responsibleUser: authorLabel,
     priority: normalizePriority(dto.priority),
     seenBy: dto.seenByCount,
