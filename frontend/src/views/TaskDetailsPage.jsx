@@ -10,6 +10,7 @@ import { ProjectTaskTimer } from '../components/ProjectTaskTimer'
 import { apiClient } from '@/lib/api-client'
 import { fetchProjectActivities, fetchTaskActivities } from '@/features/team-activity/services/activities.api'
 import { createChatterComment, createChatterPost, listChatterPosts } from '@/features/chatter/services/chatter-posts.api'
+import { emitChatterRefresh, onChatterRefresh } from '@/features/chatter/utils/chatter-events'
 
 function isValidHttpUrl(value) {
   try {
@@ -858,7 +859,7 @@ export function TaskDetailsPage() {
   const resolvedOpCode = String(record?.salesForceCode ?? record?.opNo ?? '').trim()
   const pageTitleCore = `${resolvedProjectName.toUpperCase()} @ ${(record?.businessUnit ?? '').toUpperCase()}`
   const pageTitle = resolvedOpCode ? `${resolvedOpCode} - ${pageTitleCore}` : pageTitleCore
-  const canPostChatter = chatterMessage.trim().length > 0
+  const canPostChatter = chatterMessage.trim().length > 0 && Boolean(taskId || projectId)
   const hasExistingTask = Boolean(taskId || isUuid(record?.taskId ?? record?.id))
   const taskStatus = record?.status ?? null
   const isTerminalStatus = taskStatus === 'COMPLETED' || taskStatus === 'APPROVED'
@@ -1057,15 +1058,18 @@ export function TaskDetailsPage() {
   }, [projectId])
 
   const fetchChatterPosts = useCallback(async ({ silent = false } = {}) => {
-    if (!projectId) {
+    const queryTaskId = taskId && isUuid(taskId) ? taskId : null
+    if (!queryTaskId && !projectId) {
       setChatterPosts([])
-      if (!silent) setChatterError('No project linked to this record — chatter cannot load.')
+      if (!silent) setChatterError('No task or project linked — chatter cannot load.')
       return
     }
     setChatterError('')
-    setChatterLoading(true)
+    if (!silent) setChatterLoading(true)
     try {
-      const posts = await listChatterPosts({ projectId, limit: 200 })
+      const posts = queryTaskId
+        ? await listChatterPosts({ taskId: queryTaskId, limit: 200 })
+        : await listChatterPosts({ projectId, limit: 200 })
       const normalized = Array.isArray(posts) ? [...posts] : []
       normalized.sort((a, b) => new Date(b.createdAt).getTime() - new Date(a.createdAt).getTime())
       setChatterPosts(normalized)
@@ -1073,14 +1077,24 @@ export function TaskDetailsPage() {
       setChatterError(error instanceof Error ? error.message : 'Failed to load chatter')
       setChatterPosts([])
     } finally {
-      setChatterLoading(false)
+      if (!silent) setChatterLoading(false)
     }
-  }, [projectId])
+  }, [projectId, taskId])
 
   useEffect(() => {
     if (activeTab !== 'chatter') return
     fetchChatterPosts()
   }, [activeTab, fetchChatterPosts])
+
+  useEffect(() => {
+    return onChatterRefresh((detail) => {
+      if (detail.taskId && taskId && detail.taskId !== taskId) return
+      if (detail.projectId && projectId && detail.projectId !== projectId) return
+      if (activeTab === 'chatter') {
+        void fetchChatterPosts({ silent: true })
+      }
+    })
+  }, [activeTab, fetchChatterPosts, projectId, taskId])
 
   const fetchProjectFiles = useCallback(async () => {
     if (!projectId) {
@@ -1136,20 +1150,25 @@ export function TaskDetailsPage() {
   async function handlePostChatter() {
     const message = chatterMessage.trim()
     if (!message) return
-    if (!projectId) {
-      setChatterError('Project is not yet linked. Please wait a moment and try again.')
+    if (!taskId && !projectId) {
+      setChatterError('Task is not yet linked. Please wait a moment and try again.')
       return
     }
     setChatterSubmitting(true)
     setChatterError('')
     try {
-      await createChatterPost({
+      const created = await createChatterPost({
         message,
         postType: 'Posts',
         taskId: taskId || undefined,
       })
       setChatterMessage('')
-      await fetchChatterPosts()
+      setChatterPosts((prev) => {
+        const next = [created, ...prev.filter((p) => p.id !== created.id)]
+        next.sort((a, b) => new Date(b.createdAt).getTime() - new Date(a.createdAt).getTime())
+        return next
+      })
+      emitChatterRefresh({ taskId, projectId, postId: created.id })
     } catch (error) {
       toast.error(error instanceof Error ? error.message : 'Failed to post chatter')
     } finally {
@@ -1163,9 +1182,20 @@ export function TaskDetailsPage() {
     setCommentSubmittingPostId(postId)
     setChatterError('')
     try {
-      await createChatterComment(postId, message)
+      const created = await createChatterComment(postId, message)
       setCommentByPostId((prev) => ({ ...prev, [postId]: '' }))
-      await fetchChatterPosts()
+      setChatterPosts((prev) =>
+        prev.map((post) =>
+          post.id === postId
+            ? {
+                ...post,
+                updatedAt: new Date().toISOString(),
+                comments: [created, ...(post.comments ?? []).filter((c) => c.id !== created.id)],
+              }
+            : post,
+        ),
+      )
+      emitChatterRefresh({ taskId, projectId, postId })
     } catch (error) {
       toast.error(error instanceof Error ? error.message : 'Failed to post comment')
     } finally {
@@ -1510,7 +1540,7 @@ export function TaskDetailsPage() {
                       <button
                         type="button"
                         onClick={handlePostChatter}
-                        disabled={!canPostChatter || chatterSubmitting || !projectId || resolvingProjectId}
+                        disabled={!canPostChatter || chatterSubmitting || resolvingProjectId}
                         className="rounded-md bg-[#10a6e3] px-3.5 py-1.5 text-xs font-semibold text-white transition hover:bg-[#0f96cd] disabled:cursor-not-allowed disabled:opacity-60"
                       >
                         {chatterSubmitting ? 'Posting...' : 'Post'}

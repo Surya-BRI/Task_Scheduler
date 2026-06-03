@@ -132,7 +132,7 @@ export class OvertimeRequestsController {
   @Roles(UserRole.HOD, UserRole.ADMIN)
   findPendingApprovals(@CurrentUser() user: JwtPayload) {
     const userId = user.sub;
-    return this.service.findPendingApprovals(userId, user.role);
+    return this.service.findPendingApprovalsForView(userId, user.role);
   }
 
   @Post(':id/review')

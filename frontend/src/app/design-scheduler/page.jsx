@@ -1,6 +1,6 @@
 'use client'
 
-import { useEffect, useState } from 'react'
+import { Suspense, useEffect, useState } from 'react'
 import { useRouter } from 'next/navigation'
 import { getSession } from '@/lib/mock-auth'
 import { DesignSchedulerScreen } from '@/features/scheduler/components/DesignSchedulerScreen'
@@ -25,5 +25,9 @@ export default function DesignSchedulerPage() {
 
   if (!allowed) return null
 
-  return <DesignSchedulerScreen />
+  return (
+    <Suspense fallback={null}>
+      <DesignSchedulerScreen />
+    </Suspense>
+  )
 }

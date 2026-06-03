@@ -18,6 +18,10 @@ function optionalUuid(value?: string | null): string | null {
   return UUID_RE.test(trimmed) ? trimmed : null;
 }
 
+function sqlQuotedUuid(value: string): string {
+  return `'${value.replace(/'/g, "''")}'`;
+}
+
 export type ChatterAttachmentDto = {
   id: string;
   fileName: string;
@@ -34,6 +38,7 @@ export type ChatterCommentDto = {
   authorId: string | null;
   authorName: string | null;
   authorRole: string | null;
+  mentionUserId: string | null;
   message: string;
   createdAt: string;
 };
@@ -48,6 +53,8 @@ export type ChatterLinkAttachmentDto = {
 export type ChatterPostDto = {
   id: string;
   taskId: string | null;
+  taskName: string | null;
+  projectId: string | null;
   authorId: string | null;
   authorName: string | null;
   authorRole: string | null;
@@ -99,6 +106,7 @@ export class ChatterPostsService {
       authorId: row.authorId != null ? String(row.authorId) : null,
       authorName: row.authorName != null ? String(row.authorName) : null,
       authorRole: row.authorRole != null ? String(row.authorRole) : null,
+      mentionUserId: row.mentionUserId != null ? String(row.mentionUserId) : null,
       message: String(row.message ?? ''),
       createdAt: createdAt.toISOString(),
     };
@@ -113,6 +121,7 @@ export class ChatterPostsService {
         c.id,
         c.postId,
         c.authorId,
+        c.mentionUserId,
         u.fullName AS authorName,
         r.name AS authorRole,
         c.message,
@@ -251,6 +260,93 @@ export class ChatterPostsService {
     }
   }
 
+  private formatTaskDisplayName(
+    title?: string | null,
+    taskNo?: string | null,
+    opNo?: string | null,
+  ): string | null {
+    const t = title?.trim() ?? '';
+    const no = taskNo?.trim() ?? '';
+    const op = opNo?.trim() ?? '';
+    if (t && no) return `${t} (${no})`;
+    if (t) return t;
+    if (no) return no;
+    if (op) return op;
+    return null;
+  }
+
+  private resolveDisplayTitle(storedTitle: string | null | undefined, taskName: string | null): string {
+    const title = (storedTitle ?? '').trim();
+    if (title && title.toLowerCase() !== 'chatter post') return title;
+    if (taskName?.trim()) return taskName.trim();
+    return title || 'Chatter Post';
+  }
+
+  private async loadTaskMeta(taskId: string): Promise<{
+    taskName: string | null;
+    projectName: string | null;
+    projectId: string | null;
+  }> {
+    const rows = await this.prisma.$queryRaw<
+      Array<{ title: string | null; taskNo: string | null; opNo: string | null; projectName: string | null; projectId: string | null }>
+    >`
+      SELECT TOP 1
+        t.title,
+        t.taskNo,
+        t.opNo,
+        pr.name AS projectName,
+        t.projectId
+      FROM ErpTSTask t
+      LEFT JOIN ErpTSProject pr ON pr.id = t.projectId
+      WHERE t.id = ${taskId}`;
+    const row = rows[0];
+    if (!row) return { taskName: null, projectName: null, projectId: null };
+    return {
+      taskName: this.formatTaskDisplayName(row.title, row.taskNo, row.opNo),
+      projectName: row.projectName?.trim() || null,
+      projectId: row.projectId != null ? String(row.projectId) : null,
+    };
+  }
+
+  private postSelectColumns(alias = 'p'): string {
+    return `
+      ${alias}.id, ${alias}.taskId, ${alias}.authorId,
+      u.fullName AS authorName, r.name AS authorRole,
+      mu.fullName AS mentionUserName, pr.name AS projectName,
+      CONVERT(varchar(36), t.projectId) AS projectId,
+      t.title AS taskTitle, t.taskNo AS taskNo, t.opNo AS taskOpNo,
+      ${alias}.title, ${alias}.message, ${alias}.postType, ${alias}.mentionUserId, ${alias}.priority,
+      ${alias}.seenByCount, ${alias}.attachmentCount, ${alias}.isPinned, ${alias}.editedAt, ${alias}.visibility,
+      ${alias}.createdAt, ${alias}.updatedAt
+    `;
+  }
+
+  private postJoinSql(alias = 'p'): string {
+    return `
+      FROM ErpTSChatterPost ${alias}
+      LEFT JOIN ErpTSUser u ON u.id = ${alias}.authorId
+      LEFT JOIN ErpTSRole r ON r.id = u.roleId
+      LEFT JOIN ErpTSUser mu ON mu.id = ${alias}.mentionUserId
+      LEFT JOIN ErpTSTask t ON t.id = ${alias}.taskId
+      LEFT JOIN ErpTSProject pr ON pr.id = t.projectId
+    `;
+  }
+
+  private async enrichPosts(posts: ChatterPostDto[]): Promise<ChatterPostDto[]> {
+    const postIds = posts.map((p) => p.id);
+    const [comments, attachmentsMap, linksMap] = await Promise.all([
+      this.findCommentsByPostIds(postIds),
+      this.findAttachmentsByPostIds(postIds),
+      this.findLinksByPostIds(postIds),
+    ]);
+    const withComments = this.attachComments(posts, comments);
+    return withComments.map((post) => ({
+      ...post,
+      attachments: attachmentsMap.get(post.id) ?? [],
+      linkAttachments: linksMap.get(post.id) ?? [],
+    }));
+  }
+
   private mapRow(row: any): Omit<ChatterPostDto, 'comments' | 'attachments' | 'linkAttachments'> {
     const createdAt = row.createdAt instanceof Date ? row.createdAt : new Date(row.createdAt);
     const updatedAt = row.updatedAt instanceof Date ? row.updatedAt : new Date(row.updatedAt);
@@ -262,16 +358,20 @@ export class ChatterPostsService {
           ? new Date(editedAtRaw).toISOString()
           : null;
 
+    const taskName = this.formatTaskDisplayName(row.taskTitle, row.taskNo, row.taskOpNo);
+    const displayTitle = this.resolveDisplayTitle(row.title, taskName);
+
     return {
       id: String(row.id),
       taskId: row.taskId != null ? String(row.taskId) : null,
+      taskName,
+      projectId: row.projectId != null ? String(row.projectId) : null,
       authorId: row.authorId != null ? String(row.authorId) : null,
       authorName: row.authorName != null ? String(row.authorName) : null,
       authorRole: row.authorRole != null ? String(row.authorRole) : null,
       mentionUserName: row.mentionUserName != null ? String(row.mentionUserName) : null,
       projectName: row.projectName != null ? String(row.projectName) : null,
-      assigneeName: row.assigneeName != null ? String(row.assigneeName) : null,
-      title: row.title,
+      title: displayTitle,
       message: row.message,
       postType: row.postType ?? null,
       mentionUserId: row.mentionUserId != null ? String(row.mentionUserId) : null,
@@ -290,67 +390,53 @@ export class ChatterPostsService {
     limitParam?: string,
     taskIdFilter?: string,
     projectIdFilter?: string,
+    mentionUserIdFilter?: string,
+    commentedByUserIdFilter?: string,
+    postTypeFilter?: string,
   ): Promise<ChatterPostDto[]> {
     const limit = Math.min(1000, Math.max(1, Number.parseInt(limitParam ?? '500', 10) || 500));
-    const taskId = taskIdFilter?.trim() || null;
-    const projectId = projectIdFilter?.trim() || null;
+    const taskId = optionalUuid(taskIdFilter);
+    const projectId = optionalUuid(projectIdFilter);
+    const mentionUserId = optionalUuid(mentionUserIdFilter);
+    const commentedByUserId = optionalUuid(commentedByUserIdFilter);
+    const postType = postTypeFilter?.trim() || null;
 
-    // Raw query: ERP rows may have NULL authorId; Prisma client rejects those until regenerated.
-    const rows = taskId
-      ? await this.prisma.$queryRaw<
-          Array<Record<string, unknown>>
-        >`
-          SELECT TOP (${limit})
-            p.id, p.taskId, p.authorId, u.fullName AS authorName, r.name AS authorRole,
-            mu.fullName AS mentionUserName, pr.name AS projectName,
-            assignee.fullName AS assigneeName,
-            p.title, p.message, p.postType, p.mentionUserId, p.priority,
-            p.seenByCount, p.attachmentCount, p.isPinned, p.editedAt, p.visibility, p.createdAt, p.updatedAt
-          FROM ErpTSChatterPost p
-          LEFT JOIN ErpTSUser u ON u.id = p.authorId
-          LEFT JOIN ErpTSRole r ON r.id = u.roleId
-          LEFT JOIN ErpTSUser mu ON mu.id = p.mentionUserId
-          LEFT JOIN ErpTSTask t ON t.id = p.taskId
-          LEFT JOIN ErpTSProject pr ON pr.id = t.projectId
-          LEFT JOIN ErpTSUser assignee ON assignee.id = t.assigneeId
-          WHERE p.taskId = ${taskId}
-          ORDER BY p.updatedAt DESC, p.createdAt DESC`
-      : projectId
-        ? await this.prisma.$queryRaw<
-            Array<Record<string, unknown>>
-          >`
-            SELECT TOP (${limit})
-              p.id, p.taskId, p.authorId, p.title, p.message, p.postType, p.mentionUserId, p.priority,
-              u.fullName AS authorName, r.name AS authorRole,
-              mu.fullName AS mentionUserName, pr.name AS projectName,
-              assignee.fullName AS assigneeName,
-              p.seenByCount, p.attachmentCount, p.isPinned, p.editedAt, p.visibility, p.createdAt, p.updatedAt
-            FROM ErpTSChatterPost p
-            JOIN ErpTSTask t ON t.id = p.taskId
-            LEFT JOIN ErpTSUser u ON u.id = p.authorId
-            LEFT JOIN ErpTSRole r ON r.id = u.roleId
-            LEFT JOIN ErpTSUser mu ON mu.id = p.mentionUserId
-            LEFT JOIN ErpTSProject pr ON pr.id = t.projectId
-            LEFT JOIN ErpTSUser assignee ON assignee.id = t.assigneeId
-            WHERE t.projectId = ${projectId}
-            ORDER BY p.updatedAt DESC, p.createdAt DESC`
-        : await this.prisma.$queryRaw<
-            Array<Record<string, unknown>>
-          >`
-            SELECT TOP (${limit})
-              p.id, p.taskId, p.authorId, u.fullName AS authorName, r.name AS authorRole,
-              mu.fullName AS mentionUserName, pr.name AS projectName,
-              assignee.fullName AS assigneeName,
-              p.title, p.message, p.postType, p.mentionUserId, p.priority,
-              p.seenByCount, p.attachmentCount, p.isPinned, p.editedAt, p.visibility, p.createdAt, p.updatedAt
-            FROM ErpTSChatterPost p
-            LEFT JOIN ErpTSUser u ON u.id = p.authorId
-            LEFT JOIN ErpTSRole r ON r.id = u.roleId
-            LEFT JOIN ErpTSUser mu ON mu.id = p.mentionUserId
-            LEFT JOIN ErpTSTask t ON t.id = p.taskId
-            LEFT JOIN ErpTSProject pr ON pr.id = t.projectId
-            LEFT JOIN ErpTSUser assignee ON assignee.id = t.assigneeId
-            ORDER BY p.updatedAt DESC, p.createdAt DESC`;
+    const whereParts: string[] = [];
+    if (taskId) {
+      whereParts.push(`p.taskId = ${sqlQuotedUuid(taskId)}`);
+    } else if (projectId) {
+      whereParts.push(`t.projectId = ${sqlQuotedUuid(projectId)}`);
+      whereParts.push('p.taskId IS NOT NULL');
+    }
+    if (mentionUserId) {
+      const mentionSql = sqlQuotedUuid(mentionUserId);
+      whereParts.push(`(
+        p.mentionUserId = ${mentionSql}
+        OR EXISTS (
+          SELECT 1 FROM ErpTSChatterComment cm
+          WHERE cm.postId = p.id AND cm.mentionUserId = ${mentionSql}
+        )
+      )`);
+    }
+    if (commentedByUserId) {
+      whereParts.push(`EXISTS (
+        SELECT 1 FROM ErpTSChatterComment cm
+        WHERE cm.postId = p.id AND cm.authorId = ${sqlQuotedUuid(commentedByUserId)}
+      )`);
+    }
+    if (postType) {
+      whereParts.push(`p.postType = N'${postType.replace(/'/g, "''")}'`);
+    }
+
+    const whereSql = whereParts.length > 0 ? `WHERE ${whereParts.join(' AND ')}` : '';
+
+    const rows = await this.prisma.$queryRawUnsafe<Array<Record<string, unknown>>>(`
+      SELECT TOP (${limit})
+        ${this.postSelectColumns('p')}
+      ${this.postJoinSql('p')}
+      ${whereSql}
+      ORDER BY p.updatedAt DESC, p.createdAt DESC
+    `);
 
     const posts = rows.map((r) => ({
       ...this.mapRow(r),
@@ -358,21 +444,30 @@ export class ChatterPostsService {
       attachments: [] as ChatterAttachmentDto[],
       linkAttachments: [] as ChatterLinkAttachmentDto[],
     }));
-    const postIds = posts.map((p) => p.id);
 
-    const [comments, attachmentsMap, linksMap] = await Promise.all([
-      this.findCommentsByPostIds(postIds),
-      this.findAttachmentsByPostIds(postIds),
-      this.findLinksByPostIds(postIds),
+    return this.enrichPosts(posts);
+  }
+
+  async loadPostById(postId: string): Promise<ChatterPostDto | null> {
+    const id = optionalUuid(postId);
+    if (!id) return null;
+    const rows = await this.prisma.$queryRawUnsafe<Array<Record<string, unknown>>>(`
+      SELECT TOP (1)
+        ${this.postSelectColumns('p')}
+      ${this.postJoinSql('p')}
+      WHERE p.id = ${sqlQuotedUuid(id)}
+    `);
+    const row = rows[0];
+    if (!row) return null;
+    const posts = await this.enrichPosts([
+      {
+        ...this.mapRow(row),
+        comments: [],
+        attachments: [],
+        linkAttachments: [],
+      },
     ]);
-
-    const withComments = this.attachComments(posts, comments);
-
-    return withComments.map((post) => ({
-      ...post,
-      attachments: attachmentsMap.get(post.id) ?? [],
-      linkAttachments: linksMap.get(post.id) ?? [],
-    }));
+    return posts[0] ?? null;
   }
 
   async findCommentsForPost(postId: string): Promise<ChatterCommentDto[]> {
@@ -402,12 +497,20 @@ export class ChatterPostsService {
       throw new NotFoundException('Chatter post not found');
     }
 
+    const mentionUserId = optionalUuid(dto.mentionUserId);
+
     const created = await this.prisma.chatterComment.create({
       data: {
         postId: normalizedPostId,
         authorId,
         message: dto.message.trim(),
+        mentionUserId: mentionUserId ?? undefined,
       },
+    });
+
+    await this.prisma.chatterPost.update({
+      where: { id: normalizedPostId },
+      data: { updatedAt: new Date() },
     });
 
     await this.activityLogger.log({
@@ -423,6 +526,10 @@ export class ChatterPostsService {
         context: { projectId: postExists[0].projectId ?? null, postId: normalizedPostId },
       },
     });
+
+    const comments = await this.findCommentsByPostIds([normalizedPostId]);
+    const saved = comments.find((c) => c.id === String(created.id));
+    if (saved) return saved;
 
     return this.mapCommentRow(created as unknown as Record<string, unknown>);
   }
@@ -469,16 +576,27 @@ export class ChatterPostsService {
     const linkPayload = this.parseLinkAttachmentsJson(dto.linkAttachmentsJson);
     const totalAttachments = uploadResults.length + linkPayload.length;
 
+    const taskId = optionalUuid(dto.taskId);
+    let taskMeta: { taskName: string | null; projectName: string | null; projectId: string | null } = {
+      taskName: null,
+      projectName: null,
+      projectId: null,
+    };
+    if (taskId) {
+      taskMeta = await this.loadTaskMeta(taskId);
+    }
+    const resolvedTitle = this.resolveDisplayTitle(dto.title, taskMeta.taskName);
+
     let newPost: any;
     try {
       newPost = await this.prisma.chatterPost.create({
         data: {
-          title: dto.title?.trim() || 'Chatter Post',
+          title: resolvedTitle,
           message: dto.message,
           postType: dto.postType || null,
           priority: dto.priority || null,
           visibility: dto.visibility || null,
-          taskId: dto.taskId || null,
+          taskId: taskId || null,
           authorId: authorId,
           mentionUserId: optionalUuid(dto.mentionUserId),
           attachmentCount: totalAttachments > 0 ? totalAttachments : undefined,
@@ -531,24 +649,8 @@ export class ChatterPostsService {
     const attachmentDtos = attachmentsMap.get(newPost.id) ?? [];
     const linkDtos = linksMap.get(newPost.id) ?? [];
 
-    let projectName: string | null = null;
-    if (newPost.taskId) {
-      const taskRow = await this.prisma.$queryRaw<Array<{ projectName: string | null }>>`
-        SELECT TOP 1 pr.name AS projectName
-        FROM ErpTSTask t
-        LEFT JOIN ErpTSProject pr ON pr.id = t.projectId
-        WHERE t.id = ${newPost.taskId}`;
-      projectName = taskRow[0]?.projectName ?? null;
-    }
-
-    let projectId: string | null = null;
-    if (newPost.taskId) {
-      const taskRow = await this.prisma.$queryRaw<Array<{ projectId: string | null; taskNo: string | null; opNo: string | null }>>`
-        SELECT TOP 1 projectId, taskNo, opNo
-        FROM ErpTSTask
-        WHERE id = ${newPost.taskId}`;
-      projectId = taskRow[0]?.projectId ?? null;
-    }
+    const projectId = taskMeta.projectId;
+    const projectName = taskMeta.projectName;
     await this.activityLogger.log({
       action: ActivityAction.CREATED_CHATTER_POST,
       userId: authorId,
@@ -559,7 +661,7 @@ export class ChatterPostsService {
         taskSnapshot: newPost.taskId ? { id: newPost.taskId } : undefined,
         projectSnapshot: projectId ? { id: projectId } : undefined,
         changes: {
-          title: dto.title?.trim() || 'Chatter Post',
+          title: resolvedTitle,
           postType: dto.postType ?? null,
           filesUploaded: uploadResults.length,
         },
@@ -570,8 +672,13 @@ export class ChatterPostsService {
       },
     });
 
+    const loaded = await this.loadPostById(newPost.id);
+    if (loaded) return loaded;
+
     return {
       ...this.mapRow(newPost),
+      taskName: taskMeta.taskName,
+      projectId,
       mentionUserName: mentionRow?.fullName ?? null,
       projectName,
       comments: [],

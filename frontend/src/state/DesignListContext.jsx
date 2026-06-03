@@ -30,9 +30,21 @@ function nextStatus(current) {
   return STATUS_ORDER[(idx + 1) % STATUS_ORDER.length]
 }
 
+function shouldLoadDesignList(pathname) {
+  return pathname?.startsWith('/design-list') || pathname?.startsWith('/project-design')
+}
+
+function normalizeDesignListResponse(data) {
+  if (Array.isArray(data)) return data
+  if (Array.isArray(data?.data)) return data.data
+  return []
+}
+
 export function DesignListProvider({ children }) {
   const pathname = usePathname()
   const [records, setRecords] = useState([])
+  const [loading, setLoading] = useState(false)
+  const [error, setError] = useState(null)
   const [query, setQuery] = useState('')
   const [status, setStatus] = useState('All')
   const [typeFilters, setTypeFilters] = useState([])
@@ -43,18 +55,24 @@ export function DesignListProvider({ children }) {
   })
 
   useEffect(() => {
-    if (!pathname?.startsWith('/design-list')) return
+    if (!shouldLoadDesignList(pathname)) return
     let mounted = true
+    setLoading(true)
+    setError(null)
     apiClient
       .get('/design-list')
       .then((data) => {
-        if (!mounted || !Array.isArray(data)) return
-        const deduped = dedupeDesignRecords(data)
-        setRecords(deduped)
-      })
-      .catch(() => {
         if (!mounted) return
+        const rows = normalizeDesignListResponse(data)
+        setRecords(dedupeDesignRecords(rows))
+        setLoading(false)
+      })
+      .catch((err) => {
+        if (!mounted) return
+        console.error('[DesignList] Failed to load design list records:', err)
         setRecords([])
+        setError(err?.message || 'Could not load project design records.')
+        setLoading(false)
       })
 
     return () => {
@@ -149,6 +167,8 @@ export function DesignListProvider({ children }) {
     () => ({
       records,
       setRecords,
+      loading,
+      error,
       query,
       setQuery,
       status,
@@ -169,7 +189,9 @@ export function DesignListProvider({ children }) {
     }),
     [
       createdDateRange,
+      error,
       filtered,
+      loading,
       query,
       records,
       salesPerson,

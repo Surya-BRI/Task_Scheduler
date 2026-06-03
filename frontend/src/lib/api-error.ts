@@ -18,6 +18,7 @@ export function parseApiErrorMessage(body: string, status?: number): string {
     };
 
     const msg = data.message;
+    if (Array.isArray(msg)) return msg.join(', ');
     if (typeof msg === 'string') {
       if (msg === 'Internal server error' && status === 500) {
         return 'The server encountered an error. Ensure the backend is running, the database is reachable, and schema is applied (run npm run prisma:setup from the repo root).';

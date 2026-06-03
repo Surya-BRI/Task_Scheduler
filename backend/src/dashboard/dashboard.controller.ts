@@ -18,7 +18,10 @@ export class DashboardController {
 
   @Get('projects-overview')
   @Roles(UserRole.HOD, UserRole.ADMIN, UserRole.PROJECT_MANAGER)
-  getProjectsOverview(@Query('weekStart') weekStart?: string) {
-    return this.dashboardService.getProjectsOverview(weekStart);
+  getProjectsOverview(
+    @Query('weekStart') weekStart?: string,
+    @CurrentUser() user?: { sub: string; role: UserRole },
+  ) {
+    return this.dashboardService.getProjectsOverview(weekStart, user?.sub, user?.role);
   }
 }

@@ -113,7 +113,7 @@ function DesignTypeTable({ rows, variant }) {
 }
 
 export function ProjectDesignHub() {
-  const { records } = useDesignListStore();
+  const { records, loading, error } = useDesignListStore();
   const list = records;
   const [searchQuery, setSearchQuery] = useState("");
   const [segment, setSegment] = useState("retail");
@@ -180,7 +180,16 @@ export function ProjectDesignHub() {
         </div>
 
         <div className="flex-1 min-h-0 flex flex-col">
-          {segment === "retail" ? (
+          {loading ? (
+            <div className="flex flex-1 items-center justify-center rounded-xl border border-slate-200 bg-white text-sm text-slate-500">
+              Loading projects…
+            </div>
+          ) : error ? (
+            <div className="flex flex-1 flex-col items-center justify-center gap-2 rounded-xl border border-amber-200 bg-amber-50 px-4 py-8 text-center">
+              <p className="text-sm font-medium text-amber-950">{error}</p>
+              <p className="text-xs text-amber-800">Check that the backend is running and the design-list API is available.</p>
+            </div>
+          ) : segment === "retail" ? (
             <DesignTypeTable rows={retailRows} variant="retail" />
           ) : (
             <DesignTypeTable rows={projectRows} variant="project" />

@@ -38,8 +38,18 @@ export class ChatterPostsController {
     @Query('limit') limit?: string,
     @Query('taskId') taskId?: string,
     @Query('projectId') projectId?: string,
+    @Query('mentionUserId') mentionUserId?: string,
+    @Query('commentedByUserId') commentedByUserId?: string,
+    @Query('postType') postType?: string,
   ) {
-    return this.chatterPostsService.findAll(limit, taskId, projectId);
+    return this.chatterPostsService.findAll(
+      limit,
+      taskId,
+      projectId,
+      mentionUserId,
+      commentedByUserId,
+      postType,
+    );
   }
 
   @Get(':postId/comments')
