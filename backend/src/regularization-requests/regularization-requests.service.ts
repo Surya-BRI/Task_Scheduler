@@ -17,6 +17,14 @@ type RawRegularizationRow = {
   status: string | null;
   approverId: string | null;
   createdAt: Date;
+  taskTitle?: string | null;
+  taskNo?: string | null;
+  opNo?: string | null;
+};
+
+export type RegularizationTaskOption = {
+  id: string;
+  name: string;
 };
 
 export type RegularizationRequestView = {
@@ -37,6 +45,7 @@ export type RegularizationRequestView = {
 export class RegularizationRequestsService {
   private readonly logger = new Logger(RegularizationRequestsService.name);
   private readonly table: string;
+  private readonly taskTable: string;
 
   constructor(
     private readonly prisma: PrismaService,
@@ -49,6 +58,7 @@ export class RegularizationRequestsService {
     this.table = catalog
       ? `[${catalog}].[dbo].[ErpTSRegularizationRequest]`
       : `[dbo].[ErpTSRegularizationRequest]`;
+    this.taskTable = catalog ? `[${catalog}].[dbo].[ErpTSTask]` : `[dbo].[ErpTSTask]`;
   }
 
   private fail(context: string, err: unknown): never {
@@ -86,19 +96,37 @@ export class RegularizationRequestsService {
     return 'Pending';
   }
 
-  private selectListSql(): string {
+  private selectListSql(alias = 'r'): string {
     return `
-      CONVERT(varchar(36), id) AS id,
-      CONVERT(varchar(36), designerId) AS designerId,
-      CONVERT(varchar(36), taskId) AS taskId,
-      [date],
-      duration,
-      reason,
-      notes,
-      status,
-      CONVERT(varchar(36), approverId) AS approverId,
-      createdAt
+      CONVERT(varchar(36), ${alias}.id) AS id,
+      CONVERT(varchar(36), ${alias}.designerId) AS designerId,
+      CONVERT(varchar(36), ${alias}.taskId) AS taskId,
+      ${alias}.[date],
+      ${alias}.duration,
+      ${alias}.reason,
+      ${alias}.notes,
+      ${alias}.status,
+      CONVERT(varchar(36), ${alias}.approverId) AS approverId,
+      ${alias}.createdAt,
+      LTRIM(RTRIM(t.title)) AS taskTitle,
+      LTRIM(RTRIM(t.taskNo)) AS taskNo,
+      LTRIM(RTRIM(t.opNo)) AS opNo
     `;
+  }
+
+  private formatTaskDisplay(parts: {
+    title?: string | null;
+    taskNo?: string | null;
+    opNo?: string | null;
+  }): string {
+    const title = parts.title?.trim() ?? '';
+    const taskNo = parts.taskNo?.trim() ?? '';
+    const opNo = parts.opNo?.trim() ?? '';
+    if (title && taskNo) return `${title} (${taskNo})`;
+    if (title) return title;
+    if (taskNo) return taskNo;
+    if (opNo) return opNo;
+    return '—';
   }
 
   private mapRow(row: RawRegularizationRow): RegularizationRequestView {
@@ -106,7 +134,11 @@ export class RegularizationRequestsService {
       id: row.id,
       designerId: row.designerId,
       taskId: row.taskId,
-      taskName: `Task #${row.taskId}`,
+      taskName: this.formatTaskDisplay({
+        title: row.taskTitle,
+        taskNo: row.taskNo,
+        opNo: row.opNo,
+      }),
       date: this.toYyyyMmDd(row.date ? new Date(row.date) : null),
       duration: this.formatDuration(row.duration),
       reason: row.reason ?? '',
@@ -117,6 +149,50 @@ export class RegularizationRequestsService {
     };
   }
 
+  async listTaskOptions(designerId: string): Promise<RegularizationTaskOption[]> {
+    if (!isUuidString(designerId)) {
+      throw new BadRequestException('designerId must be a UUID matching ErpTSRegularizationRequest.designerId (uniqueidentifier).');
+    }
+    const designerSql = sqlUniqueIdentifier(designerId);
+
+    let historicalTaskIds: string[] = [];
+    try {
+      const idRows = await this.prisma.$queryRawUnsafe<Array<{ taskId: string }>>(`
+        SELECT DISTINCT CONVERT(varchar(36), taskId) AS taskId
+        FROM ${this.table}
+        WHERE designerId = ${designerSql} AND taskId IS NOT NULL
+      `);
+      historicalTaskIds = idRows.map((r) => r.taskId).filter((id) => isUuidString(id));
+    } catch (err) {
+      this.logger.warn(`Regularization historical task ids: ${err instanceof Error ? err.message : err}`);
+    }
+
+    const tasks = await this.prisma.task.findMany({
+      where: {
+        OR: [
+          { assigneeId: designerId },
+          ...(historicalTaskIds.length > 0 ? [{ id: { in: historicalTaskIds } }] : []),
+        ],
+      },
+      select: { id: true, title: true, taskNo: true, opNo: true },
+      orderBy: { updatedAt: 'desc' },
+      take: 500,
+    });
+
+    const byId = new Map<string, RegularizationTaskOption>();
+    for (const task of tasks) {
+      byId.set(task.id, {
+        id: task.id,
+        name: this.formatTaskDisplay({
+          title: task.title,
+          taskNo: task.taskNo,
+          opNo: task.opNo,
+        }),
+      });
+    }
+    return [...byId.values()].sort((a, b) => a.name.localeCompare(b.name));
+  }
+
   async findByDesigner(designerId: string): Promise<RegularizationRequestView[]> {
     if (!isUuidString(designerId)) {
       throw new BadRequestException('designerId must be a UUID matching ErpTSRegularizationRequest.designerId (uniqueidentifier).');
@@ -125,10 +201,11 @@ export class RegularizationRequestsService {
       const designerSql = sqlUniqueIdentifier(designerId);
       const rows = await this.prisma.$queryRawUnsafe<RawRegularizationRow[]>(`
       SELECT TOP (1000)
-        ${this.selectListSql()}
-      FROM ${this.table}
-      WHERE designerId = ${designerSql}
-      ORDER BY createdAt DESC
+        ${this.selectListSql('r')}
+      FROM ${this.table} r
+      LEFT JOIN ${this.taskTable} t ON t.id = r.taskId
+      WHERE r.designerId = ${designerSql}
+      ORDER BY r.createdAt DESC
     `);
       return rows.map((r) => this.mapRow(r));
     } catch (err) {
@@ -189,9 +266,10 @@ export class RegularizationRequestsService {
       const idLit = sqlUniqueIdentifier(newId);
       rows = await this.prisma.$queryRawUnsafe<RawRegularizationRow[]>(`
       SELECT TOP (1)
-        ${this.selectListSql()}
-      FROM ${this.table}
-      WHERE id = ${idLit}
+        ${this.selectListSql('r')}
+      FROM ${this.table} r
+      LEFT JOIN ${this.taskTable} t ON t.id = r.taskId
+      WHERE r.id = ${idLit}
     `);
     } catch (err) {
       this.fail('Regularization load-after-insert failed', err);
@@ -228,9 +306,10 @@ export class RegularizationRequestsService {
     try {
       rows = await this.prisma.$queryRawUnsafe<RawRegularizationRow[]>(`
       SELECT TOP (1)
-        ${this.selectListSql()}
-      FROM ${this.table}
-      WHERE id = ${idLit}
+        ${this.selectListSql('r')}
+      FROM ${this.table} r
+      LEFT JOIN ${this.taskTable} t ON t.id = r.taskId
+      WHERE r.id = ${idLit}
     `);
     } catch (err) {
       this.fail('Regularization load-after-update failed', err);

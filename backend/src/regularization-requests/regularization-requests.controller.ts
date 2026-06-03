@@ -8,6 +8,20 @@ import { isUuidString } from './sql-uuid.util';
 export class RegularizationRequestsController {
   constructor(private readonly regularizationRequestsService: RegularizationRequestsService) {}
 
+  @Get('task-options')
+  listTaskOptions(@Query('designerId') designerIdParam?: string) {
+    const designerId = (designerIdParam ?? '').trim();
+    if (!designerId) {
+      return [];
+    }
+    if (!isUuidString(designerId)) {
+      throw new BadRequestException(
+        'Query designerId must be a UUID (SQL uniqueidentifier), e.g. the designer’s ErpTSRegularizationRequest.designerId value.',
+      );
+    }
+    return this.regularizationRequestsService.listTaskOptions(designerId);
+  }
+
   @Get()
   findByDesigner(@Query('designerId') designerIdParam?: string) {
     const designerId = (designerIdParam ?? '').trim();

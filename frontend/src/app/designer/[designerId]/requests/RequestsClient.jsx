@@ -15,6 +15,23 @@ function isUuidString(value) {
   return UUID_RE.test(String(value ?? "").trim());
 }
 
+function formatTaskOptionLabel(task) {
+  const title = String(task?.title ?? task?.name ?? "").trim();
+  const taskNo = String(task?.taskNo ?? "").trim();
+  const opNo = String(task?.opNo ?? "").trim();
+  if (title && taskNo) return `${title} (${taskNo})`;
+  if (title) return title;
+  if (taskNo) return taskNo;
+  if (opNo) return opNo;
+  return "Task";
+}
+
+function displayTaskName(req) {
+  const name = String(req?.taskName ?? "").trim();
+  if (name && name !== "—") return name;
+  return "—";
+}
+
 export default function RequestsClient() {
   const router = useRouter();
   const searchParams = useSearchParams();
@@ -78,6 +95,8 @@ export default function RequestsClient() {
   const [idleRequests, setIdleRequests] = useState([]);
   const [regularizationError, setRegularizationError] = useState(null);
   const [regularizationLoading, setRegularizationLoading] = useState(false);
+  const [regTaskOptions, setRegTaskOptions] = useState([]);
+  const [regTasksLoading, setRegTasksLoading] = useState(false);
 
   const [previousOtRequests, setPreviousOtRequests] = useState([]);
   const [overtimeError, setOvertimeError] = useState(null);
@@ -87,7 +106,7 @@ export default function RequestsClient() {
     if (erpDesignerId == null) {
       setIdleRequests([]);
       setRegularizationError(
-        "Set erpDesignerId to the designer’s SQL uniqueidentifier (UUID string) in designer JSON or the requests page fallback — it must match ErpTSRegularizationRequest.designerId.",
+        "Your designer account is not linked to ERP. Sign in again or contact an administrator.",
       );
       return;
     }
@@ -125,9 +144,46 @@ export default function RequestsClient() {
     }
   };
 
+  const loadRegTaskOptions = async () => {
+    if (erpDesignerId == null) {
+      setRegTaskOptions([]);
+      return;
+    }
+    setRegTasksLoading(true);
+    try {
+      let rows = await apiClient.get(
+        `/regularization-requests/task-options?designerId=${encodeURIComponent(erpDesignerId)}`,
+      );
+      let list = Array.isArray(rows) ? rows : [];
+      if (list.length === 0) {
+        const tasksRes = await apiClient.get("/tasks?limit=200");
+        const taskRows = Array.isArray(tasksRes)
+          ? tasksRes
+          : Array.isArray(tasksRes?.data)
+            ? tasksRes.data
+            : [];
+        list = taskRows.map((t) => ({
+          id: t.id,
+          name: formatTaskOptionLabel(t),
+        }));
+      }
+      setRegTaskOptions(
+        list.map((t) => ({
+          id: t.id,
+          label: String(t.name ?? "").trim() || formatTaskOptionLabel(t),
+        })),
+      );
+    } catch {
+      setRegTaskOptions([]);
+    } finally {
+      setRegTasksLoading(false);
+    }
+  };
+
   useEffect(() => {
     void loadRegularization();
     void loadOvertime();
+    void loadRegTaskOptions();
     // eslint-disable-next-line react-hooks/exhaustive-deps -- reload when ERP designer id changes
   }, [erpDesignerId]);
 
@@ -152,6 +208,17 @@ export default function RequestsClient() {
     setIdleRequests((prev) => prev.map((req) => (req.id === id ? { ...req, [field]: value } : req)));
   };
 
+  const handleIdleTaskSelect = (id, taskId) => {
+    const selected = regTaskOptions.find((t) => t.id === taskId);
+    setIdleRequests((prev) =>
+      prev.map((req) =>
+        req.id === id
+          ? { ...req, taskId, taskName: selected?.label ?? "" }
+          : req,
+      ),
+    );
+  };
+
   const handleSubmitIdleRow = async (id) => {
     const req = idleRequests.find((r) => r.id === id);
     if (!req || erpDesignerId == null) return;
@@ -161,7 +228,7 @@ export default function RequestsClient() {
     }
     const taskId = String(req.taskId ?? "").trim();
     if (!isUuidString(taskId)) {
-      toast.warning("Please enter a valid Task UUID (same type as ErpTSRegularizationRequest.taskId).");
+      toast.warning("Please select a task.");
       return;
     }
     try {
@@ -217,7 +284,7 @@ export default function RequestsClient() {
       return;
     }
     if (drafts.some((r) => !isUuidString(String(r.taskId ?? "").trim()))) {
-      toast.warning("Please enter a valid Task UUID for every draft row.");
+      toast.warning("Please select a task for every draft row.");
       return;
     }
     if (erpDesignerId == null) return;
@@ -526,21 +593,30 @@ export default function RequestsClient() {
                     <tr key={req.id} className="transition-colors hover:bg-slate-50">
                       <td className="px-4 py-3 font-medium text-slate-800">
                         {req.status === "unsubmitted" ? (
-                          <div className="flex max-w-[220px] flex-col gap-1">
-                            <label className="text-[10px] font-semibold uppercase text-slate-500">Task UUID (ERP)</label>
-                            <input
-                              type="text"
-                              placeholder="xxxxxxxx-xxxx-xxxx-xxxx-xxxxxxxxxxxx"
+                          <div className="flex max-w-[260px] flex-col gap-1">
+                            <label className="text-[10px] font-semibold uppercase text-slate-500">Task Name</label>
+                            <select
                               value={req.taskId === "" || req.taskId == null ? "" : req.taskId}
-                              onChange={(e) => handleIdleChange(req.id, "taskId", e.target.value)}
-                              className="w-full rounded-lg border border-slate-300 bg-white px-2 py-1.5 text-xs text-slate-800 outline-none focus:border-blue-500 focus:ring-2 focus:ring-blue-500/25"
-                            />
-                            <span className="text-xs font-normal text-slate-500">
-                              {req.taskName || (req.taskId ? `Task #${req.taskId}` : "Shown after save")}
-                            </span>
+                              onChange={(e) => handleIdleTaskSelect(req.id, e.target.value)}
+                              className={inputClass}
+                              disabled={regTasksLoading}
+                            >
+                              <option value="" disabled>
+                                {regTasksLoading
+                                  ? "Loading tasks…"
+                                  : regTaskOptions.length === 0
+                                    ? "No tasks assigned"
+                                    : "Select a task"}
+                              </option>
+                              {regTaskOptions.map((task) => (
+                                <option key={task.id} value={task.id}>
+                                  {task.label}
+                                </option>
+                              ))}
+                            </select>
                           </div>
                         ) : (
-                          req.taskName || `Task #${req.taskId}`
+                          displayTaskName(req)
                         )}
                       </td>
                       <td className="px-4 py-3 text-center">
