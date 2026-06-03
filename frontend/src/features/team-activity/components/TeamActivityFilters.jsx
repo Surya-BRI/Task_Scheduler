@@ -8,7 +8,7 @@ import { MONTH_LABELS } from "../lib/teamActivityFilters";
 const PRIORITY_OPTS = [
   { label: "All priorities", value: "all" },
   { label: "High", value: "high" },
-  { label: "Normal", value: "normal" },
+  { label: "Medium", value: "medium" },
   { label: "Low", value: "low" },
 ];
 

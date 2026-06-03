@@ -1,6 +1,6 @@
 "use client";
 
-import { useMemo, useState, useEffect } from "react";
+import { useMemo, useState, useEffect, useRef } from "react";
 import { toast } from "sonner";
 import { CalendarDays, Link2, MessageCircle, PlusSquare, Search, ThumbsUp, X } from "lucide-react";
 import { Navbar } from "@/components/Navbar";
@@ -37,6 +37,27 @@ function formatTaskCatalogLabel(task) {
   if (taskNo) return taskNo;
   if (opNo) return opNo;
   return "Task";
+}
+
+function toFormattedHtml(text) {
+  return (text ?? '')
+    .replace(/&/g, '&amp;')
+    .replace(/</g, '&lt;')
+    .replace(/>/g, '&gt;')
+    .replace(/\*\*(.+?)\*\*/gs, '<strong>$1</strong>')
+    .replace(/~~(.+?)~~/gs, '<del>$1</del>')
+    .replace(/__(.+?)__/gs, '<u>$1</u>')
+    .replace(/\*(.+?)\*/gs, '<em>$1</em>')
+    .replace(/\n/g, '<br />')
+}
+
+function FormattedText({ text, className }) {
+  return (
+    <span
+      className={className}
+      dangerouslySetInnerHTML={{ __html: toFormattedHtml(text) }}
+    />
+  )
 }
 
 function SegmentButton({ label, isActive, onClick }) {
@@ -174,6 +195,12 @@ function CreatePostModal({ isOpen, onClose, onSubmit, isSubmitting }) {
   const [linkInput, setLinkInput] = useState("");
   const [showMentions, setShowMentions] = useState(false);
   const [errors, setErrors] = useState({});
+  const [taskSearch, setTaskSearch] = useState("");
+  const [taskResults, setTaskResults] = useState([]);
+  const [selectedTaskId, setSelectedTaskId] = useState(null);
+  const [selectedTaskLabel, setSelectedTaskLabel] = useState("");
+  const [showTaskResults, setShowTaskResults] = useState(false);
+  const taskSearchTimeout = useRef(null);
 
   const handleMentionChange = (e) => {
     const val = e.target.value;
@@ -233,6 +260,31 @@ function CreatePostModal({ isOpen, onClose, onSubmit, isSubmitting }) {
     setLinkAttachments((prev) => prev.filter((link) => link.id !== linkId));
   };
 
+  function handleTaskSearchChange(val) {
+    setTaskSearch(val)
+    setSelectedTaskId(null)
+    setSelectedTaskLabel("")
+    clearTimeout(taskSearchTimeout.current)
+    if (!val.trim()) { setTaskResults([]); setShowTaskResults(false); return }
+    taskSearchTimeout.current = setTimeout(() => {
+      apiClient.get(`/tasks?search=${encodeURIComponent(val.trim())}&limit=8`)
+        .then((res) => {
+          const items = Array.isArray(res) ? res : (res?.data ?? [])
+          setTaskResults(items)
+          setShowTaskResults(true)
+        })
+        .catch(() => setTaskResults([]))
+    }, 300)
+  }
+
+  function selectTask(task) {
+    const label = `${task.taskNo ?? ''} — ${task.title ?? task.opNo ?? ''}`.trim().replace(/^—\s*/, '')
+    setSelectedTaskId(task.id)
+    setSelectedTaskLabel(label)
+    setTaskSearch(label)
+    setShowTaskResults(false)
+  }
+
   useEffect(() => {
     if (!isOpen) return;
     setTitle("");
@@ -246,6 +298,11 @@ function CreatePostModal({ isOpen, onClose, onSubmit, isSubmitting }) {
     setLinkInput("");
     setShowMentions(false);
     setErrors({});
+    setTaskSearch("");
+    setTaskResults([]);
+    setSelectedTaskId(null);
+    setSelectedTaskLabel("");
+    setShowTaskResults(false);
 
     let cancelled = false;
     listChatterMentionUsers()
@@ -278,6 +335,7 @@ function CreatePostModal({ isOpen, onClose, onSubmit, isSubmitting }) {
       message,
       priority,
       postType,
+      taskId: selectedTaskId || null,
       fileAttachments,
       linkAttachments,
     });
@@ -307,6 +365,46 @@ function CreatePostModal({ isOpen, onClose, onSubmit, isSubmitting }) {
               placeholder="Enter post title"
             />
             {errors.title ? <p className="mt-1 text-xs text-red-600">{errors.title}</p> : null}
+          </div>
+
+          <div>
+            <label className="mb-1 block text-sm font-semibold text-slate-700">Link to Task <span className="font-normal text-slate-400">(optional)</span></label>
+            <div className="relative">
+              <input
+                type="text"
+                value={taskSearch}
+                onChange={(e) => handleTaskSearchChange(e.target.value)}
+                placeholder="Search by task number or title..."
+                className="w-full rounded-lg border border-slate-300 bg-white px-3 py-2 text-sm text-slate-900 outline-none focus:border-blue-500 focus:ring-2 focus:ring-blue-500/25"
+              />
+              {selectedTaskId ? (
+                <button
+                  type="button"
+                  onClick={() => { setSelectedTaskId(null); setSelectedTaskLabel(""); setTaskSearch(""); }}
+                  className="absolute right-2 top-1/2 -translate-y-1/2 text-slate-400 hover:text-slate-700"
+                  aria-label="Clear task"
+                >
+                  <X className="h-4 w-4" />
+                </button>
+              ) : null}
+              {showTaskResults && taskResults.length > 0 ? (
+                <ul className="ui-popover-panel absolute z-20 mt-1 max-h-48 w-full overflow-y-auto">
+                  {taskResults.map((t) => (
+                    <li key={t.id}>
+                      <button
+                        type="button"
+                        onClick={() => selectTask(t)}
+                        className="w-full px-3 py-2 text-left text-sm text-slate-700 hover:bg-slate-50"
+                      >
+                        <span className="font-medium text-blue-600">{t.taskNo}</span>
+                        {t.title ? <span className="ml-2 text-slate-600">{t.title}</span> : null}
+                        {t.opNo ? <span className="ml-1 text-slate-400">({t.opNo})</span> : null}
+                      </button>
+                    </li>
+                  ))}
+                </ul>
+              ) : null}
+            </div>
           </div>
 
           <div>
@@ -540,6 +638,35 @@ function ChatterCard({
   onSubmitComment,
 }) {
   const hasComments = (post.comments?.length ?? 0) > 0;
+  const textareaRef = useRef(null)
+
+  function applyFormat(syntax) {
+    const el = textareaRef.current
+    if (!el) return
+    const start = el.selectionStart
+    const end = el.selectionEnd
+    const selected = draftComment.slice(start, end)
+    const [open, close] = Array.isArray(syntax) ? syntax : [syntax, syntax]
+    const newText = draftComment.slice(0, start) + open + selected + close + draftComment.slice(end)
+    onDraftChange(newText)
+    setTimeout(() => {
+      el.focus()
+      const cursor = selected ? end + open.length : start + open.length
+      el.setSelectionRange(cursor, cursor)
+    }, 0)
+  }
+
+  function insertAtCursor(text) {
+    const el = textareaRef.current
+    if (!el) return
+    const start = el.selectionStart
+    const newText = draftComment.slice(0, start) + text + draftComment.slice(start)
+    onDraftChange(newText)
+    setTimeout(() => {
+      el.focus()
+      el.setSelectionRange(start + text.length, start + text.length)
+    }, 0)
+  }
 
   return (
     <article className="ui-surface ui-card-pad flex flex-col gap-3">
@@ -565,8 +692,10 @@ function ChatterCard({
               <p className="text-xs text-slate-400 mt-0.5">{post.time}</p>
               
               <div className="mt-3">
-                <p className="text-sm font-medium text-blue-600 mb-1">{post.mention}</p>
-                <p className="text-sm text-slate-800 leading-relaxed whitespace-pre-wrap">{post.message}</p>
+                {post.mention && post.mention !== '—' ? (
+                  <p className="text-sm font-medium text-blue-600 mb-1">{post.mention}</p>
+                ) : null}
+                <FormattedText text={post.message} className="text-sm text-slate-800 leading-relaxed" />
                 
                 <ChatterPostAttachments post={post} />
 
@@ -587,16 +716,25 @@ function ChatterCard({
           </div>
         </div>
         
-        {post.postType === "Task Updates" || !post.postType ? (
+        {(post.postType === "Task Updates" || !post.postType) ? (
           <aside className="hidden sm:flex flex-col justify-between w-[220px] shrink-0 border-l-[3px] border-slate-800 pl-4 py-1 text-xs">
             <div className="space-y-1.5 text-slate-800">
-              <p><span className="font-medium">Project Name:</span> {post.projectName}</p>
-              <p><span className="font-medium">Responsible User:</span> {post.responsibleUser}</p>
+              <p>
+                <span className="font-medium">Project Name:</span>{' '}
+                {post.projectName && post.projectName !== '—'
+                  ? post.projectName
+                  : <span className="text-slate-400 italic">No project linked</span>}
+              </p>
+              <p>
+                <span className="font-medium">Designer Assigned:</span>{' '}
+                {post.designerName && post.designerName !== '—'
+                  ? post.designerName
+                  : <span className="text-slate-400 italic">Unassigned</span>}
+              </p>
               <div className="flex items-center gap-2">
-                <span className="font-medium">Priority Label:</span>
-                <span
-                  className={`inline-block h-3.5 w-3.5 rounded-full ${PRIORITY_STYLES[post.priority]}`}
-                />
+                <span className="font-medium">Priority:</span>
+                <span className={`inline-block h-3.5 w-3.5 rounded-full ${PRIORITY_STYLES[post.priority]}`} />
+                <span className="capitalize text-slate-600">{post.priority}</span>
               </div>
             </div>
             <p className="text-right text-slate-500 mt-4 pr-2">Seen by {post.seenBy}</p>
@@ -608,7 +746,7 @@ function ChatterCard({
           {(post.comments ?? []).map((comment) => (
             <li key={comment.id} className="rounded-md bg-slate-50 px-3 py-2 text-sm">
               <p className="font-semibold text-slate-800">{comment.author}</p>
-              <p className="mt-0.5 whitespace-pre-wrap text-slate-700">{comment.message}</p>
+              <FormattedText text={comment.message} className="mt-0.5 block text-slate-700" />
             </li>
           ))}
         </ul>
@@ -616,19 +754,21 @@ function ChatterCard({
       {isComposerOpen ? (
         <div className="mt-2 rounded-lg border border-slate-200 bg-slate-50 p-3">
           <textarea
+            ref={textareaRef}
             value={draftComment}
             onChange={(event) => onDraftChange(event.target.value)}
             placeholder="Write a comment..."
             className="min-h-[80px] w-full resize-none rounded-md border border-slate-300 bg-white px-3 py-2 text-sm text-slate-900 outline-none focus:border-blue-500 focus:ring-1 focus:ring-blue-500"
           />
           <div className="mt-3 flex items-center justify-between">
-            <div className="flex items-center gap-3 text-sm font-medium text-slate-500">
-              <span className="cursor-pointer hover:text-slate-800">B</span>
-              <span className="cursor-pointer hover:text-slate-800 italic">I</span>
-              <span className="cursor-pointer hover:text-slate-800 underline">U</span>
-              <span className="cursor-pointer hover:text-slate-800 line-through">S</span>
-              <span className="cursor-pointer hover:text-slate-800">@</span>
-              <span className="cursor-pointer hover:text-slate-800">#</span>
+            <div className="flex items-center gap-1 text-sm font-medium text-slate-500">
+              <button type="button" title="Bold (**text**)" onClick={() => applyFormat(['**', '**'])} className="rounded px-1.5 py-0.5 font-bold hover:bg-slate-200 hover:text-slate-800 transition-colors">B</button>
+              <button type="button" title="Italic (*text*)" onClick={() => applyFormat(['*', '*'])} className="rounded px-1.5 py-0.5 italic hover:bg-slate-200 hover:text-slate-800 transition-colors">I</button>
+              <button type="button" title="Underline (__text__)" onClick={() => applyFormat(['__', '__'])} className="rounded px-1.5 py-0.5 underline hover:bg-slate-200 hover:text-slate-800 transition-colors">U</button>
+              <button type="button" title="Strikethrough (~~text~~)" onClick={() => applyFormat(['~~', '~~'])} className="rounded px-1.5 py-0.5 line-through hover:bg-slate-200 hover:text-slate-800 transition-colors">S</button>
+              <span className="mx-1 text-slate-300">|</span>
+              <button type="button" title="Mention someone" onClick={() => insertAtCursor('@')} className="rounded px-1.5 py-0.5 hover:bg-slate-200 hover:text-slate-800 transition-colors">@</button>
+              <button type="button" title="Add tag" onClick={() => insertAtCursor('#')} className="rounded px-1.5 py-0.5 hover:bg-slate-200 hover:text-slate-800 transition-colors">#</button>
             </div>
             <button
               type="button"
@@ -662,6 +802,7 @@ export function ChatterScreen() {
   const [submittingCommentPostId, setSubmittingCommentPostId] = useState(null);
 
   const currentUserId = useMemo(() => getSession()?.id ?? null, []);
+  const currentUserName = useMemo(() => getSession()?.fullName ?? '', []);
 
   const reloadPosts = async () => {
     setPostsLoading(true);
@@ -899,6 +1040,7 @@ export function ChatterScreen() {
         postType: postData.postType,
         priority: postData.priority,
         mentionUserId: postData.mentionUserId || null,
+        taskId: postData.taskId || null,
       }, postData.fileAttachments, postData.linkAttachments);
 
       const expectedFiles = postData.fileAttachments?.length ?? 0;
@@ -916,11 +1058,6 @@ export function ChatterScreen() {
       }
 
       const newFeedPost = mapChatterPostDtoToFeedPost(createdDto, currentUserId);
-      if (postData.mention?.trim()) {
-        newFeedPost.mention = postData.mention.trim().startsWith("@")
-          ? postData.mention.trim()
-          : `@${postData.mention.trim()}`;
-      }
       // Keep local File objects as fallback for optimistic rendering
       // (in case the server response doesn't include signed URLs yet)
       if (postData.fileAttachments?.length && (!newFeedPost.fileAttachments || newFeedPost.fileAttachments.length === 0)) {

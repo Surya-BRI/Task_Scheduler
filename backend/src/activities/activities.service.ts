@@ -2,11 +2,18 @@ import { Injectable } from '@nestjs/common';
 import { PrismaService } from '../prisma/prisma.service';
 import { ActivityAction } from './activity-events';
 
+const MILESTONE_ACTIONS = new Set([
+  ActivityAction.SCHEDULER_WEEK_LOCKED,
+  ActivityAction.PROJECT_FILE_UPLOADED,
+  ActivityAction.TASK_WORK_SUBMITTED,
+]);
+
 type FindInput = {
   limit?: number;
   cursor?: string;
   taskId?: string;
   projectId?: string;
+  userId?: string;
 };
 
 @Injectable()
@@ -20,7 +27,7 @@ export class ActivitiesService {
     if (msg === 'status_changed') {
       const oldStatus = details?.changes?.oldStatus ?? '-';
       const newStatus = details?.changes?.newStatus ?? '-';
-      return `${actorName} changed status ${oldStatus} -> ${newStatus}`;
+      return `${actorName} changed status ${oldStatus} → ${newStatus}`;
     }
     if (msg === 'project_file_uploaded') return `${actorName} uploaded ${details?.fileMeta?.fileName ?? 'a file'}`;
     if (msg === 'project_file_deleted') return `${actorName} deleted ${details?.fileMeta?.fileName ?? 'a file'}`;
@@ -49,6 +56,9 @@ export class ActivitiesService {
     const where: Record<string, unknown> = {};
     if (cursorDate && !Number.isNaN(cursorDate.getTime())) {
       where.createdAt = { lt: cursorDate };
+    }
+    if (input.userId) {
+      where.userId = input.userId;
     }
     if (input.taskId) {
       where.taskId = input.taskId;
@@ -140,11 +150,12 @@ export class ActivitiesService {
     };
   }
 
-  async findAll(input: { limit?: number }) {
-    const result = await this.queryActivities({ limit: input.limit });
+  async findAll(input: { limit?: number; userId?: string }) {
+    const result = await this.queryActivities({ limit: input.limit, userId: input.userId });
     return result.data.map((item) => ({
       id: item.id,
-      kind: 'task_update',
+      action: item.action,
+      kind: MILESTONE_ACTIONS.has(item.action as any) ? 'project_milestone' : 'task_update',
       user: item.actor,
       messageSegments: [{ type: 'text', value: item.summary }],
       occurredAt: item.occurredAt,
@@ -152,7 +163,9 @@ export class ActivitiesService {
       individualEligible: true,
       monthIndex: new Date(item.occurredAt).getMonth(),
       year: new Date(item.occurredAt).getFullYear(),
-      priority: item.severity === 'warning' ? 'high' : 'normal',
+      priority: item.task?.priority ? item.task.priority.toLowerCase() : 'normal',
+      project: item.project?.name ?? null,
+      team: null,
     }));
   }
 

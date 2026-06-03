@@ -6,6 +6,7 @@ export type ActivitySegment =
 
 export interface TeamActivity {
   id: string;
+  action: string;
   kind: string;
   user: {
     id: string;
@@ -28,6 +29,12 @@ export function fetchTeamActivities(params?: { limit?: number }) {
   if (params?.limit != null) qs.set('limit', String(params.limit));
   const suffix = qs.toString() ? `?${qs.toString()}` : '';
   return apiClient.get<TeamActivity[]>(`/activities${suffix}`);
+}
+
+export function fetchUserActivities(userId: string, params?: { limit?: number }) {
+  const qs = new URLSearchParams({ userId });
+  if (params?.limit != null) qs.set('limit', String(params.limit));
+  return apiClient.get<TeamActivity[]>(`/activities?${qs.toString()}`);
 }
 
 export interface ActivityTimelineItem {

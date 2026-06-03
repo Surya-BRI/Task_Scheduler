@@ -2,6 +2,8 @@ import { BadRequestException, ForbiddenException, Injectable, Logger, NotFoundEx
 import { randomUUID } from 'crypto';
 import { PrismaService } from '../prisma/prisma.service';
 import { TaskFilesService } from '../tasks/task-files.service';
+import { ActivityLoggerService } from '../activities/activity-logger.service';
+import { ActivityAction } from '../activities/activity-events';
 import { CreateOvertimeRequestDto } from './dto/create-overtime-request.dto';
 import { UpdateOvertimeRequestDto } from './dto/update-overtime-request.dto';
 import { ReviewOvertimeRequestDto } from './dto/review-overtime-request.dto';
@@ -15,6 +17,7 @@ export class OvertimeRequestsService {
   constructor(
     private readonly prisma: PrismaService,
     private readonly taskFilesService: TaskFilesService,
+    private readonly activityLogger: ActivityLoggerService,
   ) {}
 
   /**
@@ -482,6 +485,18 @@ export class OvertimeRequestsService {
       },
     });
 
+    await this.activityLogger.log({
+      action: ActivityAction.OVERTIME_REQUEST_SUBMITTED,
+      userId,
+      taskId: request.taskId ?? null,
+      details: {
+        event: ActivityAction.OVERTIME_REQUEST_SUBMITTED,
+        messageKey: 'overtime_request_submitted',
+        taskSnapshot: request.task ? { id: request.task.id, taskNo: request.task.taskNo } : undefined,
+        context: { requestId: id },
+      },
+    });
+
     await this.notifyApprovers(updated);
     return updated;
   }
@@ -666,6 +681,18 @@ export class OvertimeRequestsService {
         },
       });
 
+      await this.activityLogger.log({
+        action: ActivityAction.OVERTIME_REQUEST_STATUS_CHANGED,
+        userId: reviewerId,
+        taskId: request.taskId ?? null,
+        details: {
+          event: ActivityAction.OVERTIME_REQUEST_STATUS_CHANGED,
+          messageKey: 'overtime_request_status_changed',
+          changes: { newStatus: dto.status, approvedHours: dto.approvedHours ?? null },
+          context: { requestId: id },
+        },
+      });
+
       // Notify Designer and HR/Admin
       await this.notifyDesignerOfReview(updated, dto.status, dto.comments);
       if (dto.status === 'APPROVED_BY_MANAGER') {
@@ -711,6 +738,18 @@ export class OvertimeRequestsService {
           action: dto.status,
           actionById: reviewerId,
           comments: dto.comments || 'Final review completed',
+        },
+      });
+
+      await this.activityLogger.log({
+        action: ActivityAction.OVERTIME_REQUEST_STATUS_CHANGED,
+        userId: reviewerId,
+        taskId: request.taskId ?? null,
+        details: {
+          event: ActivityAction.OVERTIME_REQUEST_STATUS_CHANGED,
+          messageKey: 'overtime_request_status_changed',
+          changes: { newStatus: dto.status, approvedHours: dto.approvedHours ?? null },
+          context: { requestId: id },
         },
       });
 

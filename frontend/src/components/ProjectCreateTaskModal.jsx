@@ -1,4 +1,4 @@
-import { useEffect, useId, useState } from 'react'
+import { useEffect, useId, useRef, useState } from 'react'
 import { ChevronDown, ChevronRight, Pencil, X } from 'lucide-react'
 import { apiClient } from '@/lib/api-client'
 
@@ -188,7 +188,7 @@ function TableInput({ value, onChange, type = 'text', placeholder = '' }) {
       type={type}
       placeholder={placeholder}
       onChange={(event) => onChange(event.target.value)}
-      className="h-6 w-full rounded-full border border-slate-200 bg-slate-50 px-2 text-xs text-slate-700 outline-none focus:border-blue-400"
+      className={`w-full rounded-full border border-slate-200 bg-slate-50 px-2 text-xs text-slate-700 outline-none focus:border-blue-400 ${type === 'date' ? 'h-7' : 'h-6'}`}
     />
   )
 }
@@ -206,6 +206,7 @@ function TickBox({ checked, onChange }) {
 
 export function ProjectCreateTaskModal({ open, onClose, onCreated, submissionDate, record }) {
   const titleId = useId()
+  const revisionFetched = useRef(false)
   const [rows, setRows] = useState(() => structuredClone(SIGN_TYPE_ROWS))
   const [expanded, setExpanded] = useState(() => new Set())
   const [selectedSignType, setSelectedSignType] = useState('')
@@ -249,6 +250,7 @@ export function ProjectCreateTaskModal({ open, onClose, onCreated, submissionDat
 
   useEffect(() => {
     if (!open) return
+    revisionFetched.current = false
     setRevisionCode('')
     setPriorityLevel('Medium')
     setHoursRequired('')
@@ -282,7 +284,34 @@ export function ProjectCreateTaskModal({ open, onClose, onCreated, submissionDat
     return count + c
   }, 0)
 
+  useEffect(() => {
+    if (!open || !record || revisionFetched.current) return
+    const opNo = String(record.opNo ?? '').trim()
+    const projectNo = String(record.projectNo ?? record.projectId ?? '').trim()
+    if (!opNo || !projectNo) return
+    revisionFetched.current = true
+    const qs = new URLSearchParams({ opNo, projectNo, designType: 'Project' }).toString()
+    apiClient
+      .get(`/tasks/next-revision?${qs}`)
+      .then((res) => setRevisionCode(res?.revisionCode ?? 'R0'))
+      .catch(() => {})
+  }, [open, record])
+
   if (!open) return null
+
+  function handleSearch() {
+    if (!selectedSignType || selectedSignType === 'Select sign type') return
+    const match = rows.find((r) => r.signType === selectedSignType)
+    if (!match) return
+    setExpanded((prev) => {
+      const next = new Set(prev)
+      next.add(match.id)
+      return next
+    })
+    setTimeout(() => {
+      document.getElementById(`sign-row-${match.id}`)?.scrollIntoView({ behavior: 'smooth', block: 'center' })
+    }, 50)
+  }
 
   function toggleExpand(id) {
     setExpanded((prev) => {
@@ -357,20 +386,6 @@ export function ProjectCreateTaskModal({ open, onClose, onCreated, submissionDat
     )
   }
 
-  useEffect(() => {
-    if (!open || !record) return
-    const opNo = String(record.opNo ?? '').trim()
-    const projectNo = String(record.projectNo ?? record.projectId ?? '').trim()
-    if (!opNo || !projectNo) return
-    const qs = new URLSearchParams({ opNo, projectNo, designType: 'Project' }).toString()
-    apiClient
-      .get(`/tasks/next-revision?${qs}`)
-      .then((res) => {
-        if (!revisionCode.trim()) setRevisionCode(res?.revisionCode ?? 'R0')
-      })
-      .catch(() => {})
-  }, [open, record, revisionCode])
-
   async function handleCreateTasks() {
     if (!record) return
     setSubmitAttempted(true)
@@ -394,6 +409,16 @@ export function ProjectCreateTaskModal({ open, onClose, onCreated, submissionDat
     setError('')
     setSubmitting(true)
     try {
+      const fallbackDeadline =
+        submissionDate instanceof Date && !Number.isNaN(submissionDate.getTime())
+          ? submissionDate.toISOString()
+          : undefined
+
+      function resolveDeadline(rowDeadline) {
+        if (rowDeadline) return new Date(rowDeadline).toISOString()
+        return fallbackDeadline
+      }
+
       const details = []
       for (const row of rows) {
         if (isRowSelected(row)) {
@@ -411,8 +436,7 @@ export function ProjectCreateTaskModal({ open, onClose, onCreated, submissionDat
             asBuilt: !!row.asBuilt,
             asBuiltHours: row.asBuiltHours ? Number(row.asBuiltHours) : undefined,
             bim: !!row.bim,
-            deadline: submissionDate instanceof Date && !Number.isNaN(submissionDate.getTime()) ? submissionDate.toISOString() : undefined,
-            comment: undefined,
+            deadline: resolveDeadline(row.deadline),
           })
         }
         for (const child of row.children) {
@@ -431,8 +455,7 @@ export function ProjectCreateTaskModal({ open, onClose, onCreated, submissionDat
               asBuilt: !!child.asBuilt,
               asBuiltHours: child.asBuiltHours ? Number(child.asBuiltHours) : undefined,
               bim: !!child.bim,
-              deadline: submissionDate instanceof Date && !Number.isNaN(submissionDate.getTime()) ? submissionDate.toISOString() : undefined,
-              comment: undefined,
+              deadline: resolveDeadline(child.deadline),
             })
           }
         }
@@ -444,11 +467,12 @@ export function ProjectCreateTaskModal({ open, onClose, onCreated, submissionDat
           revisionCode: normalizedRevision,
           designType: 'Project',
           opNo: record.opNo ?? undefined,
+          projectId: record.projectId ?? record.id ?? undefined,
+          projectNo: record.projectNo ?? undefined,
           projectName: record.projectName ?? undefined,
           description: undefined,
           priority: priorityLevel,
-          dueDate: submissionDate instanceof Date && !Number.isNaN(submissionDate.getTime()) ? submissionDate.toISOString() : undefined,
-          projectNo: record.projectNo ?? record.projectId ?? undefined,
+          dueDate: fallbackDeadline,
         },
         projectDetails: details,
       }
@@ -589,7 +613,7 @@ export function ProjectCreateTaskModal({ open, onClose, onCreated, submissionDat
                 </option>
               ))}
             </select>
-            <button type="button" className="h-10 rounded-md bg-blue-600 px-8 text-sm font-semibold text-white transition hover:bg-blue-700">Search</button>
+            <button type="button" onClick={handleSearch} className="h-10 rounded-md bg-blue-600 px-8 text-sm font-semibold text-white transition hover:bg-blue-700">Search</button>
             <button type="button" onClick={clearNeeds} className="h-10 rounded-md border border-slate-300 px-6 text-sm text-slate-700 transition hover:bg-slate-50">Reset / Clear</button>
           </div>
 
@@ -610,7 +634,7 @@ export function ProjectCreateTaskModal({ open, onClose, onCreated, submissionDat
 
             <div className="max-h-[360px] overflow-auto">
               {rows.map((row) => (
-                <div key={row.id} className="border-b border-slate-200">
+                <div key={row.id} id={`sign-row-${row.id}`} className="border-b border-slate-200">
                   <div className="grid grid-cols-[1.2fr_0.9fr_0.8fr_0.9fr_0.8fr_0.9fr_0.8fr_0.9fr_0.8fr_0.8fr_1.1fr] items-center bg-white text-sm">
                     <button type="button" onClick={() => toggleExpand(row.id)} className="flex items-center gap-1 px-3 py-1.5 text-left font-semibold">
                       {expanded.has(row.id) ? <ChevronDown className="h-3.5 w-3.5" /> : <ChevronRight className="h-3.5 w-3.5" />}
@@ -627,7 +651,7 @@ export function ProjectCreateTaskModal({ open, onClose, onCreated, submissionDat
                     <div className="px-3 py-1.5 text-center">
                       <TickBox checked={row.bim} onChange={(value) => updateRowField(row.id, 'bim', value)} />
                     </div>
-                    <div className="px-3 py-1.5"><TableInput value={row.deadline} onChange={(value) => updateRowField(row.id, 'deadline', value)} placeholder="DD-MM-YYYY" /></div>
+                    <div className="px-3 py-1.5"><TableInput type="date" value={row.deadline} onChange={(value) => updateRowField(row.id, 'deadline', value)} /></div>
                   </div>
 
                   {expanded.has(row.id) &&
@@ -645,7 +669,7 @@ export function ProjectCreateTaskModal({ open, onClose, onCreated, submissionDat
                         <div className="px-3 py-1.5 text-center">
                           <TickBox checked={child.bim} onChange={(value) => updateChildField(row.id, child.id, 'bim', value)} />
                         </div>
-                        <div className="px-3 py-1.5"><TableInput value={child.deadline} onChange={(value) => updateChildField(row.id, child.id, 'deadline', value)} placeholder="DD-MM-YYYY" /></div>
+                        <div className="px-3 py-1.5"><TableInput type="date" value={child.deadline} onChange={(value) => updateChildField(row.id, child.id, 'deadline', value)} /></div>
                       </div>
                     ))}
                 </div>

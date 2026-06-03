@@ -36,6 +36,6 @@ export function getSession() {
 export function getHomeRoute(session) {
   if (!session) return '/login';
   if (session.role === 'HOD') return '/design-list';
-  if (session.role === 'DESIGNER') return '/designer/dashboard';
+  if (session.role === 'DESIGNER') return '/design-list/tasks';
   return '/design-list';
 }

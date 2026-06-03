@@ -669,6 +669,7 @@ export function TaskDetailsPage() {
   const routeId = params?.taskId ?? params?.id
   const queryOpNo = searchParams.get('opNo')
   const queryProjectCode = searchParams.get('projectCode')
+  const queryDesignType = searchParams.get('designType')
   const from = searchParams.get('from')
   const recordId = routeId
   const [record, setRecord] = useState(null)
@@ -758,13 +759,41 @@ export function TaskDetailsPage() {
               `/design-list/projects-list?page=1&limit=30&q=${encodeURIComponent(projectLookupKey)}`,
             )
             const projectRows = Array.isArray(projectRowsResponse?.data) ? projectRowsResponse.data : []
+            // Exact projectCode match — trim both sides to handle ERP whitespace issues
             const projectRow =
-              projectRows.find((row) => String(row?.projectCode ?? row?.projectNo ?? '') === projectLookupKey) ??
-              projectRows.find((row) => String(row?.salesForceCode ?? row?.opNo ?? '') === projectLookupKey) ??
-              null
+              projectRows.find((row) => String(row?.projectCode ?? row?.projectNo ?? '').trim() === projectLookupKey) ??
+              // Only fall back to salesForceCode match when NOT in projects-list flow
+              // (projects-list flow passes designType in URL; salesForceCode fallback risks loading the wrong project)
+              (!isProjectsListFlow
+                ? projectRows.find((row) => String(row?.salesForceCode ?? row?.opNo ?? '') === projectLookupKey) ?? null
+                : null)
             if (projectRow) {
               if (!alive) return
-              setRecord(mapProjectListRowToRecord(projectRow))
+              const mapped = mapProjectListRowToRecord(projectRow)
+              if (queryDesignType) mapped.designType = queryDesignType
+              setRecord(mapped)
+              return
+            }
+            if (isProjectsListFlow && queryDesignType) {
+              if (!alive) return
+              setRecord({
+                id: rawId,
+                taskId: null,
+                opNo: lookupOpNo || '-',
+                projectNo: lookupProjectCode || rawId,
+                projectId: null,
+                designType: queryDesignType,
+                businessUnit: queryDesignType,
+                name: lookupProjectCode || rawId,
+                status: 'Pending',
+                salesPerson: 'Unassigned',
+                created: '',
+                deadline: '',
+                agingDays: 0,
+                clientName: null,
+                projectName: lookupProjectCode || null,
+                client: null,
+              })
               return
             }
           }
@@ -780,7 +809,7 @@ export function TaskDetailsPage() {
     return () => {
       alive = false
     }
-  }, [recordId, queryOpNo, queryProjectCode, from, taskRefreshCounter])
+  }, [recordId, queryOpNo, queryProjectCode, queryDesignType, from, taskRefreshCounter])
 
 
   const launchAutostart = searchParams.get('autostart') === '1'
@@ -824,7 +853,7 @@ export function TaskDetailsPage() {
         : from === 'design-scheduler'
           ? '/design-scheduler'
           : from === 'designer-queue' || from === 'designer-design-list'
-            ? '/design-list/my-work'
+            ? '/design-list/tasks'
           : '/design-list'
   const resolvedProjectName = record?.projectName ?? record?.name ?? ''
   const resolvedOpCode = String(record?.salesForceCode ?? record?.opNo ?? '').trim()

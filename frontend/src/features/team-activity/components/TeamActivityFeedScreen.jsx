@@ -3,7 +3,7 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { useSearchParams } from "next/navigation";
 import { Navbar } from "@/components/Navbar";
-import { fetchTeamActivities } from "../services/activities.api";
+import { fetchTeamActivities, fetchUserActivities } from "../services/activities.api";
 import { filterActivities } from "../lib/teamActivityFilters";
 import { TeamActivityFilters } from "./TeamActivityFilters";
 import { ActivityFeedList } from "./ActivityFeedList";
@@ -79,7 +79,11 @@ export function TeamActivityFeedScreenInner() {
     }
   }, []);
 
-  const [nowMs] = useState(() => Date.now());
+  const [nowMs, setNowMs] = useState(() => Date.now());
+  useEffect(() => {
+    const t = setInterval(() => setNowMs(Date.now()), 60_000);
+    return () => clearInterval(t);
+  }, []);
 
   const visible = useMemo(
     () =>
@@ -102,7 +106,7 @@ export function TeamActivityFeedScreenInner() {
     if (teammateMode !== "individuals") return [];
     const peopleById = new Map();
     for (const item of visible) {
-      if (item.kind !== "task_update" || !item.user?.id) continue;
+      if (!item.user?.id) continue;
       const existing = peopleById.get(item.user.id);
       if (!existing) {
         peopleById.set(item.user.id, {
@@ -129,10 +133,23 @@ export function TeamActivityFeedScreenInner() {
     [individualsRoster, selectedPersonId],
   );
 
+  const [userFeed, setUserFeed] = useState([]);
+  const [userFeedLoading, setUserFeedLoading] = useState(false);
+
+  useEffect(() => {
+    if (!selectedPersonId) { setUserFeed([]); return; }
+    let active = true;
+    setUserFeedLoading(true);
+    fetchUserActivities(selectedPersonId, { limit: 100 })
+      .then(data => { if (active) { setUserFeed(data); setUserFeedLoading(false); } })
+      .catch(() => { if (active) setUserFeedLoading(false); });
+    return () => { active = false; };
+  }, [selectedPersonId]);
+
   const individualFeedItems = useMemo(() => {
     if (teammateMode !== "individuals" || !selectedPersonId) return [];
-    return visible.filter((item) => item.user?.id === selectedPersonId);
-  }, [selectedPersonId, teammateMode, visible]);
+    return filterActivities(userFeed, { teammateMode: "all", activityKind, sortMonthIndex, dateRange, timeOrder, priority });
+  }, [selectedPersonId, teammateMode, userFeed, activityKind, sortMonthIndex, dateRange, timeOrder, priority]);
 
   const showIndividualsRoster = teammateMode === "individuals" && !selectedPersonId;
   const showIndividualFeed = teammateMode === "individuals" && Boolean(selectedPersonId);
@@ -168,14 +185,16 @@ export function TeamActivityFeedScreenInner() {
         ) : null}
 
         {showIndividualFeed ? (
-          <ActivityFeedList
-            items={individualFeedItems}
-            likes={likes}
-            onToggleLike={onToggleLike}
-            activityKind={activityKind}
-            heading={selectedPerson ? `${selectedPerson.name}'s updates` : "Individual updates"}
-            onBack={() => setSelectedPersonId(null)}
-          />
+          userFeedLoading
+            ? <div className="p-4 text-center text-slate-500">Loading...</div>
+            : <ActivityFeedList
+                items={individualFeedItems}
+                likes={likes}
+                onToggleLike={onToggleLike}
+                activityKind={activityKind}
+                heading={selectedPerson ? `${selectedPerson.name}'s updates` : "Individual updates"}
+                onBack={() => setSelectedPersonId(null)}
+              />
         ) : null}
 
         {teammateMode !== "individuals" ? (

@@ -60,6 +60,7 @@ export type ChatterPostDto = {
   authorRole: string | null;
   mentionUserName: string | null;
   projectName: string | null;
+  assigneeName: string | null;
   title: string;
   message: string;
   postType: string | null;
