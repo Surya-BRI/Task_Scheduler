@@ -8,11 +8,14 @@ import { Logger, ValidationPipe } from '@nestjs/common';
 import { HttpExceptionFilter } from './common/filters/http-exception.filter';
 import { LoggingInterceptor } from './common/interceptors/logging.interceptor';
 import { ConfigService } from '@nestjs/config';
+import { ExpressAdapter } from '@nestjs/platform-express';
+import { IoAdapter } from '@nestjs/platform-socket.io';
 
 async function bootstrap() {
   mkdirSync(join(process.cwd(), 'uploads', 'chatter'), { recursive: true });
 
-  const app = await NestFactory.create(AppModule);
+  const app = await NestFactory.create(AppModule, new ExpressAdapter());
+  app.useWebSocketAdapter(new IoAdapter(app));
   const configService = app.get(ConfigService);
   const prefix = configService.get<string>('api.prefix') ?? 'api/v1';
   const port = configService.get<number>('app.port') ?? 4000;
