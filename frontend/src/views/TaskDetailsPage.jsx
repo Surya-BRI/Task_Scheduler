@@ -9,7 +9,12 @@ import { Navbar } from '../components/Navbar'
 import { ProjectTaskTimer } from '../components/ProjectTaskTimer'
 import { apiClient } from '@/lib/api-client'
 import { fetchProjectActivities, fetchTaskActivities } from '@/features/team-activity/services/activities.api'
-import { createChatterComment, createChatterPost, listChatterPosts } from '@/features/chatter/services/chatter-posts.api'
+import {
+  createChatterComment,
+  createChatterPost,
+  listChatterPosts,
+  resolveEmbeddedChatterTitle,
+} from '@/features/chatter/services/chatter-posts.api'
 import { emitChatterRefresh, onChatterRefresh } from '@/features/chatter/utils/chatter-events'
 import { mergeChatterPostLists } from '@/features/chatter/utils/chatter-merge'
 import {
@@ -1621,9 +1626,7 @@ export function TaskDetailsPage() {
   <div className="flex items-start justify-between gap-2">
     <div className="min-w-0">
       <p className="text-[11px] font-semibold text-slate-900 truncate">
-        {entry.title && entry.title.toLowerCase() !== 'chatter post'
-          ? entry.title
-          : entry.taskName || 'Discussion'}
+        {resolveEmbeddedChatterTitle(entry, record?.opNo)}
       </p>
       <p className="text-[10px] text-slate-500">
         {entry.authorName ? `${entry.authorName}${entry.authorRole ? ` (${entry.authorRole})` : ''}` : (entry.authorId ? `User ${entry.authorId.slice(0, 8)}` : 'Unknown')}

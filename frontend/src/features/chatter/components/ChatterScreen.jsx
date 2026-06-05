@@ -32,10 +32,11 @@ function formatTaskCatalogLabel(task) {
   const title = String(task?.title ?? "").trim();
   const taskNo = String(task?.taskNo ?? "").trim();
   const opNo = String(task?.opNo ?? "").trim();
-  if (title && taskNo) return `${title} (${taskNo})`;
+  const isGenericTaskNo = !taskNo || /^TSK(?:[\s-]|$)/i.test(taskNo);
+  const ref = opNo || (!isGenericTaskNo ? taskNo : "") || taskNo;
+  if (title && ref) return `${title} (${ref})`;
   if (title) return title;
-  if (taskNo) return taskNo;
-  if (opNo) return opNo;
+  if (ref) return ref;
   return "Task";
 }
 
@@ -188,7 +189,7 @@ function CreatePostModal({ isOpen, onClose, onSubmit, isSubmitting }) {
   const [mentionUserId, setMentionUserId] = useState(null);
   const [mentionUsers, setMentionUsers] = useState([]);
   const [message, setMessage] = useState("");
-  const [priority, setPriority] = useState("Medium");
+  const [priority, setPriority] = useState("");
   const [postType, setPostType] = useState("Posts");
   const [fileAttachments, setFileAttachments] = useState([]);
   const [linkAttachments, setLinkAttachments] = useState([]);
@@ -278,7 +279,8 @@ function CreatePostModal({ isOpen, onClose, onSubmit, isSubmitting }) {
   }
 
   function selectTask(task) {
-    const label = `${task.taskNo ?? ''} — ${task.title ?? task.opNo ?? ''}`.trim().replace(/^—\s*/, '')
+    const ref = task.opNo || task.taskNo || ''
+    const label = `${ref}${task.title ? ` — ${task.title}` : ''}`.trim().replace(/^—\s*/, '')
     setSelectedTaskId(task.id)
     setSelectedTaskLabel(label)
     setTaskSearch(label)
@@ -291,7 +293,7 @@ function CreatePostModal({ isOpen, onClose, onSubmit, isSubmitting }) {
     setMention("");
     setMentionUserId(null);
     setMessage("");
-    setPriority("Medium");
+    setPriority("");
     setPostType("Posts");
     setFileAttachments([]);
     setLinkAttachments([]);
@@ -333,7 +335,7 @@ function CreatePostModal({ isOpen, onClose, onSubmit, isSubmitting }) {
       mention,
       mentionUserId,
       message,
-      priority,
+      ...(priority ? { priority } : {}),
       postType,
       taskId: selectedTaskId || null,
       fileAttachments,
@@ -396,9 +398,8 @@ function CreatePostModal({ isOpen, onClose, onSubmit, isSubmitting }) {
                         onClick={() => selectTask(t)}
                         className="w-full px-3 py-2 text-left text-sm text-slate-700 hover:bg-slate-50"
                       >
-                        <span className="font-medium text-blue-600">{t.taskNo}</span>
+                        <span className="font-medium text-blue-600">{t.opNo || t.taskNo}</span>
                         {t.title ? <span className="ml-2 text-slate-600">{t.title}</span> : null}
-                        {t.opNo ? <span className="ml-1 text-slate-400">({t.opNo})</span> : null}
                       </button>
                     </li>
                   ))}
@@ -579,13 +580,15 @@ function CreatePostModal({ isOpen, onClose, onSubmit, isSubmitting }) {
           </div>
 
           <div>
-            <label className="mb-2 block text-sm font-semibold text-slate-700">Priority Level</label>
+            <label className="mb-2 block text-sm font-semibold text-slate-700">
+              Priority Level <span className="font-normal text-slate-400">(optional)</span>
+            </label>
             <div className="grid grid-cols-3 gap-2">
               {["High", "Medium", "Low"].map((level) => (
                 <button
                   key={level}
                   type="button"
-                  onClick={() => setPriority(level)}
+                  onClick={() => setPriority((prev) => (prev === level ? "" : level))}
                   className={`rounded-lg border px-3 py-2 text-sm font-semibold transition-colors ${
                     priority === level
                       ? level === "High"
@@ -731,11 +734,13 @@ function ChatterCard({
                   ? post.designerName
                   : <span className="text-slate-400 italic">Unassigned</span>}
               </p>
-              <div className="flex items-center gap-2">
-                <span className="font-medium">Priority:</span>
-                <span className={`inline-block h-3.5 w-3.5 rounded-full ${PRIORITY_STYLES[post.priority]}`} />
-                <span className="capitalize text-slate-600">{post.priority}</span>
-              </div>
+              {post.priority ? (
+                <div className="flex items-center gap-2">
+                  <span className="font-medium">Priority:</span>
+                  <span className={`inline-block h-3.5 w-3.5 rounded-full ${PRIORITY_STYLES[post.priority]}`} />
+                  <span className="capitalize text-slate-600">{post.priority}</span>
+                </div>
+              ) : null}
             </div>
             <p className="text-right text-slate-500 mt-4 pr-2">Seen by {post.seenBy}</p>
           </aside>
@@ -1093,7 +1098,7 @@ export function ChatterScreen() {
           title: postData.title,
           message: postData.message,
           postType: postData.postType,
-          priority: postData.priority,
+          ...(postData.priority ? { priority: postData.priority } : {}),
           ...(postData.mentionUserId ? { mentionUserId: postData.mentionUserId } : {}),
           ...(postData.taskId ? { taskId: postData.taskId } : {}),
           ...(postData.projectId ? { projectId: postData.projectId } : {}),
