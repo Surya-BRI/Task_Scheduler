@@ -17,6 +17,7 @@ import { CreateRegularizationRequestDto } from './dto/create-regularization-requ
 import { ReviewRegularizationRequestDto } from './dto/review-regularization-request.dto';
 import { UpdateRegularizationStatusDto } from './dto/update-regularization-status.dto';
 import { isUuidString, sqlUniqueIdentifier } from './sql-uuid.util';
+import type { RegularizationRequestsContract } from './regularization-requests.contract';
 
 type RawRegularizationRow = {
   id: string;
@@ -65,7 +66,7 @@ export type RegularizationRequestView = {
 };
 
 @Injectable()
-export class RegularizationRequestsService {
+export class RegularizationRequestsService implements RegularizationRequestsContract {
   private readonly logger = new Logger(RegularizationRequestsService.name);
   private readonly table: string;
   private readonly taskTable: string;

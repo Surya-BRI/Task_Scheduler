@@ -72,6 +72,7 @@ export type ChatterFeedPost = {
   responsibleUser: string;
   priority: 'low' | 'medium' | 'high';
   seenBy: number;
+  designerName?: string | null;
   comments: Array<{
     id: string;
     message: string;
@@ -210,9 +211,10 @@ export function mapChatterPostDtoToFeedPost(
     mention,
     mentionUserId: dto.mentionUserId,
     message: dto.message || '',
-    projectName: dto.projectName?.trim() || '—',
+    projectName: safeDisplayValue(dto.projectName),
     projectId: dto.projectId ?? null,
     taskName: dto.taskName?.trim() || null,
+    designerName: safeDisplayValue(dto.assigneeName),
     responsibleUser: authorLabel,
     priority: normalizePriority(dto.priority),
     seenBy: dto.seenByCount,

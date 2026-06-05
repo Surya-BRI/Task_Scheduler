@@ -37,10 +37,30 @@ export class ActivitiesService {
       return title ? `${actorName} posted in chatter: ${title}` : `${actorName} posted in chatter`;
     }
     if (msg === 'chatter_comment_created') return `${actorName} commented on chatter`;
-    if (msg === 'regularization_submitted') return `${actorName} submitted a regularization request`;
+    if (msg === 'task_work_submitted') {
+      const mins = Math.round((details?.changes?.durationSeconds ?? 0) / 60);
+      const taskNo = details?.taskSnapshot?.taskNo ?? '';
+      return `${actorName} submitted work on task ${taskNo} (${mins} min)`.replace(/\s+/g, ' ').trim();
+    }
+    if (msg === 'scheduler_week_saved') return `${actorName} saved the schedule for week of ${details?.context?.weekStart ?? ''}`;
+    if (msg === 'scheduler_week_locked') return `${actorName} locked the schedule for week of ${details?.context?.weekStart ?? ''}`;
+    if (msg === 'scheduler_week_unlocked') return `${actorName} unlocked the schedule for week of ${details?.context?.weekStart ?? ''}`;
+    if (msg === 'leave_request_submitted')
+      return `${actorName} submitted a ${details?.context?.type ?? 'leave'} request`;
+    if (msg === 'leave_request_status_changed')
+      return `${actorName} ${(details?.changes?.newStatus as string)?.toLowerCase() ?? 'updated'} a leave request`;
+    if (msg === 'regularization_submitted')
+      return `${actorName} submitted a regularization request`;
     if (msg === 'regularization_approved') return `${actorName} approved a regularization request`;
     if (msg === 'regularization_rejected') return `${actorName} rejected a regularization request`;
-    return `${actorName} performed ${action}`;
+    if (msg === 'regularization_status_changed')
+      return `${actorName} ${(details?.changes?.newStatus as string)?.toLowerCase() ?? 'updated'} a regularization request`;
+    if (msg === 'overtime_request_submitted')
+      return `${actorName} submitted an overtime request`;
+    if (msg === 'overtime_request_status_changed')
+      return `${actorName} ${(details?.changes?.newStatus as string)?.toLowerCase().replace(/_/g, ' ') ?? 'updated'} an overtime request`;
+    const readable = action.toLowerCase().replace(/_/g, ' ');
+    return `${actorName} ${readable}`;
   }
 
   private formatSeverity(action: string): 'info' | 'success' | 'warning' {

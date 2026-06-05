@@ -6,6 +6,7 @@
   "private": true,
   "license": "UNLICENSED",
   "scripts": {
+    "clean": "node -e \"try{require('fs').rmSync('dist',{recursive:true,force:true})}catch(e){}\"",
     "build": "nest build",
     "format": "prettier --write \"src/**/*.ts\" \"test/**/*.ts\"",
     "start": "nest start",
@@ -37,8 +38,8 @@
     "@nestjs/jwt": "^11.0.2",
     "@nestjs/passport": "^11.0.5",
     "@nestjs/platform-express": "^11.0.1",
-    "@nestjs/platform-socket.io": "^11.0.0",
-    "@nestjs/websockets": "^11.0.0",
+    "@nestjs/platform-socket.io": "^11.1.21",
+    "@nestjs/websockets": "^11.1.21",
     "@prisma/client": "^6.19.3",
     "bcrypt": "^6.0.0",
     "class-transformer": "^0.5.1",
