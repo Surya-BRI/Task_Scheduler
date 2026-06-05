@@ -799,9 +799,39 @@ export function ChatterScreen() {
   const [postsLoadError, setPostsLoadError] = useState(null);
   const [postsLoading, setPostsLoading] = useState(false);
   const [submittingCommentPostId, setSubmittingCommentPostId] = useState(null);
+  const [mentionFeedPosts, setMentionFeedPosts] = useState([]);
+  const [commentedFeedPosts, setCommentedFeedPosts] = useState([]);
+  const mentionUsersRef = useRef([]);
 
   const currentUserId = useMemo(() => getSession()?.id ?? null, []);
   const currentUserName = useMemo(() => getSession()?.fullName ?? '', []);
+
+  const reloadPrivateFeeds = async () => {
+    if (!currentUserId) {
+      setMentionFeedPosts([]);
+      setCommentedFeedPosts([]);
+      return;
+    }
+    try {
+      const [mentionedRows, commentedRows] = await Promise.all([
+        listChatterPosts({ mentionUserId: currentUserId, limit: 200 }),
+        listChatterPosts({ commentedByUserId: currentUserId, limit: 200 }),
+      ]);
+      setMentionFeedPosts(
+        (Array.isArray(mentionedRows) ? mentionedRows : []).map((row) =>
+          mapChatterPostDtoToFeedPost(row, currentUserId),
+        ),
+      );
+      setCommentedFeedPosts(
+        (Array.isArray(commentedRows) ? commentedRows : []).map((row) =>
+          mapChatterPostDtoToFeedPost(row, currentUserId),
+        ),
+      );
+    } catch {
+      setMentionFeedPosts([]);
+      setCommentedFeedPosts([]);
+    }
+  };
 
   const reloadPosts = async () => {
     setPostsLoading(true);
@@ -826,12 +856,21 @@ export function ChatterScreen() {
 
   useEffect(() => {
     void reloadPosts();
+    void reloadPrivateFeeds();
+    listChatterMentionUsers()
+      .then((users) => {
+        mentionUsersRef.current = Array.isArray(users) ? users : [];
+      })
+      .catch(() => {
+        mentionUsersRef.current = [];
+      });
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [currentUserId]);
 
   useEffect(() => {
     return onChatterRefresh(() => {
       void reloadPosts();
+      void reloadPrivateFeeds();
     });
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [currentUserId]);
@@ -872,7 +911,8 @@ export function ChatterScreen() {
 
   const privateMentions = useMemo(() => {
     if (!currentUserId) return [];
-    return sortedPosts
+    const source = mentionFeedPosts.length > 0 ? mentionFeedPosts : sortedPosts;
+    return source
       .filter((post) => {
         if (post.mentionUserId === currentUserId) return true;
         return (post.comments ?? []).some((comment) => comment.mentionUserId === currentUserId);
@@ -895,11 +935,12 @@ export function ChatterScreen() {
         (a, b) =>
           new Date(b.updatedAt ?? 0).getTime() - new Date(a.updatedAt ?? 0).getTime(),
       );
-  }, [sortedPosts, currentUserId]);
+  }, [mentionFeedPosts, sortedPosts, currentUserId]);
 
   const privateComments = useMemo(() => {
     if (!currentUserId) return [];
-    return sortedPosts
+    const source = commentedFeedPosts.length > 0 ? commentedFeedPosts : sortedPosts;
+    return source
       .filter((post) => (post.comments ?? []).some((comment) => comment.authorId === currentUserId))
       .map((post) => {
         const myComments = (post.comments ?? []).filter((comment) => comment.authorId === currentUserId);
@@ -921,7 +962,7 @@ export function ChatterScreen() {
         (a, b) =>
           new Date(b.updatedAt ?? 0).getTime() - new Date(a.updatedAt ?? 0).getTime(),
       );
-  }, [sortedPosts, currentUserId]);
+  }, [commentedFeedPosts, sortedPosts, currentUserId]);
 
   const taskUpdates = useMemo(() => {
     const byTask = new Map();
@@ -994,13 +1035,25 @@ export function ChatterScreen() {
     setOpenComposerPostId(postId);
   };
 
+  const resolveMentionUserId = (message) => {
+    const match = message.match(/@([A-Za-z][A-Za-z0-9._\s-]{1,60})/);
+    if (!match) return null;
+    const needle = match[1].trim().toLowerCase();
+    const user = mentionUsersRef.current.find((u) => {
+      const name = String(u.fullName ?? "").trim().toLowerCase();
+      return name === needle || name.startsWith(needle);
+    });
+    return user?.id ?? null;
+  };
+
   const submitComment = async (postId) => {
     const content = (draftByPostId[postId] ?? "").trim();
     if (!content || submittingCommentPostId) return;
 
     setSubmittingCommentPostId(postId);
     try {
-      const created = await createChatterComment(postId, content);
+      const mentionUserId = resolveMentionUserId(content);
+      const created = await createChatterComment(postId, content, mentionUserId);
       const feedComment = mapCommentDtoToFeedComment(created, currentUserId);
       const now = new Date().toISOString();
       setPosts((prev) =>
@@ -1016,10 +1069,12 @@ export function ChatterScreen() {
       );
       setDraftByPostId((prev) => ({ ...prev, [postId]: "" }));
       setOpenComposerPostId(null);
-      emitChatterRefresh({ postId });
+      const targetPost = posts.find((p) => p.id === postId);
+      emitChatterRefresh({ postId, taskId: targetPost?.taskId, projectId: targetPost?.projectId });
+      void reloadPrivateFeeds();
     } catch (err) {
       console.error("Failed to save comment:", err);
-      toast.error("Could not save comment. Please try again.");
+      toast.error(err instanceof Error ? err.message : "Could not save comment. Please try again.");
     } finally {
       setSubmittingCommentPostId(null);
     }
@@ -1033,14 +1088,19 @@ export function ChatterScreen() {
     }
     setIsSubmitting(true);
     try {
-      const createdDto = await createChatterPost({
-        title: postData.title,
-        message: postData.message,
-        postType: postData.postType,
-        priority: postData.priority,
-        mentionUserId: postData.mentionUserId || null,
-        taskId: postData.taskId || null,
-      }, postData.fileAttachments, postData.linkAttachments);
+      const createdDto = await createChatterPost(
+        {
+          title: postData.title,
+          message: postData.message,
+          postType: postData.postType,
+          priority: postData.priority,
+          ...(postData.mentionUserId ? { mentionUserId: postData.mentionUserId } : {}),
+          ...(postData.taskId ? { taskId: postData.taskId } : {}),
+          ...(postData.projectId ? { projectId: postData.projectId } : {}),
+        },
+        postData.fileAttachments,
+        postData.linkAttachments,
+      );
 
       const expectedFiles = postData.fileAttachments?.length ?? 0;
       const savedFiles = createdDto.attachments?.length ?? 0;
@@ -1071,7 +1131,12 @@ export function ChatterScreen() {
             ? "task-updates"
             : "posts";
       setActiveTab(targetTab);
-      emitChatterRefresh({ taskId: createdDto.taskId, postId: createdDto.id });
+      emitChatterRefresh({
+        taskId: createdDto.taskId,
+        projectId: createdDto.projectId,
+        postId: createdDto.id,
+      });
+      void reloadPrivateFeeds();
       toast.success("Post created successfully");
     } catch (err) {
       console.error("Failed to create post:", err);

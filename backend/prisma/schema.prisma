@@ -90,6 +90,7 @@ model Project {
   createdById  String?  @db.UniqueIdentifier
   createdBy    User?    @relation("ProjectCreator", fields: [createdById], references: [id], onDelete: NoAction, onUpdate: NoAction)
   tasks        Task[]
+  chatterPosts ChatterPost[]
   attachments  ProjectAttachment[]
   createdAt    DateTime @default(dbgenerated("sysutcdatetime()"))
   updatedAt    DateTime @default(dbgenerated("sysutcdatetime()")) @updatedAt
@@ -324,6 +325,8 @@ model ChatterPost {
 
   taskId        String? @db.UniqueIdentifier
   task          Task?   @relation(fields: [taskId], references: [id], onDelete: NoAction, onUpdate: NoAction)
+  projectId     String? @db.UniqueIdentifier
+  project       Project? @relation(fields: [projectId], references: [id], onDelete: NoAction, onUpdate: NoAction)
   authorId      String? @db.UniqueIdentifier
   author        User?   @relation("PostAuthor", fields: [authorId], references: [id], onDelete: NoAction, onUpdate: NoAction)
   mentionUserId String? @db.UniqueIdentifier

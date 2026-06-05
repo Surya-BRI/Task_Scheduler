@@ -15,6 +15,12 @@ export class CreateChatterPostDto {
   taskId?: string;
 
   @IsOptional()
+  @Transform(({ value }) => emptyToUndefined(value))
+  @ValidateIf((_, v) => v !== undefined)
+  @IsUUID()
+  projectId?: string;
+
+  @IsOptional()
   @IsString()
   title?: string;
 

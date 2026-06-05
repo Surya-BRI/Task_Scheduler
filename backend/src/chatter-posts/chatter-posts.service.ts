@@ -1,5 +1,12 @@
 import { randomUUID } from 'crypto';
-import { BadRequestException, Injectable, InternalServerErrorException, Logger, NotFoundException } from '@nestjs/common';
+import {
+  BadRequestException,
+  Injectable,
+  InternalServerErrorException,
+  Logger,
+  NotFoundException,
+  OnModuleInit,
+} from '@nestjs/common';
 import { Prisma } from '@prisma/client';
 import { PrismaService } from '../prisma/prisma.service';
 import { UsersService } from '../users/users.service';
@@ -79,7 +86,7 @@ export type ChatterPostDto = {
 };
 
 @Injectable()
-export class ChatterPostsService {
+export class ChatterPostsService implements OnModuleInit {
   private readonly logger = new Logger(ChatterPostsService.name);
 
   constructor(
@@ -88,6 +95,20 @@ export class ChatterPostsService {
     private readonly activityLogger: ActivityLoggerService,
     private readonly taskFilesService: TaskFilesService,
   ) {}
+
+  async onModuleInit(): Promise<void> {
+    try {
+      await this.prisma.$executeRawUnsafe(`
+        IF COL_LENGTH('dbo.ErpTSChatterPost', 'projectId') IS NULL
+        BEGIN
+          ALTER TABLE dbo.ErpTSChatterPost ADD projectId UNIQUEIDENTIFIER NULL;
+        END
+      `);
+    } catch (err) {
+      const detail = err instanceof Error ? err.message : String(err);
+      this.logger.warn(`Could not ensure ErpTSChatterPost.projectId column: ${detail}`);
+    }
+  }
 
   async listMentionUsers() {
     const users = await this.usersService.findAll();
@@ -282,6 +303,14 @@ export class ChatterPostsService {
     return title || 'Chatter Post';
   }
 
+  private async loadProjectMeta(projectId: string): Promise<{ projectName: string | null }> {
+    const project = await this.prisma.project.findUnique({
+      where: { id: projectId },
+      select: { name: true },
+    });
+    return { projectName: project?.name?.trim() || null };
+  }
+
   private async loadTaskMeta(taskId: string): Promise<{
     taskName: string | null;
     projectName: string | null;
@@ -312,8 +341,9 @@ export class ChatterPostsService {
     return `
       ${alias}.id, ${alias}.taskId, ${alias}.authorId,
       u.fullName AS authorName, r.name AS authorRole,
-      mu.fullName AS mentionUserName, pr.name AS projectName,
-      CONVERT(varchar(36), t.projectId) AS projectId,
+      mu.fullName AS mentionUserName,
+      COALESCE(pr.name, prDirect.name) AS projectName,
+      CONVERT(varchar(36), COALESCE(t.projectId, ${alias}.projectId)) AS projectId,
       t.title AS taskTitle, t.taskNo AS taskNo, t.opNo AS taskOpNo,
       assignee.fullName AS assigneeName,
       ${alias}.title, ${alias}.message, ${alias}.postType, ${alias}.mentionUserId, ${alias}.priority,
@@ -330,6 +360,7 @@ export class ChatterPostsService {
       LEFT JOIN ErpTSUser mu ON mu.id = ${alias}.mentionUserId
       LEFT JOIN ErpTSTask t ON t.id = ${alias}.taskId
       LEFT JOIN ErpTSProject pr ON pr.id = t.projectId
+      LEFT JOIN ErpTSProject prDirect ON prDirect.id = ${alias}.projectId
       LEFT JOIN ErpTSUser assignee ON assignee.id = t.assigneeId
     `;
   }
@@ -408,8 +439,11 @@ export class ChatterPostsService {
     if (taskId) {
       whereParts.push(`p.taskId = ${sqlQuotedUuid(taskId)}`);
     } else if (projectId) {
-      whereParts.push(`t.projectId = ${sqlQuotedUuid(projectId)}`);
-      whereParts.push('p.taskId IS NOT NULL');
+      const projectSql = sqlQuotedUuid(projectId);
+      whereParts.push(`(
+        t.projectId = ${projectSql}
+        OR p.projectId = ${projectSql}
+      )`);
     }
     if (mentionUserId) {
       const mentionSql = sqlQuotedUuid(mentionUserId);
@@ -592,15 +626,26 @@ export class ChatterPostsService {
     const totalAttachments = uploadResults.length + linkPayload.length;
 
     const taskId = optionalUuid(dto.taskId);
+    const dtoProjectId = optionalUuid(dto.projectId);
+
     let taskMeta: { taskName: string | null; projectName: string | null; projectId: string | null } = {
       taskName: null,
       projectName: null,
       projectId: null,
     };
+    let projectMeta: { projectName: string | null } = { projectName: null };
     if (taskId) {
       taskMeta = await this.loadTaskMeta(taskId);
+    } else if (dtoProjectId) {
+      projectMeta = await this.loadProjectMeta(dtoProjectId);
+      taskMeta.projectId = dtoProjectId;
+      taskMeta.projectName = projectMeta.projectName;
     }
-    const resolvedTitle = this.resolveDisplayTitle(dto.title, taskMeta.taskName);
+    const resolvedTitle = this.resolveDisplayTitle(
+      dto.title,
+      taskMeta.taskName ?? projectMeta.projectName,
+    );
+    const resolvedProjectId = taskMeta.projectId ?? dtoProjectId;
 
     let newPost: any;
     try {
@@ -612,6 +657,7 @@ export class ChatterPostsService {
           priority: dto.priority || null,
           visibility: dto.visibility || null,
           taskId: taskId || null,
+          projectId: resolvedProjectId,
           authorId: authorId,
           mentionUserId: optionalUuid(dto.mentionUserId),
           attachmentCount: totalAttachments > 0 ? totalAttachments : undefined,
@@ -664,8 +710,8 @@ export class ChatterPostsService {
     const attachmentDtos = attachmentsMap.get(newPost.id) ?? [];
     const linkDtos = linksMap.get(newPost.id) ?? [];
 
-    const projectId = taskMeta.projectId;
-    const projectName = taskMeta.projectName;
+    const projectId = resolvedProjectId;
+    const projectName = taskMeta.projectName ?? projectMeta.projectName;
     await this.activityLogger.log({
       action: ActivityAction.CREATED_CHATTER_POST,
       userId: authorId,

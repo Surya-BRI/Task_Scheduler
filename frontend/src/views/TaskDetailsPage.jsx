@@ -11,6 +11,11 @@ import { apiClient } from '@/lib/api-client'
 import { fetchProjectActivities, fetchTaskActivities } from '@/features/team-activity/services/activities.api'
 import { createChatterComment, createChatterPost, listChatterPosts } from '@/features/chatter/services/chatter-posts.api'
 import { emitChatterRefresh, onChatterRefresh } from '@/features/chatter/utils/chatter-events'
+import { mergeChatterPostLists } from '@/features/chatter/utils/chatter-merge'
+import {
+  isChatterUuid,
+  resolveTaskIdForChatter,
+} from '@/features/chatter/utils/resolve-chatter-task-id'
 
 function isValidHttpUrl(value) {
   try {
@@ -608,6 +613,8 @@ function mapTaskToRecord(task) {
 
   return {
     id: task.id,
+    taskId: task.id,
+    fromTaskApi: true,
     opNo: task.opNo ?? '-',
     projectNo: project.projectNo ?? '-',
     projectId: project.id ?? null,
@@ -639,7 +646,8 @@ function mapProjectListRowToRecord(row) {
   const dateLabel = formatDdMmYyyy(createdOn)
   return {
     id: String(row?.id ?? ''),
-    taskId: null,
+    taskId: row?.taskId ?? null,
+    fromTaskApi: false,
     opNo: row?.salesForceCode ?? row?.opNo ?? '-',
     projectNo: row?.projectCode ?? row?.projectNo ?? '-',
     projectId: row?.projectId ?? row?.id ?? null,
@@ -700,6 +708,7 @@ export function TaskDetailsPage() {
   const [projectFiles, setProjectFiles] = useState([])
   const [uploadingProjectFiles, setUploadingProjectFiles] = useState(false)
   const [resolvingProjectId, setResolvingProjectId] = useState(false)
+  const [resolvingTaskId, setResolvingTaskId] = useState(false)
   const isCreationRoute = Boolean(pathname?.includes('-task-creation'))
   const [activityMode] = useState(isCreationRoute ? 'project' : 'task')
   const [activityItems, setActivityItems] = useState([])
@@ -779,6 +788,7 @@ export function TaskDetailsPage() {
               setRecord({
                 id: rawId,
                 taskId: null,
+                fromTaskApi: false,
                 opNo: lookupOpNo || '-',
                 projectNo: lookupProjectCode || rawId,
                 projectId: null,
@@ -859,7 +869,9 @@ export function TaskDetailsPage() {
   const resolvedOpCode = String(record?.salesForceCode ?? record?.opNo ?? '').trim()
   const pageTitleCore = `${resolvedProjectName.toUpperCase()} @ ${(record?.businessUnit ?? '').toUpperCase()}`
   const pageTitle = resolvedOpCode ? `${resolvedOpCode} - ${pageTitleCore}` : pageTitleCore
-  const canPostChatter = chatterMessage.trim().length > 0 && Boolean(taskId || projectId)
+  const taskIdReady = isChatterUuid(taskId)
+  const canPostChatter =
+    chatterMessage.trim().length > 0 && !resolvingProjectId && !resolvingTaskId
   const hasExistingTask = Boolean(taskId || isUuid(record?.taskId ?? record?.id))
   const taskStatus = record?.status ?? null
   const isTerminalStatus = taskStatus === 'COMPLETED' || taskStatus === 'APPROVED'
@@ -899,20 +911,21 @@ export function TaskDetailsPage() {
   useEffect(() => {
     let alive = true
     async function resolveTaskId() {
-      const raw = record?.taskId ?? record?.id
-      if (raw && /^[0-9a-f]{8}-[0-9a-f]{4}-[1-5][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i.test(raw)) {
-        setTaskId(raw)
+      if (!record) {
+        if (alive) setTaskId('')
         return
       }
-      const opNo = record?.opNo
-      if (!opNo) return
+      setResolvingTaskId(true)
       try {
-        const result = await apiClient.get(`/tasks?search=${encodeURIComponent(opNo)}&limit=20`)
-        const rows = result?.data ?? []
-        const exact = rows.find((task) => task.opNo === opNo && (!projectId || task.projectId === projectId))
+        const foundId = await resolveTaskIdForChatter({
+          taskId: record.taskId,
+          recordId: record.id,
+          opNo: record.opNo,
+          projectId,
+          fromTaskApi: Boolean(record.fromTaskApi),
+        })
         if (!alive) return
-        const foundId = exact?.id ?? rows[0]?.id ?? ''
-        setTaskId(foundId)
+        setTaskId(foundId ?? '')
         if (foundId) {
           try {
             const fullTask = await apiClient.get(`/tasks/${encodeURIComponent(foundId)}`)
@@ -925,13 +938,15 @@ export function TaskDetailsPage() {
       } catch {
         if (!alive) return
         setTaskId('')
+      } finally {
+        if (alive) setResolvingTaskId(false)
       }
     }
     resolveTaskId()
     return () => {
       alive = false
     }
-  }, [record?.taskId, record?.id, record?.opNo, projectId])
+  }, [record?.taskId, record?.id, record?.opNo, record?.fromTaskApi, projectId])
 
   useEffect(() => {
     if (!record) return
@@ -1057,6 +1072,8 @@ export function TaskDetailsPage() {
     }
   }, [projectId])
 
+  const chatterRefreshPendingRef = useRef(false)
+
   const fetchChatterPosts = useCallback(async ({ silent = false } = {}) => {
     const queryTaskId = taskId && isUuid(taskId) ? taskId : null
     if (!queryTaskId && !projectId) {
@@ -1071,11 +1088,12 @@ export function TaskDetailsPage() {
         ? await listChatterPosts({ taskId: queryTaskId, limit: 200 })
         : await listChatterPosts({ projectId, limit: 200 })
       const normalized = Array.isArray(posts) ? [...posts] : []
-      normalized.sort((a, b) => new Date(b.createdAt).getTime() - new Date(a.createdAt).getTime())
-      setChatterPosts(normalized)
+      setChatterPosts((prev) =>
+        mergeChatterPostLists(normalized, prev, { taskId: queryTaskId, projectId }),
+      )
     } catch (error) {
       setChatterError(error instanceof Error ? error.message : 'Failed to load chatter')
-      setChatterPosts([])
+      if (!silent) setChatterPosts([])
     } finally {
       if (!silent) setChatterLoading(false)
     }
@@ -1083,6 +1101,7 @@ export function TaskDetailsPage() {
 
   useEffect(() => {
     if (activeTab !== 'chatter') return
+    chatterRefreshPendingRef.current = false
     fetchChatterPosts()
   }, [activeTab, fetchChatterPosts])
 
@@ -1092,6 +1111,8 @@ export function TaskDetailsPage() {
       if (detail.projectId && projectId && detail.projectId !== projectId) return
       if (activeTab === 'chatter') {
         void fetchChatterPosts({ silent: true })
+      } else {
+        chatterRefreshPendingRef.current = true
       }
     })
   }, [activeTab, fetchChatterPosts, projectId, taskId])
@@ -1150,17 +1171,36 @@ export function TaskDetailsPage() {
   async function handlePostChatter() {
     const message = chatterMessage.trim()
     if (!message) return
-    if (!taskId && !projectId) {
-      setChatterError('Task is not yet linked. Please wait a moment and try again.')
-      return
-    }
     setChatterSubmitting(true)
     setChatterError('')
+    let resolvedTaskId = taskIdReady ? taskId : null
+    if (!resolvedTaskId) {
+      setResolvingTaskId(true)
+      try {
+        resolvedTaskId = await resolveTaskIdForChatter({
+          taskId: record?.taskId,
+          recordId: record?.id,
+          opNo: record?.opNo,
+          projectId,
+          fromTaskApi: Boolean(record?.fromTaskApi),
+        })
+        if (resolvedTaskId) setTaskId(resolvedTaskId)
+      } finally {
+        setResolvingTaskId(false)
+      }
+    }
+    const postProjectId =
+      projectId || (isChatterUuid(record?.projectId) ? record.projectId : null)
+    if (!resolvedTaskId && !postProjectId) {
+      setChatterError('Project is still being linked. Please wait a moment and try again.')
+      setChatterSubmitting(false)
+      return
+    }
     try {
       const created = await createChatterPost({
         message,
         postType: 'Posts',
-        taskId: taskId || undefined,
+        ...(resolvedTaskId ? { taskId: resolvedTaskId } : { projectId: postProjectId }),
       })
       setChatterMessage('')
       setChatterPosts((prev) => {
@@ -1168,7 +1208,11 @@ export function TaskDetailsPage() {
         next.sort((a, b) => new Date(b.createdAt).getTime() - new Date(a.createdAt).getTime())
         return next
       })
-      emitChatterRefresh({ taskId, projectId, postId: created.id })
+      emitChatterRefresh({
+        taskId: resolvedTaskId ?? undefined,
+        projectId: postProjectId ?? projectId,
+        postId: created.id,
+      })
     } catch (error) {
       toast.error(error instanceof Error ? error.message : 'Failed to post chatter')
     } finally {
@@ -1536,14 +1580,20 @@ export function TaskDetailsPage() {
                         <p className="text-[11px] text-amber-600">No project linked — chatter unavailable</p>
                       ) : resolvingProjectId ? (
                         <p className="text-[11px] text-slate-400">Resolving project…</p>
-                      ) : <span />}
+                      ) : resolvingTaskId ? (
+                        <p className="text-[11px] text-slate-400">Preparing chatter…</p>
+                      ) : !taskIdReady && projectId ? (
+                        <p className="text-[11px] text-slate-400">Posting to project discussion</p>
+                      ) : (
+                        <span />
+                      )}
                       <button
                         type="button"
                         onClick={handlePostChatter}
-                        disabled={!canPostChatter || chatterSubmitting || resolvingProjectId}
+                        disabled={!canPostChatter || chatterSubmitting || resolvingProjectId || resolvingTaskId}
                         className="rounded-md bg-[#10a6e3] px-3.5 py-1.5 text-xs font-semibold text-white transition hover:bg-[#0f96cd] disabled:cursor-not-allowed disabled:opacity-60"
                       >
-                        {chatterSubmitting ? 'Posting...' : 'Post'}
+                        {chatterSubmitting ? 'Posting...' : resolvingTaskId ? 'Linking…' : 'Post'}
                       </button>
                     </div>
                   </div>
@@ -1569,9 +1619,16 @@ export function TaskDetailsPage() {
                       chatterPosts.map((entry) => (
                         <article key={entry.id} className="rounded-md border border-slate-200 bg-white px-2.5 py-2 text-xs text-slate-800">
   <div className="flex items-start justify-between gap-2">
-    <p className="text-[11px] font-semibold text-slate-800">
-      {entry.authorName ? `${entry.authorName}${entry.authorRole ? ` (${entry.authorRole})` : ''}` : (entry.authorId ? `User ${entry.authorId.slice(0, 8)}` : 'Unknown')}
-    </p>
+    <div className="min-w-0">
+      <p className="text-[11px] font-semibold text-slate-900 truncate">
+        {entry.title && entry.title.toLowerCase() !== 'chatter post'
+          ? entry.title
+          : entry.taskName || 'Discussion'}
+      </p>
+      <p className="text-[10px] text-slate-500">
+        {entry.authorName ? `${entry.authorName}${entry.authorRole ? ` (${entry.authorRole})` : ''}` : (entry.authorId ? `User ${entry.authorId.slice(0, 8)}` : 'Unknown')}
+      </p>
+    </div>
     <p className="shrink-0 text-[10px] text-slate-500">{formatChatterDateTime(entry.createdAt)}</p>
   </div>
   <p className="mt-1">{entry.message}</p>

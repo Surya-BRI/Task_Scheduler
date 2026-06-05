@@ -222,8 +222,10 @@ export class RegularizationRequestsService implements RegularizationRequestsCont
     });
   }
 
-  private regularizationLink(id: string): string {
-    return `/designer/requests?regularizationId=${encodeURIComponent(id)}#regularization`;
+  private regularizationLink(id: string, designerId?: string): string {
+    const params = new URLSearchParams({ regularizationId: id });
+    if (designerId?.trim()) params.set('forDesignerId', designerId.trim());
+    return `/designer/requests?${params.toString()}#regularization`;
   }
 
   private async notifyHods(request: RegularizationRequestView, designerName: string) {
@@ -256,7 +258,7 @@ export class RegularizationRequestsService implements RegularizationRequestsCont
             userId: hod.id,
             title: 'New Regularization Request',
             message: `New regularization request submitted by ${designerName} for ${request.date}. Reason: ${request.reason}.`,
-            linkUrl: this.regularizationLink(request.id),
+            linkUrl: this.regularizationLink(request.id, request.designerId),
           },
         });
       } catch (err) {
@@ -282,7 +284,7 @@ export class RegularizationRequestsService implements RegularizationRequestsCont
           message: `Your regularization request for ${request.date} has been ${actionLabel}.${
             remarks?.trim() ? ` Remarks: "${remarks.trim()}"` : ''
           }`,
-          linkUrl: this.regularizationLink(request.id),
+          linkUrl: this.regularizationLink(request.id, request.designerId),
         },
       });
     } catch (err) {
