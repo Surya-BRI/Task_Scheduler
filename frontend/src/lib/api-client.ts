@@ -16,10 +16,21 @@ async function request<T>(path: string, init?: RequestInit): Promise<T> {
     headers.set('Authorization', `Bearer ${token}`);
   }
 
-  const response = await fetch(`${env.apiBaseUrl}${path}`, {
-    ...init,
-    headers,
-  });
+  let response: Response;
+  try {
+    response = await fetch(`${env.apiBaseUrl}${path}`, {
+      ...init,
+      headers,
+    });
+  } catch (err) {
+    const hint =
+      err instanceof TypeError
+        ? `Cannot reach the API at ${env.apiBaseUrl}. Start the backend (npm run dev:backend) and confirm NEXT_PUBLIC_API_BASE_URL.`
+        : err instanceof Error
+          ? err.message
+          : 'Network request failed';
+    throw new Error(hint);
+  }
 
   if (response.status === 401) {
     clearAccessToken();
