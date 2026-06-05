@@ -11,6 +11,11 @@ import { apiClient } from '@/lib/api-client'
 import { fetchProjectActivities, fetchTaskActivities } from '@/features/team-activity/services/activities.api'
 import { createChatterComment, createChatterPost, listChatterPosts } from '@/features/chatter/services/chatter-posts.api'
 import { emitChatterRefresh, onChatterRefresh } from '@/features/chatter/utils/chatter-events'
+import { mergeChatterPostLists } from '@/features/chatter/utils/chatter-merge'
+import {
+  isChatterUuid,
+  resolveTaskIdForChatter,
+} from '@/features/chatter/utils/resolve-chatter-task-id'
 
 function isValidHttpUrl(value) {
   try {
@@ -346,6 +351,7 @@ export function RetailProjectPage() {
   const [taskId, setTaskId] = useState('')
   const [projectFiles, setProjectFiles] = useState([])
   const [uploadingProjectFiles, setUploadingProjectFiles] = useState(false)
+  const [resolvingTaskId, setResolvingTaskId] = useState(false)
   const [activityMode, setActivityMode] = useState('project')
   const [activityItems, setActivityItems] = useState([])
   const [activityLoading, setActivityLoading] = useState(false)
@@ -405,7 +411,9 @@ export function RetailProjectPage() {
         : row,
     [row, m],
   )
-  const canPostChatter = chatterMessage.trim().length > 0
+  const taskIdReady = isChatterUuid(taskId)
+  const canPostChatter =
+    chatterMessage.trim().length > 0 && !resolvingTaskId
   useEffect(() => {
     let alive = true
     async function resolveProjectId() {
@@ -432,25 +440,33 @@ export function RetailProjectPage() {
   useEffect(() => {
     let alive = true
     async function resolveTaskId() {
-      if (!projectId) return
+      if (!row && !projectId) {
+        if (alive) setTaskId('')
+        return
+      }
+      setResolvingTaskId(true)
       try {
-        const result = await apiClient.get(`/tasks?projectId=${encodeURIComponent(projectId)}&limit=20`)
-        const rows = result?.data ?? []
-        const exact = m?.opNo
-          ? rows.find((task) => task.opNo === m.opNo && task.projectId === projectId)
-          : null
+        const foundId = await resolveTaskIdForChatter({
+          taskId: row?.taskId,
+          recordId: row?.id,
+          opNo: m?.opNo,
+          projectId,
+          fromTaskApi: Boolean(row?.fromTaskApi),
+        })
         if (!alive) return
-        setTaskId(exact?.id ?? rows[0]?.id ?? '')
+        setTaskId(foundId ?? '')
       } catch {
         if (!alive) return
         setTaskId('')
+      } finally {
+        if (alive) setResolvingTaskId(false)
       }
     }
     resolveTaskId()
     return () => {
       alive = false
     }
-  }, [m?.opNo, projectId])
+  }, [m?.opNo, projectId, row?.fromTaskApi, row?.id, row?.taskId])
 
   const fetchActivities = useCallback(
     async (opts = { append: false, cursor: null }) => {
@@ -519,6 +535,8 @@ export function RetailProjectPage() {
     }
   }, [projectId])
 
+  const chatterRefreshPendingRef = useRef(false)
+
   const fetchChatterPosts = useCallback(async ({ silent = false } = {}) => {
     const queryTaskId = taskId && isUuid(taskId) ? taskId : null
     if (!queryTaskId && !projectId) {
@@ -532,11 +550,12 @@ export function RetailProjectPage() {
         ? await listChatterPosts({ taskId: queryTaskId, limit: 200 })
         : await listChatterPosts({ projectId, limit: 200 })
       const normalized = Array.isArray(posts) ? [...posts] : []
-      normalized.sort((a, b) => new Date(b.createdAt).getTime() - new Date(a.createdAt).getTime())
-      setChatterPosts(normalized)
+      setChatterPosts((prev) =>
+        mergeChatterPostLists(normalized, prev, { taskId: queryTaskId, projectId }),
+      )
     } catch (error) {
       setChatterError(error instanceof Error ? error.message : 'Failed to load chatter')
-      setChatterPosts([])
+      if (!silent) setChatterPosts([])
     } finally {
       if (!silent) setChatterLoading(false)
     }
@@ -544,6 +563,7 @@ export function RetailProjectPage() {
 
   useEffect(() => {
     if (activeTab !== 'chatter') return
+    chatterRefreshPendingRef.current = false
     fetchChatterPosts()
   }, [activeTab, fetchChatterPosts])
 
@@ -553,6 +573,8 @@ export function RetailProjectPage() {
       if (detail.projectId && projectId && detail.projectId !== projectId) return
       if (activeTab === 'chatter') {
         void fetchChatterPosts({ silent: true })
+      } else {
+        chatterRefreshPendingRef.current = true
       }
     })
   }, [activeTab, fetchChatterPosts, projectId, taskId])
@@ -610,14 +632,35 @@ export function RetailProjectPage() {
 
   async function handlePostChatter() {
     const message = chatterMessage.trim()
-    if (!message || (!taskId && !projectId)) return
+    if (!message) return
     setChatterSubmitting(true)
     setChatterError('')
+    let resolvedTaskId = taskIdReady ? taskId : null
+    if (!resolvedTaskId) {
+      setResolvingTaskId(true)
+      try {
+        resolvedTaskId = await resolveTaskIdForChatter({
+          taskId: row?.taskId,
+          recordId: row?.id,
+          opNo: m?.opNo,
+          projectId,
+          fromTaskApi: Boolean(row?.fromTaskApi),
+        })
+        if (resolvedTaskId) setTaskId(resolvedTaskId)
+      } finally {
+        setResolvingTaskId(false)
+      }
+    }
+    if (!resolvedTaskId && !projectId) {
+      setChatterError('Project is still being linked. Please wait a moment and try again.')
+      setChatterSubmitting(false)
+      return
+    }
     try {
       const created = await createChatterPost({
         message,
         postType: 'Posts',
-        taskId: taskId || undefined,
+        ...(resolvedTaskId ? { taskId: resolvedTaskId } : { projectId }),
       })
       setChatterMessage('')
       setChatterPosts((prev) => {
@@ -625,7 +668,7 @@ export function RetailProjectPage() {
         next.sort((a, b) => new Date(b.createdAt).getTime() - new Date(a.createdAt).getTime())
         return next
       })
-      emitChatterRefresh({ taskId, projectId, postId: created.id })
+      emitChatterRefresh({ taskId: resolvedTaskId, projectId, postId: created.id })
     } catch (error) {
       toast.error(error instanceof Error ? error.message : 'Failed to post chatter')
     } finally {
@@ -801,14 +844,21 @@ export function RetailProjectPage() {
                       placeholder="Type your comment..."
                       className="mt-1.5 w-full resize-none rounded-md border border-slate-300 bg-white px-2.5 py-1.5 text-sm text-slate-900 outline-none focus:border-blue-500 focus:ring-2 focus:ring-blue-500/25"
                     />
-                    <div className="mt-1.5 flex justify-end">
+                    <div className="mt-1.5 flex items-center justify-between gap-2">
+                      {resolvingTaskId ? (
+                        <p className="text-[11px] text-slate-400">Preparing chatter…</p>
+                      ) : !taskIdReady && projectId ? (
+                        <p className="text-[11px] text-slate-400">Posting to project discussion</p>
+                      ) : (
+                        <span />
+                      )}
                       <button
                         type="button"
                         onClick={handlePostChatter}
-                        disabled={!canPostChatter || chatterSubmitting}
+                        disabled={!canPostChatter || chatterSubmitting || resolvingTaskId}
                         className="rounded-md bg-[#10a6e3] px-3.5 py-1.5 text-xs font-semibold text-white transition hover:bg-[#0f96cd] disabled:cursor-not-allowed disabled:opacity-60"
                       >
-                        {chatterSubmitting ? 'Posting...' : 'Post'}
+                        {chatterSubmitting ? 'Posting...' : resolvingTaskId ? 'Linking…' : 'Post'}
                       </button>
                     </div>
                   </div>

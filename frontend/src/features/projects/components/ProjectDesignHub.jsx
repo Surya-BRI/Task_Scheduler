@@ -16,6 +16,7 @@ function hubTaskHref(row, opts = {}) {
   if (!routingId) return null;
   const routingRow = { ...row, id: routingId };
   const q = { from: FROM_PROJECT_DESIGN };
+  if (row?.opNo) q.opNo = row.opNo;
   if (opts.tab) q.tab = opts.tab;
   if (opts.create) return taskCreationPathForRecord(routingRow, q);
   return taskViewPathForRecord(routingRow, q);

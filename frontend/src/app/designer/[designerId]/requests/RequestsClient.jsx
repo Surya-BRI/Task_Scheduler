@@ -822,7 +822,12 @@ export default function RequestsClient() {
       toast.success("Overtime request submitted successfully!");
       setOtForm((f) => ({ ...f, date: "", reason: "" }));
     } catch (err) {
-      const message = err?.message || "Submit failed";
+      const message =
+        err instanceof Error
+          ? err.message
+          : typeof err === "string"
+            ? err
+            : "Submit failed. Check that the backend is running and the task is still assigned to you.";
       setOvertimeError(message);
       toast.error(message);
     } finally {
@@ -899,25 +904,27 @@ export default function RequestsClient() {
 
   const unifiedRegularizationRows = useMemo(() => {
     const map = new Map();
-    if (isHOD && activeDesignerId) {
+    if (isHOD) {
       for (const req of hodPendingRequests) {
-        if (!matchesActiveDesigner(req, activeDesignerId)) continue;
+        if (activeDesignerId && !matchesActiveDesigner(req, activeDesignerId)) continue;
         map.set(req.id, {
           ...req,
-          _requester: req.designerName || activeDesignerName,
+          _requester: req.designerName || "Designer",
           _needsAction: true,
           _source: "team-pending",
         });
       }
     }
-    for (const req of idleRequests) {
-      if (!map.has(req.id)) {
-        map.set(req.id, {
-          ...req,
-          _requester: req.designerName || activeDesignerName,
-          _needsAction: isHOD && req.status === "Pending",
-          _source: req.localDraft ? "draft" : "profile",
-        });
+    if (activeDesignerId) {
+      for (const req of idleRequests) {
+        if (!map.has(req.id)) {
+          map.set(req.id, {
+            ...req,
+            _requester: req.designerName || activeDesignerName,
+            _needsAction: isHOD && req.status === "Pending",
+            _source: req.localDraft ? "draft" : "profile",
+          });
+        }
       }
     }
     return [...map.values()].sort((a, b) => {
@@ -930,27 +937,29 @@ export default function RequestsClient() {
 
   const unifiedOvertimeRows = useMemo(() => {
     const map = new Map();
-    if (isHOD && activeDesignerId) {
+    if (isHOD) {
       for (const req of hodOvertimePending) {
-        if (!matchesActiveDesigner(req, activeDesignerId)) continue;
+        if (activeDesignerId && !matchesActiveDesigner(req, activeDesignerId)) continue;
         map.set(req.id, {
           ...req,
-          _requester: req.designerName || activeDesignerName,
+          _requester: req.designerName || "Designer",
           _needsAction: true,
           _source: "team-pending",
         });
       }
     }
-    for (const req of previousOtRequests) {
-      if (!map.has(req.id)) {
-        map.set(req.id, {
-          ...req,
-          _requester: req.designerName || activeDesignerName,
-          _needsAction:
-            isHOD &&
-            (req.status === "Pending Approval" || req.status === "Pending"),
-          _source: "profile",
-        });
+    if (activeDesignerId) {
+      for (const req of previousOtRequests) {
+        if (!map.has(req.id)) {
+          map.set(req.id, {
+            ...req,
+            _requester: req.designerName || activeDesignerName,
+            _needsAction:
+              isHOD &&
+              (req.status === "Pending Approval" || req.status === "Pending"),
+            _source: "profile",
+          });
+        }
       }
     }
     return [...map.values()].sort((a, b) => {
@@ -1059,6 +1068,14 @@ export default function RequestsClient() {
             {regularizationError ? (
               <div className="border-b border-amber-200 bg-amber-50 px-4 py-3 text-sm text-amber-950 sm:px-5">{regularizationError}</div>
             ) : null}
+            {hodInboxError ? (
+              <div className="border-b border-red-200 bg-red-50 px-4 py-3 text-sm text-red-800 sm:px-5">{hodInboxError}</div>
+            ) : null}
+            {isHOD && hodPendingRequests.length > 0 && !activeDesignerId ? (
+              <div className="border-b border-blue-100 bg-blue-50 px-4 py-3 text-sm text-blue-900 sm:px-5">
+                {hodPendingRequests.length} pending regularization request{hodPendingRequests.length === 1 ? "" : "s"} awaiting your review. Select a designer to view full context, or approve directly from the pending rows below.
+              </div>
+            ) : null}
             {regularizationLoading ? (
               <div className="border-b border-slate-100 px-4 py-2 text-sm text-slate-500 sm:px-5">Loading regularization…</div>
             ) : null}
@@ -1091,7 +1108,12 @@ export default function RequestsClient() {
                           key={req.id}
                           className={`transition-colors hover:bg-slate-50${highlightedRequestId === req.id ? " bg-blue-50 ring-1 ring-inset ring-blue-200" : ""}`}
                         >
-                          <td className="px-4 py-3 font-medium text-slate-800">{req._requester}</td>
+                          <td className="px-4 py-3 font-medium text-slate-800">
+                            <p>{req._requester}</p>
+                            {req.departmentName && req.departmentName !== "—" ? (
+                              <p className="text-xs font-normal text-slate-500">{req.departmentName}</p>
+                            ) : null}
+                          </td>
                           <td className="px-4 py-3 text-slate-700">{displayTaskName(req)}</td>
                           <td className="px-4 py-3 text-center text-slate-600">{req.date ? formatDate(req.date) : "—"}</td>
                           <td className="px-4 py-3 text-center text-slate-600">{req.duration || "—"}</td>

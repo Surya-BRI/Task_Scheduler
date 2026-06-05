@@ -924,8 +924,10 @@ export class OvertimeRequestsService {
 
   // --- Notification Helpers ---
 
-  private overtimeLink(requestId: string): string {
-    return `/designer/requests?overtimeId=${encodeURIComponent(requestId)}#overtime`;
+  private overtimeLink(requestId: string, designerId?: string): string {
+    const params = new URLSearchParams({ overtimeId: requestId });
+    if (designerId?.trim()) params.set('forDesignerId', designerId.trim());
+    return `/designer/requests?${params.toString()}#overtime`;
   }
 
   private async notifyApprovers(request: any) {
@@ -957,7 +959,7 @@ export class OvertimeRequestsService {
             userId: hod.id,
             title: 'New Overtime Request Submitted',
             message: `${request.designer.fullName} has submitted an overtime request for ${request.totalHours} hours on ${request.date.toISOString().split('T')[0]} (${taskLabel}).`,
-            linkUrl: this.overtimeLink(request.id),
+            linkUrl: this.overtimeLink(request.id, request.designerId),
           },
         });
       } catch (err) {
@@ -981,7 +983,7 @@ export class OvertimeRequestsService {
           userId: admin.id,
           title: 'Overtime Request Pending Final HR Approval',
           message: `${request.designer.fullName}'s overtime request has been approved by the manager and requires final HR sign-off.`,
-          linkUrl: this.overtimeLink(request.id),
+          linkUrl: this.overtimeLink(request.id, request.designerId),
         },
       });
     }
@@ -997,7 +999,7 @@ export class OvertimeRequestsService {
         message: `Your overtime request for ${request.date.toISOString().split('T')[0]} has been ${actionLabel.toLowerCase()}.${
           comments ? ` Comment: "${comments}"` : ''
         }`,
-        linkUrl: this.overtimeLink(request.id),
+        linkUrl: this.overtimeLink(request.id, request.designerId),
       },
     });
   }
