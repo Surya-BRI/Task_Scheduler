@@ -315,6 +315,7 @@ export class ChatterPostsService {
       mu.fullName AS mentionUserName, pr.name AS projectName,
       CONVERT(varchar(36), t.projectId) AS projectId,
       t.title AS taskTitle, t.taskNo AS taskNo, t.opNo AS taskOpNo,
+      assignee.fullName AS assigneeName,
       ${alias}.title, ${alias}.message, ${alias}.postType, ${alias}.mentionUserId, ${alias}.priority,
       ${alias}.seenByCount, ${alias}.attachmentCount, ${alias}.isPinned, ${alias}.editedAt, ${alias}.visibility,
       ${alias}.createdAt, ${alias}.updatedAt
@@ -329,6 +330,7 @@ export class ChatterPostsService {
       LEFT JOIN ErpTSUser mu ON mu.id = ${alias}.mentionUserId
       LEFT JOIN ErpTSTask t ON t.id = ${alias}.taskId
       LEFT JOIN ErpTSProject pr ON pr.id = t.projectId
+      LEFT JOIN ErpTSUser assignee ON assignee.id = t.assigneeId
     `;
   }
 
@@ -371,6 +373,7 @@ export class ChatterPostsService {
       authorRole: row.authorRole != null ? String(row.authorRole) : null,
       mentionUserName: row.mentionUserName != null ? String(row.mentionUserName) : null,
       projectName: row.projectName != null ? String(row.projectName) : null,
+      assigneeName: row.assigneeName != null ? String(row.assigneeName) : null,
       title: displayTitle,
       message: row.message,
       postType: row.postType ?? null,
@@ -498,20 +501,32 @@ export class ChatterPostsService {
     }
 
     const mentionUserId = optionalUuid(dto.mentionUserId);
+    const messageSql = `N'${dto.message.trim().replace(/'/g, "''")}'`;
+    const mentionSql = mentionUserId ? sqlQuotedUuid(mentionUserId) : 'NULL';
 
-    const created = await this.prisma.chatterComment.create({
-      data: {
-        postId: normalizedPostId,
-        authorId,
-        message: dto.message.trim(),
-        mentionUserId: mentionUserId ?? undefined,
-      },
-    });
+    const idRows = await this.prisma.$queryRawUnsafe<Array<{ id: string }>>(`
+      DECLARE @ids TABLE (cid uniqueidentifier);
+      INSERT INTO ErpTSChatterComment (postId, authorId, mentionUserId, message, createdAt)
+      OUTPUT INSERTED.id INTO @ids(cid)
+      VALUES (
+        ${sqlQuotedUuid(normalizedPostId)},
+        ${sqlQuotedUuid(authorId)},
+        ${mentionSql},
+        ${messageSql},
+        SYSUTCDATETIME()
+      );
+      SELECT CONVERT(varchar(36), cid) AS id FROM @ids;
+    `);
+    const newCommentId = idRows[0]?.id;
+    if (!newCommentId) {
+      throw new BadRequestException('Failed to create chatter comment');
+    }
 
-    await this.prisma.chatterPost.update({
-      where: { id: normalizedPostId },
-      data: { updatedAt: new Date() },
-    });
+    await this.prisma.$executeRawUnsafe(`
+      UPDATE ErpTSChatterPost
+      SET updatedAt = SYSUTCDATETIME()
+      WHERE id = ${sqlQuotedUuid(normalizedPostId)}
+    `);
 
     await this.activityLogger.log({
       action: ActivityAction.CREATED_CHATTER_COMMENT,
@@ -528,10 +543,10 @@ export class ChatterPostsService {
     });
 
     const comments = await this.findCommentsByPostIds([normalizedPostId]);
-    const saved = comments.find((c) => c.id === String(created.id));
+    const saved = comments.find((c) => c.id === String(newCommentId));
     if (saved) return saved;
 
-    return this.mapCommentRow(created as unknown as Record<string, unknown>);
+    throw new BadRequestException('Comment created but could not be loaded');
   }
 
   async create(dto: CreateChatterPostDto, authorId: string, files?: Express.Multer.File[]): Promise<ChatterPostDto> {

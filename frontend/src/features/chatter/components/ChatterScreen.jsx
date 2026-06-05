@@ -792,9 +792,8 @@ export function ChatterScreen() {
   const [activeTab, setActiveTab] = useState("posts");
   const [openTaskId, setOpenTaskId] = useState(null);
   const [focusedPostId, setFocusedPostId] = useState(null);
-  const [currentDate, setCurrentDate] = useState(new Date());
+  const [currentDate, setCurrentDate] = useState(() => new Date());
   const [taskCatalog, setTaskCatalog] = useState([]);
-  
   const [isCreatePostOpen, setIsCreatePostOpen] = useState(false);
   const [isSubmitting, setIsSubmitting] = useState(false);
   const [postsLoadError, setPostsLoadError] = useState(null);
