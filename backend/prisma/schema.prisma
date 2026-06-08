@@ -52,6 +52,7 @@ model User {
   chatterCommentMentions   ChatterComment[]           @relation("CommentMentionedUser")
   activities               ActivityLog[]
   leaveRequests            LeaveRequest[]
+  leaveRequestsApproved    LeaveRequest[]             @relation("LeaveApprover")
   notifications            Notification[]
   regularizationAsDesigner RegularizationRequest[]    @relation("RegularizationDesigner")
   regularizationAsApprover RegularizationRequest[]    @relation("RegularizationApprover")
@@ -386,16 +387,20 @@ model LinkAttachment {
 // REQUESTS (leave, regularization, overtime)
 // ---------------------------------------------------------
 model LeaveRequest {
-  id        String    @id @default(dbgenerated("newid()")) @db.UniqueIdentifier
-  userId    String    @db.UniqueIdentifier
-  user      User      @relation(fields: [userId], references: [id], onDelete: NoAction, onUpdate: NoAction)
-  type      String    @db.NVarChar(255)
-  status    String    @default("Pending") @db.NVarChar(255)
-  startDate DateTime
-  endDate   DateTime?
-  reason    String?   @db.NVarChar(Max)
-  createdAt DateTime  @default(now())
-  updatedAt DateTime  @default(now()) @updatedAt
+  id              String    @id @default(dbgenerated("newid()")) @db.UniqueIdentifier
+  userId          String    @db.UniqueIdentifier
+  user            User      @relation(fields: [userId], references: [id], onDelete: NoAction, onUpdate: NoAction)
+  type            String    @db.NVarChar(255)
+  status          String    @default("Pending") @db.NVarChar(255)
+  startDate       DateTime
+  endDate         DateTime?
+  reason          String?   @db.NVarChar(Max)
+  approverId      String?   @db.UniqueIdentifier
+  approver        User?     @relation("LeaveApprover", fields: [approverId], references: [id], onDelete: NoAction, onUpdate: NoAction)
+  approverRemarks String?   @db.NVarChar(Max)
+  reviewedAt      DateTime? @db.DateTime
+  createdAt       DateTime  @default(now())
+  updatedAt       DateTime  @default(now()) @updatedAt
 
   @@map("ErpTSLeaveRequest")
 }

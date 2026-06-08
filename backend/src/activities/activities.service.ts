@@ -47,6 +47,8 @@ export class ActivitiesService {
     if (msg === 'scheduler_week_unlocked') return `${actorName} unlocked the schedule for week of ${details?.context?.weekStart ?? ''}`;
     if (msg === 'leave_request_submitted')
       return `${actorName} submitted a ${details?.context?.type ?? 'leave'} request`;
+    if (msg === 'leave_request_updated') return `${actorName} updated a pending leave request`;
+    if (msg === 'leave_request_cancelled') return `${actorName} cancelled a leave request`;
     if (msg === 'leave_request_status_changed')
       return `${actorName} ${(details?.changes?.newStatus as string)?.toLowerCase() ?? 'updated'} a leave request`;
     if (msg === 'regularization_submitted')
