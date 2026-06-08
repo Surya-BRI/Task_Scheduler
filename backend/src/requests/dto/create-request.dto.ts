@@ -1,4 +1,4 @@
-import { IsNotEmpty, IsOptional, IsString, IsDateString } from 'class-validator';
+import { IsDateString, IsNotEmpty, IsOptional, IsString, MaxLength } from 'class-validator';
 
 export class CreateLeaveRequestDto {
   @IsNotEmpty()
@@ -7,7 +7,8 @@ export class CreateLeaveRequestDto {
 
   @IsNotEmpty()
   @IsString()
-  type: string; // "Leave", "Half Day", "Regularization"
+  @MaxLength(255)
+  type: string; // "Leave", "Half Day", etc.
 
   @IsNotEmpty()
   @IsDateString()
@@ -17,7 +18,8 @@ export class CreateLeaveRequestDto {
   @IsDateString()
   endDate?: string;
 
-  @IsOptional()
+  @IsNotEmpty()
   @IsString()
-  reason?: string;
+  @MaxLength(4000)
+  reason: string;
 }

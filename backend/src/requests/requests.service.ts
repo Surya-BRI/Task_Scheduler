@@ -1,78 +1,504 @@
-import { Injectable, NotFoundException } from '@nestjs/common';
+import {
+  BadRequestException,
+  ForbiddenException,
+  Injectable,
+  Logger,
+  NotFoundException,
+  OnModuleInit,
+} from '@nestjs/common';
+import { randomUUID } from 'crypto';
 import { PrismaService } from '../prisma/prisma.service';
 import { ActivityLoggerService } from '../activities/activity-logger.service';
 import { ActivityAction } from '../activities/activity-events';
+import { UserRole } from '../common/constants/roles.enum';
 import { CreateLeaveRequestDto } from './dto/create-request.dto';
+import { ReviewLeaveRequestDto } from './dto/review-leave-request.dto';
+import { UpdateLeaveRequestDto } from './dto/update-leave-request.dto';
 import { UpdateRequestStatusDto } from './dto/update-request-status.dto';
+import { escSqlNString, sqlUniqueIdentifier } from '../regularization-requests/sql-uuid.util';
+import {
+  findOverlappingLeave,
+  normalizeLeaveStatus as normalizeLeaveStatusUtil,
+  overlapErrorMessage,
+  validateLeaveDates,
+  type LeaveDateRange,
+} from './leave-request.validation';
+
+const UUID_RE =
+  /^[0-9a-f]{8}-[0-9a-f]{4}-[1-5][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i;
+
+export type LeaveRequestView = {
+  id: string;
+  designerId: string;
+  requesterName: string;
+  reason: string | null;
+  fromDate: string;
+  toDate: string;
+  status: string;
+  type: string;
+  createdBy: 'HOD' | 'Designer';
+  approverId: string | null;
+  approverName: string | null;
+  approverRemarks: string | null;
+  reviewedAt: string | null;
+  createdAt: string;
+};
 
 @Injectable()
-export class RequestsService {
+export class RequestsService implements OnModuleInit {
+  private readonly logger = new Logger(RequestsService.name);
+
   constructor(
     private readonly prisma: PrismaService,
     private readonly activityLogger: ActivityLoggerService,
   ) {}
 
+  async onModuleInit(): Promise<void> {
+    try {
+      await this.prisma.$executeRawUnsafe(`
+        IF COL_LENGTH('dbo.ErpTSLeaveRequest', 'approverId') IS NULL
+        BEGIN
+          ALTER TABLE dbo.ErpTSLeaveRequest ADD approverId UNIQUEIDENTIFIER NULL;
+        END
+        IF COL_LENGTH('dbo.ErpTSLeaveRequest', 'approverRemarks') IS NULL
+        BEGIN
+          ALTER TABLE dbo.ErpTSLeaveRequest ADD approverRemarks NVARCHAR(MAX) NULL;
+        END
+        IF COL_LENGTH('dbo.ErpTSLeaveRequest', 'reviewedAt') IS NULL
+        BEGIN
+          ALTER TABLE dbo.ErpTSLeaveRequest ADD reviewedAt DATETIME NULL;
+        END
+        IF COL_LENGTH('dbo.ErpTSLeaveRequest', 'id') IS NOT NULL
+           AND NOT EXISTS (
+             SELECT 1
+             FROM sys.default_constraints dc
+             INNER JOIN sys.columns c ON c.default_object_id = dc.object_id
+             INNER JOIN sys.tables t ON t.object_id = c.object_id
+             WHERE t.name = 'ErpTSLeaveRequest' AND c.name = 'id'
+           )
+        BEGIN
+          ALTER TABLE dbo.ErpTSLeaveRequest ADD CONSTRAINT DF_ErpTSLeaveRequest_id DEFAULT (newid()) FOR id;
+        END
+      `);
+    } catch (err) {
+      const detail = err instanceof Error ? err.message : String(err);
+      this.logger.warn(`Could not ensure leave review columns: ${detail}`);
+    }
+  }
+
+  private isUuid(value: string | null | undefined): boolean {
+    return Boolean(value?.trim() && UUID_RE.test(value.trim()));
+  }
+
   private async resolveDummyId(dummyId: string): Promise<string> {
     if (!dummyId) return dummyId;
-    if (dummyId.length > 5) return dummyId; // Likely already a UUID
+    if (this.isUuid(dummyId)) return dummyId;
 
     const mapping: Record<string, string> = {
-      'd1': 'Alex Johnson',
-      'd2': 'Alexander Allen',
-      'd3': 'Benjamin Harris',
+      d1: 'Alex Johnson',
+      d2: 'Alexander Allen',
+      d3: 'Benjamin Harris',
     };
-    
+
     const name = mapping[dummyId] || 'Alex Johnson';
     const user = await this.prisma.user.findFirst({ where: { fullName: name } });
     if (user) return user.id;
 
-    // Fallback to absolute first user if name doesn't match
     const fallback = await this.prisma.user.findFirst();
     return fallback?.id || dummyId;
   }
 
-  async findAll(userId?: string) {
+  private toDateLabel(d: Date): string {
+    return d.toISOString().split('T')[0];
+  }
+
+  private normalizeStatus(status: string): string {
+    const s = normalizeLeaveStatusUtil(status);
+    if (s === 'APPROVED' || s === 'REJECTED' || s === 'PENDING' || s === 'CANCELLED') return s;
+    return status;
+  }
+
+  private toDateLabelFromDate(d: Date): string {
+    return d.toISOString().split('T')[0];
+  }
+
+  private assertDatesOrThrow(startDateIso: string, endDateIso?: string): LeaveDateRange {
+    const result = validateLeaveDates(startDateIso, endDateIso);
+    if (!result.ok) {
+      throw new BadRequestException(result.message);
+    }
+    return result.range;
+  }
+
+  private async assertNoOverlappingLeave(
+    userId: string,
+    range: LeaveDateRange,
+    excludeRequestId?: string,
+  ): Promise<void> {
+    const existing = await this.prisma.leaveRequest.findMany({
+      where: { userId },
+      select: { id: true, startDate: true, endDate: true, status: true },
+    });
+
+    const conflict = findOverlappingLeave(existing, range, excludeRequestId);
+    if (conflict) {
+      throw new BadRequestException(overlapErrorMessage(conflict));
+    }
+  }
+
+  private assertOwnerCanModifyPending(
+    requesterId: string,
+    role: UserRole,
+    request: { userId: string; status: string },
+  ): void {
+    if (role !== UserRole.DESIGNER) {
+      throw new ForbiddenException('Only designers can modify their own leave requests');
+    }
+    if (requesterId !== request.userId) {
+      throw new ForbiddenException('You can only modify your own leave requests');
+    }
+    if (this.normalizeStatus(request.status) !== 'PENDING') {
+      throw new BadRequestException(
+        `Only pending leave requests can be modified (current status: ${this.normalizeStatus(request.status)})`,
+      );
+    }
+  }
+
+  private mapRequest(
+    req: {
+      id: string;
+      userId: string;
+      reason: string | null;
+      startDate: Date;
+      endDate: Date | null;
+      status: string;
+      type: string;
+      createdAt: Date;
+      approverId?: string | null;
+      approverRemarks?: string | null;
+      reviewedAt?: Date | null;
+      user: { fullName: string; role: { name: string } };
+      approver?: { fullName: string } | null;
+    },
+    designerIdOverride?: string,
+  ): LeaveRequestView {
+    const roleName = req.user.role.name;
+    return {
+      id: req.id,
+      designerId: designerIdOverride ?? req.userId,
+      requesterName: req.user.fullName,
+      reason: req.reason,
+      fromDate: this.toDateLabel(req.startDate),
+      toDate: this.toDateLabel(req.endDate ?? req.startDate),
+      status: this.normalizeStatus(req.status),
+      type: req.type,
+      createdBy: roleName === UserRole.HOD ? 'HOD' : 'Designer',
+      approverId: req.approverId ?? null,
+      approverName: req.approver?.fullName ?? null,
+      approverRemarks: req.approverRemarks?.trim() || null,
+      reviewedAt: req.reviewedAt ? req.reviewedAt.toISOString() : null,
+      createdAt: req.createdAt.toISOString(),
+    };
+  }
+
+  private leaveInclude() {
+    return {
+      user: { select: { id: true, fullName: true, role: { select: { name: true } }, departmentId: true } },
+      approver: { select: { id: true, fullName: true } },
+    } as const;
+  }
+
+  private leaveLink(id: string, userId?: string): string {
+    const params = new URLSearchParams({ leaveId: id });
+    if (userId?.trim()) params.set('forUserId', userId.trim());
+    return `/designer/leave-planner?${params.toString()}`;
+  }
+
+  private async findDepartmentHods(departmentId: string | null | undefined) {
+    if (!departmentId?.trim()) return [];
+    return this.prisma.user.findMany({
+      where: {
+        departmentId: departmentId.trim(),
+        role: { name: UserRole.HOD },
+      },
+      select: { id: true, fullName: true },
+    });
+  }
+
+  private formatLeaveDates(from: string, to: string): string {
+    return from === to ? from : `${from} to ${to}`;
+  }
+
+  private async notifyApproversOnCreate(view: LeaveRequestView) {
+    const dates = this.formatLeaveDates(view.fromDate, view.toDate);
+    const messageBase = `Leave request ${view.id.slice(0, 8)}… for ${dates}. Reason: ${view.reason ?? '—'}.`;
+
+    const requester = await this.prisma.user.findUnique({
+      where: { id: view.designerId },
+      select: { departmentId: true },
+    });
+    let targets = await this.findDepartmentHods(requester?.departmentId);
+    if (targets.length === 0) {
+      targets = await this.prisma.user.findMany({
+        where: { role: { name: UserRole.HOD } },
+        select: { id: true, fullName: true },
+      });
+    }
+
+    for (const approver of targets) {
+      if (approver.id === view.designerId) continue;
+      try {
+        await this.prisma.notification.create({
+          data: {
+            id: randomUUID(),
+            userId: approver.id,
+            title: 'New Leave Request',
+            message: `${view.requesterName} submitted a leave request. ${messageBase}`,
+            linkUrl: this.leaveLink(view.id, view.designerId),
+          },
+        });
+      } catch (err) {
+        this.logger.warn(`Leave approver notification failed for ${approver.id}: ${err}`);
+      }
+    }
+  }
+
+  private async notifyHodsOnLeaveChange(
+    view: LeaveRequestView,
+    title: string,
+    actionVerb: string,
+  ) {
+    const dates = this.formatLeaveDates(view.fromDate, view.toDate);
+    const requester = await this.prisma.user.findUnique({
+      where: { id: view.designerId },
+      select: { departmentId: true },
+    });
+    let targets = await this.findDepartmentHods(requester?.departmentId);
+    if (targets.length === 0) {
+      targets = await this.prisma.user.findMany({
+        where: { role: { name: UserRole.HOD } },
+        select: { id: true, fullName: true },
+      });
+    }
+
+    for (const approver of targets) {
+      if (approver.id === view.designerId) continue;
+      try {
+        await this.prisma.notification.create({
+          data: {
+            id: randomUUID(),
+            userId: approver.id,
+            title,
+            message: `${view.requesterName} ${actionVerb} a leave request (${dates}). Reason: ${view.reason ?? '—'}.`,
+            linkUrl: this.leaveLink(view.id, view.designerId),
+          },
+        });
+      } catch (err) {
+        this.logger.warn(`Leave HOD notification failed for ${approver.id}: ${err}`);
+      }
+    }
+  }
+
+  private async notifyRequesterOnReview(
+    view: LeaveRequestView,
+    action: 'APPROVED' | 'REJECTED',
+    reviewerName: string,
+    reviewedAt: Date,
+  ) {
+    const actionLabel = action === 'APPROVED' ? 'Approved' : 'Rejected';
+    const dates = this.formatLeaveDates(view.fromDate, view.toDate);
+    const timestamp = reviewedAt.toISOString();
+    const remarks =
+      action === 'REJECTED' && view.approverRemarks
+        ? ` Remarks: "${view.approverRemarks}"`
+        : '';
+
+    try {
+      await this.prisma.notification.create({
+        data: {
+          id: randomUUID(),
+          userId: view.designerId,
+          title: `Leave Request ${actionLabel}`,
+          message: `Leave ${view.id.slice(0, 8)}… (${dates}) was ${actionLabel.toLowerCase()} by ${reviewerName} at ${timestamp}.${remarks}`,
+          linkUrl: this.leaveLink(view.id, view.designerId),
+        },
+      });
+    } catch (err) {
+      this.logger.warn(`Leave requester notification failed: ${err}`);
+    }
+  }
+
+  private assertCreateAccess(submitterId: string, role: UserRole, targetUserId: string) {
+    if (role !== UserRole.DESIGNER) {
+      throw new ForbiddenException('Only designers can submit leave requests');
+    }
+    if (submitterId !== targetUserId) {
+      throw new ForbiddenException('You can only submit leave requests for yourself');
+    }
+  }
+
+  private async assertReviewerAccess(
+    reviewerId: string,
+    role: UserRole,
+    request: { userId: string; user: { role: { name: string }; departmentId: string | null } },
+  ) {
+    if (reviewerId === request.userId) {
+      throw new ForbiddenException('You cannot approve or reject your own leave request');
+    }
+
+    const requesterRole = request.user.role.name;
+
+    if (role !== UserRole.HOD) {
+      throw new ForbiddenException('Only HOD can review leave requests');
+    }
+
+    if (requesterRole !== UserRole.DESIGNER) {
+      throw new ForbiddenException('Only designer leave requests can be reviewed');
+    }
+
+    const [reviewer, requester] = await Promise.all([
+      this.prisma.user.findUnique({ where: { id: reviewerId }, select: { departmentId: true } }),
+      Promise.resolve(request.user),
+    ]);
+
+    if (
+      reviewer?.departmentId &&
+      requester.departmentId &&
+      reviewer.departmentId !== requester.departmentId
+    ) {
+      throw new ForbiddenException('You can only review leave requests from your department');
+    }
+  }
+
+  async findAll(userId: string | undefined, requesterId: string, role: UserRole) {
     let resolvedId = userId;
     if (userId) {
       resolvedId = await this.resolveDummyId(userId);
+    } else {
+      resolvedId = requesterId;
     }
-    const where = resolvedId ? { userId: resolvedId } : {};
+
+    if (!resolvedId) return [];
+
+    if (role === UserRole.DESIGNER && resolvedId !== requesterId) {
+      throw new ForbiddenException('You can only view your own leave requests');
+    }
+
+    const requests = await this.prisma.leaveRequest.findMany({
+      where: { userId: resolvedId },
+      orderBy: { createdAt: 'desc' },
+      include: this.leaveInclude(),
+    });
+
+    return requests.map((req) => this.mapRequest(req, userId || req.userId));
+  }
+
+  async findPendingApprovals(reviewerId: string, role: UserRole): Promise<LeaveRequestView[]> {
+    if (role !== UserRole.HOD) {
+      throw new ForbiddenException('Only HOD can view pending leave approvals');
+    }
+
+    const pending = await this.prisma.leaveRequest.findMany({
+      where: {
+        status: { in: ['Pending', 'PENDING', 'pending'] },
+        user: { role: { name: UserRole.DESIGNER } },
+      },
+      orderBy: { createdAt: 'desc' },
+      include: this.leaveInclude(),
+    });
+
+    const reviewer = await this.prisma.user.findUnique({
+      where: { id: reviewerId },
+      select: { departmentId: true },
+    });
+
+    return pending
+      .filter((req) => {
+        if (!reviewer?.departmentId || !req.user.departmentId) return true;
+        return reviewer.departmentId === req.user.departmentId;
+      })
+      .map((req) => this.mapRequest(req));
+  }
+
+  async findTeamRequests(
+    managerId: string,
+    role: UserRole,
+    filters?: { status?: string; designerId?: string },
+  ): Promise<LeaveRequestView[]> {
+    if (role !== UserRole.HOD) {
+      throw new ForbiddenException('Only HOD can view team leave requests');
+    }
+
+    const where: {
+      user?: { role?: { name?: string }; departmentId?: string };
+      status?: string;
+      userId?: string;
+    } = {};
+
+    if (filters?.status?.trim()) {
+      where.status = filters.status.trim();
+    }
+    if (filters?.designerId?.trim() && this.isUuid(filters.designerId)) {
+      where.userId = filters.designerId.trim();
+    }
+
+    const manager = await this.prisma.user.findUnique({
+      where: { id: managerId },
+      select: { departmentId: true },
+    });
+    where.user = {
+      role: { name: UserRole.DESIGNER },
+      ...(manager?.departmentId ? { departmentId: manager.departmentId } : {}),
+    };
+
     const requests = await this.prisma.leaveRequest.findMany({
       where,
       orderBy: { createdAt: 'desc' },
-      include: {
-        user: { select: { id: true, fullName: true, role: { select: { name: true } } } }
-      }
+      take: 500,
+      include: this.leaveInclude(),
     });
 
-    return requests.map(req => ({
-      id: req.id,
-      designerId: userId || req.userId, // Keep dummy ID transparent
-      reason: req.reason,
-      fromDate: req.startDate.toISOString().split('T')[0],
-      toDate: req.endDate ? req.endDate.toISOString().split('T')[0] : req.startDate.toISOString().split('T')[0],
-      status: req.status.toUpperCase(),
-      type: req.type,
-      createdBy: req.user.role.name === 'HOD' ? 'HOD' : 'Designer'
-    }));
+    return requests.map((req) => this.mapRequest(req));
   }
 
-  async create(dto: CreateLeaveRequestDto) {
+  async create(submitterId: string, role: UserRole, dto: CreateLeaveRequestDto) {
     const resolvedId = await this.resolveDummyId(dto.userId);
+    this.assertCreateAccess(submitterId, role, resolvedId);
+
+    const requester = await this.prisma.user.findUnique({
+      where: { id: resolvedId },
+      include: { role: { select: { name: true } } },
+    });
+    if (!requester) throw new BadRequestException('User not found');
+    if (requester.role.name !== UserRole.DESIGNER) {
+      throw new ForbiddenException('Only designers can submit leave requests');
+    }
+    if (!this.isUuid(resolvedId)) {
+      throw new BadRequestException('A valid user id is required to submit a leave request');
+    }
+
+    const reason = dto.reason?.trim();
+    if (!reason) {
+      throw new BadRequestException('Reason is required for leave requests');
+    }
+
+    const range = this.assertDatesOrThrow(dto.startDate, dto.endDate);
+    await this.assertNoOverlappingLeave(resolvedId, range);
 
     const req = await this.prisma.leaveRequest.create({
       data: {
+        id: randomUUID(),
         userId: resolvedId,
-        type: dto.type,
-        startDate: new Date(dto.startDate),
-        endDate: dto.endDate ? new Date(dto.endDate) : new Date(dto.startDate),
-        reason: dto.reason,
+        type: dto.type.trim(),
+        startDate: range.startDate,
+        endDate: range.endDate,
+        reason,
         status: 'Pending',
       },
-      include: {
-        user: { select: { id: true, fullName: true, role: { select: { name: true } } } }
-      }
+      include: this.leaveInclude(),
     });
+
+    const view = this.mapRequest(req, dto.userId);
 
     await this.activityLogger.log({
       action: ActivityAction.LEAVE_REQUEST_SUBMITTED,
@@ -80,32 +506,223 @@ export class RequestsService {
       details: {
         event: ActivityAction.LEAVE_REQUEST_SUBMITTED,
         messageKey: 'leave_request_submitted',
-        context: { type: dto.type, startDate: dto.startDate, endDate: dto.endDate ?? null },
+        context: {
+          requestId: req.id,
+          type: dto.type,
+          startDate: dto.startDate,
+          endDate: dto.endDate ?? null,
+        },
       },
     });
 
-    return {
-      id: req.id,
-      designerId: dto.userId, // Return the original dummy ID to the frontend
-      reason: req.reason,
-      fromDate: req.startDate.toISOString().split('T')[0],
-      toDate: req.endDate ? req.endDate.toISOString().split('T')[0] : req.startDate.toISOString().split('T')[0],
-      status: req.status.toUpperCase(),
-      type: req.type,
-      createdBy: req.user.role.name === 'HOD' ? 'HOD' : 'Designer'
-    };
+    await this.notifyApproversOnCreate(view);
+
+    return view;
   }
 
-  async updateStatus(id: string, dto: UpdateRequestStatusDto) {
-    const existing = await this.prisma.leaveRequest.findUnique({ where: { id } });
+  async update(
+    id: string,
+    requesterId: string,
+    role: UserRole,
+    dto: UpdateLeaveRequestDto,
+  ): Promise<LeaveRequestView> {
+    const hasChange =
+      dto.type !== undefined ||
+      dto.startDate !== undefined ||
+      dto.endDate !== undefined ||
+      dto.reason !== undefined;
+    if (!hasChange) {
+      throw new BadRequestException('At least one field must be provided to update a leave request');
+    }
+
+    const existing = await this.prisma.leaveRequest.findUnique({
+      where: { id },
+      include: this.leaveInclude(),
+    });
     if (!existing) throw new NotFoundException('Leave request not found');
+
+    this.assertOwnerCanModifyPending(requesterId, role, existing);
+
+    const nextType = dto.type?.trim() ?? existing.type;
+    const nextReason = dto.reason !== undefined ? dto.reason.trim() : existing.reason?.trim() ?? '';
+    const nextStartIso =
+      dto.startDate ?? this.toDateLabelFromDate(existing.startDate);
+    const nextEndIso =
+      dto.endDate ??
+      this.toDateLabelFromDate(existing.endDate ?? existing.startDate);
+
+    if (!nextType.trim()) {
+      throw new BadRequestException('Leave type cannot be empty');
+    }
+    if (!nextReason) {
+      throw new BadRequestException('Reason is required for leave requests');
+    }
+
+    const range = this.assertDatesOrThrow(nextStartIso, nextEndIso);
+    await this.assertNoOverlappingLeave(existing.userId, range, id);
+
+    const changes: Record<string, { from: unknown; to: unknown }> = {};
+    if (existing.type !== nextType) changes.type = { from: existing.type, to: nextType };
+    if ((existing.reason ?? '') !== nextReason) changes.reason = { from: existing.reason, to: nextReason };
+    if (existing.startDate.getTime() !== range.startDate.getTime()) {
+      changes.startDate = { from: this.toDateLabel(existing.startDate), to: nextStartIso };
+    }
+    const prevEnd = existing.endDate ?? existing.startDate;
+    if (prevEnd.getTime() !== range.endDate.getTime()) {
+      changes.endDate = {
+        from: this.toDateLabel(prevEnd),
+        to: nextEndIso,
+      };
+    }
 
     const req = await this.prisma.leaveRequest.update({
       where: { id },
-      data: { status: dto.status },
-      include: {
-        user: { select: { id: true, fullName: true, role: { select: { name: true } } } }
-      }
+      data: {
+        type: nextType,
+        reason: nextReason,
+        startDate: range.startDate,
+        endDate: range.endDate,
+      },
+      include: this.leaveInclude(),
+    });
+
+    const view = this.mapRequest(req);
+
+    await this.activityLogger.log({
+      action: ActivityAction.LEAVE_REQUEST_UPDATED,
+      userId: existing.userId,
+      details: {
+        event: ActivityAction.LEAVE_REQUEST_UPDATED,
+        messageKey: 'leave_request_updated',
+        changes,
+        context: { requestId: id },
+      },
+    });
+
+    if (Object.keys(changes).length > 0) {
+      await this.notifyHodsOnLeaveChange(view, 'Leave Request Updated', 'updated');
+    }
+
+    return view;
+  }
+
+  async cancel(id: string, requesterId: string, role: UserRole): Promise<LeaveRequestView> {
+    const existing = await this.prisma.leaveRequest.findUnique({
+      where: { id },
+      include: this.leaveInclude(),
+    });
+    if (!existing) throw new NotFoundException('Leave request not found');
+
+    if (role !== UserRole.DESIGNER) {
+      throw new ForbiddenException('Only designers can cancel their own leave requests');
+    }
+    if (requesterId !== existing.userId) {
+      throw new ForbiddenException('You can only cancel your own leave requests');
+    }
+
+    const currentStatus = this.normalizeStatus(existing.status);
+    if (currentStatus === 'CANCELLED') {
+      throw new BadRequestException('Leave request is already cancelled');
+    }
+    if (currentStatus === 'APPROVED') {
+      throw new BadRequestException(
+        'Approved leave requests cannot be cancelled. Contact your HOD if changes are required.',
+      );
+    }
+    if (currentStatus === 'REJECTED') {
+      throw new BadRequestException('Rejected leave requests cannot be cancelled');
+    }
+    if (currentStatus !== 'PENDING') {
+      throw new BadRequestException(`Leave request cannot be cancelled (status: ${currentStatus})`);
+    }
+
+    const req = await this.prisma.leaveRequest.update({
+      where: { id },
+      data: { status: 'CANCELLED' },
+      include: this.leaveInclude(),
+    });
+
+    const view = this.mapRequest({ ...req, status: 'CANCELLED' });
+
+    await this.activityLogger.log({
+      action: ActivityAction.LEAVE_REQUEST_CANCELLED,
+      userId: existing.userId,
+      details: {
+        event: ActivityAction.LEAVE_REQUEST_CANCELLED,
+        messageKey: 'leave_request_cancelled',
+        changes: { status: { from: existing.status, to: 'CANCELLED' } },
+        context: { requestId: id },
+      },
+    });
+
+    await this.notifyHodsOnLeaveChange(view, 'Leave Request Cancelled', 'cancelled');
+
+    return view;
+  }
+
+  async review(id: string, reviewerId: string, role: UserRole, dto: ReviewLeaveRequestDto) {
+    const status = this.normalizeStatus(dto.status);
+    if (status !== 'APPROVED' && status !== 'REJECTED') {
+      throw new BadRequestException('status must be APPROVED or REJECTED');
+    }
+    if (status === 'REJECTED' && !dto.remarks?.trim()) {
+      throw new BadRequestException('Remarks are required when rejecting a leave request');
+    }
+
+    const existing = await this.prisma.leaveRequest.findUnique({
+      where: { id },
+      include: this.leaveInclude(),
+    });
+    if (!existing) throw new NotFoundException('Leave request not found');
+
+    const currentStatus = this.normalizeStatus(existing.status);
+    if (currentStatus === 'CANCELLED') {
+      throw new BadRequestException('Cancelled leave requests cannot be reviewed');
+    }
+    if (currentStatus !== 'PENDING') {
+      throw new BadRequestException(`Leave request is already ${currentStatus}`);
+    }
+
+    await this.assertReviewerAccess(reviewerId, role, existing);
+
+    const reviewer = await this.prisma.user.findUnique({
+      where: { id: reviewerId },
+      select: { fullName: true },
+    });
+
+    const reviewedAt = new Date();
+    const approverRemarks = dto.remarks?.trim() || null;
+
+    const idLit = sqlUniqueIdentifier(id);
+    const approverLit = sqlUniqueIdentifier(reviewerId);
+    const remarksSql = approverRemarks
+      ? `N'${escSqlNString(approverRemarks)}'`
+      : 'NULL';
+
+    await this.prisma.$executeRawUnsafe(`
+      UPDATE dbo.ErpTSLeaveRequest
+      SET
+        status = N'${escSqlNString(status)}',
+        approverId = ${approverLit},
+        approverRemarks = ${remarksSql},
+        reviewedAt = GETUTCDATE(),
+        updatedAt = GETUTCDATE()
+      WHERE id = ${idLit}
+    `);
+
+    const req = await this.prisma.leaveRequest.findUnique({
+      where: { id },
+      include: this.leaveInclude(),
+    });
+    if (!req) throw new NotFoundException('Leave request not found after update');
+
+    const view = this.mapRequest({
+      ...req,
+      status,
+      approverId: reviewerId,
+      approverRemarks,
+      reviewedAt,
+      approver: reviewer ? { fullName: reviewer.fullName } : null,
     });
 
     await this.activityLogger.log({
@@ -114,20 +731,25 @@ export class RequestsService {
       details: {
         event: ActivityAction.LEAVE_REQUEST_STATUS_CHANGED,
         messageKey: 'leave_request_status_changed',
-        changes: { newStatus: dto.status },
+        changes: { newStatus: status, approverId: reviewerId },
         context: { requestId: id },
       },
     });
 
-    return {
-      id: req.id,
-      designerId: req.userId,
-      reason: req.reason,
-      fromDate: req.startDate.toISOString().split('T')[0],
-      toDate: req.endDate ? req.endDate.toISOString().split('T')[0] : req.startDate.toISOString().split('T')[0],
-      status: req.status.toUpperCase(),
-      type: req.type,
-      createdBy: req.user.role.name === 'HOD' ? 'HOD' : 'Designer'
-    };
+    await this.notifyRequesterOnReview(
+      view,
+      status as 'APPROVED' | 'REJECTED',
+      reviewer?.fullName ?? 'Approver',
+      reviewedAt,
+    );
+
+    return view;
+  }
+
+  async updateStatus(id: string, reviewerId: string, role: UserRole, dto: UpdateRequestStatusDto) {
+    return this.review(id, reviewerId, role, {
+      status: dto.status,
+      remarks: dto.status === 'REJECTED' ? 'Rejected' : undefined,
+    });
   }
 }
