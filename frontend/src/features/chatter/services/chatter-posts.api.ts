@@ -70,7 +70,7 @@ export type ChatterFeedPost = {
   projectId?: string | null;
   taskName?: string | null;
   responsibleUser: string;
-  priority: 'low' | 'medium' | 'high';
+  priority: 'low' | 'medium' | 'high' | null;
   seenBy: number;
   designerName?: string | null;
   comments: Array<{
@@ -99,8 +99,10 @@ function safeDisplayValue(value: string | null | undefined, fallback = '—'): s
   return isUuidLike(value.trim()) ? fallback : value.trim();
 }
 
-function normalizePriority(p: string | number | null | undefined): 'low' | 'medium' | 'high' {
-  if (p == null) return 'medium';
+export function normalizePriority(
+  p: string | number | null | undefined,
+): 'low' | 'medium' | 'high' | null {
+  if (p == null || String(p).trim() === '') return null;
   const s = String(p).trim().toLowerCase();
   if (s === 'high' || s === 'urgent' || s === '3' || s === 'critical') return 'high';
   if (s === 'low' || s === '1' || s === 'minor') return 'low';
@@ -108,7 +110,8 @@ function normalizePriority(p: string | number | null | undefined): 'low' | 'medi
   const n = Number(p);
   if (n === 1) return 'low';
   if (n === 3) return 'high';
-  return 'medium';
+  if (n === 2) return 'medium';
+  return null;
 }
 
 export function formatChatterTime(value: Date | string | null | undefined): string {
@@ -136,12 +139,30 @@ function normalizePostType(raw: string | null | undefined): string {
   return t;
 }
 
+function isGenericTaskReference(value: string): boolean {
+  return !value || /^TSK(?:[\s-]|$)/i.test(value);
+}
+
 function resolveDisplayTitle(dto: ChatterPostDto): string {
   const title = dto.title?.trim() ?? '';
   const taskName = dto.taskName?.trim() ?? '';
-  if (title && title.toLowerCase() !== 'chatter post') return title;
-  if (taskName) return taskName;
-  return title || '(No title)';
+  if (title && title.toLowerCase() !== 'chatter post' && !isGenericTaskReference(title)) return title;
+  if (taskName && !isGenericTaskReference(taskName)) return taskName;
+  return title || taskName || '(No title)';
+}
+
+/** Title for embedded project/task chatter lists (prefers OP number over generic TSK refs). */
+export function resolveEmbeddedChatterTitle(
+  entry: { title?: string | null; taskName?: string | null },
+  fallbackOpNo?: string | null,
+): string {
+  const title = entry.title?.trim() ?? '';
+  const taskName = entry.taskName?.trim() ?? '';
+  const opNo = String(fallbackOpNo ?? '').trim();
+  if (title && title.toLowerCase() !== 'chatter post' && !isGenericTaskReference(title)) return title;
+  if (taskName && !isGenericTaskReference(taskName)) return taskName;
+  if (opNo && opNo !== '-') return opNo;
+  return title || taskName || 'Discussion';
 }
 
 export function mapCommentDtoToFeedComment(
@@ -283,6 +304,9 @@ export function createChatterPost(
   }
 
   const payload: Record<string, unknown> = { ...data };
+  if (payload.priority == null || String(payload.priority).trim() === '') {
+    delete payload.priority;
+  }
   const fileCount = files?.length ?? 0;
   if (fileCount > 0 && typeof process !== 'undefined' && process.env.NODE_ENV === 'development') {
     console.info('[Chatter] Uploading post with files:', files!.map((f) => `${f.name} (${f.type}, ${f.size}b)`));

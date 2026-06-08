@@ -289,10 +289,11 @@ export class ChatterPostsService implements OnModuleInit {
     const t = title?.trim() ?? '';
     const no = taskNo?.trim() ?? '';
     const op = opNo?.trim() ?? '';
-    if (t && no) return `${t} (${no})`;
+    const isGenericTaskNo = !no || /^TSK(?:[\s-]|$)/i.test(no);
+    const ref = op || (!isGenericTaskNo ? no : '') || no;
+    if (t && ref) return `${t} (${ref})`;
     if (t) return t;
-    if (no) return no;
-    if (op) return op;
+    if (ref) return ref;
     return null;
   }
 
@@ -654,7 +655,7 @@ export class ChatterPostsService implements OnModuleInit {
           title: resolvedTitle,
           message: dto.message,
           postType: dto.postType || null,
-          priority: dto.priority || null,
+          priority: dto.priority?.trim() ? dto.priority.trim() : null,
           visibility: dto.visibility || null,
           taskId: taskId || null,
           projectId: resolvedProjectId,

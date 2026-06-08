@@ -9,7 +9,12 @@ import { Navbar } from '../components/Navbar'
 import { dummyProjects } from '../features/projects/data/dummy-projects'
 import { apiClient } from '@/lib/api-client'
 import { fetchProjectActivities, fetchTaskActivities } from '@/features/team-activity/services/activities.api'
-import { createChatterComment, createChatterPost, listChatterPosts } from '@/features/chatter/services/chatter-posts.api'
+import {
+  createChatterComment,
+  createChatterPost,
+  listChatterPosts,
+  resolveEmbeddedChatterTitle,
+} from '@/features/chatter/services/chatter-posts.api'
 import { emitChatterRefresh, onChatterRefresh } from '@/features/chatter/utils/chatter-events'
 import { mergeChatterPostLists } from '@/features/chatter/utils/chatter-merge'
 import {
