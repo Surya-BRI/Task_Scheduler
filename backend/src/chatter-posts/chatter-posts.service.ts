@@ -103,11 +103,48 @@ export class ChatterPostsService implements OnModuleInit {
         BEGIN
           ALTER TABLE dbo.ErpTSChatterPost ADD projectId UNIQUEIDENTIFIER NULL;
         END
+        IF COL_LENGTH('dbo.ErpTSChatterComment', 'mentionUserId') IS NULL
+        BEGIN
+          ALTER TABLE dbo.ErpTSChatterComment ADD mentionUserId UNIQUEIDENTIFIER NULL;
+        END
       `);
     } catch (err) {
       const detail = err instanceof Error ? err.message : String(err);
-      this.logger.warn(`Could not ensure ErpTSChatterPost.projectId column: ${detail}`);
+      this.logger.warn(`Could not ensure chatter schema columns: ${detail}`);
     }
+  }
+
+  private sqlInUuidList(ids: string[]): string {
+    const uuids = [...new Set(ids.map((id) => optionalUuid(id)).filter(Boolean) as string[])];
+    return uuids.map((id) => sqlQuotedUuid(id)).join(', ');
+  }
+
+  private commentIdsMatch(a: string, b: string): boolean {
+    return String(a).trim().toLowerCase() === String(b).trim().toLowerCase();
+  }
+
+  private async loadCommentById(commentId: string): Promise<ChatterCommentDto | null> {
+    const id = optionalUuid(commentId);
+    if (!id) return null;
+
+    const rows = await this.prisma.$queryRawUnsafe<Array<Record<string, unknown>>>(`
+      SELECT
+        c.id,
+        c.postId,
+        c.authorId,
+        c.mentionUserId,
+        u.fullName AS authorName,
+        r.name AS authorRole,
+        c.message,
+        c.createdAt
+      FROM ErpTSChatterComment c
+      LEFT JOIN ErpTSUser u ON u.id = c.authorId
+      LEFT JOIN ErpTSRole r ON r.id = u.roleId
+      WHERE c.id = ${sqlQuotedUuid(id)}
+    `);
+
+    const row = rows[0];
+    return row ? this.mapCommentRow(row) : null;
   }
 
   async listMentionUsers() {
@@ -134,10 +171,10 @@ export class ChatterPostsService implements OnModuleInit {
   }
 
   private async findCommentsByPostIds(postIds: string[]): Promise<ChatterCommentDto[]> {
-    const ids = [...new Set(postIds.map((id) => id.trim()).filter(Boolean))];
-    if (ids.length === 0) return [];
+    const inList = this.sqlInUuidList(postIds);
+    if (!inList) return [];
 
-    const rows = await this.prisma.$queryRaw<Array<Record<string, unknown>>>`
+    const rows = await this.prisma.$queryRawUnsafe<Array<Record<string, unknown>>>(`
       SELECT
         c.id,
         c.postId,
@@ -150,8 +187,8 @@ export class ChatterPostsService implements OnModuleInit {
       FROM ErpTSChatterComment c
       LEFT JOIN ErpTSUser u ON u.id = c.authorId
       LEFT JOIN ErpTSRole r ON r.id = u.roleId
-      WHERE c.postId IN (${Prisma.join(ids)})
-      ORDER BY c.createdAt DESC`;
+      WHERE c.postId IN (${inList})
+      ORDER BY c.createdAt DESC`);
 
     return rows.map((row) => this.mapCommentRow(row));
   }
@@ -577,10 +614,16 @@ export class ChatterPostsService implements OnModuleInit {
       },
     });
 
+    const loaded = await this.loadCommentById(newCommentId);
+    if (loaded) return loaded;
+
     const comments = await this.findCommentsByPostIds([normalizedPostId]);
-    const saved = comments.find((c) => c.id === String(newCommentId));
+    const saved = comments.find((c) => this.commentIdsMatch(c.id, newCommentId));
     if (saved) return saved;
 
+    this.logger.error(
+      `Comment ${newCommentId} inserted for post ${normalizedPostId} but reload returned ${comments.length} row(s)`,
+    );
     throw new BadRequestException('Comment created but could not be loaded');
   }
 
