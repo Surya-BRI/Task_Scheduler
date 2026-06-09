@@ -745,11 +745,6 @@ export class RequestsService implements OnModuleInit {
 
     await this.assertReviewerAccess(reviewerId, role, existing);
 
-    const reviewer = await this.prisma.user.findUnique({
-      where: { id: reviewerId },
-      select: { fullName: true },
-    });
-
     const reviewedAt = new Date();
     const approverRemarks = dto.remarks?.trim() || null;
 
@@ -764,10 +759,7 @@ export class RequestsService implements OnModuleInit {
       include: this.leaveInclude(),
     });
 
-    const view = this.mapRequest({
-      ...req,
-      approver: reviewer ? { fullName: reviewer.fullName } : null,
-    });
+    const view = this.mapRequest(req);
 
     await this.activityLogger.log({
       action: ActivityAction.LEAVE_REQUEST_STATUS_CHANGED,
@@ -783,7 +775,7 @@ export class RequestsService implements OnModuleInit {
     await this.notifyRequesterOnReview(
       view,
       status as 'APPROVED' | 'REJECTED',
-      reviewer?.fullName ?? 'Approver',
+      req.approver?.fullName ?? 'Approver',
       reviewedAt,
     );
 
