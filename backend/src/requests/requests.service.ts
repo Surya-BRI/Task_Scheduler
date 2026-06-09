@@ -15,7 +15,6 @@ import { CreateLeaveRequestDto } from './dto/create-request.dto';
 import { ReviewLeaveRequestDto } from './dto/review-leave-request.dto';
 import { UpdateLeaveRequestDto } from './dto/update-leave-request.dto';
 import { UpdateRequestStatusDto } from './dto/update-request-status.dto';
-import { escSqlNString, sqlUniqueIdentifier } from '../regularization-requests/sql-uuid.util';
 import {
   findOverlappingLeave,
   normalizeLeaveStatus as normalizeLeaveStatusUtil,
@@ -693,35 +692,19 @@ export class RequestsService implements OnModuleInit {
     const reviewedAt = new Date();
     const approverRemarks = dto.remarks?.trim() || null;
 
-    const idLit = sqlUniqueIdentifier(id);
-    const approverLit = sqlUniqueIdentifier(reviewerId);
-    const remarksSql = approverRemarks
-      ? `N'${escSqlNString(approverRemarks)}'`
-      : 'NULL';
-
-    await this.prisma.$executeRawUnsafe(`
-      UPDATE dbo.ErpTSLeaveRequest
-      SET
-        status = N'${escSqlNString(status)}',
-        approverId = ${approverLit},
-        approverRemarks = ${remarksSql},
-        reviewedAt = GETUTCDATE(),
-        updatedAt = GETUTCDATE()
-      WHERE id = ${idLit}
-    `);
-
-    const req = await this.prisma.leaveRequest.findUnique({
+    const req = await this.prisma.leaveRequest.update({
       where: { id },
+      data: {
+        status,
+        approverId: reviewerId,
+        approverRemarks,
+        reviewedAt,
+      },
       include: this.leaveInclude(),
     });
-    if (!req) throw new NotFoundException('Leave request not found after update');
 
     const view = this.mapRequest({
       ...req,
-      status,
-      approverId: reviewerId,
-      approverRemarks,
-      reviewedAt,
       approver: reviewer ? { fullName: reviewer.fullName } : null,
     });
 
