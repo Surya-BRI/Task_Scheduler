@@ -1,6 +1,9 @@
 import { mkdirSync } from 'fs';
 import { join } from 'path';
+import { installBigIntJsonSerialization } from './common/utils/json-serialization.util';
 import { NestFactory } from '@nestjs/core';
+
+installBigIntJsonSerialization();
 import { ExpressAdapter } from '@nestjs/platform-express';
 import { AppModule } from './app.module';
 import { SocketIoAdapter } from './common/adapters/socket-io.adapter';
