@@ -23,6 +23,25 @@ type FindInput = {
 export class ActivitiesService {
   constructor(private readonly prisma: PrismaService) {}
 
+  private formatOvertimeSummary(messageKey: string, _details: any, actorName: string): string {
+    if (messageKey === 'overtime_request_submitted') {
+      return `${actorName} submitted an overtime request`;
+    }
+    if (messageKey === 'overtime_request_updated') {
+      return `${actorName} updated an overtime request`;
+    }
+    if (messageKey === 'overtime_request_approved') {
+      return `${actorName} approved an overtime request`;
+    }
+    if (messageKey === 'overtime_request_rejected') {
+      return `${actorName} rejected an overtime request`;
+    }
+    if (messageKey === 'overtime_request_withdrawn') {
+      return `${actorName} withdrew an overtime request`;
+    }
+    return `${actorName} updated an overtime request`;
+  }
+
   private formatSummary(action: string, details: any, actorName: string): string {
     const msg = details?.messageKey;
     if (msg === 'task_created') return `${actorName} created task ${details?.taskSnapshot?.taskNo ?? ''}`.trim();
@@ -72,10 +91,16 @@ export class ActivitiesService {
     }
     if (msg === 'regularization_status_changed')
       return `${actorName} ${(details?.changes?.newStatus as string)?.toLowerCase() ?? 'updated'} a regularization request`;
-    if (msg === 'overtime_request_submitted')
-      return `${actorName} submitted an overtime request`;
-    if (msg === 'overtime_request_status_changed')
-      return `${actorName} ${(details?.changes?.newStatus as string)?.toLowerCase().replace(/_/g, ' ') ?? 'updated'} an overtime request`;
+    if (
+      msg === 'overtime_request_submitted' ||
+      msg === 'overtime_request_updated' ||
+      msg === 'overtime_request_approved' ||
+      msg === 'overtime_request_rejected' ||
+      msg === 'overtime_request_withdrawn' ||
+      msg === 'overtime_request_status_changed'
+    ) {
+      return this.formatOvertimeSummary(msg, details, actorName);
+    }
     const readable = action.toLowerCase().replace(/_/g, ' ');
     return `${actorName} ${readable}`;
   }
@@ -98,6 +123,12 @@ export class ActivitiesService {
       case ActivityAction.REGULARIZATION_SUBMITTED:
       case ActivityAction.REGULARIZATION_APPROVED:
       case ActivityAction.REGULARIZATION_REJECTED:
+      case ActivityAction.OVERTIME_REQUEST_SUBMITTED:
+      case ActivityAction.OVERTIME_REQUEST_UPDATED:
+      case ActivityAction.OVERTIME_REQUEST_APPROVED:
+      case ActivityAction.OVERTIME_REQUEST_REJECTED:
+      case ActivityAction.OVERTIME_REQUEST_WITHDRAWN:
+      case ActivityAction.OVERTIME_REQUEST_STATUS_CHANGED:
         return [...base, txt(' for task '), taskLink];
       default:
         return base;

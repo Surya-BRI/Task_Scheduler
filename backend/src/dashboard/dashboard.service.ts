@@ -34,6 +34,11 @@ const INBOX_ACTION_LABELS: Record<string, string> = {
   LEAVE_REQUEST_UPDATED: 'Leave request updated',
   LEAVE_REQUEST_CANCELLED: 'Leave request cancelled',
   LEAVE_REQUEST_REVOKED: 'Leave request revoked',
+  OVERTIME_REQUEST_SUBMITTED: 'Overtime request submitted',
+  OVERTIME_REQUEST_UPDATED: 'Overtime request updated',
+  OVERTIME_REQUEST_APPROVED: 'Overtime request approved',
+  OVERTIME_REQUEST_REJECTED: 'Overtime request rejected',
+  OVERTIME_REQUEST_WITHDRAWN: 'Overtime request withdrawn',
 };
 
 @Injectable()
