@@ -4,6 +4,7 @@ import { CreateLeaveRequestDto } from './dto/create-request.dto';
 import { ReviewLeaveRequestDto } from './dto/review-leave-request.dto';
 import { UpdateLeaveRequestDto } from './dto/update-leave-request.dto';
 import { UpdateRequestStatusDto } from './dto/update-request-status.dto';
+import { RevokeLeaveRequestDto } from './dto/revoke-leave-request.dto';
 import { JwtAuthGuard } from '../common/guards/jwt-auth.guard';
 import { RolesGuard } from '../common/guards/roles.guard';
 import { Roles } from '../common/decorators/roles.decorator';
@@ -82,6 +83,19 @@ export class RequestsController {
       throw new BadRequestException('Leave request id must be a valid UUID');
     }
     return this.requestsService.review(id, user.sub, user.role, dto);
+  }
+
+  @Post(':id/revoke')
+  @Roles(UserRole.HOD)
+  revoke(
+    @Param('id') id: string,
+    @CurrentUser() user: JwtPayload,
+    @Body() dto: RevokeLeaveRequestDto,
+  ) {
+    if (!UUID_RE.test(id.trim())) {
+      throw new BadRequestException('Leave request id must be a valid UUID');
+    }
+    return this.requestsService.revoke(id, user.sub, user.role, dto);
   }
 
   @Patch(':id/status')

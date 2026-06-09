@@ -19,11 +19,16 @@ const ACTION_BADGE = {
   SCHEDULER_WEEK_UNLOCKED:        { label: "Schedule Unlocked",      color: "bg-orange-100 text-orange-700" },
   LEAVE_REQUEST_SUBMITTED:        { label: "Leave Request",          color: "bg-indigo-100 text-indigo-700" },
   LEAVE_REQUEST_STATUS_CHANGED:   { label: "Leave Updated",          color: "bg-indigo-100 text-indigo-700" },
+  LEAVE_REQUEST_REVOKED:          { label: "Leave Revoked",          color: "bg-orange-100 text-orange-700" },
   REGULARIZATION_SUBMITTED:       { label: "Regularization",         color: "bg-purple-100 text-purple-700" },
   REGULARIZATION_APPROVED:        { label: "Regularization Updated", color: "bg-purple-100 text-purple-700" },
   REGULARIZATION_REJECTED:        { label: "Regularization Updated", color: "bg-purple-100 text-purple-700" },
   REGULARIZATION_STATUS_CHANGED:  { label: "Regularization Updated", color: "bg-purple-100 text-purple-700" },
-  OVERTIME_REQUEST_SUBMITTED:     { label: "Overtime Request",       color: "bg-rose-100 text-rose-700" },
+  OVERTIME_REQUEST_SUBMITTED:     { label: "Overtime Submitted",     color: "bg-rose-100 text-rose-700" },
+  OVERTIME_REQUEST_UPDATED:       { label: "Overtime Updated",       color: "bg-rose-100 text-rose-700" },
+  OVERTIME_REQUEST_APPROVED:      { label: "Overtime Approved",      color: "bg-emerald-100 text-emerald-700" },
+  OVERTIME_REQUEST_REJECTED:      { label: "Overtime Rejected",      color: "bg-red-100 text-red-700" },
+  OVERTIME_REQUEST_WITHDRAWN:     { label: "Overtime Withdrawn",     color: "bg-slate-100 text-slate-700" },
   OVERTIME_REQUEST_STATUS_CHANGED:{ label: "Overtime Updated",       color: "bg-rose-100 text-rose-700" },
 };
 

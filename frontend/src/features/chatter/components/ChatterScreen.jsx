@@ -8,6 +8,7 @@ import {
   createChatterComment,
   createChatterPost,
   formatChatterTime,
+  getMondayOfWeek,
   listChatterMentionUsers,
   listChatterPosts,
   mapChatterPostDtoToFeedPost,
@@ -45,6 +46,7 @@ function toFormattedHtml(text) {
     .replace(/&/g, '&amp;')
     .replace(/</g, '&lt;')
     .replace(/>/g, '&gt;')
+    .replace(/@([A-Za-z][A-Za-z0-9._\s-]{1,80})/g, '<span class="font-semibold text-blue-600">@$1</span>')
     .replace(/\*\*(.+?)\*\*/gs, '<strong>$1</strong>')
     .replace(/~~(.+?)~~/gs, '<del>$1</del>')
     .replace(/__(.+?)__/gs, '<u>$1</u>')
@@ -186,7 +188,7 @@ function ChatterPostAttachments({ post }) {
 function CreatePostModal({ isOpen, onClose, onSubmit, isSubmitting }) {
   const [title, setTitle] = useState("");
   const [mention, setMention] = useState("");
-  const [mentionUserId, setMentionUserId] = useState(null);
+  const [selectedMentions, setSelectedMentions] = useState([]);
   const [mentionUsers, setMentionUsers] = useState([]);
   const [message, setMessage] = useState("");
   const [priority, setPriority] = useState("");
@@ -206,15 +208,21 @@ function CreatePostModal({ isOpen, onClose, onSubmit, isSubmitting }) {
   const handleMentionChange = (e) => {
     const val = e.target.value;
     setMention(val);
-    setMentionUserId(null);
     if (val.includes("@")) setShowMentions(true);
     else setShowMentions(false);
   };
 
   const selectMention = (user) => {
-    setMention(`@${user.fullName}`);
-    setMentionUserId(user.id);
+    setSelectedMentions((prev) => {
+      if (prev.some((m) => m.id === user.id)) return prev;
+      return [...prev, { id: user.id, fullName: user.fullName }];
+    });
+    setMention("");
     setShowMentions(false);
+  };
+
+  const removeMention = (userId) => {
+    setSelectedMentions((prev) => prev.filter((m) => m.id !== userId));
   };
 
   const handleDragOver = (e) => e.preventDefault();
@@ -291,7 +299,7 @@ function CreatePostModal({ isOpen, onClose, onSubmit, isSubmitting }) {
     if (!isOpen) return;
     setTitle("");
     setMention("");
-    setMentionUserId(null);
+    setSelectedMentions([]);
     setMessage("");
     setPriority("");
     setPostType("Posts");
@@ -333,7 +341,8 @@ function CreatePostModal({ isOpen, onClose, onSubmit, isSubmitting }) {
     onSubmit({
       title,
       mention,
-      mentionUserId,
+      mentionUserIds: selectedMentions.map((m) => m.id),
+      mentionedUsers: selectedMentions,
       message,
       ...(priority ? { priority } : {}),
       postType,
@@ -429,21 +438,39 @@ function CreatePostModal({ isOpen, onClose, onSubmit, isSubmitting }) {
           </div>
 
           <div>
-            <label className="mb-1 block text-sm font-semibold text-slate-700">Mention User</label>
+            <label className="mb-1 block text-sm font-semibold text-slate-700">Mention Users</label>
+            {selectedMentions.length > 0 ? (
+              <div className="mb-2 flex flex-wrap gap-2">
+                {selectedMentions.map((user) => (
+                  <span
+                    key={user.id}
+                    className="inline-flex items-center gap-1 rounded-full bg-blue-50 px-2.5 py-1 text-xs font-medium text-blue-700"
+                  >
+                    @{user.fullName}
+                    <button type="button" onClick={() => removeMention(user.id)} className="text-blue-500 hover:text-blue-800">
+                      <X className="h-3 w-3" />
+                    </button>
+                  </span>
+                ))}
+              </div>
+            ) : null}
             <div className="relative">
               <input
                 type="text"
                 value={mention}
                 onChange={handleMentionChange}
-                placeholder="@username"
+                placeholder="@username to add another mention"
                 className="w-full rounded-lg border border-slate-300 bg-white px-3 py-2 text-sm text-slate-900 outline-none focus:border-blue-500 focus:ring-2 focus:ring-blue-500/25"
               />
               {showMentions && mentionUsers.length > 0 ? (
                 <ul className="ui-popover-panel absolute z-20 mt-1 max-h-36 w-full overflow-y-auto">
                   {mentionUsers
-                    .filter((user) =>
-                      `@${user.fullName}`.toLowerCase().includes(mention.toLowerCase()),
-                    )
+                    .filter((user) => {
+                      const needle = mention.toLowerCase();
+                      const label = `@${user.fullName}`.toLowerCase();
+                      return !needle || label.includes(needle.replace(/^@/, ''));
+                    })
+                    .filter((user) => !selectedMentions.some((m) => m.id === user.id))
                     .map((user) => (
                       <li key={user.id}>
                         <button
@@ -722,11 +749,18 @@ function ChatterCard({
         {(post.postType === "Task Updates" || !post.postType) ? (
           <aside className="hidden sm:flex flex-col justify-between w-[220px] shrink-0 border-l-[3px] border-slate-800 pl-4 py-1 text-xs">
             <div className="space-y-1.5 text-slate-800">
-              <p>
+              <p className="min-w-0">
                 <span className="font-medium">Project Name:</span>{' '}
-                {post.projectName && post.projectName !== '—'
-                  ? post.projectName
-                  : <span className="text-slate-400 italic">No project linked</span>}
+                {post.projectName && post.projectName !== '—' ? (
+                  <span
+                    className="block truncate text-slate-800"
+                    title={post.projectName}
+                  >
+                    {post.projectName}
+                  </span>
+                ) : (
+                  <span className="text-slate-400 italic">No project linked</span>
+                )}
               </p>
               <p>
                 <span className="font-medium">Designer Assigned:</span>{' '}
@@ -798,6 +832,7 @@ export function ChatterScreen() {
   const [openTaskId, setOpenTaskId] = useState(null);
   const [focusedPostId, setFocusedPostId] = useState(null);
   const [currentDate, setCurrentDate] = useState(() => new Date());
+  const [activeWeekStart, setActiveWeekStart] = useState(null);
   const [taskCatalog, setTaskCatalog] = useState([]);
   const [isCreatePostOpen, setIsCreatePostOpen] = useState(false);
   const [isSubmitting, setIsSubmitting] = useState(false);
@@ -838,10 +873,14 @@ export function ChatterScreen() {
     }
   };
 
-  const reloadPosts = async () => {
+  const reloadPosts = async (weekStartOverride) => {
     setPostsLoading(true);
     try {
-      const rows = await listChatterPosts({ limit: 500 });
+      const weekStart =
+        weekStartOverride === undefined
+          ? (activeWeekStart ?? undefined)
+          : (weekStartOverride || undefined);
+      const rows = await listChatterPosts({ limit: 500, ...(weekStart ? { weekStart } : {}) });
       if (!Array.isArray(rows)) {
         setPosts([]);
         setPostsLoadError(
@@ -897,11 +936,10 @@ export function ChatterScreen() {
   }, []);
 
   const weekLabel = useMemo(() => {
-    const start = new Date(currentDate);
-    start.setDate(start.getDate() - 3);
-    const end = new Date(currentDate);
-    end.setDate(end.getDate() + 3);
-    return `${start.toLocaleDateString("en-US", { month: "short", day: "numeric" })} - ${end.toLocaleDateString("en-US", { month: "short", day: "numeric", year: "numeric" })}`;
+    const monday = new Date(getMondayOfWeek(currentDate));
+    const sunday = new Date(monday);
+    sunday.setDate(monday.getDate() + 6);
+    return `${monday.toLocaleDateString("en-US", { month: "short", day: "numeric" })} — ${sunday.toLocaleDateString("en-US", { month: "short", day: "numeric", year: "numeric" })}`;
   }, [currentDate]);
 
   const sortedPosts = useMemo(
@@ -920,7 +958,12 @@ export function ChatterScreen() {
     return source
       .filter((post) => {
         if (post.mentionUserId === currentUserId) return true;
-        return (post.comments ?? []).some((comment) => comment.mentionUserId === currentUserId);
+        if ((post.mentionedUsers ?? []).some((u) => u.id === currentUserId)) return true;
+        return (post.comments ?? []).some(
+          (comment) =>
+            comment.mentionUserId === currentUserId
+            || (comment.mentionedUsers ?? []).some((u) => u.id === currentUserId),
+        );
       })
       .map((post) => {
         const mentionedComment = (post.comments ?? []).find((c) => c.mentionUserId === currentUserId);
@@ -1040,15 +1083,19 @@ export function ChatterScreen() {
     setOpenComposerPostId(postId);
   };
 
-  const resolveMentionUserId = (message) => {
-    const match = message.match(/@([A-Za-z][A-Za-z0-9._\s-]{1,60})/);
-    if (!match) return null;
-    const needle = match[1].trim().toLowerCase();
-    const user = mentionUsersRef.current.find((u) => {
-      const name = String(u.fullName ?? "").trim().toLowerCase();
-      return name === needle || name.startsWith(needle);
-    });
-    return user?.id ?? null;
+  const resolveMentionUserIds = (message) => {
+    const ids = [];
+    const pattern = /@([A-Za-z][A-Za-z0-9._\s-]{1,80})/g;
+    let match;
+    while ((match = pattern.exec(message)) !== null) {
+      const needle = match[1].trim().toLowerCase();
+      const user = mentionUsersRef.current.find((u) => {
+        const name = String(u.fullName ?? "").trim().toLowerCase();
+        return name === needle || name.startsWith(needle);
+      });
+      if (user && !ids.includes(user.id)) ids.push(user.id);
+    }
+    return ids;
   };
 
   const submitComment = async (postId) => {
@@ -1057,8 +1104,8 @@ export function ChatterScreen() {
 
     setSubmittingCommentPostId(postId);
     try {
-      const mentionUserId = resolveMentionUserId(content);
-      const created = await createChatterComment(postId, content, mentionUserId);
+      const mentionUserIds = resolveMentionUserIds(content);
+      const created = await createChatterComment(postId, content, mentionUserIds);
       const feedComment = mapCommentDtoToFeedComment(created, currentUserId);
       const now = new Date().toISOString();
       setPosts((prev) =>
@@ -1099,7 +1146,7 @@ export function ChatterScreen() {
           message: postData.message,
           postType: postData.postType,
           ...(postData.priority ? { priority: postData.priority } : {}),
-          ...(postData.mentionUserId ? { mentionUserId: postData.mentionUserId } : {}),
+          ...(postData.mentionUserIds?.length ? { mentionUserIds: postData.mentionUserIds } : {}),
           ...(postData.taskId ? { taskId: postData.taskId } : {}),
           ...(postData.projectId ? { projectId: postData.projectId } : {}),
         },
@@ -1198,7 +1245,16 @@ export function ChatterScreen() {
                 }}
               />
             </div>
-            <button type="button" className="ui-icon-button h-8 w-8 border border-slate-300 bg-white">
+            <button
+              type="button"
+              className="ui-icon-button h-8 w-8 border border-slate-300 bg-white"
+              title="Filter posts for selected week"
+              onClick={() => {
+                const weekStart = getMondayOfWeek(currentDate);
+                setActiveWeekStart(weekStart);
+                void reloadPosts(weekStart);
+              }}
+            >
               <Search className="h-4 w-4 text-slate-500" />
             </button>
             <button
@@ -1220,20 +1276,41 @@ export function ChatterScreen() {
                 Loading chatter…
               </div>
             ) : null}
+            {activeWeekStart ? (
+              <div className="mb-3 flex items-center justify-between rounded-lg border border-blue-100 bg-blue-50 px-3 py-2 text-xs text-blue-800">
+                <span>Showing posts for week of {weekLabel}</span>
+                <button
+                  type="button"
+                  className="font-semibold underline"
+                  onClick={() => {
+                    setActiveWeekStart(null);
+                    void reloadPosts(null);
+                  }}
+                >
+                  Clear filter
+                </button>
+              </div>
+            ) : null}
             {!postsLoading && sortedPosts.length === 0 ? (
-              <div className="rounded-lg border border-slate-200 bg-slate-50 px-4 py-8 text-center text-sm text-slate-600">
-                <p>
-                  No chatter posts loaded. Ensure the backend is running,{" "}
-                  <code className="rounded bg-slate-200 px-1">NEXT_PUBLIC_API_BASE_URL</code> points at it (not an older
-                  deploy missing <code className="rounded bg-slate-200 px-1">/chatter-posts</code>), the chatter table
-                  has rows, or check the browser network tab for errors.
-                </p>
-                {postsLoadError ? (
+              postsLoadError ? (
+                <div className="rounded-lg border border-slate-200 bg-slate-50 px-4 py-8 text-center text-sm text-slate-600">
+                  <p>
+                    No chatter posts loaded. Ensure the backend is running,{" "}
+                    <code className="rounded bg-slate-200 px-1">NEXT_PUBLIC_API_BASE_URL</code> points at it (not an older
+                    deploy missing <code className="rounded bg-slate-200 px-1">/chatter-posts</code>), the chatter table
+                    has rows, or check the browser network tab for errors.
+                  </p>
                   <pre className="mt-3 max-h-48 overflow-auto text-left font-mono text-[11px] leading-snug text-red-700 whitespace-pre-wrap break-words">
                     {postsLoadError}
                   </pre>
-                ) : null}
-              </div>
+                </div>
+              ) : (
+                <div className="rounded-lg border border-dashed border-slate-300 bg-white px-6 py-10 text-center text-sm text-slate-500">
+                  {activeWeekStart
+                    ? `No chatter posts found for the week of ${weekLabel}.`
+                    : 'No chatter posts yet.'}
+                </div>
+              )
             ) : null}
             {sortedPosts.map((post, postIndex) => (
               <div

@@ -41,6 +41,7 @@ export class ChatterPostsController {
     @Query('mentionUserId') mentionUserId?: string,
     @Query('commentedByUserId') commentedByUserId?: string,
     @Query('postType') postType?: string,
+    @Query('weekStart') weekStart?: string,
   ) {
     return this.chatterPostsService.findAll(
       limit,
@@ -49,6 +50,7 @@ export class ChatterPostsController {
       mentionUserId,
       commentedByUserId,
       postType,
+      weekStart,
     );
   }
 

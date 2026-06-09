@@ -2,6 +2,7 @@ import { BadRequestException, ForbiddenException, NotFoundException } from '@nes
 import { Test, TestingModule } from '@nestjs/testing';
 import { PrismaService } from '../prisma/prisma.service';
 import { TaskFilesService } from '../tasks/task-files.service';
+import { ActivityLoggerService } from '../activities/activity-logger.service';
 import { OvertimeRequestsService } from './overtime-requests.service';
 import { UserRole } from '../common/constants/roles.enum';
 import { CreateOvertimeRequestDto } from './dto/create-overtime-request.dto';
@@ -35,6 +36,9 @@ describe('OvertimeRequestsService', () => {
       findUnique: jest.fn(),
       findMany: jest.fn(),
     },
+    task: {
+      findUnique: jest.fn(),
+    },
     $transaction: jest.fn((cb: (tx: any) => any) => cb(mockPrismaService)),
   };
 
@@ -44,17 +48,31 @@ describe('OvertimeRequestsService', () => {
     deleteObjectByKey: jest.fn(),
   };
 
+  const mockActivityLogger = {
+    log: jest.fn(),
+  };
+
   beforeEach(async () => {
     const module: TestingModule = await Test.createTestingModule({
       providers: [
         OvertimeRequestsService,
         { provide: PrismaService, useValue: mockPrismaService },
         { provide: TaskFilesService, useValue: mockTaskFilesService },
+        { provide: ActivityLoggerService, useValue: mockActivityLogger },
       ],
     }).compile();
 
     service = module.get<OvertimeRequestsService>(OvertimeRequestsService);
     jest.clearAllMocks();
+    mockPrismaService.task.findUnique.mockResolvedValue({
+      id: 't1',
+      assigneeId: 'd1',
+      title: 'Task 1',
+      taskNo: 'T-001',
+      opNo: 'OP-100',
+      project: { name: 'Retail Revamp', projectNo: 'PRJ-01' },
+    });
+    mockPrismaService.overtimeRequest.findMany.mockResolvedValue([]);
   });
 
   it('should be defined', () => {
@@ -173,17 +191,33 @@ describe('OvertimeRequestsService', () => {
     it('should create and auto-submit request when status is SUBMITTED', async () => {
       const dto = { ...baseDto, status: 'SUBMITTED' as const };
 
+      mockPrismaService.task.findUnique.mockResolvedValue({
+        id: 't1',
+        assigneeId: 'd1',
+        title: 'Task 1',
+        taskNo: 'T-001',
+        opNo: 'OP-100',
+        project: { name: 'Retail Revamp', projectNo: 'PRJ-01' },
+      });
       mockPrismaService.overtimeRequest.findFirst.mockResolvedValue(null);
       mockPrismaService.overtimeRequest.findMany.mockResolvedValue([]);
 
       const mockResult = {
         id: 'r1',
         designerId: 'd1',
+        taskId: 't1',
         date: new Date('2026-06-03'),
+        requestedHours: new Decimal(2.0),
         totalHours: new Decimal(2.0),
         status: 'SUBMITTED',
         designer: { id: 'd1', fullName: 'Designer 1', departmentId: 'dept1' },
-        task: { id: 't1', title: 'Task 1', taskNo: 'T-001' },
+        task: {
+          id: 't1',
+          title: 'Task 1',
+          taskNo: 'T-001',
+          opNo: 'OP-100',
+          project: { name: 'Retail Revamp', projectNo: 'PRJ-01' },
+        },
         attachments: [],
       };
       mockPrismaService.overtimeRequest.create.mockResolvedValue(mockResult);
@@ -191,8 +225,54 @@ describe('OvertimeRequestsService', () => {
 
       const result = await service.create('d1', UserRole.DESIGNER, dto);
       expect(result.status).toBe('SUBMITTED');
-      // Should have sent notification to HOD
       expect(mockPrismaService.notification.create).toHaveBeenCalled();
+      expect(mockActivityLogger.log).toHaveBeenCalledWith(
+        expect.objectContaining({
+          action: 'OVERTIME_REQUEST_SUBMITTED',
+          userId: 'd1',
+          taskId: 't1',
+        }),
+      );
+    });
+
+    it('should log team activity when frontend submits with Pending status', async () => {
+      const dto = { ...baseDto, status: 'Pending' as const };
+
+      mockPrismaService.task.findUnique.mockResolvedValue({
+        id: 't1',
+        assigneeId: 'd1',
+        title: 'Task 1',
+        taskNo: 'T-001',
+        opNo: 'OP-100',
+        project: { name: 'Retail Revamp', projectNo: 'PRJ-01' },
+      });
+      mockPrismaService.overtimeRequest.findFirst.mockResolvedValue(null);
+      mockPrismaService.overtimeRequest.findMany.mockResolvedValue([]);
+      mockPrismaService.overtimeRequest.create.mockResolvedValue({
+        id: 'r1',
+        designerId: 'd1',
+        taskId: 't1',
+        date: new Date('2026-06-03'),
+        requestedHours: new Decimal(2.0),
+        totalHours: new Decimal(2.0),
+        status: 'SUBMITTED',
+        designer: { id: 'd1', fullName: 'Designer 1', departmentId: 'dept1' },
+        task: {
+          id: 't1',
+          title: 'Task 1',
+          taskNo: 'T-001',
+          opNo: 'OP-100',
+          project: { name: 'Retail Revamp', projectNo: 'PRJ-01' },
+        },
+        attachments: [],
+      });
+      mockPrismaService.user.findMany.mockResolvedValue([]);
+
+      await service.create('d1', UserRole.DESIGNER, dto);
+
+      expect(mockActivityLogger.log).toHaveBeenCalledWith(
+        expect.objectContaining({ action: 'OVERTIME_REQUEST_SUBMITTED' }),
+      );
     });
   });
 

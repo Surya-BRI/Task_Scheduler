@@ -28,6 +28,17 @@ const INBOX_ACTION_LABELS: Record<string, string> = {
   [ActivityAction.REGULARIZATION_SUBMITTED]: 'Regularization submitted',
   [ActivityAction.REGULARIZATION_APPROVED]: 'Regularization approved',
   [ActivityAction.REGULARIZATION_REJECTED]: 'Regularization rejected',
+  LEAVE_REQUEST_SUBMITTED: 'Leave request submitted',
+  LEAVE_REQUEST_APPROVED: 'Leave request approved',
+  LEAVE_REQUEST_REJECTED: 'Leave request rejected',
+  LEAVE_REQUEST_UPDATED: 'Leave request updated',
+  LEAVE_REQUEST_CANCELLED: 'Leave request cancelled',
+  LEAVE_REQUEST_REVOKED: 'Leave request revoked',
+  OVERTIME_REQUEST_SUBMITTED: 'Overtime request submitted',
+  OVERTIME_REQUEST_UPDATED: 'Overtime request updated',
+  OVERTIME_REQUEST_APPROVED: 'Overtime request approved',
+  OVERTIME_REQUEST_REJECTED: 'Overtime request rejected',
+  OVERTIME_REQUEST_WITHDRAWN: 'Overtime request withdrawn',
 };
 
 @Injectable()
@@ -49,10 +60,6 @@ export class DashboardService {
       completedRows,
       onHoldRows,
       reassignRows,
-      activityRows,
-      statusGroups,
-      completedWithDue,
-      reallocDistinct,
     ] = await Promise.all([
       // A — scheduled tasks this week
       this.prisma.schedulerAssignment.findMany({
@@ -66,6 +73,7 @@ export class DashboardService {
               designType: true,
               revisionCode: true,
               dueDate: true,
+              project: { select: { name: true, projectNo: true } },
               assignee: { select: { fullName: true } },
             },
           },
@@ -79,14 +87,28 @@ export class DashboardService {
           status: { in: ['COMPLETED', 'APPROVED'] },
           completedAt: { gte: ws, lte: we },
         },
-        select: { taskNo: true, title: true, designType: true, revisionCode: true, completedAt: true },
+        select: {
+          taskNo: true,
+          title: true,
+          designType: true,
+          revisionCode: true,
+          completedAt: true,
+          project: { select: { name: true, projectNo: true } },
+        },
         orderBy: { completedAt: 'desc' },
         take: 50,
       }),
       // C — on hold (global)
       this.prisma.task.findMany({
         where: { status: 'ON_HOLD' },
-        select: { taskNo: true, title: true, designType: true, revisionCode: true, updatedAt: true },
+        select: {
+          taskNo: true,
+          title: true,
+          designType: true,
+          revisionCode: true,
+          updatedAt: true,
+          project: { select: { name: true, projectNo: true } },
+        },
         orderBy: { updatedAt: 'desc' },
         take: 50,
       }),
@@ -100,11 +122,27 @@ export class DashboardService {
           id: true,
           createdAt: true,
           details: true,
-          task: { select: { taskNo: true, title: true, designType: true, revisionCode: true } },
+          task: {
+            select: {
+              taskNo: true,
+              title: true,
+              designType: true,
+              revisionCode: true,
+              project: { select: { name: true, projectNo: true } },
+            },
+          },
         },
         orderBy: { createdAt: 'desc' },
         take: 50,
       }),
+    ]);
+
+    const [
+      activityRows,
+      statusGroups,
+      completedWithDue,
+      reallocDistinct,
+    ] = await Promise.all([
       // E — inbox (recent activity feed)
       this.prisma.activityLog.findMany({
         orderBy: { createdAt: 'desc' },
@@ -150,6 +188,7 @@ export class DashboardService {
       scheduledTasks.push({
         taskNo: row.task?.taskNo ?? '',
         title: row.task?.title ?? '',
+        projectName: this.resolveProjectName(row.task?.project, row.task?.title),
         designType: row.task?.designType ?? null,
         revisionCode: row.task?.revisionCode ?? null,
         assigneeName: name,
@@ -162,6 +201,7 @@ export class DashboardService {
     const completedTasks: CompletedTaskItem[] = completedRows.map((r) => ({
       taskNo: r.taskNo,
       title: r.title ?? '',
+      projectName: this.resolveProjectName(r.project, r.title),
       designType: r.designType ?? null,
       revisionCode: r.revisionCode ?? null,
       completedAt: r.completedAt?.toISOString() ?? null,
@@ -171,6 +211,7 @@ export class DashboardService {
     const onHoldTasks: OnHoldTaskItem[] = onHoldRows.map((r) => ({
       taskNo: r.taskNo,
       title: r.title ?? '',
+      projectName: this.resolveProjectName(r.project, r.title),
       designType: r.designType ?? null,
       revisionCode: r.revisionCode ?? null,
       holdDate: r.updatedAt?.toISOString() ?? null,
@@ -193,6 +234,7 @@ export class DashboardService {
       reallocatedTasks.push({
         taskNo: row.task.taskNo,
         title: row.task.title ?? '',
+        projectName: this.resolveProjectName(row.task.project, row.task.title),
         designType: row.task.designType ?? null,
         revisionCode: row.task.revisionCode ?? null,
         fromAssigneeName,
@@ -288,17 +330,19 @@ export class DashboardService {
     }
 
     const deptFilter: Record<string, unknown> = {};
+    let hodDepartmentId: string | null = null;
     if (viewerRole === UserRole.HOD) {
       const viewer = await this.prisma.user.findUnique({
         where: { id: viewerId },
         select: { departmentId: true },
       });
-      if (viewer?.departmentId) {
-        deptFilter.designer = { departmentId: viewer.departmentId };
+      hodDepartmentId = viewer?.departmentId ?? null;
+      if (hodDepartmentId) {
+        deptFilter.designer = { departmentId: hodDepartmentId };
       }
     }
 
-    const [regRows, otRows] = await Promise.all([
+    const [regRows, otRows, leaveRows] = await Promise.all([
       this.prisma.regularizationRequest.findMany({
         where: { status: 'Pending', ...deptFilter },
         orderBy: { createdAt: 'desc' },
@@ -315,6 +359,20 @@ export class DashboardService {
         include: {
           designer: { select: { id: true, fullName: true } },
           task: { select: { taskNo: true, title: true, project: { select: { name: true } } } },
+        },
+      }),
+      this.prisma.leaveRequest.findMany({
+        where: {
+          status: { in: ['Pending', 'PENDING', 'pending'] },
+          user: {
+            role: { name: 'DESIGNER' },
+            ...(hodDepartmentId ? { departmentId: hodDepartmentId } : {}),
+          },
+        },
+        orderBy: { createdAt: 'desc' },
+        take: 30,
+        include: {
+          user: { select: { id: true, fullName: true } },
         },
       }),
     ]);
@@ -353,7 +411,38 @@ export class DashboardService {
       };
     });
 
-    return [...regItems, ...otItems];
+    const leaveItems: InboxItem[] = leaveRows.map((row) => {
+      const requester = row.user?.fullName?.trim() || 'Designer';
+      const designerId = row.user?.id ?? row.userId;
+      const from = row.startDate.toISOString().split('T')[0];
+      const to = (row.endDate ?? row.startDate).toISOString().split('T')[0];
+      return {
+        id: row.id,
+        summary: `${requester} — Leave ${from} to ${to}`,
+        occurredAt: row.createdAt.toISOString(),
+        taskNo: null,
+        requestType: 'leave',
+        linkUrl: `/designer/leave-planner?leaveId=${encodeURIComponent(row.id)}&forUserId=${encodeURIComponent(designerId)}`,
+        requiresAction: true,
+        requesterName: requester,
+        status: 'Pending',
+      };
+    });
+
+    return [...regItems, ...otItems, ...leaveItems];
+  }
+
+  private resolveProjectName(
+    project?: { name?: string | null; projectNo?: string | null } | null,
+    taskTitle?: string | null,
+  ): string {
+    const name = project?.name?.trim();
+    if (name) return name;
+    const projectNo = project?.projectNo?.trim();
+    if (projectNo) return projectNo;
+    const title = taskTitle?.trim();
+    if (title) return title;
+    return '—';
   }
 
   private getInitials(name: string): string {

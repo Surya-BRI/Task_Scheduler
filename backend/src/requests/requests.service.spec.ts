@@ -3,6 +3,7 @@ import { Test, TestingModule } from '@nestjs/testing';
 import { ActivityLoggerService } from '../activities/activity-logger.service';
 import { UserRole } from '../common/constants/roles.enum';
 import { PrismaService } from '../prisma/prisma.service';
+import { DUPLICATE_LEAVE_ERROR_MESSAGE } from './leave-request.validation';
 import { RequestsService } from './requests.service';
 
 describe('RequestsService', () => {
@@ -131,7 +132,37 @@ describe('RequestsService', () => {
           endDate: start,
           reason: 'Overlap',
         }),
-      ).rejects.toThrow(BadRequestException);
+      ).rejects.toThrow(DUPLICATE_LEAVE_ERROR_MESSAGE);
+    });
+
+    it('rejects multi-day overlap with existing approved leave', async () => {
+      const start = futureStart();
+      const endDate = new Date(start);
+      endDate.setUTCDate(endDate.getUTCDate() + 4);
+      const end = endDate.toISOString().slice(0, 10);
+      const overlapDay = new Date(start);
+      overlapDay.setUTCDate(overlapDay.getUTCDate() + 2);
+      const overlapIso = overlapDay.toISOString().slice(0, 10);
+
+      mockPrisma.user.findUnique.mockResolvedValue({ role: { name: UserRole.DESIGNER } });
+      mockPrisma.leaveRequest.findMany.mockResolvedValue([
+        {
+          id: 'approved-block',
+          startDate: new Date(`${overlapIso}T00:00:00.000Z`),
+          endDate: new Date(`${overlapIso}T00:00:00.000Z`),
+          status: 'APPROVED',
+        },
+      ]);
+
+      await expect(
+        service.create(designerId, UserRole.DESIGNER, {
+          userId: designerId,
+          type: 'Leave',
+          startDate: start,
+          endDate: end,
+          reason: 'Range overlap',
+        }),
+      ).rejects.toThrow(DUPLICATE_LEAVE_ERROR_MESSAGE);
     });
 
     it('creates valid leave request', async () => {
@@ -231,6 +262,98 @@ describe('RequestsService', () => {
       await expect(
         service.review(leaveId, hodId, UserRole.HOD, { status: 'APPROVED' }),
       ).rejects.toThrow(NotFoundException);
+    });
+  });
+
+  describe('revoke', () => {
+    const approvedLeave = {
+      ...pendingLeave,
+      status: 'APPROVED',
+      approverId: hodId,
+      approver: { fullName: 'HOD User' },
+      reviewedAt: new Date(),
+      revokedById: null,
+      revokedAt: null,
+      revocationReason: null,
+      revokedBy: null,
+    };
+
+    const setupHodAccess = () => {
+      mockPrisma.user.findUnique.mockResolvedValue({
+        fullName: 'HOD User',
+        departmentId: 'dept-1',
+      });
+    };
+
+    it('revokes an approved future leave', async () => {
+      mockPrisma.leaveRequest.findUnique.mockResolvedValue(approvedLeave);
+      setupHodAccess();
+      mockPrisma.leaveRequest.update.mockResolvedValue({
+        ...approvedLeave,
+        status: 'REVOKED',
+        revokedById: hodId,
+        revokedAt: new Date(),
+        revocationReason: 'Resource reallocation',
+        revokedBy: { fullName: 'HOD User' },
+      });
+
+      const result = await service.revoke(leaveId, hodId, UserRole.HOD, {
+        reason: 'Resource reallocation',
+      });
+
+      expect(result.status).toBe('REVOKED');
+      expect(result.revocationReason).toBe('Resource reallocation');
+      expect(mockPrisma.notification.create).toHaveBeenCalled();
+      expect(mockActivityLogger.log).toHaveBeenCalledWith(
+        expect.objectContaining({ action: 'LEAVE_REQUEST_REVOKED' }),
+      );
+    });
+
+    it('rejects revoke without reason', async () => {
+      mockPrisma.leaveRequest.findUnique.mockResolvedValue(approvedLeave);
+
+      await expect(
+        service.revoke(leaveId, hodId, UserRole.HOD, { reason: '   ' }),
+      ).rejects.toThrow(BadRequestException);
+    });
+
+    it('blocks double revoke', async () => {
+      mockPrisma.leaveRequest.findUnique.mockResolvedValue({
+        ...approvedLeave,
+        status: 'REVOKED',
+      });
+
+      await expect(
+        service.revoke(leaveId, hodId, UserRole.HOD, { reason: 'Again' }),
+      ).rejects.toThrow(BadRequestException);
+    });
+
+    it('blocks revoke of pending leave', async () => {
+      mockPrisma.leaveRequest.findUnique.mockResolvedValue(pendingLeave);
+
+      await expect(
+        service.revoke(leaveId, hodId, UserRole.HOD, { reason: 'Too early' }),
+      ).rejects.toThrow(BadRequestException);
+    });
+
+    it('blocks revoke of past leave', async () => {
+      mockPrisma.leaveRequest.findUnique.mockResolvedValue({
+        ...approvedLeave,
+        startDate: new Date('2020-01-01T00:00:00.000Z'),
+        endDate: new Date('2020-01-02T00:00:00.000Z'),
+      });
+
+      await expect(
+        service.revoke(leaveId, hodId, UserRole.HOD, { reason: 'Too late' }),
+      ).rejects.toThrow(BadRequestException);
+    });
+
+    it('blocks revoke by non-HOD', async () => {
+      mockPrisma.leaveRequest.findUnique.mockResolvedValue(approvedLeave);
+
+      await expect(
+        service.revoke(leaveId, designerId, UserRole.DESIGNER, { reason: 'Nope' }),
+      ).rejects.toThrow(ForbiddenException);
     });
   });
 });

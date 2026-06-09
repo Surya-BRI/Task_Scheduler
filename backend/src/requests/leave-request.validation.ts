@@ -12,6 +12,19 @@ export type LeaveOverlapCandidate = {
 
 const OVERLAP_BLOCKING_STATUSES = new Set(['PENDING', 'APPROVED']);
 
+/** True when the leave period has fully ended (end date before today). */
+export function isLeaveRangeCompleted(
+  endDateIso: string,
+  referenceTodayIso: string = todayDateOnlyIso(),
+): boolean {
+  const end = endDateIso.trim();
+  if (!ISO_DATE_RE.test(end)) return false;
+  return end < referenceTodayIso;
+}
+
+export const DUPLICATE_LEAVE_ERROR_MESSAGE =
+  'You already have a leave request for the selected date(s). Please modify or cancel the existing request instead of creating a duplicate.';
+
 /** Parse YYYY-MM-DD as UTC midnight (date-only semantics). */
 export function parseDateOnly(isoDate: string): Date {
   const trimmed = isoDate.trim();
@@ -25,9 +38,19 @@ export function parseDateOnly(isoDate: string): Date {
   return new Date(Date.UTC(year, month - 1, day));
 }
 
-export function todayUtcDate(): Date {
+const ISO_DATE_RE = /^(\d{4})-(\d{2})-(\d{2})$/;
+
+/** Today's calendar date as YYYY-MM-DD (UTC, matches date-only API payloads). */
+export function todayDateOnlyIso(): string {
   const now = new Date();
-  return new Date(Date.UTC(now.getUTCFullYear(), now.getUTCMonth(), now.getUTCDate()));
+  const y = now.getUTCFullYear();
+  const m = String(now.getUTCMonth() + 1).padStart(2, '0');
+  const d = String(now.getUTCDate()).padStart(2, '0');
+  return `${y}-${m}-${d}`;
+}
+
+export function todayUtcDate(): Date {
+  return parseDateOnly(todayDateOnlyIso());
 }
 
 export function normalizeLeaveStatus(status: string): string {
@@ -38,6 +61,19 @@ export function resolveLeaveEndDate(startDate: Date, endDate?: Date | null): Dat
   return endDate ?? startDate;
 }
 
+/** Normalize a Date (e.g. from SQL Server) to YYYY-MM-DD using UTC calendar parts. */
+export function dateToDateOnlyIso(d: Date): string {
+  const y = d.getUTCFullYear();
+  const m = String(d.getUTCMonth() + 1).padStart(2, '0');
+  const day = String(d.getUTCDate()).padStart(2, '0');
+  return `${y}-${m}-${day}`;
+}
+
+/** Inclusive overlap on YYYY-MM-DD strings. */
+export function dateRangesOverlapIso(aStart: string, aEnd: string, bStart: string, bEnd: string): boolean {
+  return aStart <= bEnd && bStart <= aEnd;
+}
+
 /** Inclusive range overlap: [aStart,aEnd] vs [bStart,bEnd]. */
 export function dateRangesOverlap(
   aStart: Date,
@@ -45,7 +81,12 @@ export function dateRangesOverlap(
   bStart: Date,
   bEnd: Date,
 ): boolean {
-  return aStart.getTime() <= bEnd.getTime() && bStart.getTime() <= aEnd.getTime();
+  return dateRangesOverlapIso(
+    dateToDateOnlyIso(aStart),
+    dateToDateOnlyIso(aEnd),
+    dateToDateOnlyIso(bStart),
+    dateToDateOnlyIso(bEnd),
+  );
 }
 
 export function buildLeaveDateRange(startDateIso: string, endDateIso?: string): LeaveDateRange {
@@ -61,21 +102,28 @@ export type LeaveDateValidationResult =
 export function validateLeaveDates(
   startDateIso: string,
   endDateIso: string | undefined,
-  referenceToday: Date = todayUtcDate(),
+  referenceTodayIso: string = todayDateOnlyIso(),
 ): LeaveDateValidationResult {
-  let range: LeaveDateRange;
-  try {
-    range = buildLeaveDateRange(startDateIso, endDateIso);
-  } catch {
+  const startNorm = startDateIso.trim();
+  const endNorm = endDateIso?.trim() || startNorm;
+
+  if (!ISO_DATE_RE.test(startNorm) || !ISO_DATE_RE.test(endNorm)) {
     return { ok: false, message: 'Dates must be valid ISO 8601 values (YYYY-MM-DD)' };
   }
 
-  if (range.startDate.getTime() < referenceToday.getTime()) {
+  if (startNorm < referenceTodayIso) {
     return { ok: false, message: 'Leave cannot be requested for past dates' };
   }
 
-  if (range.endDate.getTime() < range.startDate.getTime()) {
+  if (endNorm < startNorm) {
     return { ok: false, message: 'End date cannot be earlier than start date' };
+  }
+
+  let range: LeaveDateRange;
+  try {
+    range = buildLeaveDateRange(startNorm, endNorm);
+  } catch {
+    return { ok: false, message: 'Dates must be valid ISO 8601 values (YYYY-MM-DD)' };
   }
 
   return { ok: true, range };
@@ -90,17 +138,17 @@ export function findOverlappingLeave(
     if (excludeId && row.id === excludeId) continue;
     if (!OVERLAP_BLOCKING_STATUSES.has(normalizeLeaveStatus(row.status))) continue;
 
-    const rowEnd = resolveLeaveEndDate(row.startDate, row.endDate);
-    if (dateRangesOverlap(range.startDate, range.endDate, row.startDate, rowEnd)) {
+    const rowStart = dateToDateOnlyIso(row.startDate);
+    const rowEnd = dateToDateOnlyIso(resolveLeaveEndDate(row.startDate, row.endDate));
+    const rangeStart = dateToDateOnlyIso(range.startDate);
+    const rangeEnd = dateToDateOnlyIso(range.endDate);
+    if (dateRangesOverlapIso(rangeStart, rangeEnd, rowStart, rowEnd)) {
       return row;
     }
   }
   return null;
 }
 
-export function overlapErrorMessage(conflict: LeaveOverlapCandidate): string {
-  const from = conflict.startDate.toISOString().split('T')[0];
-  const to = (conflict.endDate ?? conflict.startDate).toISOString().split('T')[0];
-  const dates = from === to ? from : `${from} to ${to}`;
-  return `Leave dates overlap an existing ${normalizeLeaveStatus(conflict.status).toLowerCase()} request (${dates})`;
+export function overlapErrorMessage(_conflict?: LeaveOverlapCandidate): string {
+  return DUPLICATE_LEAVE_ERROR_MESSAGE;
 }
