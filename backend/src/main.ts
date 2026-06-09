@@ -9,6 +9,7 @@ import compression from 'compression';
 import { Logger, ValidationPipe } from '@nestjs/common';
 import { HttpExceptionFilter } from './common/filters/http-exception.filter';
 import { LoggingInterceptor } from './common/interceptors/logging.interceptor';
+import { BigIntSerializationInterceptor } from './common/interceptors/bigint-serialization.interceptor';
 import { ConfigService } from '@nestjs/config';
 import { installBigIntJsonSerialization } from './common/utils/json-serialization.util';
 
@@ -42,7 +43,10 @@ async function bootstrap() {
     }),
   );
   app.useGlobalFilters(new HttpExceptionFilter());
-  app.useGlobalInterceptors(new LoggingInterceptor());
+  app.useGlobalInterceptors(
+    new BigIntSerializationInterceptor(),
+    new LoggingInterceptor(),
+  );
 
   await app.listen(port);
 
