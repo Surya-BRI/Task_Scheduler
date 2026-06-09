@@ -1,6 +1,7 @@
 export interface ScheduledTaskItem {
   taskNo: string;
   title: string;
+  projectName: string;
   designType: string | null;
   revisionCode: string | null;
   assigneeName: string;
@@ -11,6 +12,7 @@ export interface ScheduledTaskItem {
 export interface CompletedTaskItem {
   taskNo: string;
   title: string;
+  projectName: string;
   designType: string | null;
   revisionCode: string | null;
   completedAt: string | null;
@@ -19,6 +21,7 @@ export interface CompletedTaskItem {
 export interface OnHoldTaskItem {
   taskNo: string;
   title: string;
+  projectName: string;
   designType: string | null;
   revisionCode: string | null;
   holdDate: string | null;
@@ -28,6 +31,7 @@ export interface OnHoldTaskItem {
 export interface ReallocatedTaskItem {
   taskNo: string;
   title: string;
+  projectName: string;
   designType: string | null;
   revisionCode: string | null;
   fromAssigneeName: string | null;
@@ -40,7 +44,7 @@ export interface InboxItem {
   summary: string;
   occurredAt: string;
   taskNo: string | null;
-  requestType?: 'regularization' | 'overtime' | 'activity';
+  requestType?: 'regularization' | 'overtime' | 'leave' | 'activity';
   linkUrl?: string | null;
   requiresAction?: boolean;
   requesterName?: string | null;

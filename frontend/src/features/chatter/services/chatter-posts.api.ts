@@ -1,6 +1,11 @@
 import { apiClient } from '@/lib/api-client';
 import { getAccessToken } from '@/lib/auth-token';
 
+export type ChatterMentionedUserDto = {
+  id: string;
+  fullName: string;
+};
+
 export type ChatterCommentDto = {
   id: string;
   postId: string | null;
@@ -8,6 +13,7 @@ export type ChatterCommentDto = {
   authorName?: string | null;
   authorRole?: string | null;
   mentionUserId?: string | null;
+  mentionedUsers?: ChatterMentionedUserDto[];
   message: string;
   createdAt: string;
 };
@@ -32,7 +38,10 @@ export type ChatterPostDto = {
   id: string;
   taskId: string | null;
   taskName?: string | null;
+  taskOpNo?: string | null;
   projectId?: string | null;
+  projectNo?: string | null;
+  listingLabel?: string | null;
   authorId: string | null;
   authorName?: string | null;
   authorRole?: string | null;
@@ -43,6 +52,7 @@ export type ChatterPostDto = {
   message: string;
   postType: string | null;
   mentionUserId: string | null;
+  mentionedUsers?: ChatterMentionedUserDto[];
   priority: string | number | null;
   seenByCount: number;
   attachmentCount: number;
@@ -65,10 +75,14 @@ export type ChatterFeedPost = {
   time: string;
   mention: string;
   mentionUserId?: string | null;
+  mentionedUsers?: ChatterMentionedUserDto[];
   message: string;
   projectName: string;
+  projectNo?: string | null;
   projectId?: string | null;
   taskName?: string | null;
+  taskOpNo?: string | null;
+  listingLabel?: string | null;
   responsibleUser: string;
   priority: 'low' | 'medium' | 'high' | null;
   seenBy: number;
@@ -97,6 +111,17 @@ function isUuidLike(value: string): boolean {
 function safeDisplayValue(value: string | null | undefined, fallback = '—'): string {
   if (!value?.trim()) return fallback;
   return isUuidLike(value.trim()) ? fallback : value.trim();
+}
+
+/** Project name for chatter sidebars (never falls back to project number). */
+export function resolveSidebarProjectName(dto: {
+  projectName?: string | null;
+  projectId?: string | null;
+}): string | null {
+  const name = dto.projectName?.trim();
+  if (name && !isUuidLike(name)) return name;
+  if (dto.projectId) return 'Unnamed Project';
+  return null;
 }
 
 export function normalizePriority(
@@ -144,25 +169,56 @@ function isGenericTaskReference(value: string): boolean {
 }
 
 function resolveDisplayTitle(dto: ChatterPostDto): string {
+  const listing = dto.listingLabel?.trim();
+  if (listing) return listing;
+  const taskOp = dto.taskOpNo?.trim() || dto.taskName?.trim() || '';
+  if (dto.taskId && taskOp && !isGenericTaskReference(taskOp)) return taskOp;
+  const projectNo = dto.projectNo?.trim();
+  if (projectNo) return projectNo;
   const title = dto.title?.trim() ?? '';
-  const taskName = dto.taskName?.trim() ?? '';
   if (title && title.toLowerCase() !== 'chatter post' && !isGenericTaskReference(title)) return title;
-  if (taskName && !isGenericTaskReference(taskName)) return taskName;
-  return title || taskName || '(No title)';
+  return title || taskOp || '(No title)';
 }
 
-/** Title for embedded project/task chatter lists (prefers OP number over generic TSK refs). */
+/** Title for embedded project/task chatter lists (OP number or project number only). */
 export function resolveEmbeddedChatterTitle(
-  entry: { title?: string | null; taskName?: string | null },
+  entry: {
+    title?: string | null;
+    taskName?: string | null;
+    taskOpNo?: string | null;
+    projectNo?: string | null;
+    listingLabel?: string | null;
+    taskId?: string | null;
+    projectId?: string | null;
+  },
   fallbackOpNo?: string | null,
+  fallbackProjectNo?: string | null,
 ): string {
-  const title = entry.title?.trim() ?? '';
-  const taskName = entry.taskName?.trim() ?? '';
-  const opNo = String(fallbackOpNo ?? '').trim();
-  if (title && title.toLowerCase() !== 'chatter post' && !isGenericTaskReference(title)) return title;
-  if (taskName && !isGenericTaskReference(taskName)) return taskName;
-  if (opNo && opNo !== '-') return opNo;
-  return title || taskName || 'Discussion';
+  const listing = entry.listingLabel?.trim();
+  if (listing) return listing;
+  const taskOp = entry.taskOpNo?.trim() || entry.taskName?.trim() || String(fallbackOpNo ?? '').trim();
+  if (entry.taskId && taskOp && taskOp !== '-' && !isGenericTaskReference(taskOp)) return taskOp;
+  const projectNo = entry.projectNo?.trim() || String(fallbackProjectNo ?? '').trim();
+  if (projectNo && projectNo !== '-') return projectNo;
+  if (taskOp && taskOp !== '-' && !isGenericTaskReference(taskOp)) return taskOp;
+  return 'Discussion';
+}
+
+export function formatMentionSummary(users?: ChatterMentionedUserDto[], fallbackName?: string | null): string {
+  const names = (users ?? [])
+    .map((u) => u.fullName?.trim())
+    .filter(Boolean) as string[];
+  if (names.length > 0) return names.map((n) => `@${n}`).join(', ');
+  const single = fallbackName?.trim();
+  if (single && !isUuidLike(single)) return `@${single}`;
+  return '—';
+}
+
+export function getMondayOfWeek(date: Date): string {
+  const d = new Date(date);
+  const day = d.getDay();
+  d.setDate(d.getDate() + (day === 0 ? -6 : 1 - day));
+  return `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, '0')}-${String(d.getDate()).padStart(2, '0')}`;
 }
 
 export function mapCommentDtoToFeedComment(
@@ -199,8 +255,8 @@ export function mapChatterPostDtoToFeedPost(
     dto.authorId && currentUserId && dto.authorId === currentUserId
       ? 'You'
       : pretty ?? 'Unknown';
-  const mentionName = dto.mentionUserName?.trim();
-  const mention = mentionName && !isUuidLike(mentionName) ? `@${mentionName}` : '—';
+  const mentionedUsers = dto.mentionedUsers ?? [];
+  const mention = formatMentionSummary(mentionedUsers, dto.mentionUserName);
 
   const rawType = (dto.postType ?? '').trim();
   const lower = rawType.toLowerCase();
@@ -231,10 +287,14 @@ export function mapChatterPostDtoToFeedPost(
     time: formatChatterTime(created),
     mention,
     mentionUserId: dto.mentionUserId,
+    mentionedUsers,
     message: dto.message || '',
-    projectName: safeDisplayValue(dto.projectName),
+    projectName: resolveSidebarProjectName(dto) ?? '—',
+    projectNo: dto.projectNo?.trim() || null,
     projectId: dto.projectId ?? null,
-    taskName: dto.taskName?.trim() || null,
+    taskName: dto.taskOpNo?.trim() || dto.taskName?.trim() || null,
+    taskOpNo: dto.taskOpNo?.trim() || null,
+    listingLabel: dto.listingLabel?.trim() || null,
     designerName: safeDisplayValue(dto.assigneeName),
     responsibleUser: authorLabel,
     priority: normalizePriority(dto.priority),
@@ -269,6 +329,7 @@ export function listChatterPosts(params?: {
   mentionUserId?: string;
   commentedByUserId?: string;
   postType?: string;
+  weekStart?: string;
 }) {
   const qs = new URLSearchParams();
   if (params?.limit != null) qs.set('limit', String(params.limit));
@@ -277,6 +338,7 @@ export function listChatterPosts(params?: {
   if (params?.mentionUserId?.trim()) qs.set('mentionUserId', params.mentionUserId.trim());
   if (params?.commentedByUserId?.trim()) qs.set('commentedByUserId', params.commentedByUserId.trim());
   if (params?.postType?.trim()) qs.set('postType', params.postType.trim());
+  if (params?.weekStart?.trim()) qs.set('weekStart', params.weekStart.trim());
   const suffix = qs.toString() ? `?${qs.toString()}` : '';
   return apiClient.get<ChatterPostDto[]>(`/chatter-posts${suffix}`);
 }
@@ -285,10 +347,16 @@ export function listChatterComments(postId: string) {
   return apiClient.get<ChatterCommentDto[]>(`/chatter-posts/${encodeURIComponent(postId)}/comments`);
 }
 
-export function createChatterComment(postId: string, message: string, mentionUserId?: string | null) {
+export function createChatterComment(
+  postId: string,
+  message: string,
+  mentionUserIds?: string[] | null,
+) {
+  const ids = (mentionUserIds ?? []).filter(Boolean);
   return apiClient.post<ChatterCommentDto>(`/chatter-posts/${encodeURIComponent(postId)}/comments`, {
     message,
-    ...(mentionUserId ? { mentionUserId } : {}),
+    ...(ids.length === 1 ? { mentionUserId: ids[0] } : {}),
+    ...(ids.length > 0 ? { mentionUserIds: ids } : {}),
   });
 }
 
@@ -306,6 +374,14 @@ export function createChatterPost(
   const payload: Record<string, unknown> = { ...data };
   if (payload.priority == null || String(payload.priority).trim() === '') {
     delete payload.priority;
+  }
+  if (Array.isArray(payload.mentionUserIds)) {
+    const ids = payload.mentionUserIds.filter((id) => typeof id === 'string' && id.trim());
+    if (ids.length === 0) {
+      delete payload.mentionUserIds;
+    } else if (ids.length === 1 && !payload.mentionUserId) {
+      payload.mentionUserId = ids[0];
+    }
   }
   const fileCount = files?.length ?? 0;
   if (fileCount > 0 && typeof process !== 'undefined' && process.env.NODE_ENV === 'development') {
@@ -331,9 +407,12 @@ export function createChatterPost(
 
     const formData = new FormData();
     Object.entries(payload).forEach(([key, value]) => {
-      if (value !== undefined && value !== null) {
-        formData.append(key, String(value));
+      if (value === undefined || value === null) return;
+      if (key === 'mentionUserIds' && Array.isArray(value)) {
+        formData.append(key, JSON.stringify(value));
+        return;
       }
+      formData.append(key, String(value));
     });
     files.forEach((file) => {
       // Preserve filename and binary Blob; never stringify File objects.

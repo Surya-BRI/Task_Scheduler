@@ -113,18 +113,22 @@ function NotificationDropdown({ session }) {
   const [items, setItems] = useState([])
   const [loading, setLoading] = useState(false)
   const rootRef = useRef(null)
+  const loadingRef = useRef(false)
 
   const unreadCount = items.filter((n) => !n.isRead).length
 
   const loadNotifications = async () => {
-    if (!session) return
+    if (!session || loadingRef.current) return
+    if (typeof document !== 'undefined' && document.visibilityState === 'hidden') return
+    loadingRef.current = true
     setLoading(true)
     try {
       const rows = await listNotifications(30)
       setItems(Array.isArray(rows) ? rows : [])
     } catch {
-      setItems([])
+      // Keep existing items on transient errors (e.g. DB pool timeout).
     } finally {
+      loadingRef.current = false
       setLoading(false)
     }
   }
@@ -132,8 +136,15 @@ function NotificationDropdown({ session }) {
   useEffect(() => {
     if (!session) return
     void loadNotifications()
-    const interval = setInterval(() => void loadNotifications(), 30000)
-    return () => clearInterval(interval)
+    const interval = setInterval(() => void loadNotifications(), 60000)
+    const onVisible = () => {
+      if (document.visibilityState === 'visible') void loadNotifications()
+    }
+    document.addEventListener('visibilitychange', onVisible)
+    return () => {
+      clearInterval(interval)
+      document.removeEventListener('visibilitychange', onVisible)
+    }
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [session?.id, session?.role])
 

@@ -14,6 +14,10 @@ export type LeaveRequestDto = {
   approverName?: string | null;
   approverRemarks?: string | null;
   reviewedAt?: string | null;
+  revokedById?: string | null;
+  revokedByName?: string | null;
+  revokedAt?: string | null;
+  revocationReason?: string | null;
   createdAt?: string;
 };
 
@@ -64,6 +68,10 @@ export function cancelLeaveRequest(id: string) {
 
 export function reviewLeaveRequest(id: string, data: { status: 'APPROVED' | 'REJECTED'; remarks?: string }) {
   return apiClient.post<LeaveRequestDto>(`/requests/${encodeURIComponent(id)}/review`, data);
+}
+
+export function revokeLeaveRequest(id: string, data: { reason: string }) {
+  return apiClient.post<LeaveRequestDto>(`/requests/${encodeURIComponent(id)}/revoke`, data);
 }
 
 /** @deprecated Prefer reviewLeaveRequest */

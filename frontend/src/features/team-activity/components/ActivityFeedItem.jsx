@@ -19,6 +19,7 @@ const ACTION_BADGE = {
   SCHEDULER_WEEK_UNLOCKED:        { label: "Schedule Unlocked",      color: "bg-orange-100 text-orange-700" },
   LEAVE_REQUEST_SUBMITTED:        { label: "Leave Request",          color: "bg-indigo-100 text-indigo-700" },
   LEAVE_REQUEST_STATUS_CHANGED:   { label: "Leave Updated",          color: "bg-indigo-100 text-indigo-700" },
+  LEAVE_REQUEST_REVOKED:          { label: "Leave Revoked",          color: "bg-orange-100 text-orange-700" },
   REGULARIZATION_SUBMITTED:       { label: "Regularization",         color: "bg-purple-100 text-purple-700" },
   REGULARIZATION_APPROVED:        { label: "Regularization Updated", color: "bg-purple-100 text-purple-700" },
   REGULARIZATION_REJECTED:        { label: "Regularization Updated", color: "bg-purple-100 text-purple-700" },

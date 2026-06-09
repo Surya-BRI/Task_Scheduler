@@ -5,6 +5,7 @@ import { useRouter } from 'next/navigation';
 import { CalendarDays, CheckCircle2, ChevronLeft, ChevronRight, Ellipsis, Inbox, Search, UserRound } from 'lucide-react';
 import { Navbar } from '@/components/Navbar';
 import { getProjectsOverview } from '../services/projects-overview.api';
+import { reviewLeaveRequest } from '@/features/requests/services/requests.api';
 import DonutChart from '@/app/designer/[designerId]/components/DonutChart';
 
 function getMondayOfWeek(date) {
@@ -50,10 +51,21 @@ function ResponsiveTable({ headers, rows, renderRow, emptyMessage }) {
   );
 }
 
-function InboxCard({ inbox, fmt, onNavigate }) {
+function requestTypeBadge(type) {
+  if (type === 'regularization') return 'Reg';
+  if (type === 'overtime') return 'OT';
+  if (type === 'leave') return 'Leave';
+  return null;
+}
+
+function InboxCard({ inbox, fmt, onNavigate, onRefresh }) {
   const containerRef = useRef(null);
   const [page, setPage] = useState(0);
   const [pageSize, setPageSize] = useState(8);
+  const [actingId, setActingId] = useState(null);
+  const [rejectTarget, setRejectTarget] = useState(null);
+  const [rejectRemarks, setRejectRemarks] = useState('');
+  const [actionError, setActionError] = useState('');
 
   const recalcPageSize = useCallback(() => {
     const height = containerRef.current?.clientHeight ?? 320;
@@ -73,6 +85,39 @@ function InboxCard({ inbox, fmt, onNavigate }) {
   const totalPages = Math.max(1, Math.ceil(inbox.length / pageSize));
   const slice = inbox.slice(page * pageSize, page * pageSize + pageSize);
   const actionCount = inbox.filter((item) => item.requiresAction).length;
+
+  const handleApproveLeave = async (item) => {
+    setActionError('');
+    setActingId(item.id);
+    try {
+      await reviewLeaveRequest(item.id, { status: 'APPROVED' });
+      await onRefresh?.();
+    } catch (err) {
+      setActionError(err instanceof Error ? err.message : 'Could not approve leave request');
+    } finally {
+      setActingId(null);
+    }
+  };
+
+  const handleRejectLeave = async () => {
+    if (!rejectTarget) return;
+    if (!rejectRemarks.trim()) {
+      setActionError('Remarks are required when rejecting a leave request');
+      return;
+    }
+    setActionError('');
+    setActingId(rejectTarget.id);
+    try {
+      await reviewLeaveRequest(rejectTarget.id, { status: 'REJECTED', remarks: rejectRemarks.trim() });
+      setRejectTarget(null);
+      setRejectRemarks('');
+      await onRefresh?.();
+    } catch (err) {
+      setActionError(err instanceof Error ? err.message : 'Could not reject leave request');
+    } finally {
+      setActingId(null);
+    }
+  };
 
   return (
     <CompactCard title="Inbox" className="h-full min-h-[280px]">
@@ -96,31 +141,61 @@ function InboxCard({ inbox, fmt, onNavigate }) {
             <ul className="divide-y divide-slate-100">
               {slice.map((item) => (
                 <li key={`${item.requestType ?? 'activity'}-${item.id}`}>
-                  <button
-                    type="button"
-                    onClick={() => item.linkUrl && onNavigate(item.linkUrl)}
-                    disabled={!item.linkUrl}
-                    className={`flex w-full flex-col px-1 py-2.5 text-left transition-colors ${
-                      item.linkUrl ? 'cursor-pointer hover:bg-slate-50' : 'cursor-default'
-                    } ${item.requiresAction ? 'border-l-2 border-orange-400 pl-2' : ''}`}
+                  <div
+                    className={`flex w-full flex-col px-1 py-2.5 text-left ${
+                      item.requiresAction ? 'border-l-2 border-orange-400 pl-2' : ''
+                    }`}
                   >
-                    <div className="flex items-start justify-between gap-2">
-                      <p className="line-clamp-2 text-xs leading-snug text-slate-700">{item.summary}</p>
-                      {item.requestType && item.requestType !== 'activity' ? (
-                        <span className="shrink-0 rounded bg-slate-100 px-1.5 py-0.5 text-[9px] font-bold uppercase text-slate-600">
-                          {item.requestType === 'regularization' ? 'Reg' : 'OT'}
-                        </span>
-                      ) : null}
-                    </div>
-                    <div className="mt-1 flex flex-wrap items-center gap-2 text-[10px] text-slate-400">
-                      {item.requesterName ? <span>{item.requesterName}</span> : null}
-                      {item.taskNo ? <span className="font-mono">{item.taskNo}</span> : null}
-                      <span>{fmt(item.occurredAt)}</span>
-                      {item.requiresAction ? (
-                        <span className="font-semibold text-orange-600">Action required</span>
-                      ) : null}
-                    </div>
-                  </button>
+                    <button
+                      type="button"
+                      onClick={() => item.linkUrl && onNavigate(item.linkUrl)}
+                      disabled={!item.linkUrl}
+                      className={`w-full text-left transition-colors ${
+                        item.linkUrl ? 'cursor-pointer hover:bg-slate-50' : 'cursor-default'
+                      }`}
+                    >
+                      <div className="flex items-start justify-between gap-2">
+                        <p className="line-clamp-2 text-xs leading-snug text-slate-700">{item.summary}</p>
+                        {requestTypeBadge(item.requestType) ? (
+                          <span className="shrink-0 rounded bg-slate-100 px-1.5 py-0.5 text-[9px] font-bold uppercase text-slate-600">
+                            {requestTypeBadge(item.requestType)}
+                          </span>
+                        ) : null}
+                      </div>
+                      <div className="mt-1 flex flex-wrap items-center gap-2 text-[10px] text-slate-400">
+                        {item.requesterName ? <span>{item.requesterName}</span> : null}
+                        {item.taskNo ? <span className="font-mono">{item.taskNo}</span> : null}
+                        <span>{fmt(item.occurredAt)}</span>
+                        {item.requiresAction ? (
+                          <span className="font-semibold text-orange-600">Action required</span>
+                        ) : null}
+                      </div>
+                    </button>
+                    {item.requiresAction && item.requestType === 'leave' ? (
+                      <div className="mt-2 flex flex-wrap gap-2">
+                        <button
+                          type="button"
+                          disabled={actingId === item.id}
+                          onClick={() => handleApproveLeave(item)}
+                          className="rounded-md bg-emerald-600 px-2.5 py-1 text-[10px] font-semibold text-white hover:bg-emerald-700 disabled:opacity-60"
+                        >
+                          {actingId === item.id ? 'Working…' : 'Approve'}
+                        </button>
+                        <button
+                          type="button"
+                          disabled={actingId === item.id}
+                          onClick={() => {
+                            setActionError('');
+                            setRejectTarget(item);
+                            setRejectRemarks('');
+                          }}
+                          className="rounded-md border border-red-200 bg-red-50 px-2.5 py-1 text-[10px] font-semibold text-red-700 hover:bg-red-100 disabled:opacity-60"
+                        >
+                          Reject
+                        </button>
+                      </div>
+                    ) : null}
+                  </div>
                 </li>
               ))}
             </ul>
@@ -148,8 +223,47 @@ function InboxCard({ inbox, fmt, onNavigate }) {
               </button>
             </div>
           ) : null}
+          {actionError ? (
+            <p className="mt-2 text-[10px] font-medium text-red-600">{actionError}</p>
+          ) : null}
         </>
       )}
+      {rejectTarget ? (
+        <div className="fixed inset-0 z-50 flex items-center justify-center bg-slate-900/30 p-4">
+          <div className="w-full max-w-md rounded-xl border border-slate-200 bg-white p-4 shadow-xl">
+            <h3 className="text-sm font-semibold text-slate-900">Reject leave request</h3>
+            <p className="mt-1 text-xs text-slate-500">{rejectTarget.summary}</p>
+            <textarea
+              value={rejectRemarks}
+              onChange={(e) => setRejectRemarks(e.target.value)}
+              rows={3}
+              placeholder="Reason for rejection (required)"
+              className="mt-3 w-full rounded-md border border-slate-300 px-3 py-2 text-sm outline-none focus:border-blue-500 focus:ring-2 focus:ring-blue-500/25"
+            />
+            <div className="mt-3 flex justify-end gap-2">
+              <button
+                type="button"
+                onClick={() => {
+                  setRejectTarget(null);
+                  setRejectRemarks('');
+                  setActionError('');
+                }}
+                className="rounded-md border border-slate-200 px-3 py-1.5 text-xs font-semibold text-slate-600"
+              >
+                Cancel
+              </button>
+              <button
+                type="button"
+                onClick={handleRejectLeave}
+                disabled={actingId === rejectTarget.id}
+                className="rounded-md bg-red-600 px-3 py-1.5 text-xs font-semibold text-white hover:bg-red-700 disabled:opacity-60"
+              >
+                {actingId === rejectTarget.id ? 'Rejecting…' : 'Confirm reject'}
+              </button>
+            </div>
+          </div>
+        </div>
+      ) : null}
     </CompactCard>
   );
 }
@@ -190,7 +304,10 @@ export function ProjectsOverviewScreen() {
     if (!overview || !searchTerm.trim()) return overview;
     const q = searchTerm.toLowerCase();
     const f = (arr) => arr.filter(
-      (t) => t.taskNo?.toLowerCase().includes(q) || t.title?.toLowerCase().includes(q),
+      (t) =>
+        t.taskNo?.toLowerCase().includes(q)
+        || t.projectName?.toLowerCase().includes(q)
+        || t.title?.toLowerCase().includes(q),
     );
     return {
       ...overview,
@@ -200,6 +317,15 @@ export function ProjectsOverviewScreen() {
       reallocatedTasks: f(overview.reallocatedTasks),
     };
   }, [overview, searchTerm]);
+
+  const reloadOverview = useCallback(() => {
+    return getProjectsOverview(getMondayOfWeek(currentDate))
+      .then((next) => {
+        setOverview(next);
+        setUpdatedAt(new Date());
+      })
+      .catch(() => {});
+  }, [currentDate]);
 
   const handleDateChange = (event) => {
     if (!event.target.value) return;
@@ -265,13 +391,13 @@ export function ProjectsOverviewScreen() {
             <div className="grid min-w-0 grid-cols-1 gap-3 md:grid-cols-2 xl:grid-cols-3 xl:grid-rows-2 xl:auto-rows-[minmax(280px,1fr)]">
               <CompactCard title="Scheduled Tasks" className="h-full min-h-[280px]">
                 <ResponsiveTable
-                  headers={['Task No', 'Title', 'Rev', 'Assignee', 'Due']}
+                  headers={['Task No', 'Project', 'Rev', 'Assignee', 'Due']}
                   rows={data?.scheduledTasks ?? []}
                   emptyMessage="No scheduled tasks this week"
                   renderRow={(row) => (
                     <tr key={row.taskNo}>
                       <td className="truncate px-2 py-2 font-mono sm:px-3">{row.taskNo}</td>
-                      <td className="truncate px-2 py-2 sm:px-3" title={row.title}>{row.title || '—'}</td>
+                      <td className="truncate px-2 py-2 sm:px-3" title={row.projectName}>{row.projectName || '—'}</td>
                       <td className="truncate px-2 py-2 font-mono text-slate-500 sm:px-3">{row.revisionCode || '—'}</td>
                       <td className="truncate px-2 py-2 sm:px-3" title={row.assigneeName}>{row.assigneeName || '—'}</td>
                       <td className="truncate px-2 py-2 sm:px-3">{fmt(row.dueDate)}</td>
@@ -282,13 +408,13 @@ export function ProjectsOverviewScreen() {
 
               <CompactCard title="Completed Tasks" className="h-full min-h-[280px]">
                 <ResponsiveTable
-                  headers={['Task No', 'Title', 'Rev', 'Completed', '']}
+                  headers={['Task No', 'Project', 'Rev', 'Completed', '']}
                   rows={data?.completedTasks ?? []}
                   emptyMessage="No completions this week"
                   renderRow={(row) => (
                     <tr key={row.taskNo}>
                       <td className="truncate px-2 py-2 font-mono sm:px-3">{row.taskNo}</td>
-                      <td className="truncate px-2 py-2 sm:px-3" title={row.title}>{row.title || '—'}</td>
+                      <td className="truncate px-2 py-2 sm:px-3" title={row.projectName}>{row.projectName || '—'}</td>
                       <td className="truncate px-2 py-2 font-mono text-slate-500 sm:px-3">{row.revisionCode || '—'}</td>
                       <td className="truncate px-2 py-2 sm:px-3">{fmt(row.completedAt)}</td>
                       <td className="px-2 py-2 text-right sm:px-3">
@@ -303,17 +429,18 @@ export function ProjectsOverviewScreen() {
                 inbox={data?.inbox ?? []}
                 fmt={fmt}
                 onNavigate={(url) => router.push(url)}
+                onRefresh={reloadOverview}
               />
 
               <CompactCard title="On Hold Tasks" className="h-full min-h-[280px]">
                 <ResponsiveTable
-                  headers={['Task No', 'Title', 'Rev', 'Hold Date', 'Reason']}
+                  headers={['Task No', 'Project', 'Rev', 'Hold Date', 'Reason']}
                   rows={data?.onHoldTasks ?? []}
                   emptyMessage="No tasks on hold"
                   renderRow={(row) => (
                     <tr key={row.taskNo}>
                       <td className="truncate px-2 py-2 font-mono sm:px-3">{row.taskNo}</td>
-                      <td className="truncate px-2 py-2 sm:px-3" title={row.title}>{row.title || '—'}</td>
+                      <td className="truncate px-2 py-2 sm:px-3" title={row.projectName}>{row.projectName || '—'}</td>
                       <td className="truncate px-2 py-2 font-mono text-slate-500 sm:px-3">{row.revisionCode || '—'}</td>
                       <td className="truncate px-2 py-2 sm:px-3">{fmt(row.holdDate)}</td>
                       <td className="truncate px-2 py-2 text-slate-500 sm:px-3">{row.reason ?? 'Pending approval'}</td>
@@ -324,13 +451,13 @@ export function ProjectsOverviewScreen() {
 
               <CompactCard title="Reallocated Tasks" className="h-full min-h-[280px]">
                 <ResponsiveTable
-                  headers={['Task No', 'Title', 'From', 'To']}
+                  headers={['Task No', 'Project', 'From', 'To']}
                   rows={data?.reallocatedTasks ?? []}
                   emptyMessage="No reallocations this week"
                   renderRow={(row) => (
                     <tr key={`${row.taskNo}-${row.reassignedAt}`}>
                       <td className="truncate px-2 py-2 font-mono sm:px-3">{row.taskNo}</td>
-                      <td className="truncate px-2 py-2 sm:px-3" title={row.title}>{row.title || '—'}</td>
+                      <td className="truncate px-2 py-2 sm:px-3" title={row.projectName}>{row.projectName || '—'}</td>
                       <td className="truncate px-2 py-2 text-slate-400 sm:px-3" title={row.fromAssigneeName ?? ''}>{row.fromAssigneeName || '—'}</td>
                       <td className="truncate px-2 py-2 sm:px-3" title={row.newAssigneeName}>{row.newAssigneeName}</td>
                     </tr>

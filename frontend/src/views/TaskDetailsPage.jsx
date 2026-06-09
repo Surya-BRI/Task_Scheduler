@@ -13,6 +13,7 @@ import {
   createChatterComment,
   createChatterPost,
   listChatterPosts,
+  normalizePriority,
   resolveEmbeddedChatterTitle,
 } from '@/features/chatter/services/chatter-posts.api'
 import { emitChatterRefresh, onChatterRefresh } from '@/features/chatter/utils/chatter-events'
@@ -690,6 +691,7 @@ export function TaskDetailsPage() {
   const [projectCreateModalOpen, setProjectCreateModalOpen] = useState(false)
   const [createdTasks, setCreatedTasks] = useState([])
   const [chatterMessage, setChatterMessage] = useState('')
+  const [chatterPriority, setChatterPriority] = useState('')
   const [chatterPosts, setChatterPosts] = useState([])
   const [chatterLoading, setChatterLoading] = useState(false)
   const [chatterError, setChatterError] = useState('')
@@ -1205,9 +1207,11 @@ export function TaskDetailsPage() {
       const created = await createChatterPost({
         message,
         postType: 'Posts',
+        ...(chatterPriority ? { priority: chatterPriority } : {}),
         ...(resolvedTaskId ? { taskId: resolvedTaskId } : { projectId: postProjectId }),
       })
       setChatterMessage('')
+      setChatterPriority('')
       setChatterPosts((prev) => {
         const next = [created, ...prev.filter((p) => p.id !== created.id)]
         next.sort((a, b) => new Date(b.createdAt).getTime() - new Date(a.createdAt).getTime())
@@ -1580,6 +1584,29 @@ export function TaskDetailsPage() {
                       placeholder="Type your comment..."
                       className="mt-1.5 w-full resize-none rounded-md border border-slate-300 bg-white px-2.5 py-1.5 text-sm text-slate-900 outline-none focus:border-blue-500 focus:ring-2 focus:ring-blue-500/25"
                     />
+                    <div className="mt-2">
+                      <p className="text-[11px] font-semibold text-slate-600">Priority (optional)</p>
+                      <div className="mt-1 flex flex-wrap gap-1.5">
+                        {['High', 'Medium', 'Low'].map((level) => (
+                          <button
+                            key={level}
+                            type="button"
+                            onClick={() => setChatterPriority((prev) => (prev === level ? '' : level))}
+                            className={`rounded-md border px-2 py-1 text-[10px] font-semibold ${
+                              chatterPriority === level
+                                ? level === 'High'
+                                  ? 'border-red-500 bg-red-500 text-white'
+                                  : level === 'Medium'
+                                    ? 'border-amber-400 bg-amber-400 text-white'
+                                    : 'border-emerald-500 bg-emerald-500 text-white'
+                                : 'border-slate-200 bg-white text-slate-600'
+                            }`}
+                          >
+                            {level}
+                          </button>
+                        ))}
+                      </div>
+                    </div>
                     <div className="mt-1.5 flex items-center justify-between gap-2">
                       {!projectId && !resolvingProjectId ? (
                         <p className="text-[11px] text-amber-600">No project linked — chatter unavailable</p>
@@ -1626,8 +1653,13 @@ export function TaskDetailsPage() {
   <div className="flex items-start justify-between gap-2">
     <div className="min-w-0">
       <p className="text-[11px] font-semibold text-slate-900 truncate">
-        {resolveEmbeddedChatterTitle(entry, record?.opNo)}
+        {resolveEmbeddedChatterTitle(entry, record?.opNo, record?.projectNo)}
       </p>
+      {normalizePriority(entry.priority) ? (
+        <span className="mt-0.5 inline-block rounded-full bg-slate-100 px-2 py-0.5 text-[9px] font-semibold uppercase text-slate-600">
+          {normalizePriority(entry.priority)}
+        </span>
+      ) : null}
       <p className="text-[10px] text-slate-500">
         {entry.authorName ? `${entry.authorName}${entry.authorRole ? ` (${entry.authorRole})` : ''}` : (entry.authorId ? `User ${entry.authorId.slice(0, 8)}` : 'Unknown')}
       </p>

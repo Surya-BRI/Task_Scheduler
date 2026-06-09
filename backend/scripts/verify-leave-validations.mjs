@@ -117,7 +117,13 @@ async function main() {
     }),
   });
   assert(overlap.status === 400, `Overlap should 400, got ${overlap.status}`);
-  console.log('✓ Overlapping leave rejected');
+  assert(
+    overlap.text.includes(
+      'You already have a leave request for the selected date(s). Please modify or cancel the existing request instead of creating a duplicate.',
+    ),
+    'Overlap should return standard duplicate message',
+  );
+  console.log('✓ Overlapping leave rejected with standard message');
 
   // Edit pending
   const updated = await api(designer.token, `/requests/${first.data.id}`, {

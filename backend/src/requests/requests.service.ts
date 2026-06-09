@@ -7,6 +7,7 @@ import {
   OnModuleInit,
 } from '@nestjs/common';
 import { randomUUID } from 'crypto';
+import type { Prisma } from '@prisma/client';
 import { PrismaService } from '../prisma/prisma.service';
 import { ActivityLoggerService } from '../activities/activity-logger.service';
 import { ActivityAction } from '../activities/activity-events';
@@ -15,10 +16,14 @@ import { CreateLeaveRequestDto } from './dto/create-request.dto';
 import { ReviewLeaveRequestDto } from './dto/review-leave-request.dto';
 import { UpdateLeaveRequestDto } from './dto/update-leave-request.dto';
 import { UpdateRequestStatusDto } from './dto/update-request-status.dto';
+import { RevokeLeaveRequestDto } from './dto/revoke-leave-request.dto';
 import {
+  dateToDateOnlyIso,
   findOverlappingLeave,
+  isLeaveRangeCompleted,
   normalizeLeaveStatus as normalizeLeaveStatusUtil,
   overlapErrorMessage,
+  todayDateOnlyIso,
   validateLeaveDates,
   type LeaveDateRange,
 } from './leave-request.validation';
@@ -40,6 +45,10 @@ export type LeaveRequestView = {
   approverName: string | null;
   approverRemarks: string | null;
   reviewedAt: string | null;
+  revokedById: string | null;
+  revokedByName: string | null;
+  revokedAt: string | null;
+  revocationReason: string | null;
   createdAt: string;
 };
 
@@ -66,6 +75,18 @@ export class RequestsService implements OnModuleInit {
         IF COL_LENGTH('dbo.ErpTSLeaveRequest', 'reviewedAt') IS NULL
         BEGIN
           ALTER TABLE dbo.ErpTSLeaveRequest ADD reviewedAt DATETIME NULL;
+        END
+        IF COL_LENGTH('dbo.ErpTSLeaveRequest', 'revokedById') IS NULL
+        BEGIN
+          ALTER TABLE dbo.ErpTSLeaveRequest ADD revokedById UNIQUEIDENTIFIER NULL;
+        END
+        IF COL_LENGTH('dbo.ErpTSLeaveRequest', 'revokedAt') IS NULL
+        BEGIN
+          ALTER TABLE dbo.ErpTSLeaveRequest ADD revokedAt DATETIME NULL;
+        END
+        IF COL_LENGTH('dbo.ErpTSLeaveRequest', 'revocationReason') IS NULL
+        BEGIN
+          ALTER TABLE dbo.ErpTSLeaveRequest ADD revocationReason NVARCHAR(MAX) NULL;
         END
         IF COL_LENGTH('dbo.ErpTSLeaveRequest', 'id') IS NOT NULL
            AND NOT EXISTS (
@@ -108,12 +129,20 @@ export class RequestsService implements OnModuleInit {
   }
 
   private toDateLabel(d: Date): string {
-    return d.toISOString().split('T')[0];
+    return dateToDateOnlyIso(d);
   }
 
   private normalizeStatus(status: string): string {
     const s = normalizeLeaveStatusUtil(status);
-    if (s === 'APPROVED' || s === 'REJECTED' || s === 'PENDING' || s === 'CANCELLED') return s;
+    if (
+      s === 'APPROVED' ||
+      s === 'REJECTED' ||
+      s === 'PENDING' ||
+      s === 'CANCELLED' ||
+      s === 'REVOKED'
+    ) {
+      return s;
+    }
     return status;
   }
 
@@ -176,8 +205,12 @@ export class RequestsService implements OnModuleInit {
       approverId?: string | null;
       approverRemarks?: string | null;
       reviewedAt?: Date | null;
+      revokedById?: string | null;
+      revokedAt?: Date | null;
+      revocationReason?: string | null;
       user: { fullName: string; role: { name: string } };
       approver?: { fullName: string } | null;
+      revokedBy?: { fullName: string } | null;
     },
     designerIdOverride?: string,
   ): LeaveRequestView {
@@ -196,6 +229,10 @@ export class RequestsService implements OnModuleInit {
       approverName: req.approver?.fullName ?? null,
       approverRemarks: req.approverRemarks?.trim() || null,
       reviewedAt: req.reviewedAt ? req.reviewedAt.toISOString() : null,
+      revokedById: req.revokedById ?? null,
+      revokedByName: req.revokedBy?.fullName ?? null,
+      revokedAt: req.revokedAt ? req.revokedAt.toISOString() : null,
+      revocationReason: req.revocationReason?.trim() || null,
       createdAt: req.createdAt.toISOString(),
     };
   }
@@ -204,6 +241,7 @@ export class RequestsService implements OnModuleInit {
     return {
       user: { select: { id: true, fullName: true, role: { select: { name: true } }, departmentId: true } },
       approver: { select: { id: true, fullName: true } },
+      revokedBy: { select: { id: true, fullName: true } },
     } as const;
   }
 
@@ -295,6 +333,29 @@ export class RequestsService implements OnModuleInit {
       } catch (err) {
         this.logger.warn(`Leave HOD notification failed for ${approver.id}: ${err}`);
       }
+    }
+  }
+
+  private async notifyRequesterOnRevoke(
+    view: LeaveRequestView,
+    revokerName: string,
+    revokedAt: Date,
+  ) {
+    const dates = this.formatLeaveDates(view.fromDate, view.toDate);
+    const reason = view.revocationReason?.trim() || '—';
+
+    try {
+      await this.prisma.notification.create({
+        data: {
+          id: randomUUID(),
+          userId: view.designerId,
+          title: 'Leave Request Revoked',
+          message: `Your approved leave (${dates}) was revoked by ${revokerName}. Reason: ${reason}`,
+          linkUrl: this.leaveLink(view.id, view.designerId),
+        },
+      });
+    } catch (err) {
+      this.logger.warn(`Leave revocation notification failed: ${err}`);
     }
   }
 
@@ -734,5 +795,92 @@ export class RequestsService implements OnModuleInit {
       status: dto.status,
       remarks: dto.status === 'REJECTED' ? 'Rejected' : undefined,
     });
+  }
+
+  async revoke(
+    id: string,
+    reviewerId: string,
+    role: UserRole,
+    dto: RevokeLeaveRequestDto,
+  ): Promise<LeaveRequestView> {
+    const reason = dto.reason?.trim();
+    if (!reason) {
+      throw new BadRequestException('A revocation reason is required');
+    }
+
+    const existing = await this.prisma.leaveRequest.findUnique({
+      where: { id },
+      include: this.leaveInclude(),
+    });
+    if (!existing) throw new NotFoundException('Leave request not found');
+
+    const currentStatus = this.normalizeStatus(existing.status);
+    if (currentStatus === 'REVOKED') {
+      throw new BadRequestException('Leave request is already revoked');
+    }
+    if (currentStatus !== 'APPROVED') {
+      throw new BadRequestException(
+        `Only approved leave requests can be revoked (current status: ${currentStatus})`,
+      );
+    }
+
+    const endIso = this.toDateLabel(existing.endDate ?? existing.startDate);
+    if (isLeaveRangeCompleted(endIso, todayDateOnlyIso())) {
+      throw new BadRequestException('Past or completed leave requests cannot be revoked');
+    }
+
+    await this.assertReviewerAccess(reviewerId, role, existing);
+
+    const revoker = await this.prisma.user.findUnique({
+      where: { id: reviewerId },
+      select: { fullName: true },
+    });
+
+    const revokedAt = new Date();
+    const req = await this.prisma.leaveRequest.update({
+      where: { id },
+      data: {
+        status: 'REVOKED',
+        revokedById: reviewerId,
+        revokedAt,
+        revocationReason: reason,
+      } as Prisma.LeaveRequestUncheckedUpdateInput,
+      include: this.leaveInclude(),
+    });
+
+    const view = this.mapRequest({
+      ...req,
+      user: existing.user,
+      revokedBy: revoker ? { fullName: revoker.fullName } : null,
+    });
+
+    await this.activityLogger.log({
+      action: ActivityAction.LEAVE_REQUEST_REVOKED,
+      userId: reviewerId,
+      details: {
+        event: ActivityAction.LEAVE_REQUEST_REVOKED,
+        messageKey: 'leave_request_revoked',
+        changes: {
+          status: { from: existing.status, to: 'REVOKED' },
+          revokedById: reviewerId,
+          revocationReason: reason,
+        },
+        context: {
+          requestId: id,
+          designerId: existing.userId,
+          designerName: existing.user.fullName,
+          revokedAt: revokedAt.toISOString(),
+          revokerName: revoker?.fullName ?? 'HOD',
+        },
+      },
+    });
+
+    await this.notifyRequesterOnRevoke(
+      view,
+      revoker?.fullName ?? 'HOD',
+      revokedAt,
+    );
+
+    return view;
   }
 }

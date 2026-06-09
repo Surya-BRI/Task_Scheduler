@@ -52,6 +52,12 @@ export class ActivitiesService {
       return `${actorName} submitted a ${details?.context?.type ?? 'leave'} request`;
     if (msg === 'leave_request_updated') return `${actorName} updated a pending leave request`;
     if (msg === 'leave_request_cancelled') return `${actorName} cancelled a leave request`;
+    if (msg === 'leave_request_revoked') {
+      const dn = details?.context?.designerName ?? details?.context?.requesterName;
+      return dn
+        ? `${actorName} revoked ${dn}'s approved leave request`
+        : `${actorName} revoked an approved leave request`;
+    }
     if (msg === 'leave_request_status_changed')
       return `${actorName} ${(details?.changes?.newStatus as string)?.toLowerCase() ?? 'updated'} a leave request`;
     if (msg === 'regularization_submitted')
