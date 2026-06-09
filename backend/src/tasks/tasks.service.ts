@@ -1041,7 +1041,8 @@ export class TasksService {
       files: session.files.map((f) => ({
         fileName: f.fileName,
         mimeType: f.mimeType,
-        sizeBytes: f.sizeBytes,
+        sizeBytes:
+          typeof f.sizeBytes === 'bigint' ? Number(f.sizeBytes) : f.sizeBytes,
       })),
     };
   }
