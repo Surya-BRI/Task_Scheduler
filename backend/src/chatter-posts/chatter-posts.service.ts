@@ -15,6 +15,14 @@ import { CreateChatterPostDto } from './dto/create-chatter-post.dto';
 import { ActivityAction } from '../activities/activity-events';
 import { ActivityLoggerService } from '../activities/activity-logger.service';
 import { TaskFilesService } from '../tasks/task-files.service';
+import {
+  MentionUserRef,
+  parseMentionUserIdsFromMessage,
+  resolveProjectNo,
+  resolveTaskOpNo,
+  uniqueUuids,
+  weekRangeContaining,
+} from './chatter-mentions.util';
 
 const UUID_RE =
   /^[0-9a-f]{8}-[0-9a-f]{4}-[1-5][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i;
@@ -39,6 +47,11 @@ export type ChatterAttachmentDto = {
   url: string;
 };
 
+export type ChatterMentionedUserDto = {
+  id: string;
+  fullName: string;
+};
+
 export type ChatterCommentDto = {
   id: string;
   postId: string | null;
@@ -46,6 +59,7 @@ export type ChatterCommentDto = {
   authorName: string | null;
   authorRole: string | null;
   mentionUserId: string | null;
+  mentionedUsers: ChatterMentionedUserDto[];
   message: string;
   createdAt: string;
 };
@@ -61,7 +75,10 @@ export type ChatterPostDto = {
   id: string;
   taskId: string | null;
   taskName: string | null;
+  taskOpNo: string | null;
   projectId: string | null;
+  projectNo: string | null;
+  listingLabel: string | null;
   authorId: string | null;
   authorName: string | null;
   authorRole: string | null;
@@ -72,6 +89,7 @@ export type ChatterPostDto = {
   message: string;
   postType: string | null;
   mentionUserId: string | null;
+  mentionedUsers: ChatterMentionedUserDto[];
   priority: string | null;
   seenByCount: number;
   attachmentCount: number;
@@ -103,41 +121,215 @@ export class ChatterPostsService implements OnModuleInit {
         BEGIN
           ALTER TABLE dbo.ErpTSChatterPost ADD projectId UNIQUEIDENTIFIER NULL;
         END
+        IF COL_LENGTH('dbo.ErpTSChatterComment', 'mentionUserId') IS NULL
+        BEGIN
+          ALTER TABLE dbo.ErpTSChatterComment ADD mentionUserId UNIQUEIDENTIFIER NULL;
+        END
+        IF NOT EXISTS (SELECT 1 FROM sys.tables WHERE name = 'ErpTSChatterPostMention')
+        BEGIN
+          CREATE TABLE dbo.ErpTSChatterPostMention (
+            id UNIQUEIDENTIFIER NOT NULL DEFAULT NEWID() PRIMARY KEY,
+            postId UNIQUEIDENTIFIER NOT NULL,
+            userId UNIQUEIDENTIFIER NOT NULL,
+            createdAt DATETIME NOT NULL DEFAULT SYSUTCDATETIME(),
+            CONSTRAINT UQ_ErpTSChatterPostMention_post_user UNIQUE (postId, userId)
+          );
+          CREATE NONCLUSTERED INDEX IX_ErpTSChatterPostMention_userId ON dbo.ErpTSChatterPostMention (userId);
+        END
+        IF NOT EXISTS (SELECT 1 FROM sys.tables WHERE name = 'ErpTSChatterCommentMention')
+        BEGIN
+          CREATE TABLE dbo.ErpTSChatterCommentMention (
+            id UNIQUEIDENTIFIER NOT NULL DEFAULT NEWID() PRIMARY KEY,
+            commentId UNIQUEIDENTIFIER NOT NULL,
+            userId UNIQUEIDENTIFIER NOT NULL,
+            createdAt DATETIME NOT NULL DEFAULT SYSUTCDATETIME(),
+            CONSTRAINT UQ_ErpTSChatterCommentMention_comment_user UNIQUE (commentId, userId)
+          );
+          CREATE NONCLUSTERED INDEX IX_ErpTSChatterCommentMention_userId ON dbo.ErpTSChatterCommentMention (userId);
+        END
       `);
     } catch (err) {
       const detail = err instanceof Error ? err.message : String(err);
-      this.logger.warn(`Could not ensure ErpTSChatterPost.projectId column: ${detail}`);
+      this.logger.warn(`Could not ensure chatter schema columns: ${detail}`);
     }
   }
 
-  async listMentionUsers() {
+  private sqlInUuidList(ids: string[]): string {
+    const uuids = [...new Set(ids.map((id) => optionalUuid(id)).filter(Boolean) as string[])];
+    return uuids.map((id) => sqlQuotedUuid(id)).join(', ');
+  }
+
+  private commentIdsMatch(a: string, b: string): boolean {
+    return String(a).trim().toLowerCase() === String(b).trim().toLowerCase();
+  }
+
+  private async loadMentionDirectory(): Promise<MentionUserRef[]> {
     const users = await this.usersService.findAll();
-    return users.map((user) => ({
-      id: user.id,
-      fullName: user.fullName,
-    }));
+    return users.map((user) => ({ id: user.id, fullName: user.fullName }));
   }
 
-  private mapCommentRow(row: Record<string, unknown>): ChatterCommentDto {
-    const createdAt =
-      row.createdAt instanceof Date ? row.createdAt : new Date(row.createdAt as string | number | Date);
-    return {
-      id: String(row.id),
-      postId: row.postId != null ? String(row.postId) : null,
-      authorId: row.authorId != null ? String(row.authorId) : null,
-      authorName: row.authorName != null ? String(row.authorName) : null,
-      authorRole: row.authorRole != null ? String(row.authorRole) : null,
-      mentionUserId: row.mentionUserId != null ? String(row.mentionUserId) : null,
-      message: String(row.message ?? ''),
-      createdAt: createdAt.toISOString(),
-    };
+  private async collectPostMentionUserIds(
+    dto: CreateChatterPostDto,
+    message: string,
+  ): Promise<string[]> {
+    const directory = await this.loadMentionDirectory();
+    return uniqueUuids([
+      dto.mentionUserId,
+      ...(dto.mentionUserIds ?? []),
+      ...parseMentionUserIdsFromMessage(message, directory),
+    ]);
   }
 
-  private async findCommentsByPostIds(postIds: string[]): Promise<ChatterCommentDto[]> {
-    const ids = [...new Set(postIds.map((id) => id.trim()).filter(Boolean))];
-    if (ids.length === 0) return [];
+  private async collectCommentMentionUserIds(
+    dto: CreateChatterCommentDto,
+    message: string,
+  ): Promise<string[]> {
+    const directory = await this.loadMentionDirectory();
+    return uniqueUuids([
+      dto.mentionUserId,
+      ...(dto.mentionUserIds ?? []),
+      ...parseMentionUserIdsFromMessage(message, directory),
+    ]);
+  }
 
-    const rows = await this.prisma.$queryRaw<Array<Record<string, unknown>>>`
+  private async insertPostMentions(postId: string, userIds: string[]): Promise<void> {
+    const ids = uniqueUuids(userIds);
+    if (!ids.length) return;
+    const postSql = sqlQuotedUuid(postId);
+    for (const userId of ids) {
+      await this.prisma.$executeRawUnsafe(`
+        IF NOT EXISTS (
+          SELECT 1 FROM ErpTSChatterPostMention
+          WHERE postId = ${postSql} AND userId = ${sqlQuotedUuid(userId)}
+        )
+        INSERT INTO ErpTSChatterPostMention (postId, userId) VALUES (${postSql}, ${sqlQuotedUuid(userId)});
+      `);
+    }
+  }
+
+  private async insertCommentMentions(commentId: string, userIds: string[]): Promise<void> {
+    const ids = uniqueUuids(userIds);
+    if (!ids.length) return;
+    const commentSql = sqlQuotedUuid(commentId);
+    for (const userId of ids) {
+      await this.prisma.$executeRawUnsafe(`
+        IF NOT EXISTS (
+          SELECT 1 FROM ErpTSChatterCommentMention
+          WHERE commentId = ${commentSql} AND userId = ${sqlQuotedUuid(userId)}
+        )
+        INSERT INTO ErpTSChatterCommentMention (commentId, userId) VALUES (${commentSql}, ${sqlQuotedUuid(userId)});
+      `);
+    }
+  }
+
+  private async loadPostMentionsMap(
+    postIds: string[],
+  ): Promise<Map<string, ChatterMentionedUserDto[]>> {
+    const inList = this.sqlInUuidList(postIds);
+    const result = new Map<string, ChatterMentionedUserDto[]>();
+    if (!inList) return result;
+
+    const rows = await this.prisma.$queryRawUnsafe<
+      Array<{ postId: string; userId: string; fullName: string }>
+    >(`
+      SELECT
+        CONVERT(varchar(36), pm.postId) AS postId,
+        CONVERT(varchar(36), pm.userId) AS userId,
+        u.fullName
+      FROM ErpTSChatterPostMention pm
+      INNER JOIN ErpTSUser u ON u.id = pm.userId
+      WHERE pm.postId IN (${inList})
+      ORDER BY u.fullName ASC
+    `);
+
+    for (const row of rows) {
+      const key = String(row.postId);
+      const bucket = result.get(key) ?? [];
+      bucket.push({ id: String(row.userId), fullName: String(row.fullName ?? '').trim() });
+      result.set(key, bucket);
+    }
+    return result;
+  }
+
+  private async loadCommentMentionsMap(
+    commentIds: string[],
+  ): Promise<Map<string, ChatterMentionedUserDto[]>> {
+    const inList = this.sqlInUuidList(commentIds);
+    const result = new Map<string, ChatterMentionedUserDto[]>();
+    if (!inList) return result;
+
+    const rows = await this.prisma.$queryRawUnsafe<
+      Array<{ commentId: string; userId: string; fullName: string }>
+    >(`
+      SELECT
+        CONVERT(varchar(36), cm.commentId) AS commentId,
+        CONVERT(varchar(36), cm.userId) AS userId,
+        u.fullName
+      FROM ErpTSChatterCommentMention cm
+      INNER JOIN ErpTSUser u ON u.id = cm.userId
+      WHERE cm.commentId IN (${inList})
+      ORDER BY u.fullName ASC
+    `);
+
+    for (const row of rows) {
+      const key = String(row.commentId);
+      const bucket = result.get(key) ?? [];
+      bucket.push({ id: String(row.userId), fullName: String(row.fullName ?? '').trim() });
+      result.set(key, bucket);
+    }
+    return result;
+  }
+
+  private resolveListingLabel(
+    taskId: string | null,
+    taskOpNo: string | null,
+    projectNo: string | null,
+  ): string | null {
+    if (taskId && taskOpNo) return taskOpNo;
+    if (projectNo) return projectNo;
+    if (taskOpNo) return taskOpNo;
+    return null;
+  }
+
+  private async notifyMentionedUsers(params: {
+    mentionedUserIds: string[];
+    authorId: string;
+    authorName: string;
+    postId: string;
+    listingLabel?: string | null;
+    taskId?: string | null;
+    projectId?: string | null;
+  }): Promise<void> {
+    const ref = params.listingLabel?.trim() || 'a discussion';
+    const link = params.taskId
+      ? `/tasks/${params.taskId}?tab=chatter`
+      : params.projectId
+        ? `/projects/${params.projectId}?tab=chatter`
+        : '/chatter';
+
+    for (const userId of uniqueUuids(params.mentionedUserIds)) {
+      if (userId === params.authorId) continue;
+      try {
+        await this.prisma.notification.create({
+          data: {
+            id: randomUUID(),
+            userId,
+            title: 'You were mentioned in Chatter',
+            message: `${params.authorName} mentioned you in a post about ${ref}.`,
+            linkUrl: link,
+          },
+        });
+      } catch (err) {
+        this.logger.warn(`Mention notification failed for ${userId}: ${err}`);
+      }
+    }
+  }
+
+  private async loadCommentById(commentId: string): Promise<ChatterCommentDto | null> {
+    const id = optionalUuid(commentId);
+    if (!id) return null;
+
+    const rows = await this.prisma.$queryRawUnsafe<Array<Record<string, unknown>>>(`
       SELECT
         c.id,
         c.postId,
@@ -150,10 +342,72 @@ export class ChatterPostsService implements OnModuleInit {
       FROM ErpTSChatterComment c
       LEFT JOIN ErpTSUser u ON u.id = c.authorId
       LEFT JOIN ErpTSRole r ON r.id = u.roleId
-      WHERE c.postId IN (${Prisma.join(ids)})
-      ORDER BY c.createdAt DESC`;
+      WHERE c.id = ${sqlQuotedUuid(id)}
+    `);
 
-    return rows.map((row) => this.mapCommentRow(row));
+    const row = rows[0];
+    return row ? this.mapCommentRow(row) : null;
+  }
+
+  async listMentionUsers() {
+    const users = await this.usersService.findAll();
+    return users.map((user) => ({
+      id: user.id,
+      fullName: user.fullName,
+    }));
+  }
+
+  private mapCommentRow(
+    row: Record<string, unknown>,
+    mentionedUsers: ChatterMentionedUserDto[] = [],
+  ): ChatterCommentDto {
+    const createdAt =
+      row.createdAt instanceof Date ? row.createdAt : new Date(row.createdAt as string | number | Date);
+    const primaryMention = mentionedUsers[0]?.id ?? (row.mentionUserId != null ? String(row.mentionUserId) : null);
+    return {
+      id: String(row.id),
+      postId: row.postId != null ? String(row.postId) : null,
+      authorId: row.authorId != null ? String(row.authorId) : null,
+      authorName: row.authorName != null ? String(row.authorName) : null,
+      authorRole: row.authorRole != null ? String(row.authorRole) : null,
+      mentionUserId: primaryMention,
+      mentionedUsers,
+      message: String(row.message ?? ''),
+      createdAt: createdAt.toISOString(),
+    };
+  }
+
+  private async findCommentsByPostIds(postIds: string[]): Promise<ChatterCommentDto[]> {
+    const inList = this.sqlInUuidList(postIds);
+    if (!inList) return [];
+
+    const rows = await this.prisma.$queryRawUnsafe<Array<Record<string, unknown>>>(`
+      SELECT
+        c.id,
+        c.postId,
+        c.authorId,
+        c.mentionUserId,
+        u.fullName AS authorName,
+        r.name AS authorRole,
+        c.message,
+        c.createdAt
+      FROM ErpTSChatterComment c
+      LEFT JOIN ErpTSUser u ON u.id = c.authorId
+      LEFT JOIN ErpTSRole r ON r.id = u.roleId
+      WHERE c.postId IN (${inList})
+      ORDER BY c.createdAt DESC`);
+
+    const commentDtos = rows.map((row) => this.mapCommentRow(row));
+    const mentionMap = await this.loadCommentMentionsMap(commentDtos.map((c) => c.id));
+    return commentDtos.map((comment) => {
+      const extra = mentionMap.get(comment.id) ?? [];
+      if (!extra.length) return comment;
+      return {
+        ...comment,
+        mentionedUsers: extra,
+        mentionUserId: extra[0]?.id ?? comment.mentionUserId,
+      };
+    });
   }
 
   private attachComments(posts: ChatterPostDto[], comments: ChatterCommentDto[]): ChatterPostDto[] {
@@ -304,37 +558,57 @@ export class ChatterPostsService implements OnModuleInit {
     return title || 'Chatter Post';
   }
 
-  private async loadProjectMeta(projectId: string): Promise<{ projectName: string | null }> {
+  private async loadProjectMeta(
+    projectId: string,
+  ): Promise<{ projectName: string | null; projectNo: string | null }> {
     const project = await this.prisma.project.findUnique({
       where: { id: projectId },
-      select: { name: true },
+      select: { name: true, projectNo: true },
     });
-    return { projectName: project?.name?.trim() || null };
+    return {
+      projectName: project?.name?.trim() || null,
+      projectNo: resolveProjectNo(project?.projectNo),
+    };
   }
 
   private async loadTaskMeta(taskId: string): Promise<{
     taskName: string | null;
+    taskOpNo: string | null;
     projectName: string | null;
+    projectNo: string | null;
     projectId: string | null;
   }> {
     const rows = await this.prisma.$queryRaw<
-      Array<{ title: string | null; taskNo: string | null; opNo: string | null; projectName: string | null; projectId: string | null }>
+      Array<{
+        title: string | null;
+        taskNo: string | null;
+        opNo: string | null;
+        projectName: string | null;
+        projectNo: string | null;
+        projectId: string | null;
+      }>
     >`
       SELECT TOP 1
         t.title,
         t.taskNo,
         t.opNo,
         pr.name AS projectName,
+        pr.projectNo AS projectNo,
         t.projectId
       FROM ErpTSTask t
       LEFT JOIN ErpTSProject pr ON pr.id = t.projectId
       WHERE t.id = ${taskId}`;
     const row = rows[0];
-    if (!row) return { taskName: null, projectName: null, projectId: null };
+    if (!row) {
+      return { taskName: null, taskOpNo: null, projectName: null, projectNo: null, projectId: null };
+    }
+    const taskOpNo = resolveTaskOpNo(row.opNo, row.taskNo);
     return {
-      taskName: this.formatTaskDisplayName(row.title, row.taskNo, row.opNo),
+      taskName: taskOpNo,
       projectName: row.projectName?.trim() || null,
       projectId: row.projectId != null ? String(row.projectId) : null,
+      taskOpNo,
+      projectNo: resolveProjectNo(row.projectNo),
     };
   }
 
@@ -344,6 +618,7 @@ export class ChatterPostsService implements OnModuleInit {
       u.fullName AS authorName, r.name AS authorRole,
       mu.fullName AS mentionUserName,
       COALESCE(pr.name, prDirect.name) AS projectName,
+      COALESCE(pr.projectNo, prDirect.projectNo) AS projectNo,
       CONVERT(varchar(36), COALESCE(t.projectId, ${alias}.projectId)) AS projectId,
       t.title AS taskTitle, t.taskNo AS taskNo, t.opNo AS taskOpNo,
       assignee.fullName AS assigneeName,
@@ -368,17 +643,25 @@ export class ChatterPostsService implements OnModuleInit {
 
   private async enrichPosts(posts: ChatterPostDto[]): Promise<ChatterPostDto[]> {
     const postIds = posts.map((p) => p.id);
-    const [comments, attachmentsMap, linksMap] = await Promise.all([
+    const [comments, attachmentsMap, linksMap, mentionMap] = await Promise.all([
       this.findCommentsByPostIds(postIds),
       this.findAttachmentsByPostIds(postIds),
       this.findLinksByPostIds(postIds),
+      this.loadPostMentionsMap(postIds),
     ]);
     const withComments = this.attachComments(posts, comments);
-    return withComments.map((post) => ({
-      ...post,
-      attachments: attachmentsMap.get(post.id) ?? [],
-      linkAttachments: linksMap.get(post.id) ?? [],
-    }));
+    return withComments.map((post) => {
+      const mentionedUsers = mentionMap.get(post.id) ?? post.mentionedUsers ?? [];
+      const primaryMention = mentionedUsers[0]?.fullName ?? post.mentionUserName;
+      return {
+        ...post,
+        mentionedUsers,
+        mentionUserId: mentionedUsers[0]?.id ?? post.mentionUserId,
+        mentionUserName: primaryMention ?? post.mentionUserName,
+        attachments: attachmentsMap.get(post.id) ?? [],
+        linkAttachments: linksMap.get(post.id) ?? [],
+      };
+    });
   }
 
   private mapRow(row: any): Omit<ChatterPostDto, 'comments' | 'attachments' | 'linkAttachments'> {
@@ -392,14 +675,23 @@ export class ChatterPostsService implements OnModuleInit {
           ? new Date(editedAtRaw).toISOString()
           : null;
 
-    const taskName = this.formatTaskDisplayName(row.taskTitle, row.taskNo, row.taskOpNo);
-    const displayTitle = this.resolveDisplayTitle(row.title, taskName);
+    const taskOpNo = resolveTaskOpNo(
+      row.taskOpNo != null ? String(row.taskOpNo) : null,
+      row.taskNo != null ? String(row.taskNo) : null,
+    );
+    const projectNo = resolveProjectNo(row.projectNo != null ? String(row.projectNo) : null);
+    const taskId = row.taskId != null ? String(row.taskId) : null;
+    const listingLabel = this.resolveListingLabel(taskId, taskOpNo, projectNo);
+    const displayTitle = listingLabel ?? this.resolveDisplayTitle(row.title, taskOpNo);
 
     return {
       id: String(row.id),
-      taskId: row.taskId != null ? String(row.taskId) : null,
-      taskName,
+      taskId,
+      taskName: taskOpNo,
+      taskOpNo,
       projectId: row.projectId != null ? String(row.projectId) : null,
+      projectNo,
+      listingLabel,
       authorId: row.authorId != null ? String(row.authorId) : null,
       authorName: row.authorName != null ? String(row.authorName) : null,
       authorRole: row.authorRole != null ? String(row.authorRole) : null,
@@ -410,6 +702,7 @@ export class ChatterPostsService implements OnModuleInit {
       message: row.message,
       postType: row.postType ?? null,
       mentionUserId: row.mentionUserId != null ? String(row.mentionUserId) : null,
+      mentionedUsers: [],
       priority: row.priority ?? null,
       seenByCount: Number(row.seenByCount ?? 0),
       attachmentCount: Number(row.attachmentCount ?? row._count?.attachments ?? 0),
@@ -428,6 +721,7 @@ export class ChatterPostsService implements OnModuleInit {
     mentionUserIdFilter?: string,
     commentedByUserIdFilter?: string,
     postTypeFilter?: string,
+    weekStartFilter?: string,
   ): Promise<ChatterPostDto[]> {
     const limit = Math.min(1000, Math.max(1, Number.parseInt(limitParam ?? '500', 10) || 500));
     const taskId = optionalUuid(taskIdFilter);
@@ -451,8 +745,17 @@ export class ChatterPostsService implements OnModuleInit {
       whereParts.push(`(
         p.mentionUserId = ${mentionSql}
         OR EXISTS (
+          SELECT 1 FROM ErpTSChatterPostMention pm
+          WHERE pm.postId = p.id AND pm.userId = ${mentionSql}
+        )
+        OR EXISTS (
           SELECT 1 FROM ErpTSChatterComment cm
           WHERE cm.postId = p.id AND cm.mentionUserId = ${mentionSql}
+        )
+        OR EXISTS (
+          SELECT 1 FROM ErpTSChatterComment cm
+          INNER JOIN ErpTSChatterCommentMention cmm ON cmm.commentId = cm.id
+          WHERE cm.postId = p.id AND cmm.userId = ${mentionSql}
         )
       )`);
     }
@@ -464,6 +767,14 @@ export class ChatterPostsService implements OnModuleInit {
     }
     if (postType) {
       whereParts.push(`p.postType = N'${postType.replace(/'/g, "''")}'`);
+    }
+    if (weekStartFilter?.trim()) {
+      const range = weekRangeContaining(weekStartFilter.trim());
+      if (range) {
+        const startSql = `'${range.start.toISOString().replace(/'/g, "''")}'`;
+        const endSql = `'${range.end.toISOString().replace(/'/g, "''")}'`;
+        whereParts.push(`p.createdAt >= ${startSql} AND p.createdAt <= ${endSql}`);
+      }
     }
 
     const whereSql = whereParts.length > 0 ? `WHERE ${whereParts.join(' AND ')}` : '';
@@ -535,7 +846,8 @@ export class ChatterPostsService implements OnModuleInit {
       throw new NotFoundException('Chatter post not found');
     }
 
-    const mentionUserId = optionalUuid(dto.mentionUserId);
+    const mentionUserIds = await this.collectCommentMentionUserIds(dto, dto.message);
+    const mentionUserId = mentionUserIds[0] ?? optionalUuid(dto.mentionUserId);
     const messageSql = `N'${dto.message.trim().replace(/'/g, "''")}'`;
     const mentionSql = mentionUserId ? sqlQuotedUuid(mentionUserId) : 'NULL';
 
@@ -563,6 +875,16 @@ export class ChatterPostsService implements OnModuleInit {
       WHERE id = ${sqlQuotedUuid(normalizedPostId)}
     `);
 
+    if (mentionUserIds.length > 0) {
+      await this.insertCommentMentions(newCommentId, mentionUserIds);
+    }
+
+    const author = await this.prisma.user.findUnique({
+      where: { id: authorId },
+      select: { fullName: true },
+    });
+    const postMeta = await this.loadPostById(normalizedPostId);
+
     await this.activityLogger.log({
       action: ActivityAction.CREATED_CHATTER_COMMENT,
       userId: authorId,
@@ -577,10 +899,28 @@ export class ChatterPostsService implements OnModuleInit {
       },
     });
 
+    if (mentionUserIds.length > 0) {
+      await this.notifyMentionedUsers({
+        mentionedUserIds: mentionUserIds,
+        authorId,
+        authorName: author?.fullName?.trim() || 'Someone',
+        postId: normalizedPostId,
+        listingLabel: postMeta?.listingLabel,
+        taskId: postMeta?.taskId,
+        projectId: postMeta?.projectId,
+      });
+    }
+
+    const loaded = await this.loadCommentById(newCommentId);
+    if (loaded) return loaded;
+
     const comments = await this.findCommentsByPostIds([normalizedPostId]);
-    const saved = comments.find((c) => c.id === String(newCommentId));
+    const saved = comments.find((c) => this.commentIdsMatch(c.id, newCommentId));
     if (saved) return saved;
 
+    this.logger.error(
+      `Comment ${newCommentId} inserted for post ${normalizedPostId} but reload returned ${comments.length} row(s)`,
+    );
     throw new BadRequestException('Comment created but could not be loaded');
   }
 
@@ -629,23 +969,39 @@ export class ChatterPostsService implements OnModuleInit {
     const taskId = optionalUuid(dto.taskId);
     const dtoProjectId = optionalUuid(dto.projectId);
 
-    let taskMeta: { taskName: string | null; projectName: string | null; projectId: string | null } = {
+    let taskMeta: {
+      taskName: string | null;
+      taskOpNo: string | null;
+      projectName: string | null;
+      projectNo: string | null;
+      projectId: string | null;
+    } = {
       taskName: null,
+      taskOpNo: null,
       projectName: null,
+      projectNo: null,
       projectId: null,
     };
-    let projectMeta: { projectName: string | null } = { projectName: null };
+    let projectMeta: { projectName: string | null; projectNo: string | null } = {
+      projectName: null,
+      projectNo: null,
+    };
     if (taskId) {
       taskMeta = await this.loadTaskMeta(taskId);
     } else if (dtoProjectId) {
       projectMeta = await this.loadProjectMeta(dtoProjectId);
       taskMeta.projectId = dtoProjectId;
       taskMeta.projectName = projectMeta.projectName;
+      taskMeta.projectNo = projectMeta.projectNo;
     }
-    const resolvedTitle = this.resolveDisplayTitle(
-      dto.title,
-      taskMeta.taskName ?? projectMeta.projectName,
+    const listingLabel = this.resolveListingLabel(
+      taskId,
+      taskMeta.taskOpNo,
+      taskMeta.projectNo ?? projectMeta.projectNo,
     );
+    const resolvedTitle = listingLabel ?? this.resolveDisplayTitle(dto.title, taskMeta.taskOpNo);
+    const mentionUserIds = await this.collectPostMentionUserIds(dto, dto.message);
+    const primaryMentionUserId = mentionUserIds[0] ?? optionalUuid(dto.mentionUserId);
     const resolvedProjectId = taskMeta.projectId ?? dtoProjectId;
 
     let newPost: any;
@@ -660,7 +1016,7 @@ export class ChatterPostsService implements OnModuleInit {
           taskId: taskId || null,
           projectId: resolvedProjectId,
           authorId: authorId,
-          mentionUserId: optionalUuid(dto.mentionUserId),
+          mentionUserId: primaryMentionUserId,
           attachmentCount: totalAttachments > 0 ? totalAttachments : undefined,
           attachments: uploadResults.length > 0 ? {
             create: uploadResults.map((r) => ({
@@ -698,21 +1054,37 @@ export class ChatterPostsService implements OnModuleInit {
       );
     }
 
-    const [attachmentsMap, linksMap, mentionRow] = await Promise.all([
+    if (mentionUserIds.length > 0) {
+      await this.insertPostMentions(newPost.id, mentionUserIds);
+    }
+
+    const author = await this.prisma.user.findUnique({
+      where: { id: authorId },
+      select: { fullName: true },
+    });
+
+    const [attachmentsMap, linksMap] = await Promise.all([
       this.findAttachmentsByPostIds([newPost.id]),
       this.findLinksByPostIds([newPost.id]),
-      dto.mentionUserId
-        ? this.prisma.user.findUnique({
-            where: { id: optionalUuid(dto.mentionUserId) ?? undefined },
-            select: { fullName: true },
-          })
-        : Promise.resolve(null),
     ]);
     const attachmentDtos = attachmentsMap.get(newPost.id) ?? [];
     const linkDtos = linksMap.get(newPost.id) ?? [];
 
     const projectId = resolvedProjectId;
     const projectName = taskMeta.projectName ?? projectMeta.projectName;
+
+    if (mentionUserIds.length > 0) {
+      await this.notifyMentionedUsers({
+        mentionedUserIds: mentionUserIds,
+        authorId,
+        authorName: author?.fullName?.trim() || 'Someone',
+        postId: newPost.id,
+        listingLabel,
+        taskId: newPost.taskId,
+        projectId,
+      });
+    }
+
     await this.activityLogger.log({
       action: ActivityAction.CREATED_CHATTER_POST,
       userId: authorId,
@@ -739,9 +1111,12 @@ export class ChatterPostsService implements OnModuleInit {
 
     return {
       ...this.mapRow(newPost),
-      taskName: taskMeta.taskName,
+      taskName: taskMeta.taskOpNo,
+      taskOpNo: taskMeta.taskOpNo,
+      projectNo: taskMeta.projectNo ?? projectMeta.projectNo,
+      listingLabel,
       projectId,
-      mentionUserName: mentionRow?.fullName ?? null,
+      mentionUserName: null,
       projectName,
       comments: [],
       attachments: attachmentDtos,

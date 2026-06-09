@@ -848,8 +848,8 @@ export class TasksService {
     const newStatusApi = this.toApiTaskStatus(dto.status);
     const newStatusDb = this.toDbTaskStatus(dto.status);
     const extraData: Record<string, unknown> = {};
-    if (newStatusApi === 'WIP' && !existing.startedAt) extraData.startedAt = now;
-    if (newStatusApi === 'COMPLETED' || newStatusApi === 'APPROVED') extraData.completedAt = now;
+    if ((newStatusApi === 'WIP' || newStatusApi === 'IN_PROGRESS') && !existing.startedAt) extraData.startedAt = now;
+    if (['COMPLETED', 'APPROVED', 'DESIGN_COMPLETED', 'REVIEW_COMPLETED'].includes(newStatusApi)) extraData.completedAt = now;
 
     const updatedTask = await this.prisma.task.update({
       where: { id },
@@ -1041,7 +1041,7 @@ export class TasksService {
       files: session.files.map((f) => ({
         fileName: f.fileName,
         mimeType: f.mimeType,
-        sizeBytes: f.sizeBytes,
+        sizeBytes: f.sizeBytes == null ? null : Number(f.sizeBytes),
       })),
     };
   }

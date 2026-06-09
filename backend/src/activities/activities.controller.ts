@@ -3,7 +3,9 @@ import { ActivitiesService } from './activities.service';
 import { JwtAuthGuard } from '../common/guards/jwt-auth.guard';
 import { RolesGuard } from '../common/guards/roles.guard';
 import { Roles } from '../common/decorators/roles.decorator';
+import { CurrentUser } from '../common/decorators/current-user.decorator';
 import { UserRole } from '../common/constants/roles.enum';
+import type { JwtPayload } from '../common/types/jwt-payload.type';
 
 @UseGuards(JwtAuthGuard, RolesGuard)
 @Controller('activities')
@@ -12,9 +14,18 @@ export class ActivitiesController {
 
   @Get()
   @Roles(UserRole.HOD, UserRole.DESIGNER, UserRole.ADMIN, UserRole.PROJECT_MANAGER)
-  findAll(@Query('limit') limit?: string, @Query('userId') userId?: string) {
+  findAll(
+    @Query('limit') limit?: string,
+    @Query('userId') userId?: string,
+    @CurrentUser() currentUser?: JwtPayload,
+  ) {
     const parsedLimit = limit ? parseInt(limit, 10) : 50;
-    return this.activitiesService.findAll({ limit: parsedLimit, userId });
+    return this.activitiesService.findAll({
+      limit: parsedLimit,
+      userId,
+      requestingUserId: currentUser?.sub,
+      requestingUserRole: currentUser?.role,
+    });
   }
 
   @Get('task/:taskId')

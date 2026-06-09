@@ -1,6 +1,7 @@
 import { Injectable } from '@nestjs/common';
 import { PrismaService } from '../prisma/prisma.service';
 import { ActivityAction } from './activity-events';
+import { UserRole } from '../common/constants/roles.enum';
 
 const MILESTONE_ACTIONS = new Set([
   ActivityAction.SCHEDULER_WEEK_LOCKED,
@@ -14,11 +15,32 @@ type FindInput = {
   taskId?: string;
   projectId?: string;
   userId?: string;
+  requestingUserId?: string;
+  requestingUserRole?: string;
 };
 
 @Injectable()
 export class ActivitiesService {
   constructor(private readonly prisma: PrismaService) {}
+
+  private formatOvertimeSummary(messageKey: string, _details: any, actorName: string): string {
+    if (messageKey === 'overtime_request_submitted') {
+      return `${actorName} submitted an overtime request`;
+    }
+    if (messageKey === 'overtime_request_updated') {
+      return `${actorName} updated an overtime request`;
+    }
+    if (messageKey === 'overtime_request_approved') {
+      return `${actorName} approved an overtime request`;
+    }
+    if (messageKey === 'overtime_request_rejected') {
+      return `${actorName} rejected an overtime request`;
+    }
+    if (messageKey === 'overtime_request_withdrawn') {
+      return `${actorName} withdrew an overtime request`;
+    }
+    return `${actorName} updated an overtime request`;
+  }
 
   private formatSummary(action: string, details: any, actorName: string): string {
     const msg = details?.messageKey;
@@ -47,20 +69,70 @@ export class ActivitiesService {
     if (msg === 'scheduler_week_unlocked') return `${actorName} unlocked the schedule for week of ${details?.context?.weekStart ?? ''}`;
     if (msg === 'leave_request_submitted')
       return `${actorName} submitted a ${details?.context?.type ?? 'leave'} request`;
+    if (msg === 'leave_request_updated') return `${actorName} updated a pending leave request`;
+    if (msg === 'leave_request_cancelled') return `${actorName} cancelled a leave request`;
+    if (msg === 'leave_request_revoked') {
+      const dn = details?.context?.designerName ?? details?.context?.requesterName;
+      return dn
+        ? `${actorName} revoked ${dn}'s approved leave request`
+        : `${actorName} revoked an approved leave request`;
+    }
     if (msg === 'leave_request_status_changed')
       return `${actorName} ${(details?.changes?.newStatus as string)?.toLowerCase() ?? 'updated'} a leave request`;
     if (msg === 'regularization_submitted')
       return `${actorName} submitted a regularization request`;
-    if (msg === 'regularization_approved') return `${actorName} approved a regularization request`;
-    if (msg === 'regularization_rejected') return `${actorName} rejected a regularization request`;
+    if (msg === 'regularization_approved') {
+      const dn = details?.context?.designerName;
+      return dn ? `${actorName} approved ${dn}'s regularization request` : `${actorName} approved a regularization request`;
+    }
+    if (msg === 'regularization_rejected') {
+      const dn = details?.context?.designerName;
+      return dn ? `${actorName} rejected ${dn}'s regularization request` : `${actorName} rejected a regularization request`;
+    }
     if (msg === 'regularization_status_changed')
       return `${actorName} ${(details?.changes?.newStatus as string)?.toLowerCase() ?? 'updated'} a regularization request`;
-    if (msg === 'overtime_request_submitted')
-      return `${actorName} submitted an overtime request`;
-    if (msg === 'overtime_request_status_changed')
-      return `${actorName} ${(details?.changes?.newStatus as string)?.toLowerCase().replace(/_/g, ' ') ?? 'updated'} an overtime request`;
+    if (
+      msg === 'overtime_request_submitted' ||
+      msg === 'overtime_request_updated' ||
+      msg === 'overtime_request_approved' ||
+      msg === 'overtime_request_rejected' ||
+      msg === 'overtime_request_withdrawn' ||
+      msg === 'overtime_request_status_changed'
+    ) {
+      return this.formatOvertimeSummary(msg, details, actorName);
+    }
     const readable = action.toLowerCase().replace(/_/g, ' ');
     return `${actorName} ${readable}`;
+  }
+
+  private buildSegments(item: ReturnType<typeof this.mapRow>) {
+    const t = item.task;
+    const txt = (v: string) => ({ type: 'text' as const, value: v });
+    const base = [txt(item.summary)];
+
+    if (!t) return base;
+
+    const taskLink = { type: 'link' as const, label: t.taskNo, href: `/design-list/task/${t.id}` };
+
+    switch (item.action) {
+      case ActivityAction.TASK_CREATED:
+        return [txt(`${item.actor.name} created task `), taskLink];
+      case ActivityAction.STATUS_CHANGED:
+      case ActivityAction.ASSIGNED_TASK:
+        return [...base, txt(' — '), taskLink];
+      case ActivityAction.REGULARIZATION_SUBMITTED:
+      case ActivityAction.REGULARIZATION_APPROVED:
+      case ActivityAction.REGULARIZATION_REJECTED:
+      case ActivityAction.OVERTIME_REQUEST_SUBMITTED:
+      case ActivityAction.OVERTIME_REQUEST_UPDATED:
+      case ActivityAction.OVERTIME_REQUEST_APPROVED:
+      case ActivityAction.OVERTIME_REQUEST_REJECTED:
+      case ActivityAction.OVERTIME_REQUEST_WITHDRAWN:
+      case ActivityAction.OVERTIME_REQUEST_STATUS_CHANGED:
+        return [...base, txt(' for task '), taskLink];
+      default:
+        return base;
+    }
   }
 
   private formatSeverity(action: string): 'info' | 'success' | 'warning' {
@@ -86,6 +158,19 @@ export class ActivitiesService {
       where.OR = [
         { task: { projectId: input.projectId } },
         { details: { contains: input.projectId } },
+      ];
+    } else if (input.requestingUserRole === UserRole.DESIGNER && input.requestingUserId) {
+      const designerTasks = await this.prisma.task.findMany({
+        where: { assigneeId: input.requestingUserId },
+        select: { projectId: true },
+        distinct: ['projectId'],
+      });
+      const projectIds = designerTasks.map((t) => t.projectId).filter(Boolean) as string[];
+
+      where.OR = [
+        { task: { assigneeId: input.requestingUserId } },
+        { userId: input.requestingUserId },
+        ...(projectIds.length > 0 ? [{ projectId: { in: projectIds } }] : []),
       ];
     }
 
@@ -170,14 +255,19 @@ export class ActivitiesService {
     };
   }
 
-  async findAll(input: { limit?: number; userId?: string }) {
-    const result = await this.queryActivities({ limit: input.limit, userId: input.userId });
+  async findAll(input: { limit?: number; userId?: string; requestingUserId?: string; requestingUserRole?: string }) {
+    const result = await this.queryActivities({
+      limit: input.limit,
+      userId: input.userId,
+      requestingUserId: input.requestingUserId,
+      requestingUserRole: input.requestingUserRole,
+    });
     return result.data.map((item) => ({
       id: item.id,
       action: item.action,
       kind: MILESTONE_ACTIONS.has(item.action as any) ? 'project_milestone' : 'task_update',
       user: item.actor,
-      messageSegments: [{ type: 'text', value: item.summary }],
+      messageSegments: this.buildSegments(item),
       occurredAt: item.occurredAt,
       liked: false,
       individualEligible: true,

@@ -1,18 +1,25 @@
 import { mkdirSync } from 'fs';
 import { join } from 'path';
 import { NestFactory } from '@nestjs/core';
+import { ExpressAdapter } from '@nestjs/platform-express';
 import { AppModule } from './app.module';
+import { SocketIoAdapter } from './common/adapters/socket-io.adapter';
 import helmet from 'helmet';
 import compression from 'compression';
 import { Logger, ValidationPipe } from '@nestjs/common';
 import { HttpExceptionFilter } from './common/filters/http-exception.filter';
 import { LoggingInterceptor } from './common/interceptors/logging.interceptor';
+import { BigIntSerializationInterceptor } from './common/interceptors/bigint-serialization.interceptor';
 import { ConfigService } from '@nestjs/config';
+import { installBigIntJsonSerialization } from './common/utils/json-serialization.util';
+
+installBigIntJsonSerialization();
 
 async function bootstrap() {
   mkdirSync(join(process.cwd(), 'uploads', 'chatter'), { recursive: true });
 
-  const app = await NestFactory.create(AppModule);
+  const app = await NestFactory.create(AppModule, new ExpressAdapter());
+  app.useWebSocketAdapter(new SocketIoAdapter(app));
   const configService = app.get(ConfigService);
   const prefix = configService.get<string>('api.prefix') ?? 'api/v1';
   const port = configService.get<number>('app.port') ?? 4000;
@@ -36,7 +43,10 @@ async function bootstrap() {
     }),
   );
   app.useGlobalFilters(new HttpExceptionFilter());
-  app.useGlobalInterceptors(new LoggingInterceptor());
+  app.useGlobalInterceptors(
+    new BigIntSerializationInterceptor(),
+    new LoggingInterceptor(),
+  );
 
   await app.listen(port);
 

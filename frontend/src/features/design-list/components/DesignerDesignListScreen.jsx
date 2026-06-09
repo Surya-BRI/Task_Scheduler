@@ -12,16 +12,35 @@ import { getStatusLabel, mapTaskToDesignRow, matchDateRange } from "../task-view
 
 const getStatusColor = (status) => {
   switch (status) {
-    case "WIP": return "bg-blue-100 text-blue-700 border-blue-200";
-    case "COMPLETED": return "bg-green-100 text-green-700 border-green-200";
-    case "PENDING": return "bg-yellow-100 text-yellow-700 border-yellow-200";
-    case "REVISION": return "bg-orange-100 text-orange-700 border-orange-200";
-    case "APPROVED": return "bg-purple-100 text-purple-700 border-purple-200";
-    case "ON_HOLD": return "bg-slate-100 text-slate-700 border-slate-300";
-    default: return "bg-slate-100 text-slate-700 border-slate-200";
+    // Legacy
+    case "WIP":              return "bg-blue-100 text-blue-700 border-blue-200";
+    case "COMPLETED":        return "bg-green-100 text-green-700 border-green-200";
+    case "PENDING":          return "bg-yellow-100 text-yellow-700 border-yellow-200";
+    case "REVISION":         return "bg-orange-100 text-orange-700 border-orange-200";
+    case "APPROVED":         return "bg-purple-100 text-purple-700 border-purple-200";
+    case "ON_HOLD":          return "bg-slate-100 text-slate-700 border-slate-300";
+    // New lifecycle
+    case "DESIGN_NEW":       return "bg-amber-100 text-amber-700 border-amber-200";
+    case "DESIGN_PLANNED":   return "bg-sky-100 text-sky-700 border-sky-200";
+    case "IN_PROGRESS":      return "bg-blue-100 text-blue-700 border-blue-200";
+    case "DESIGN_COMPLETED": return "bg-teal-100 text-teal-700 border-teal-200";
+    case "HOD_REVIEW":       return "bg-violet-100 text-violet-700 border-violet-200";
+    case "SALES_REVIEW":     return "bg-orange-100 text-orange-700 border-orange-200";
+    case "REWORK":           return "bg-red-100 text-red-700 border-red-200";
+    case "REVIEW_COMPLETED": return "bg-green-100 text-green-700 border-green-200";
+    case "CLIENT_REJECTED":  return "bg-rose-100 text-rose-700 border-rose-200";
+    default:                 return "bg-slate-100 text-slate-700 border-slate-200";
   }
 };
-const getStatusDot = (status) => ({ WIP: "bg-blue-500", COMPLETED: "bg-green-500", PENDING: "bg-yellow-500", REVISION: "bg-orange-500", APPROVED: "bg-purple-500", ON_HOLD: "bg-slate-500" }[status] || "bg-slate-500");
+const getStatusDot = (status) => ({
+  // Legacy
+  WIP: "bg-blue-500", COMPLETED: "bg-green-500", PENDING: "bg-yellow-500",
+  REVISION: "bg-orange-500", APPROVED: "bg-purple-500", ON_HOLD: "bg-slate-500",
+  // New lifecycle
+  DESIGN_NEW: "bg-amber-500", DESIGN_PLANNED: "bg-sky-500", IN_PROGRESS: "bg-blue-500",
+  DESIGN_COMPLETED: "bg-teal-500", HOD_REVIEW: "bg-violet-500", SALES_REVIEW: "bg-orange-500",
+  REWORK: "bg-red-500", REVIEW_COMPLETED: "bg-green-500", CLIENT_REJECTED: "bg-rose-500",
+}[status] || "bg-slate-500");
 function taskDetailPath(row, extra = {}) { return taskViewPathForRecord(row, { from: FROM_DESIGNER_QUEUE, ...extra }); }
 function truncateText(value, max = 20) {
   const text = String(value ?? "").trim();
@@ -33,7 +52,11 @@ function truncateText(value, max = 20) {
 const Toolbar = ({ viewMode, setViewMode, filters, setFilters, salesPersons, designerName }) => {
   const [showFilters, setShowFilters] = useState(false);
   const activeCount = [filters.type, filters.status, filters.salesPerson, filters.startDate, filters.endDate].filter(Boolean).length;
-  const designStatuses = ["PENDING", "WIP", "ON_HOLD", "REVISION", "APPROVED", "COMPLETED"];
+  const designStatuses = [
+    "DESIGN_NEW", "DESIGN_PLANNED", "IN_PROGRESS", "DESIGN_COMPLETED",
+    "HOD_REVIEW", "SALES_REVIEW", "REWORK", "REVIEW_COMPLETED", "CLIENT_REJECTED",
+    "PENDING", "WIP", "ON_HOLD", "REVISION", "APPROVED", "COMPLETED",
+  ];
   return (
     <div className="mb-4 mt-4 flex flex-col gap-4 px-4 sm:px-6 md:flex-row md:items-center md:justify-between">
       <h1 className="text-2xl font-semibold tracking-tight text-slate-900 leading-none shrink-0">{designerName} Design List</h1>
@@ -54,7 +77,24 @@ const Table = ({ data }) => {
 
 const Board = ({ data }) => {
   const router = useRouter();
-  const columns = [{ title: "WIP", status: "WIP" }, { title: "Confirmation Pending", status: "PENDING" }, { title: "On Hold", status: "ON_HOLD" }, { title: "Revision", status: "REVISION" }, { title: "Approved", status: "APPROVED" }, { title: "Completed", status: "COMPLETED" }];
+  const columns = [
+    { title: "Design Task New",  status: "DESIGN_NEW" },
+    { title: "Design Planned",   status: "DESIGN_PLANNED" },
+    { title: "In Progress",      status: "IN_PROGRESS" },
+    { title: "Design Completed", status: "DESIGN_COMPLETED" },
+    { title: "HOD Review",       status: "HOD_REVIEW" },
+    { title: "Sales Review",     status: "SALES_REVIEW" },
+    { title: "Rework / Error",   status: "REWORK" },
+    { title: "Review Completed", status: "REVIEW_COMPLETED" },
+    { title: "Client Rejected",  status: "CLIENT_REJECTED" },
+    { title: "On Hold",          status: "ON_HOLD" },
+    // Legacy statuses (existing tasks)
+    { title: "WIP",                  status: "WIP" },
+    { title: "Confirmation Pending", status: "PENDING" },
+    { title: "Revision",             status: "REVISION" },
+    { title: "Approved",             status: "APPROVED" },
+    { title: "Completed",            status: "COMPLETED" },
+  ];
   return <div className="flex min-h-0 flex-1 items-start gap-4 overflow-auto px-4 pb-6 sm:px-6">{columns.map((col) => <div key={col.status} className="flex-1 min-w-[280px] flex flex-col gap-4"><div className={`sticky top-0 z-10 px-4 py-2 rounded-xl flex items-center gap-2 font-semibold shadow-sm ${getStatusColor(col.status)}`}><span className={`w-2 h-2 rounded-full ${getStatusDot(col.status)}`} />{col.title}</div><div className="flex flex-col gap-3">{data.filter((d) => d.status === col.status).map((item) => <div key={item.id} onClick={() => router.push(taskDetailPath(item))} className={`p-2.5 min-h-[84px] rounded-lg border flex flex-col cursor-pointer hover:ring-1 hover:ring-blue-300/60 ${getStatusColor(item.status).replace("text-", "text-slate-900 border-").split(" ")[0]} bg-opacity-50`}><div className="text-[10px] border-b border-slate-200/50 pb-1 mb-1 whitespace-nowrap overflow-hidden text-ellipsis"><span className="font-semibold text-slate-900">{item.opNo}</span> | <span className="text-slate-700">{item.projectNo}</span></div><div className="text-xs font-medium mb-1.5 text-slate-800 truncate leading-tight">{item.businessUnit} - {item.name}</div><div className="flex items-center justify-between mt-auto gap-1"><div className={`flex items-center gap-1 text-[9px] font-semibold uppercase tracking-wider ${item.agingDays > 20 ? "text-red-500" : "text-slate-600"}`}><div className={`p-0.5 rounded flex shrink-0 ${getStatusColor(item.status)}`}><Clock size={10} className="text-slate-700" /></div>Aging {item.agingDays}d</div>{item.status !== "COMPLETED" && item.status !== "APPROVED" && <div className="flex items-center gap-0.5 shrink-0" onClick={(e) => e.stopPropagation()}><button type="button" onClick={() => router.push(taskDetailPath(item, { autostart: "1" }))} className="grid h-6 w-6 place-items-center rounded-full bg-white/90 text-emerald-600 ring-1 ring-slate-200 hover:bg-emerald-50" title="Start timer"><Play size={11} className="fill-current" /></button><button type="button" onClick={() => router.push(taskDetailPath(item, { openPause: "1" }))} className="grid h-6 w-6 place-items-center rounded-full bg-white/90 text-amber-500 ring-1 ring-slate-200 hover:bg-amber-50" title="Pause timer"><Pause size={11} /></button><button type="button" onClick={() => router.push(taskDetailPath(item, { openComplete: "1" }))} className="grid h-6 w-6 place-items-center rounded-full bg-white/90 text-red-600 ring-1 ring-slate-200 hover:bg-red-50" title="Stop and submit"><Square size={10} className="fill-current" /></button></div>}</div></div>)}</div></div>)}</div>;
 };
 

@@ -367,14 +367,15 @@ export class SchedulerAssignmentsService {
           const assignedDesigner = designerSet.size === 1 ? [...designerSet][0] : null;
 
           const currentStatus = String(task.status ?? '').toUpperCase();
-          const isTerminal = currentStatus === 'COMPLETED' || currentStatus === 'APPROVED';
+          const isTerminal = ['COMPLETED', 'APPROVED', 'REVIEW_COMPLETED'].includes(currentStatus);
 
           const updateData: Prisma.TaskUncheckedUpdateInput = {};
           if (assignedDesigner) {
             updateData.assigneeId = assignedDesigner;
-            // Only move to PENDING if not already completed/approved — never overwrite terminal states
+            // Only move to PENDING if not already completed/approved — never overwrite terminal states.
+            // Exception: DESIGN_NEW auto-promotes to DESIGN_PLANNED when assigned a scheduler slot.
             if (!isTerminal) {
-              updateData.status = 'PENDING';
+              updateData.status = currentStatus === 'DESIGN_NEW' ? 'DESIGN_PLANNED' : 'PENDING';
             }
           } else if (designerSet.size === 0) {
             updateData.assigneeId = null;

@@ -3,7 +3,7 @@ import { randomUUID } from 'crypto';
 import { PrismaService } from '../prisma/prisma.service';
 import { TaskFilesService } from '../tasks/task-files.service';
 import { ActivityLoggerService } from '../activities/activity-logger.service';
-import { ActivityAction } from '../activities/activity-events';
+import { ActivityAction, type ActivityActionType, type ActivityDetailsPayload } from '../activities/activity-events';
 import { CreateOvertimeRequestDto } from './dto/create-overtime-request.dto';
 import { UpdateOvertimeRequestDto } from './dto/update-overtime-request.dto';
 import { ReviewOvertimeRequestDto } from './dto/review-overtime-request.dto';
@@ -181,6 +181,101 @@ export class OvertimeRequestsService {
     return 'DRAFT';
   }
 
+  private readonly overtimeActivityTaskSelect = {
+    id: true,
+    title: true,
+    taskNo: true,
+    opNo: true,
+    project: { select: { name: true, projectNo: true } },
+  } as const;
+
+  private buildOvertimeActivityDetails(
+    request: {
+      id: string;
+      designerId?: string | null;
+      date?: Date | null;
+      totalHours?: Decimal | null;
+      requestedHours?: Decimal | null;
+      taskId?: string | null;
+      task?: {
+        id: string;
+        title?: string | null;
+        taskNo?: string | null;
+        opNo?: string | null;
+        project?: { name?: string | null; projectNo?: string | null } | null;
+      } | null;
+      designer?: { fullName?: string | null } | null;
+    },
+    action: ActivityActionType,
+    messageKey: string,
+    extra?: { changes?: Record<string, unknown> },
+  ): ActivityDetailsPayload {
+    const hours = request.requestedHours ?? request.totalHours;
+    const hoursLabel =
+      hours instanceof Decimal ? hours.toString() : hours != null ? String(hours) : undefined;
+
+    return {
+      event: action,
+      messageKey,
+      taskSnapshot: request.task
+        ? {
+            id: request.task.id,
+            taskNo: request.task.taskNo ?? undefined,
+            opNo: request.task.opNo ?? undefined,
+            title: request.task.title ?? undefined,
+          }
+        : undefined,
+      projectSnapshot: request.task?.project
+        ? {
+            name: request.task.project.name ?? undefined,
+            projectNo: request.task.project.projectNo ?? undefined,
+          }
+        : undefined,
+      changes: {
+        requestId: request.id,
+        overtimeDate: request.date ? request.date.toISOString().split('T')[0] : undefined,
+        requestedHours: hoursLabel,
+        ...extra?.changes,
+      },
+      context: {
+        designerId: request.designerId,
+        designerName: request.designer?.fullName ?? undefined,
+      },
+    };
+  }
+
+  private async logOvertimeActivity(params: {
+    action: ActivityActionType;
+    messageKey: string;
+    userId: string;
+    request: {
+      id: string;
+      designerId?: string | null;
+      date?: Date | null;
+      totalHours?: Decimal | null;
+      requestedHours?: Decimal | null;
+      taskId?: string | null;
+      task?: {
+        id: string;
+        title?: string | null;
+        taskNo?: string | null;
+        opNo?: string | null;
+        project?: { name?: string | null; projectNo?: string | null } | null;
+      } | null;
+      designer?: { fullName?: string | null } | null;
+    };
+    changes?: Record<string, unknown>;
+  }): Promise<void> {
+    await this.activityLogger.log({
+      action: params.action,
+      userId: params.userId,
+      taskId: params.request.taskId ?? null,
+      details: this.buildOvertimeActivityDetails(params.request, params.action, params.messageKey, {
+        changes: params.changes,
+      }),
+    });
+  }
+
   private mapStatusForUi(status: string | null | undefined): string {
     const normalized = (status ?? '').trim().toUpperCase();
     if (normalized === 'SUBMITTED') return 'Pending Approval';
@@ -298,7 +393,7 @@ export class OvertimeRequestsService {
 
     const task = await this.prisma.task.findUnique({
       where: { id: dto.taskId },
-      select: { id: true, assigneeId: true, title: true, taskNo: true, project: { select: { name: true } } },
+      select: { ...this.overtimeActivityTaskSelect, assigneeId: true },
     });
     if (!task) {
       throw new BadRequestException('Task not found. Select a valid assigned task.');
@@ -341,7 +436,7 @@ export class OvertimeRequestsService {
       },
       include: {
         designer: { select: { id: true, fullName: true, email: true, departmentId: true } },
-        task: { select: { id: true, title: true, taskNo: true, project: { select: { name: true } } } },
+        task: { select: this.overtimeActivityTaskSelect },
         attachments: true,
       },
     });
@@ -363,6 +458,12 @@ export class OvertimeRequestsService {
     }
 
     if (status === 'SUBMITTED') {
+      await this.logOvertimeActivity({
+        action: ActivityAction.OVERTIME_REQUEST_SUBMITTED,
+        messageKey: 'overtime_request_submitted',
+        userId: creatorId,
+        request,
+      });
       try {
         await this.notifyApprovers(request);
       } catch (err) {
@@ -427,7 +528,7 @@ export class OvertimeRequestsService {
       },
       include: {
         designer: { select: { id: true, fullName: true, email: true, departmentId: true } },
-        task: { select: { id: true, title: true, taskNo: true, project: { select: { name: true } } } },
+        task: { select: this.overtimeActivityTaskSelect },
         attachments: true,
       },
     });
@@ -441,6 +542,22 @@ export class OvertimeRequestsService {
         comments: 'Request details updated',
       },
     });
+
+    if (status === 'SUBMITTED' && request.status !== 'SUBMITTED') {
+      await this.logOvertimeActivity({
+        action: ActivityAction.OVERTIME_REQUEST_SUBMITTED,
+        messageKey: 'overtime_request_submitted',
+        userId,
+        request: updated,
+      });
+    } else {
+      await this.logOvertimeActivity({
+        action: ActivityAction.OVERTIME_REQUEST_UPDATED,
+        messageKey: 'overtime_request_updated',
+        userId,
+        request: updated,
+      });
+    }
 
     if (status === 'SUBMITTED' && request.status !== 'SUBMITTED') {
       await this.notifyApprovers(updated);
@@ -457,7 +574,7 @@ export class OvertimeRequestsService {
       where: { id },
       include: {
         designer: { select: { id: true, fullName: true, email: true, departmentId: true } },
-        task: { select: { id: true, title: true, taskNo: true, project: { select: { name: true } } } },
+        task: { select: this.overtimeActivityTaskSelect },
         attachments: true,
       },
     });
@@ -471,7 +588,7 @@ export class OvertimeRequestsService {
       data: { status: 'SUBMITTED' },
       include: {
         designer: { select: { id: true, fullName: true, email: true, departmentId: true } },
-        task: { select: { id: true, title: true, taskNo: true, project: { select: { name: true } } } },
+        task: { select: this.overtimeActivityTaskSelect },
         attachments: true,
       },
     });
@@ -485,16 +602,11 @@ export class OvertimeRequestsService {
       },
     });
 
-    await this.activityLogger.log({
+    await this.logOvertimeActivity({
       action: ActivityAction.OVERTIME_REQUEST_SUBMITTED,
+      messageKey: 'overtime_request_submitted',
       userId,
-      taskId: request.taskId ?? null,
-      details: {
-        event: ActivityAction.OVERTIME_REQUEST_SUBMITTED,
-        messageKey: 'overtime_request_submitted',
-        taskSnapshot: request.task ? { id: request.task.id, taskNo: request.task.taskNo } : undefined,
-        context: { requestId: id },
-      },
+      request: updated,
     });
 
     await this.notifyApprovers(updated);
@@ -517,7 +629,7 @@ export class OvertimeRequestsService {
       data: { status: 'WITHDRAWN' },
       include: {
         designer: { select: { id: true, fullName: true, email: true, departmentId: true } },
-        task: { select: { id: true, title: true, taskNo: true, project: { select: { name: true } } } },
+        task: { select: this.overtimeActivityTaskSelect },
       },
     });
 
@@ -528,6 +640,13 @@ export class OvertimeRequestsService {
         actionById: userId,
         comments: 'Request withdrawn by employee',
       },
+    });
+
+    await this.logOvertimeActivity({
+      action: ActivityAction.OVERTIME_REQUEST_WITHDRAWN,
+      messageKey: 'overtime_request_withdrawn',
+      userId,
+      request: updated,
     });
 
     return updated;
@@ -632,7 +751,10 @@ export class OvertimeRequestsService {
   async review(id: string, reviewerId: string, reviewerRole: UserRole, dto: ReviewOvertimeRequestDto) {
     const request = await this.prisma.overtimeRequest.findUnique({
       where: { id },
-      include: { designer: { select: { id: true, fullName: true, departmentId: true } } },
+      include: {
+        designer: { select: { id: true, fullName: true, departmentId: true } },
+        task: { select: this.overtimeActivityTaskSelect },
+      },
     });
 
     if (!request) throw new NotFoundException('Overtime request not found');
@@ -669,7 +791,10 @@ export class OvertimeRequestsService {
       const updated = await this.prisma.overtimeRequest.update({
         where: { id },
         data: updateData,
-        include: { designer: { select: { id: true, fullName: true, email: true } } },
+        include: {
+          designer: { select: { id: true, fullName: true, email: true } },
+          task: { select: this.overtimeActivityTaskSelect },
+        },
       });
 
       await this.prisma.overtimeApprovalHistory.create({
@@ -681,15 +806,18 @@ export class OvertimeRequestsService {
         },
       });
 
-      await this.activityLogger.log({
-        action: ActivityAction.OVERTIME_REQUEST_STATUS_CHANGED,
+      const approved = dto.status === 'APPROVED_BY_MANAGER';
+      await this.logOvertimeActivity({
+        action: approved
+          ? ActivityAction.OVERTIME_REQUEST_APPROVED
+          : ActivityAction.OVERTIME_REQUEST_REJECTED,
+        messageKey: approved ? 'overtime_request_approved' : 'overtime_request_rejected',
         userId: reviewerId,
-        taskId: request.taskId ?? null,
-        details: {
-          event: ActivityAction.OVERTIME_REQUEST_STATUS_CHANGED,
-          messageKey: 'overtime_request_status_changed',
-          changes: { newStatus: dto.status, approvedHours: dto.approvedHours ?? null },
-          context: { requestId: id },
+        request: { ...request, ...updated, task: updated.task ?? request.task },
+        changes: {
+          newStatus: dto.status,
+          approvedHours: dto.approvedHours ?? null,
+          reviewStage: 'manager',
         },
       });
 
@@ -729,7 +857,10 @@ export class OvertimeRequestsService {
       const updated = await this.prisma.overtimeRequest.update({
         where: { id },
         data: updateData,
-        include: { designer: { select: { id: true, fullName: true, email: true } } },
+        include: {
+          designer: { select: { id: true, fullName: true, email: true } },
+          task: { select: this.overtimeActivityTaskSelect },
+        },
       });
 
       await this.prisma.overtimeApprovalHistory.create({
@@ -741,15 +872,18 @@ export class OvertimeRequestsService {
         },
       });
 
-      await this.activityLogger.log({
-        action: ActivityAction.OVERTIME_REQUEST_STATUS_CHANGED,
+      const approved = dto.status === 'APPROVED';
+      await this.logOvertimeActivity({
+        action: approved
+          ? ActivityAction.OVERTIME_REQUEST_APPROVED
+          : ActivityAction.OVERTIME_REQUEST_REJECTED,
+        messageKey: approved ? 'overtime_request_approved' : 'overtime_request_rejected',
         userId: reviewerId,
-        taskId: request.taskId ?? null,
-        details: {
-          event: ActivityAction.OVERTIME_REQUEST_STATUS_CHANGED,
-          messageKey: 'overtime_request_status_changed',
-          changes: { newStatus: dto.status, approvedHours: dto.approvedHours ?? null },
-          context: { requestId: id },
+        request: { ...request, ...updated, task: updated.task ?? request.task },
+        changes: {
+          newStatus: dto.status,
+          approvedHours: dto.approvedHours ?? null,
+          reviewStage: 'hr',
         },
       });
 

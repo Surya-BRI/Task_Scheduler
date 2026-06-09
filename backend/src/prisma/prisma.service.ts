@@ -1,6 +1,7 @@
 import { Injectable, OnModuleDestroy, OnModuleInit } from '@nestjs/common';
 import { ConfigService } from '@nestjs/config';
 import { PrismaClient } from '@prisma/client';
+import { withPrismaConnectionPool } from './prisma-pool.util';
 
 @Injectable()
 export class PrismaService extends PrismaClient implements OnModuleInit, OnModuleDestroy {
@@ -13,8 +14,10 @@ export class PrismaService extends PrismaClient implements OnModuleInit, OnModul
   }
 
   constructor(configService: ConfigService) {
-    const databaseUrl = configService.get<string>('database.url') ?? process.env.DATABASE_URL;
-    const liveDatabaseUrl = process.env.LIVE_DATABASE_URL?.trim();
+    const databaseUrl = withPrismaConnectionPool(
+      configService.get<string>('database.url') ?? process.env.DATABASE_URL,
+    );
+    const liveDatabaseUrl = withPrismaConnectionPool(process.env.LIVE_DATABASE_URL?.trim());
 
     super(
       databaseUrl
