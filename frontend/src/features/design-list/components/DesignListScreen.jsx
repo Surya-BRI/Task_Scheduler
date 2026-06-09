@@ -23,39 +23,47 @@ import { getStatusLabel, mapTaskToDesignRow, matchDateRange } from "../task-view
 
 const getStatusColor = (status) => {
   switch (status) {
-    case "WIP":
-      return "bg-blue-100 text-blue-700 border-blue-200";
-    case "COMPLETED":
-      return "bg-green-100 text-green-700 border-green-200";
-    case "PENDING":
-      return "bg-amber-50 text-amber-700 border-amber-200";
-    case "REVISION":
-      return "bg-red-100 text-red-700 border-red-200";
-    case "APPROVED":
-      return "bg-purple-100 text-purple-700 border-purple-200";
-    case "ON_HOLD":
-      return "bg-slate-100 text-slate-700 border-slate-300";
-    default:
-      return "bg-slate-100 text-slate-700 border-slate-200";
+    // Legacy
+    case "WIP":              return "bg-blue-100 text-blue-700 border-blue-200";
+    case "COMPLETED":        return "bg-green-100 text-green-700 border-green-200";
+    case "PENDING":          return "bg-amber-50 text-amber-700 border-amber-200";
+    case "REVISION":         return "bg-red-100 text-red-700 border-red-200";
+    case "APPROVED":         return "bg-purple-100 text-purple-700 border-purple-200";
+    case "ON_HOLD":          return "bg-slate-100 text-slate-700 border-slate-300";
+    // New lifecycle
+    case "DESIGN_NEW":       return "bg-amber-100 text-amber-700 border-amber-200";
+    case "DESIGN_PLANNED":   return "bg-sky-100 text-sky-700 border-sky-200";
+    case "IN_PROGRESS":      return "bg-blue-100 text-blue-700 border-blue-200";
+    case "DESIGN_COMPLETED": return "bg-teal-100 text-teal-700 border-teal-200";
+    case "HOD_REVIEW":       return "bg-violet-100 text-violet-700 border-violet-200";
+    case "SALES_REVIEW":     return "bg-orange-100 text-orange-700 border-orange-200";
+    case "REWORK":           return "bg-red-100 text-red-700 border-red-200";
+    case "REVIEW_COMPLETED": return "bg-green-100 text-green-700 border-green-200";
+    case "CLIENT_REJECTED":  return "bg-rose-100 text-rose-700 border-rose-200";
+    default:                 return "bg-slate-100 text-slate-700 border-slate-200";
   }
 };
 
 const getStatusDot = (status) => {
   switch (status) {
-    case "WIP":
-      return "bg-blue-500";
-    case "COMPLETED":
-      return "bg-green-500";
-    case "PENDING":
-      return "bg-yellow-500";
-    case "REVISION":
-      return "bg-orange-500";
-    case "APPROVED":
-      return "bg-purple-500";
-    case "ON_HOLD":
-      return "bg-slate-500";
-    default:
-      return "bg-slate-500";
+    // Legacy
+    case "WIP":              return "bg-blue-500";
+    case "COMPLETED":        return "bg-green-500";
+    case "PENDING":          return "bg-yellow-500";
+    case "REVISION":         return "bg-orange-500";
+    case "APPROVED":         return "bg-purple-500";
+    case "ON_HOLD":          return "bg-slate-500";
+    // New lifecycle
+    case "DESIGN_NEW":       return "bg-amber-500";
+    case "DESIGN_PLANNED":   return "bg-sky-500";
+    case "IN_PROGRESS":      return "bg-blue-500";
+    case "DESIGN_COMPLETED": return "bg-teal-500";
+    case "HOD_REVIEW":       return "bg-violet-500";
+    case "SALES_REVIEW":     return "bg-orange-500";
+    case "REWORK":           return "bg-red-500";
+    case "REVIEW_COMPLETED": return "bg-green-500";
+    case "CLIENT_REJECTED":  return "bg-rose-500";
+    default:                 return "bg-slate-500";
   }
 };
 
@@ -83,7 +91,13 @@ const Toolbar = ({ viewMode, setViewMode, filters, setFilters, salesPersons }) =
     filters.startDate,
     filters.endDate,
   ].filter(Boolean).length;
-  const designStatuses = ["PENDING", "WIP", "ON_HOLD", "REVISION", "APPROVED", "COMPLETED"];
+  const designStatuses = [
+    // New lifecycle
+    "DESIGN_NEW", "DESIGN_PLANNED", "IN_PROGRESS", "DESIGN_COMPLETED",
+    "HOD_REVIEW", "SALES_REVIEW", "REWORK", "REVIEW_COMPLETED", "CLIENT_REJECTED",
+    // Legacy
+    "PENDING", "WIP", "ON_HOLD", "REVISION", "APPROVED", "COMPLETED",
+  ];
 
   return (
     <div className="mb-4 mt-4 flex flex-col gap-4 px-4 sm:px-6 md:flex-row md:items-center md:justify-between">

@@ -1,6 +1,7 @@
 import { Injectable } from '@nestjs/common';
 import { PrismaService } from '../prisma/prisma.service';
 import { ActivityAction } from './activity-events';
+import { UserRole } from '../common/constants/roles.enum';
 
 const MILESTONE_ACTIONS = new Set([
   ActivityAction.SCHEDULER_WEEK_LOCKED,
@@ -14,6 +15,8 @@ type FindInput = {
   taskId?: string;
   projectId?: string;
   userId?: string;
+  requestingUserId?: string;
+  requestingUserRole?: string;
 };
 
 @Injectable()
@@ -53,8 +56,14 @@ export class ActivitiesService {
       return `${actorName} ${(details?.changes?.newStatus as string)?.toLowerCase() ?? 'updated'} a leave request`;
     if (msg === 'regularization_submitted')
       return `${actorName} submitted a regularization request`;
-    if (msg === 'regularization_approved') return `${actorName} approved a regularization request`;
-    if (msg === 'regularization_rejected') return `${actorName} rejected a regularization request`;
+    if (msg === 'regularization_approved') {
+      const dn = details?.context?.designerName;
+      return dn ? `${actorName} approved ${dn}'s regularization request` : `${actorName} approved a regularization request`;
+    }
+    if (msg === 'regularization_rejected') {
+      const dn = details?.context?.designerName;
+      return dn ? `${actorName} rejected ${dn}'s regularization request` : `${actorName} rejected a regularization request`;
+    }
     if (msg === 'regularization_status_changed')
       return `${actorName} ${(details?.changes?.newStatus as string)?.toLowerCase() ?? 'updated'} a regularization request`;
     if (msg === 'overtime_request_submitted')
@@ -63,6 +72,30 @@ export class ActivitiesService {
       return `${actorName} ${(details?.changes?.newStatus as string)?.toLowerCase().replace(/_/g, ' ') ?? 'updated'} an overtime request`;
     const readable = action.toLowerCase().replace(/_/g, ' ');
     return `${actorName} ${readable}`;
+  }
+
+  private buildSegments(item: ReturnType<typeof this.mapRow>) {
+    const t = item.task;
+    const txt = (v: string) => ({ type: 'text' as const, value: v });
+    const base = [txt(item.summary)];
+
+    if (!t) return base;
+
+    const taskLink = { type: 'link' as const, label: t.taskNo, href: `/design-list/task/${t.id}` };
+
+    switch (item.action) {
+      case ActivityAction.TASK_CREATED:
+        return [txt(`${item.actor.name} created task `), taskLink];
+      case ActivityAction.STATUS_CHANGED:
+      case ActivityAction.ASSIGNED_TASK:
+        return [...base, txt(' — '), taskLink];
+      case ActivityAction.REGULARIZATION_SUBMITTED:
+      case ActivityAction.REGULARIZATION_APPROVED:
+      case ActivityAction.REGULARIZATION_REJECTED:
+        return [...base, txt(' for task '), taskLink];
+      default:
+        return base;
+    }
   }
 
   private formatSeverity(action: string): 'info' | 'success' | 'warning' {
@@ -88,6 +121,19 @@ export class ActivitiesService {
       where.OR = [
         { task: { projectId: input.projectId } },
         { details: { contains: input.projectId } },
+      ];
+    } else if (input.requestingUserRole === UserRole.DESIGNER && input.requestingUserId) {
+      const designerTasks = await this.prisma.task.findMany({
+        where: { assigneeId: input.requestingUserId },
+        select: { projectId: true },
+        distinct: ['projectId'],
+      });
+      const projectIds = designerTasks.map((t) => t.projectId).filter(Boolean) as string[];
+
+      where.OR = [
+        { task: { assigneeId: input.requestingUserId } },
+        { userId: input.requestingUserId },
+        ...(projectIds.length > 0 ? [{ projectId: { in: projectIds } }] : []),
       ];
     }
 
@@ -172,14 +218,19 @@ export class ActivitiesService {
     };
   }
 
-  async findAll(input: { limit?: number; userId?: string }) {
-    const result = await this.queryActivities({ limit: input.limit, userId: input.userId });
+  async findAll(input: { limit?: number; userId?: string; requestingUserId?: string; requestingUserRole?: string }) {
+    const result = await this.queryActivities({
+      limit: input.limit,
+      userId: input.userId,
+      requestingUserId: input.requestingUserId,
+      requestingUserRole: input.requestingUserRole,
+    });
     return result.data.map((item) => ({
       id: item.id,
       action: item.action,
       kind: MILESTONE_ACTIONS.has(item.action as any) ? 'project_milestone' : 'task_update',
       user: item.actor,
-      messageSegments: [{ type: 'text', value: item.summary }],
+      messageSegments: this.buildSegments(item),
       occurredAt: item.occurredAt,
       liked: false,
       individualEligible: true,

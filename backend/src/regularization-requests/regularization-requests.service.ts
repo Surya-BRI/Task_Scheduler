@@ -1,14 +1,12 @@
 import {
   BadRequestException,
   ForbiddenException,
-  HttpException,
-  HttpStatus,
   Injectable,
   Logger,
   NotFoundException,
 } from '@nestjs/common';
 import { randomUUID } from 'crypto';
-import { ConfigService } from '@nestjs/config';
+import { Prisma } from '@prisma/client';
 import { PrismaService } from '../prisma/prisma.service';
 import { ActivityLoggerService } from '../activities/activity-logger.service';
 import { ActivityAction } from '../activities/activity-events';
@@ -16,29 +14,8 @@ import { UserRole } from '../common/constants/roles.enum';
 import { CreateRegularizationRequestDto } from './dto/create-regularization-request.dto';
 import { ReviewRegularizationRequestDto } from './dto/review-regularization-request.dto';
 import { UpdateRegularizationStatusDto } from './dto/update-regularization-status.dto';
-import { isUuidString, sqlUniqueIdentifier } from './sql-uuid.util';
+import { isUuidString } from './sql-uuid.util';
 import type { RegularizationRequestsContract } from './regularization-requests.contract';
-
-type RawRegularizationRow = {
-  id: string;
-  designerId: string;
-  taskId: string;
-  date: Date;
-  duration: string | number | null;
-  reason: string | null;
-  notes: string | null;
-  status: string | null;
-  approverId: string | null;
-  approverRemarks?: string | null;
-  reviewedAt?: Date | null;
-  createdAt: Date;
-  taskTitle?: string | null;
-  taskNo?: string | null;
-  opNo?: string | null;
-  designerName?: string | null;
-  departmentName?: string | null;
-  approverName?: string | null;
-};
 
 export type RegularizationTaskOption = {
   id: string;
@@ -65,43 +42,34 @@ export type RegularizationRequestView = {
   createdAt: string;
 };
 
+const INCLUDE = {
+  designer: {
+    select: {
+      id: true,
+      fullName: true,
+      departmentId: true,
+      department: { select: { name: true } },
+    },
+  },
+  task: { select: { id: true, title: true, taskNo: true, opNo: true } },
+  approver: { select: { id: true, fullName: true } },
+} satisfies Prisma.RegularizationRequestInclude;
+
+type RegularizationRequestFull = Prisma.RegularizationRequestGetPayload<{
+  include: typeof INCLUDE;
+}>;
+
 @Injectable()
 export class RegularizationRequestsService implements RegularizationRequestsContract {
   private readonly logger = new Logger(RegularizationRequestsService.name);
-  private readonly table: string;
-  private readonly taskTable: string;
-  private readonly userTable: string;
-  private readonly deptTable: string;
 
   constructor(
     private readonly prisma: PrismaService,
-    private readonly config: ConfigService,
     private readonly activityLogger: ActivityLoggerService,
-  ) {
-    const catalog = (this.config.get<string>('erp.sqlCatalog') ?? '').trim();
-    if (catalog && !/^[\w-]+$/.test(catalog)) {
-      throw new Error('Invalid erp.sqlCatalog / ERP_SQL_CATALOG');
-    }
-    const prefix = catalog ? `[${catalog}].[dbo]` : `[dbo]`;
-    this.table = `${prefix}.[ErpTSRegularizationRequest]`;
-    this.taskTable = `${prefix}.[ErpTSTask]`;
-    this.userTable = `${prefix}.[ErpTSUser]`;
-    this.deptTable = `[dbo].[Department]`;
-  }
+  ) {}
 
-  private fail(context: string, err: unknown): never {
-    const msg = err instanceof Error ? err.message : String(err);
-    this.logger.warn(`${context}: ${msg}`);
-    throw new HttpException(`${context}: ${msg}`, HttpStatus.SERVICE_UNAVAILABLE);
-  }
-
-  private esc(s: string): string {
-    return s.replace(/'/g, "''");
-  }
-
-  private formatDuration(value: string | number | null | undefined): string {
-    if (value === null || value === undefined) return '—';
-    if (typeof value === 'number') return `${value} mins`;
+  private formatDuration(value: string | null | undefined): string {
+    if (!value) return '—';
     const t = String(value).trim();
     return t || '—';
   }
@@ -124,39 +92,6 @@ export class RegularizationRequestsService implements RegularizationRequestsCont
     return 'Pending';
   }
 
-  private joinSql(alias = 'r'): string {
-    return `
-      FROM ${this.table} ${alias}
-      LEFT JOIN ${this.taskTable} t ON t.id = ${alias}.taskId
-      LEFT JOIN ${this.userTable} du ON du.id = ${alias}.designerId
-      LEFT JOIN ${this.deptTable} d ON d.id = du.departmentId
-      LEFT JOIN ${this.userTable} au ON au.id = ${alias}.approverId
-    `;
-  }
-
-  private selectListSql(alias = 'r'): string {
-    return `
-      CONVERT(varchar(36), ${alias}.id) AS id,
-      CONVERT(varchar(36), ${alias}.designerId) AS designerId,
-      CONVERT(varchar(36), ${alias}.taskId) AS taskId,
-      ${alias}.[date],
-      ${alias}.duration,
-      ${alias}.reason,
-      ${alias}.notes,
-      ${alias}.status,
-      CONVERT(varchar(36), ${alias}.approverId) AS approverId,
-      ${alias}.approverRemarks,
-      ${alias}.reviewedAt,
-      ${alias}.createdAt,
-      LTRIM(RTRIM(t.title)) AS taskTitle,
-      LTRIM(RTRIM(t.taskNo)) AS taskNo,
-      LTRIM(RTRIM(t.opNo)) AS opNo,
-      LTRIM(RTRIM(du.fullName)) AS designerName,
-      LTRIM(RTRIM(d.name)) AS departmentName,
-      LTRIM(RTRIM(au.fullName)) AS approverName
-    `;
-  }
-
   private formatTaskDisplay(parts: {
     title?: string | null;
     taskNo?: string | null;
@@ -172,26 +107,26 @@ export class RegularizationRequestsService implements RegularizationRequestsCont
     return '—';
   }
 
-  private mapRow(row: RawRegularizationRow): RegularizationRequestView {
+  private mapRow(row: RegularizationRequestFull): RegularizationRequestView {
     return {
       id: row.id,
-      designerId: row.designerId,
-      designerName: row.designerName?.trim() || 'Unknown',
-      employeeId: row.designerId,
-      departmentName: row.departmentName?.trim() || '—',
-      taskId: row.taskId,
+      designerId: row.designerId ?? '',
+      designerName: row.designer?.fullName?.trim() || 'Unknown',
+      employeeId: row.designerId ?? '',
+      departmentName: row.designer?.department?.name?.trim() || '—',
+      taskId: row.taskId ?? '',
       taskName: this.formatTaskDisplay({
-        title: row.taskTitle,
-        taskNo: row.taskNo,
-        opNo: row.opNo,
+        title: row.task?.title,
+        taskNo: row.task?.taskNo,
+        opNo: row.task?.opNo,
       }),
-      date: this.toYyyyMmDd(row.date ? new Date(row.date) : null),
+      date: this.toYyyyMmDd(row.date),
       duration: this.formatDuration(row.duration),
       reason: row.reason ?? '',
       notes: row.notes ?? '',
       status: this.mapStatus(row.status),
-      approverId: row.approverId && row.approverId.trim() ? row.approverId : null,
-      approverName: row.approverName?.trim() || null,
+      approverId: row.approverId?.trim() || null,
+      approverName: row.approver?.fullName?.trim() || null,
       approverRemarks: row.approverRemarks?.trim() || null,
       reviewedAt: row.reviewedAt ? new Date(row.reviewedAt).toISOString() : null,
       createdAt: row.createdAt ? new Date(row.createdAt).toISOString() : new Date(0).toISOString(),
@@ -199,14 +134,10 @@ export class RegularizationRequestsService implements RegularizationRequestsCont
   }
 
   private async loadRowById(id: string): Promise<RegularizationRequestView> {
-    const idLit = sqlUniqueIdentifier(id);
-    const rows = await this.prisma.$queryRawUnsafe<RawRegularizationRow[]>(`
-      SELECT TOP (1)
-        ${this.selectListSql('r')}
-      ${this.joinSql('r')}
-      WHERE r.id = ${idLit}
-    `);
-    const row = rows[0];
+    const row = await this.prisma.regularizationRequest.findUnique({
+      where: { id },
+      include: INCLUDE,
+    });
     if (!row) throw new NotFoundException('Regularization request not found');
     return this.mapRow(row);
   }
@@ -299,7 +230,11 @@ export class RegularizationRequestsService implements RegularizationRequestsCont
     }
   }
 
-  private async assertReviewerAccess(reviewerId: string, role: UserRole, request: RegularizationRequestView) {
+  private async assertReviewerAccess(
+    reviewerId: string,
+    role: UserRole,
+    request: RegularizationRequestView,
+  ) {
     if (role === UserRole.ADMIN) return;
 
     if (role !== UserRole.HOD) {
@@ -308,30 +243,40 @@ export class RegularizationRequestsService implements RegularizationRequestsCont
 
     const [reviewer, designer] = await Promise.all([
       this.prisma.user.findUnique({ where: { id: reviewerId }, select: { departmentId: true } }),
-      this.prisma.user.findUnique({ where: { id: request.designerId }, select: { departmentId: true } }),
+      this.prisma.user.findUnique({
+        where: { id: request.designerId },
+        select: { departmentId: true },
+      }),
     ]);
 
-    if (reviewer?.departmentId && designer?.departmentId && reviewer.departmentId !== designer.departmentId) {
+    if (
+      reviewer?.departmentId &&
+      designer?.departmentId &&
+      reviewer.departmentId !== designer.departmentId
+    ) {
       throw new ForbiddenException('You can only review requests from your department');
     }
   }
 
   async listTaskOptions(designerId: string): Promise<RegularizationTaskOption[]> {
     if (!isUuidString(designerId)) {
-      throw new BadRequestException('designerId must be a UUID matching ErpTSRegularizationRequest.designerId (uniqueidentifier).');
+      throw new BadRequestException(
+        'designerId must be a UUID matching ErpTSRegularizationRequest.designerId (uniqueidentifier).',
+      );
     }
-    const designerSql = sqlUniqueIdentifier(designerId);
 
     let historicalTaskIds: string[] = [];
     try {
-      const idRows = await this.prisma.$queryRawUnsafe<Array<{ taskId: string }>>(`
-        SELECT DISTINCT CONVERT(varchar(36), taskId) AS taskId
-        FROM ${this.table}
-        WHERE designerId = ${designerSql} AND taskId IS NOT NULL
-      `);
-      historicalTaskIds = idRows.map((r) => r.taskId).filter((id) => isUuidString(id));
+      const historicalRequests = await this.prisma.regularizationRequest.findMany({
+        where: { designerId, taskId: { not: null } },
+        select: { taskId: true },
+        distinct: ['taskId'],
+      });
+      historicalTaskIds = historicalRequests.map((r) => r.taskId!).filter(Boolean);
     } catch (err) {
-      this.logger.warn(`Regularization historical task ids: ${err instanceof Error ? err.message : err}`);
+      this.logger.warn(
+        `Regularization historical task ids: ${err instanceof Error ? err.message : err}`,
+      );
     }
 
     const tasks = await this.prisma.task.findMany({
@@ -362,25 +307,24 @@ export class RegularizationRequestsService implements RegularizationRequestsCont
 
   async findByDesigner(designerId: string): Promise<RegularizationRequestView[]> {
     if (!isUuidString(designerId)) {
-      throw new BadRequestException('designerId must be a UUID matching ErpTSRegularizationRequest.designerId (uniqueidentifier).');
+      throw new BadRequestException(
+        'designerId must be a UUID matching ErpTSRegularizationRequest.designerId (uniqueidentifier).',
+      );
     }
-    try {
-      const designerSql = sqlUniqueIdentifier(designerId);
-      const rows = await this.prisma.$queryRawUnsafe<RawRegularizationRow[]>(`
-      SELECT TOP (1000)
-        ${this.selectListSql('r')}
-      ${this.joinSql('r')}
-      WHERE r.designerId = ${designerSql}
-      ORDER BY r.createdAt DESC
-    `);
-      return rows.map((r) => this.mapRow(r));
-    } catch (err) {
-      if (err instanceof BadRequestException) throw err;
-      this.fail('Regularization list query failed', err);
-    }
+    const rows = await this.prisma.regularizationRequest.findMany({
+      where: { designerId },
+      include: INCLUDE,
+      orderBy: { createdAt: 'desc' },
+      take: 1000,
+    });
+    return rows.map((r) => this.mapRow(r));
   }
 
-  async findOne(id: string, userId: string, role: UserRole): Promise<RegularizationRequestView> {
+  async findOne(
+    id: string,
+    userId: string,
+    role: UserRole,
+  ): Promise<RegularizationRequestView> {
     if (!isUuidString(id)) throw new BadRequestException('id must be a UUID.');
     const request = await this.loadRowById(id);
 
@@ -397,35 +341,33 @@ export class RegularizationRequestsService implements RegularizationRequestsCont
     return request;
   }
 
-  async findPendingApprovals(managerId: string, role: UserRole): Promise<RegularizationRequestView[]> {
+  async findPendingApprovals(
+    managerId: string,
+    role: UserRole,
+  ): Promise<RegularizationRequestView[]> {
     if (role !== UserRole.HOD && role !== UserRole.ADMIN) {
       throw new ForbiddenException('Only HOD or Admin can view pending approvals');
     }
 
-    let departmentFilter = '';
+    const where: Prisma.RegularizationRequestWhereInput = { status: 'Pending' };
+
     if (role === UserRole.HOD) {
       const manager = await this.prisma.user.findUnique({
         where: { id: managerId },
         select: { departmentId: true },
       });
       if (manager?.departmentId) {
-        departmentFilter = `AND du.departmentId = N'${this.esc(manager.departmentId)}'`;
+        where.designer = { departmentId: manager.departmentId };
       }
     }
 
-    try {
-      const rows = await this.prisma.$queryRawUnsafe<RawRegularizationRow[]>(`
-        SELECT TOP (500)
-          ${this.selectListSql('r')}
-        ${this.joinSql('r')}
-        WHERE LOWER(LTRIM(RTRIM(r.status))) = N'pending'
-        ${departmentFilter}
-        ORDER BY r.createdAt DESC
-      `);
-      return rows.map((r) => this.mapRow(r));
-    } catch (err) {
-      this.fail('Regularization pending approvals query failed', err);
-    }
+    const rows = await this.prisma.regularizationRequest.findMany({
+      where,
+      include: INCLUDE,
+      orderBy: { createdAt: 'desc' },
+      take: 500,
+    });
+    return rows.map((r) => this.mapRow(r));
   }
 
   async findTeamRequests(
@@ -437,12 +379,13 @@ export class RegularizationRequestsService implements RegularizationRequestsCont
       throw new ForbiddenException('Only HOD or Admin can view team requests');
     }
 
-    const whereParts: string[] = ['1=1'];
+    const where: Prisma.RegularizationRequestWhereInput = {};
+
     if (filters.status?.trim()) {
-      whereParts.push(`LOWER(LTRIM(RTRIM(r.status))) = LOWER(N'${this.esc(filters.status.trim())}')`);
+      where.status = filters.status.trim();
     }
     if (filters.designerId?.trim() && isUuidString(filters.designerId)) {
-      whereParts.push(`r.designerId = ${sqlUniqueIdentifier(filters.designerId.trim())}`);
+      where.designerId = filters.designerId.trim();
     }
     if (role === UserRole.HOD) {
       const manager = await this.prisma.user.findUnique({
@@ -450,22 +393,20 @@ export class RegularizationRequestsService implements RegularizationRequestsCont
         select: { departmentId: true },
       });
       if (manager?.departmentId) {
-        whereParts.push(`du.departmentId = N'${this.esc(manager.departmentId)}'`);
+        where.designer = {
+          ...((where.designer as Prisma.UserWhereInput | undefined) ?? {}),
+          departmentId: manager.departmentId,
+        };
       }
     }
 
-    try {
-      const rows = await this.prisma.$queryRawUnsafe<RawRegularizationRow[]>(`
-        SELECT TOP (1000)
-          ${this.selectListSql('r')}
-        ${this.joinSql('r')}
-        WHERE ${whereParts.join(' AND ')}
-        ORDER BY r.createdAt DESC
-      `);
-      return rows.map((r) => this.mapRow(r));
-    } catch (err) {
-      this.fail('Regularization team requests query failed', err);
-    }
+    const rows = await this.prisma.regularizationRequest.findMany({
+      where,
+      include: INCLUDE,
+      orderBy: { createdAt: 'desc' },
+      take: 1000,
+    });
+    return rows.map((r) => this.mapRow(r));
   }
 
   async create(
@@ -487,7 +428,7 @@ export class RegularizationRequestsService implements RegularizationRequestsCont
 
     const task = await this.prisma.task.findUnique({
       where: { id: dto.taskId },
-      select: { id: true },
+      select: { id: true, taskNo: true, title: true },
     });
     if (!task) throw new BadRequestException('Task not found');
 
@@ -495,53 +436,22 @@ export class RegularizationRequestsService implements RegularizationRequestsCont
     const assignedHodId = hods[0]?.id ?? null;
 
     const status = dto.status?.trim() || 'Pending';
-    const dur = dto.duration.trim();
-    const durationSql = /^\d+$/.test(dur) ? dur : `N'${this.esc(dur)}'`;
-    const notesSql = dto.notes?.trim() ? `N'${this.esc(dto.notes.trim())}'` : 'NULL';
-    const approverSql = assignedHodId ? sqlUniqueIdentifier(assignedHodId) : 'NULL';
 
-    const designerSql = sqlUniqueIdentifier(dto.designerId);
-    const taskSql = sqlUniqueIdentifier(dto.taskId);
-
-    let idRows: Array<{ id: string }>;
-    try {
-      idRows = await this.prisma.$queryRawUnsafe<Array<{ id: string }>>(`
-      DECLARE @ids TABLE (rid uniqueidentifier);
-      INSERT INTO ${this.table} (
-        designerId,
-        taskId,
-        [date],
-        duration,
-        reason,
-        notes,
+    const newRow = await this.prisma.regularizationRequest.create({
+      data: {
+        designerId: dto.designerId,
+        taskId: dto.taskId,
+        date: new Date(dto.date),
+        duration: dto.duration.trim(),
+        reason: dto.reason,
+        notes: dto.notes?.trim() || null,
         status,
-        approverId,
-        createdAt
-      )
-      OUTPUT INSERTED.id INTO @ids(rid)
-      VALUES (
-        ${designerSql},
-        ${taskSql},
-        CAST(N'${this.esc(dto.date)}' AS DATE),
-        ${durationSql},
-        N'${this.esc(dto.reason)}',
-        ${notesSql},
-        N'${this.esc(status)}',
-        ${approverSql},
-        SYSUTCDATETIME()
-      );
-      SELECT CONVERT(varchar(36), rid) AS id FROM @ids;
-    `);
-    } catch (err) {
-      this.fail('Regularization insert failed', err);
-    }
+        approverId: assignedHodId,
+      },
+      include: INCLUDE,
+    });
 
-    const newId = idRows[0]?.id;
-    if (newId == null || !isUuidString(newId)) {
-      throw new Error('Insert did not return id');
-    }
-
-    const request = await this.loadRowById(newId);
+    const request = this.mapRow(newRow);
 
     await this.activityLogger.log({
       action: ActivityAction.REGULARIZATION_SUBMITTED,
@@ -551,13 +461,18 @@ export class RegularizationRequestsService implements RegularizationRequestsCont
         event: ActivityAction.REGULARIZATION_SUBMITTED,
         messageKey: 'regularization_submitted',
         changes: {
-          requestId: newId,
+          requestId: newRow.id,
           date: dto.date,
           reason: dto.reason,
           status,
           assignedHodId,
         },
-        context: { designerId: dto.designerId, departmentId: designer.departmentId ?? null },
+        taskSnapshot: { id: task.id, taskNo: task.taskNo, title: task.title ?? undefined },
+        context: {
+          designerId: dto.designerId,
+          departmentId: designer.departmentId ?? null,
+          designerName: designer.fullName,
+        },
       },
     });
 
@@ -586,30 +501,30 @@ export class RegularizationRequestsService implements RegularizationRequestsCont
       throw new BadRequestException('Rejection remarks are required');
     }
 
-    const idLit = sqlUniqueIdentifier(id);
-    const approverLit = sqlUniqueIdentifier(reviewerId);
-    const remarksSql = remarks ? `N'${this.esc(remarks)}'` : 'NULL';
+    const updatedRow = await this.prisma.regularizationRequest.update({
+      where: { id },
+      data: {
+        status: dto.status,
+        approverId: reviewerId,
+        approverRemarks: remarks || null,
+        reviewedAt: new Date(),
+      },
+      include: INCLUDE,
+    });
 
-    try {
-      await this.prisma.$executeRawUnsafe(`
-      UPDATE ${this.table}
-      SET
-        status = N'${this.esc(dto.status)}',
-        approverId = ${approverLit},
-        approverRemarks = ${remarksSql},
-        reviewedAt = SYSUTCDATETIME()
-      WHERE id = ${idLit}
-    `);
-    } catch (err) {
-      this.fail('Regularization review update failed', err);
-    }
-
-    const updated = await this.loadRowById(id);
+    const updated = this.mapRow(updatedRow);
 
     const action =
       dto.status === 'Approved'
         ? ActivityAction.REGULARIZATION_APPROVED
         : ActivityAction.REGULARIZATION_REJECTED;
+
+    const reviewTask = await this.prisma.task
+      .findUnique({
+        where: { id: updated.taskId },
+        select: { id: true, taskNo: true, title: true },
+      })
+      .catch(() => null);
 
     await this.activityLogger.log({
       action,
@@ -617,7 +532,8 @@ export class RegularizationRequestsService implements RegularizationRequestsCont
       taskId: updated.taskId,
       details: {
         event: action,
-        messageKey: dto.status === 'Approved' ? 'regularization_approved' : 'regularization_rejected',
+        messageKey:
+          dto.status === 'Approved' ? 'regularization_approved' : 'regularization_rejected',
         changes: {
           requestId: id,
           status: dto.status,
@@ -625,7 +541,10 @@ export class RegularizationRequestsService implements RegularizationRequestsCont
           remarks: remarks || null,
           reviewedAt: updated.reviewedAt,
         },
-        context: { designerId: updated.designerId },
+        taskSnapshot: reviewTask
+          ? { id: reviewTask.id, taskNo: reviewTask.taskNo, title: reviewTask.title ?? undefined }
+          : undefined,
+        context: { designerId: updated.designerId, designerName: updated.designerName },
       },
     });
 
@@ -637,36 +556,32 @@ export class RegularizationRequestsService implements RegularizationRequestsCont
   }
 
   /** @deprecated Use review() — kept for backward compatibility */
-  async updateStatus(id: string, dto: UpdateRegularizationStatusDto, reviewerId?: string, role?: UserRole): Promise<RegularizationRequestView> {
+  async updateStatus(
+    id: string,
+    dto: UpdateRegularizationStatusDto,
+    reviewerId?: string,
+    role?: UserRole,
+  ): Promise<RegularizationRequestView> {
     if (reviewerId && role && (dto.status === 'Approved' || dto.status === 'Rejected')) {
-      return this.review(id, reviewerId, role, {
-        status: dto.status,
-        remarks: undefined,
-      });
+      return this.review(id, reviewerId, role, { status: dto.status, remarks: undefined });
     }
 
-    if (!isUuidString(id)) {
-      throw new BadRequestException('id must be a UUID.');
-    }
-    const idLit = sqlUniqueIdentifier(id);
+    if (!isUuidString(id)) throw new BadRequestException('id must be a UUID.');
 
     const defaultApprover = process.env.REGULARIZATION_DEFAULT_APPROVER_ID?.trim();
-    const approverGuid = dto.approverId?.trim() ?? (defaultApprover && isUuidString(defaultApprover) ? defaultApprover : null);
-    const approverSql =
-      approverGuid && isUuidString(approverGuid) ? sqlUniqueIdentifier(approverGuid) : 'NULL';
+    const approverGuid =
+      dto.approverId?.trim() ??
+      (defaultApprover && isUuidString(defaultApprover) ? defaultApprover : null);
 
-    try {
-      await this.prisma.$executeRawUnsafe(`
-      UPDATE ${this.table}
-      SET
-        status = N'${this.esc(dto.status)}',
-        approverId = ${approverSql}
-      WHERE id = ${idLit}
-    `);
-    } catch (err) {
-      this.fail('Regularization status update failed', err);
-    }
+    const updatedRow = await this.prisma.regularizationRequest.update({
+      where: { id },
+      data: {
+        status: dto.status,
+        ...(approverGuid ? { approverId: approverGuid } : {}),
+      },
+      include: INCLUDE,
+    });
 
-    return this.loadRowById(id);
+    return this.mapRow(updatedRow);
   }
 }
