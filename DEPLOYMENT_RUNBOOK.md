@@ -50,7 +50,7 @@ pm2 start npm --name task-sc -- run start:prod
 pm2 save
 ```
 
-`npm run build` also writes a legacy shim at `dist/src/main.js` for older PM2 configs.
+`npm run build` automatically writes a legacy shim at `dist/src/main.js` for older PM2 configs (no extra script file needed).
 
 ## 4. Frontend Deploy Commands (PuTTY)
 If frontend is hosted from this server:
