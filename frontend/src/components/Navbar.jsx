@@ -5,10 +5,12 @@ import { usePathname, useRouter } from 'next/navigation'
 import { Bell, Calendar, ClipboardList, Clock, Home, LogOut, MessageSquareText, Users } from 'lucide-react'
 import { getSession, mockLogout } from '@/lib/mock-auth'
 import {
+  getUnreadNotificationCount,
   listNotifications,
   markAllNotificationsRead,
   markNotificationRead,
 } from '@/features/notifications/services/notifications.api'
+import { connectDashboardRealtime } from '@/lib/realtime'
 
 const NAV_ITEMS = [
   'Activities',
@@ -111,11 +113,10 @@ function NotificationDropdown({ session }) {
   const router = useRouter()
   const [open, setOpen] = useState(false)
   const [items, setItems] = useState([])
+  const [unreadCount, setUnreadCount] = useState(0)
   const [loading, setLoading] = useState(false)
   const rootRef = useRef(null)
   const loadingRef = useRef(false)
-
-  const unreadCount = items.filter((n) => !n.isRead).length
 
   const loadNotifications = async () => {
     if (!session || loadingRef.current) return
@@ -123,8 +124,12 @@ function NotificationDropdown({ session }) {
     loadingRef.current = true
     setLoading(true)
     try {
-      const rows = await listNotifications(30)
+      const [rows, count] = await Promise.all([
+        listNotifications(30),
+        getUnreadNotificationCount().catch(() => items.filter((n) => !n.isRead).length),
+      ])
       setItems(Array.isArray(rows) ? rows : [])
+      setUnreadCount(typeof count === 'number' ? count : 0)
     } catch {
       // Keep existing items on transient errors (e.g. DB pool timeout).
     } finally {
@@ -136,14 +141,18 @@ function NotificationDropdown({ session }) {
   useEffect(() => {
     if (!session) return
     void loadNotifications()
-    const interval = setInterval(() => void loadNotifications(), 60000)
+    const interval = setInterval(() => void loadNotifications(), 45000)
     const onVisible = () => {
       if (document.visibilityState === 'visible') void loadNotifications()
     }
     document.addEventListener('visibilitychange', onVisible)
+    const disconnectRealtime = connectDashboardRealtime({
+      onNotificationsRefresh: () => void loadNotifications(),
+    })
     return () => {
       clearInterval(interval)
       document.removeEventListener('visibilitychange', onVisible)
+      disconnectRealtime()
     }
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [session?.id, session?.role])
@@ -203,7 +212,9 @@ function NotificationDropdown({ session }) {
       >
         <Bell className="h-5 w-5" strokeWidth={1.75} aria-hidden />
         {unreadCount > 0 ? (
-          <span className="pointer-events-none absolute right-1 top-1 h-2 w-2 rounded-full bg-red-500 ring-2 ring-white" />
+          <span className="pointer-events-none absolute -right-0.5 -top-0.5 flex h-4 min-w-4 items-center justify-center rounded-full bg-red-500 px-1 text-[9px] font-bold text-white ring-2 ring-white">
+            {unreadCount > 99 ? '99+' : unreadCount}
+          </span>
         ) : null}
       </button>
 
@@ -269,6 +280,7 @@ export function Navbar({ currentDate, onCalendarChange, dateRangeText }) {
 
   const isHOD = session?.role === 'HOD'
   const isDesigner = session?.role === 'DESIGNER'
+  const canViewOverview = session?.role === 'HOD'
 
   const utilityIconClass = 'ui-icon-button'
   const onTeamActivity =
@@ -376,8 +388,8 @@ export function Navbar({ currentDate, onCalendarChange, dateRangeText }) {
               </button>
             )}
 
-            {/* Projects overview — HOD only */}
-            {isHOD && (
+            {/* Projects overview — HOD / Admin / PM */}
+            {canViewOverview && (
               <button
                 type="button"
                 onClick={() => router.push('/projects-overview')}

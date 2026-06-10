@@ -14,7 +14,7 @@ export class SchedulerAssignmentsController {
   constructor(private readonly schedulerAssignmentsService: SchedulerAssignmentsService) {}
 
   @Get()
-  @Roles(UserRole.HOD, UserRole.DESIGNER, UserRole.ADMIN, UserRole.PROJECT_MANAGER)
+  @Roles(UserRole.HOD, UserRole.DESIGNER)
   findForWeek(@Query('weekStart') weekStart?: string, @Query('designerId') designerId?: string) {
     const ws = weekStart?.trim() ?? '';
     if (!ws) {
@@ -24,13 +24,13 @@ export class SchedulerAssignmentsController {
   }
 
   @Get('week/:weekStart/meta')
-  @Roles(UserRole.HOD, UserRole.DESIGNER, UserRole.ADMIN, UserRole.PROJECT_MANAGER)
+  @Roles(UserRole.HOD, UserRole.DESIGNER)
   getWeekMeta(@Param('weekStart') weekStart: string) {
     return this.schedulerAssignmentsService.getWeekMeta(weekStart);
   }
 
   @Put('week/:weekStart')
-  @Roles(UserRole.HOD, UserRole.ADMIN, UserRole.PROJECT_MANAGER)
+  @Roles(UserRole.HOD)
   saveWeek(
     @Param('weekStart') weekStart: string,
     @CurrentUser() user: JwtPayload,
@@ -40,13 +40,13 @@ export class SchedulerAssignmentsController {
   }
 
   @Post('week/:weekStart/lock')
-  @Roles(UserRole.HOD, UserRole.ADMIN, UserRole.PROJECT_MANAGER)
+  @Roles(UserRole.HOD)
   lockWeek(@Param('weekStart') weekStart: string, @CurrentUser() user: JwtPayload) {
     return this.schedulerAssignmentsService.setWeekLock(weekStart, user.sub, true);
   }
 
   @Delete('week/:weekStart/lock')
-  @Roles(UserRole.HOD, UserRole.ADMIN, UserRole.PROJECT_MANAGER)
+  @Roles(UserRole.HOD)
   unlockWeek(@Param('weekStart') weekStart: string, @CurrentUser() user: JwtPayload) {
     return this.schedulerAssignmentsService.setWeekLock(weekStart, user.sub, false);
   }

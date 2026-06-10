@@ -13,7 +13,7 @@ export class DepartmentsController {
 
   /** POST /departments — Admin/HOD only */
   @Post()
-  @Roles(UserRole.HOD, UserRole.ADMIN)
+  @Roles(UserRole.HOD)
   create(@Body() dto: CreateDepartmentDto) {
     return this.departmentsService.create(dto);
   }
@@ -32,14 +32,14 @@ export class DepartmentsController {
 
   /** PATCH /departments/:id — Admin/HOD only */
   @Patch(':id')
-  @Roles(UserRole.HOD, UserRole.ADMIN)
+  @Roles(UserRole.HOD)
   update(@Param('id') id: string, @Body() dto: CreateDepartmentDto) {
     return this.departmentsService.update(id, dto);
   }
 
   /** DELETE /departments/:id — Admin only */
   @Delete(':id')
-  @Roles(UserRole.ADMIN)
+  @Roles(UserRole.HOD)
   remove(@Param('id') id: string) {
     return this.departmentsService.remove(id);
   }
