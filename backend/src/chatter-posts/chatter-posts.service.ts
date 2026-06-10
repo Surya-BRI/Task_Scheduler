@@ -6,6 +6,7 @@ import {
   Logger,
   NotFoundException,
   OnModuleInit,
+  Optional,
 } from '@nestjs/common';
 import { Prisma } from '@prisma/client';
 import { PrismaService } from '../prisma/prisma.service';
@@ -23,6 +24,7 @@ import {
   uniqueUuids,
   weekRangeContaining,
 } from './chatter-mentions.util';
+import { DashboardRealtimeService } from '../dashboard/dashboard-realtime.service';
 
 const UUID_RE =
   /^[0-9a-f]{8}-[0-9a-f]{4}-[1-5][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i;
@@ -112,6 +114,7 @@ export class ChatterPostsService implements OnModuleInit {
     private readonly usersService: UsersService,
     private readonly activityLogger: ActivityLoggerService,
     private readonly taskFilesService: TaskFilesService,
+    @Optional() private readonly dashboardRealtime?: DashboardRealtimeService,
   ) {}
 
   async onModuleInit(): Promise<void> {
@@ -899,6 +902,8 @@ export class ChatterPostsService implements OnModuleInit {
       },
     });
 
+    this.dashboardRealtime?.notifyOverviewRefresh('chatter_post_created');
+
     if (mentionUserIds.length > 0) {
       await this.notifyMentionedUsers({
         mentionedUserIds: mentionUserIds,
@@ -1105,6 +1110,8 @@ export class ChatterPostsService implements OnModuleInit {
         },
       },
     });
+
+    this.dashboardRealtime?.notifyOverviewRefresh('chatter_post_created');
 
     const loaded = await this.loadPostById(newPost.id);
     if (loaded) return loaded;

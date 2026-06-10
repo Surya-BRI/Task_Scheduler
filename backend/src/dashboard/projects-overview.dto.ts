@@ -49,6 +49,7 @@ export interface InboxItem {
   requiresAction?: boolean;
   requesterName?: string | null;
   status?: string | null;
+  itemKey?: string;
 }
 
 export interface DonutSegment {

@@ -1,4 +1,4 @@
-import { BadRequestException, ForbiddenException, Injectable, NotFoundException } from '@nestjs/common';
+import { BadRequestException, ForbiddenException, Injectable, NotFoundException, Optional } from '@nestjs/common';
 import { Prisma } from '@prisma/client';
 import { PrismaService } from '../prisma/prisma.service';
 import { CreateTaskDto } from './dto/create-task.dto';
@@ -13,6 +13,8 @@ import { ActivityAction } from '../activities/activity-events';
 import { SaveSignRowsDto } from './dto/save-sign-rows.dto';
 import { SubmitWorkDto } from './dto/submit-work.dto';
 import { SaveTimerStateDto } from './dto/save-timer-state.dto';
+import { DashboardRealtimeService } from '../dashboard/dashboard-realtime.service';
+import { COMPLETED_STATUS_FILTER } from '../dashboard/task-status-buckets.util';
 
 const TASK_SELECT = {
   id: true,
@@ -145,6 +147,7 @@ export class TasksService {
     private readonly prisma: PrismaService,
     private readonly taskFilesService: TaskFilesService,
     private readonly activityLogger: ActivityLoggerService,
+    @Optional() private readonly dashboardRealtime?: DashboardRealtimeService,
   ) {}
 
   private toDbTaskStatus(status?: string | null) {
@@ -829,6 +832,10 @@ export class TasksService {
       },
     });
 
+    if (existing.assigneeId && existing.assigneeId !== dto.assigneeId) {
+      this.dashboardRealtime?.notifyOverviewRefresh('task_reassigned');
+    }
+
     const withUrls = await this.withSignedAttachmentUrls(updatedTask);
     return this.normalizeTaskForApi(withUrls);
   }
@@ -849,7 +856,7 @@ export class TasksService {
     const newStatusDb = this.toDbTaskStatus(dto.status);
     const extraData: Record<string, unknown> = {};
     if ((newStatusApi === 'WIP' || newStatusApi === 'IN_PROGRESS') && !existing.startedAt) extraData.startedAt = now;
-    if (['COMPLETED', 'APPROVED', 'DESIGN_COMPLETED', 'REVIEW_COMPLETED'].includes(newStatusApi)) extraData.completedAt = now;
+    if (COMPLETED_STATUS_FILTER.includes(newStatusApi)) extraData.completedAt = now;
 
     const updatedTask = await this.prisma.task.update({
       where: { id },
@@ -883,6 +890,12 @@ export class TasksService {
         context: { source: 'tasks.updateStatus' },
       },
     });
+
+    if (COMPLETED_STATUS_FILTER.includes(newStatusApi)) {
+      this.dashboardRealtime?.notifyOverviewRefresh('task_completed');
+    } else {
+      this.dashboardRealtime?.notifyOverviewRefresh('task_status_changed');
+    }
 
     const withUrls = await this.withSignedAttachmentUrls(updatedTask);
     return this.normalizeTaskForApi(withUrls);

@@ -1,4 +1,4 @@
-import { BadRequestException, ForbiddenException, Injectable, Logger, NotFoundException } from '@nestjs/common';
+import { BadRequestException, ForbiddenException, Injectable, Logger, NotFoundException, Optional } from '@nestjs/common';
 import { randomUUID } from 'crypto';
 import { PrismaService } from '../prisma/prisma.service';
 import { TaskFilesService } from '../tasks/task-files.service';
@@ -9,6 +9,7 @@ import { UpdateOvertimeRequestDto } from './dto/update-overtime-request.dto';
 import { ReviewOvertimeRequestDto } from './dto/review-overtime-request.dto';
 import { UserRole } from '../common/constants/roles.enum';
 import { Decimal } from '@prisma/client/runtime/library';
+import { DashboardRealtimeService } from '../dashboard/dashboard-realtime.service';
 
 @Injectable()
 export class OvertimeRequestsService {
@@ -18,6 +19,7 @@ export class OvertimeRequestsService {
     private readonly prisma: PrismaService,
     private readonly taskFilesService: TaskFilesService,
     private readonly activityLogger: ActivityLoggerService,
+    @Optional() private readonly dashboardRealtime?: DashboardRealtimeService,
   ) {}
 
   /**
@@ -387,7 +389,7 @@ export class OvertimeRequestsService {
     const designerId = dto.designerId || creatorId;
 
     // Authorization check
-    if (designerId !== creatorId && creatorRole !== UserRole.HOD && creatorRole !== UserRole.ADMIN) {
+    if (designerId !== creatorId && creatorRole !== UserRole.HOD) {
       throw new ForbiddenException('You are not authorized to create request for this designer');
     }
 
@@ -490,7 +492,7 @@ export class OvertimeRequestsService {
     }
 
     // Auth check
-    if (request.designerId !== userId && role !== UserRole.ADMIN) {
+    if (request.designerId !== userId && role !== UserRole.HOD) {
       throw new ForbiddenException('You can only update your own requests');
     }
 
@@ -699,14 +701,13 @@ export class OvertimeRequestsService {
 
     if (!request) throw new NotFoundException('Overtime request not found');
 
-    // Auth check: Owner, manager of same dept, or admin
-    if (request.designerId !== userId && role !== UserRole.ADMIN) {
-      if (role === UserRole.HOD) {
-        const viewer = await this.prisma.user.findUnique({ where: { id: userId }, select: { departmentId: true } });
-        if (viewer?.departmentId !== request.designer?.departmentId) {
-          throw new ForbiddenException('Access denied');
-        }
-      } else {
+    // Auth check: owner or HOD in the same department
+    if (request.designerId !== userId) {
+      if (role !== UserRole.HOD) {
+        throw new ForbiddenException('Access denied');
+      }
+      const viewer = await this.prisma.user.findUnique({ where: { id: userId }, select: { departmentId: true } });
+      if (viewer?.departmentId && viewer.departmentId !== request.designer?.departmentId) {
         throw new ForbiddenException('Access denied');
       }
     }
@@ -764,17 +765,17 @@ export class OvertimeRequestsService {
       throw new BadRequestException('Comments are required when rejecting a request');
     }
 
-    // Manager / HOD Authorization and workflow
+    // HOD review (single-step approval — no separate HR role)
     if (dto.status === 'APPROVED_BY_MANAGER' || dto.status === 'REJECTED_BY_MANAGER') {
-      if (reviewerRole !== UserRole.HOD && reviewerRole !== UserRole.ADMIN) {
-        throw new ForbiddenException('Only managers can perform manager reviews');
+      if (reviewerRole !== UserRole.HOD) {
+        throw new ForbiddenException('Only HOD can review overtime requests');
       }
       if (request.status !== 'SUBMITTED') {
-        throw new BadRequestException('Request is not in a submittable state for manager review');
+        throw new BadRequestException('Request is not in a submittable state for review');
       }
 
       const updateData: any = {
-        status: dto.status,
+        status: dto.status === 'APPROVED_BY_MANAGER' ? 'APPROVED' : dto.status,
         managerComments: dto.comments,
       };
 
@@ -821,74 +822,14 @@ export class OvertimeRequestsService {
         },
       });
 
-      // Notify Designer and HR/Admin
-      await this.notifyDesignerOfReview(updated, dto.status, dto.comments);
-      if (dto.status === 'APPROVED_BY_MANAGER') {
-        await this.notifyHrOfPending(updated);
+      await this.notifyDesignerOfReview(updated, updateData.status, dto.comments);
+
+      this.dashboardRealtime?.notifyOverviewRefresh(
+        approved ? 'overtime_approved' : 'overtime_rejected',
+      );
+      if (updated.designerId) {
+        this.dashboardRealtime?.notifyUserNotificationRefresh(updated.designerId);
       }
-
-      return updated;
-    }
-
-    // HR / Admin Final Review
-    if (dto.status === 'APPROVED' || dto.status === 'REJECTED_BY_HR') {
-      if (reviewerRole !== UserRole.ADMIN) {
-        throw new ForbiddenException('Only HR / Admin can perform final reviews');
-      }
-      if (request.status !== 'APPROVED_BY_MANAGER') {
-        throw new BadRequestException('Request must first be approved by department HOD');
-      }
-
-      const updateData: any = {
-        status: dto.status,
-        hrComments: dto.comments,
-      };
-
-      if (dto.status === 'APPROVED') {
-        updateData.approvedHours =
-          this.parseOptionalHoursLabel(dto.approvedHours) ?? request.approvedHours;
-        updateData.approvedById = reviewerId;
-        updateData.approvedAt = new Date();
-      } else {
-        updateData.rejectedById = reviewerId;
-        updateData.rejectedAt = new Date();
-      }
-
-      const updated = await this.prisma.overtimeRequest.update({
-        where: { id },
-        data: updateData,
-        include: {
-          designer: { select: { id: true, fullName: true, email: true } },
-          task: { select: this.overtimeActivityTaskSelect },
-        },
-      });
-
-      await this.prisma.overtimeApprovalHistory.create({
-        data: {
-          requestId: id,
-          action: dto.status,
-          actionById: reviewerId,
-          comments: dto.comments || 'Final review completed',
-        },
-      });
-
-      const approved = dto.status === 'APPROVED';
-      await this.logOvertimeActivity({
-        action: approved
-          ? ActivityAction.OVERTIME_REQUEST_APPROVED
-          : ActivityAction.OVERTIME_REQUEST_REJECTED,
-        messageKey: approved ? 'overtime_request_approved' : 'overtime_request_rejected',
-        userId: reviewerId,
-        request: { ...request, ...updated, task: updated.task ?? request.task },
-        changes: {
-          newStatus: dto.status,
-          approvedHours: dto.approvedHours ?? null,
-          reviewStage: 'hr',
-        },
-      });
-
-      // Notify Designer
-      await this.notifyDesignerOfReview(updated, dto.status, dto.comments);
 
       return updated;
     }
@@ -1099,27 +1040,6 @@ export class OvertimeRequestsService {
       } catch (err) {
         this.logger.warn(`Failed to notify HOD ${hod.id}: ${err instanceof Error ? err.message : err}`);
       }
-    }
-  }
-
-  private async notifyHrOfPending(request: any) {
-    // Notify all Admins (HR Role equivalent)
-    const admins = await this.prisma.user.findMany({
-      where: {
-        role: { name: UserRole.ADMIN },
-      },
-    });
-
-    for (const admin of admins) {
-      await this.prisma.notification.create({
-        data: {
-          id: randomUUID(),
-          userId: admin.id,
-          title: 'Overtime Request Pending Final HR Approval',
-          message: `${request.designer.fullName}'s overtime request has been approved by the manager and requires final HR sign-off.`,
-          linkUrl: this.overtimeLink(request.id, request.designerId),
-        },
-      });
     }
   }
 

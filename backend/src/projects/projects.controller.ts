@@ -33,14 +33,14 @@ export class ProjectsController {
 
   /** POST /projects — HOD/Admin */
   @Post()
-  @Roles(UserRole.HOD, UserRole.ADMIN)
+  @Roles(UserRole.HOD)
   create(@CurrentUser() user: JwtPayload, @Body() dto: CreateProjectDto) {
     return this.projectsService.create(user.sub, dto);
   }
 
   /** GET /projects?status=ACTIVE&category=Retail&search=abc&page=1&limit=20 */
   @Get()
-  @Roles(UserRole.HOD, UserRole.DESIGNER, UserRole.ADMIN, UserRole.PROJECT_MANAGER)
+  @Roles(UserRole.HOD, UserRole.DESIGNER)
   findAll(
     @Query('status') status?: string,
     @Query('category') category?: string,
@@ -53,20 +53,20 @@ export class ProjectsController {
 
   /** GET /projects/by-project-no/:projectNo */
   @Get('by-project-no/:projectNo')
-  @Roles(UserRole.HOD, UserRole.DESIGNER, UserRole.ADMIN, UserRole.PROJECT_MANAGER)
+  @Roles(UserRole.HOD, UserRole.DESIGNER)
   findByProjectNo(@Param('projectNo') projectNo: string) {
     return this.projectsService.findByProjectNo(projectNo);
   }
 
   /** GET /projects/:id — returns project with its tasks */
   @Get(':id')
-  @Roles(UserRole.HOD, UserRole.DESIGNER, UserRole.ADMIN, UserRole.PROJECT_MANAGER)
+  @Roles(UserRole.HOD, UserRole.DESIGNER)
   findOne(@Param('id') id: string) {
     return this.projectsService.findOne(id);
   }
 
   @Post(':id/files')
-  @Roles(UserRole.HOD, UserRole.ADMIN, UserRole.PROJECT_MANAGER)
+  @Roles(UserRole.HOD)
   @UseInterceptors(
     FileInterceptor('file', {
       storage: memoryStorage(),
@@ -82,7 +82,7 @@ export class ProjectsController {
   }
 
   @Post(':id/files/link')
-  @Roles(UserRole.HOD, UserRole.ADMIN, UserRole.PROJECT_MANAGER)
+  @Roles(UserRole.HOD)
   addFileLink(
     @Param('id') id: string,
     @Body() dto: CreateProjectFileLinkDto,
@@ -92,27 +92,27 @@ export class ProjectsController {
   }
 
   @Get(':id/files')
-  @Roles(UserRole.HOD, UserRole.DESIGNER, UserRole.ADMIN, UserRole.PROJECT_MANAGER)
+  @Roles(UserRole.HOD, UserRole.DESIGNER)
   getFiles(@Param('id') id: string) {
     return this.projectsService.getProjectFiles(id);
   }
 
   @Delete(':id/files/:fileId')
-  @Roles(UserRole.HOD, UserRole.ADMIN, UserRole.PROJECT_MANAGER)
+  @Roles(UserRole.HOD)
   removeFile(@Param('id') id: string, @Param('fileId') fileId: string, @CurrentUser() user: JwtPayload) {
     return this.projectsService.removeProjectFile(id, fileId, user.sub);
   }
 
   /** PATCH /projects/:id — HOD/Admin */
   @Patch(':id')
-  @Roles(UserRole.HOD, UserRole.ADMIN)
+  @Roles(UserRole.HOD)
   update(@Param('id') id: string, @Body() dto: UpdateProjectDto) {
     return this.projectsService.update(id, dto);
   }
 
   /** DELETE /projects/:id — Admin only */
   @Delete(':id')
-  @Roles(UserRole.ADMIN)
+  @Roles(UserRole.HOD)
   remove(@Param('id') id: string) {
     return this.projectsService.remove(id);
   }
