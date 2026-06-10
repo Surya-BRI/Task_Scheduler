@@ -160,17 +160,9 @@ export class ActivitiesService {
         { details: { contains: input.projectId } },
       ];
     } else if (input.requestingUserRole === UserRole.DESIGNER && input.requestingUserId) {
-      const designerTasks = await this.prisma.task.findMany({
-        where: { assigneeId: input.requestingUserId },
-        select: { projectId: true },
-        distinct: ['projectId'],
-      });
-      const projectIds = designerTasks.map((t) => t.projectId).filter(Boolean) as string[];
-
       where.OR = [
         { task: { assigneeId: input.requestingUserId } },
         { userId: input.requestingUserId },
-        ...(projectIds.length > 0 ? [{ projectId: { in: projectIds } }] : []),
       ];
     }
 
