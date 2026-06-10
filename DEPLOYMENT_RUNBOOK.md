@@ -21,12 +21,36 @@ Upload only changed files from local repo to same relative path on server.
 ## 3. Backend Deploy Commands (PuTTY)
 ```bash
 cd /home/ubuntu/bri-erp-api/task-scheduler/backend
+npm run clean
 npm run build
-pm2 restart 70
-pm2 logs 70 --lines 50
+test -f dist/main.js && echo "OK dist/main.js"
+pm2 restart 76
+pm2 logs 76 --lines 50
 ```
 
-If backend PM2 id/name is different, replace `70`.
+If backend PM2 id/name is different, replace `76`.
+
+### PM2 entry path (important)
+Production build output is `backend/dist/main.js` (not `dist/src/main.js`).
+
+If PM2 shows `Cannot find module ... dist/src/main.js`:
+```bash
+cd /home/ubuntu/bri-erp-api/task-scheduler/backend
+npm run build
+pm2 delete 76
+pm2 start ecosystem.config.cjs
+pm2 save
+```
+
+Or point the existing process at npm:
+```bash
+cd /home/ubuntu/bri-erp-api/task-scheduler/backend
+pm2 delete 76
+pm2 start npm --name task-sc -- run start:prod
+pm2 save
+```
+
+`npm run build` also writes a legacy shim at `dist/src/main.js` for older PM2 configs.
 
 ## 4. Frontend Deploy Commands (PuTTY)
 If frontend is hosted from this server:

@@ -7,7 +7,8 @@
   "license": "UNLICENSED",
   "scripts": {
     "clean": "node -e \"try{require('fs').rmSync('dist',{recursive:true,force:true});require('fs').rmSync('tsconfig.build.tsbuildinfo',{force:true})}catch(e){}\"",
-    "build": "nest build",
+    "build": "nest build && node scripts/ensure-dist-entry.cjs",
+    "start:pm2": "pm2 start ecosystem.config.cjs",
     "format": "prettier --write \"src/**/*.ts\" \"test/**/*.ts\"",
     "start": "nest start",
     "start:dev": "node -e \"try{require('fs').rmSync('tsconfig.build.tsbuildinfo',{force:true})}catch(e){}\" && nest start --watch",
