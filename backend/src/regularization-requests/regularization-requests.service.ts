@@ -4,6 +4,7 @@ import {
   Injectable,
   Logger,
   NotFoundException,
+  Optional,
 } from '@nestjs/common';
 import { randomUUID } from 'crypto';
 import { Prisma } from '@prisma/client';
@@ -16,6 +17,7 @@ import { ReviewRegularizationRequestDto } from './dto/review-regularization-requ
 import { UpdateRegularizationStatusDto } from './dto/update-regularization-status.dto';
 import { isUuidString } from './sql-uuid.util';
 import type { RegularizationRequestsContract } from './regularization-requests.contract';
+import { DashboardRealtimeService } from '../dashboard/dashboard-realtime.service';
 
 export type RegularizationTaskOption = {
   id: string;
@@ -66,6 +68,7 @@ export class RegularizationRequestsService implements RegularizationRequestsCont
   constructor(
     private readonly prisma: PrismaService,
     private readonly activityLogger: ActivityLoggerService,
+    @Optional() private readonly dashboardRealtime?: DashboardRealtimeService,
   ) {}
 
   private formatDuration(value: string | null | undefined): string {
@@ -224,7 +227,7 @@ export class RegularizationRequestsService implements RegularizationRequestsCont
   }
 
   private assertDesignerOwnership(submitterId: string, role: UserRole, designerId: string) {
-    if (role === UserRole.HOD || role === UserRole.ADMIN) return;
+    if (role === UserRole.HOD) return;
     if (submitterId !== designerId) {
       throw new ForbiddenException('You can only submit regularization requests for yourself');
     }
@@ -235,10 +238,8 @@ export class RegularizationRequestsService implements RegularizationRequestsCont
     role: UserRole,
     request: RegularizationRequestView,
   ) {
-    if (role === UserRole.ADMIN) return;
-
     if (role !== UserRole.HOD) {
-      throw new ForbiddenException('Only HOD or Admin can review regularization requests');
+      throw new ForbiddenException('Only HOD can review regularization requests');
     }
 
     const [reviewer, designer] = await Promise.all([
@@ -328,10 +329,8 @@ export class RegularizationRequestsService implements RegularizationRequestsCont
     if (!isUuidString(id)) throw new BadRequestException('id must be a UUID.');
     const request = await this.loadRowById(id);
 
-    if (role === UserRole.ADMIN || role === UserRole.HOD) {
-      if (role === UserRole.HOD) {
-        await this.assertReviewerAccess(userId, role, request);
-      }
+    if (role === UserRole.HOD) {
+      await this.assertReviewerAccess(userId, role, request);
       return request;
     }
 
@@ -345,20 +344,18 @@ export class RegularizationRequestsService implements RegularizationRequestsCont
     managerId: string,
     role: UserRole,
   ): Promise<RegularizationRequestView[]> {
-    if (role !== UserRole.HOD && role !== UserRole.ADMIN) {
-      throw new ForbiddenException('Only HOD or Admin can view pending approvals');
+    if (role !== UserRole.HOD) {
+      throw new ForbiddenException('Only HOD can view pending approvals');
     }
 
     const where: Prisma.RegularizationRequestWhereInput = { status: 'Pending' };
 
-    if (role === UserRole.HOD) {
-      const manager = await this.prisma.user.findUnique({
-        where: { id: managerId },
-        select: { departmentId: true },
-      });
-      if (manager?.departmentId) {
-        where.designer = { departmentId: manager.departmentId };
-      }
+    const manager = await this.prisma.user.findUnique({
+      where: { id: managerId },
+      select: { departmentId: true },
+    });
+    if (manager?.departmentId) {
+      where.designer = { departmentId: manager.departmentId };
     }
 
     const rows = await this.prisma.regularizationRequest.findMany({
@@ -375,8 +372,8 @@ export class RegularizationRequestsService implements RegularizationRequestsCont
     role: UserRole,
     filters: { status?: string; designerId?: string },
   ): Promise<RegularizationRequestView[]> {
-    if (role !== UserRole.HOD && role !== UserRole.ADMIN) {
-      throw new ForbiddenException('Only HOD or Admin can view team requests');
+    if (role !== UserRole.HOD) {
+      throw new ForbiddenException('Only HOD can view team requests');
     }
 
     const where: Prisma.RegularizationRequestWhereInput = {};
@@ -387,7 +384,7 @@ export class RegularizationRequestsService implements RegularizationRequestsCont
     if (filters.designerId?.trim() && isUuidString(filters.designerId)) {
       where.designerId = filters.designerId.trim();
     }
-    if (role === UserRole.HOD) {
+    {
       const manager = await this.prisma.user.findUnique({
         where: { id: managerId },
         select: { departmentId: true },
@@ -551,6 +548,11 @@ export class RegularizationRequestsService implements RegularizationRequestsCont
     await this.notifyDesigner(updated, dto.status, remarks).catch((err) => {
       this.logger.warn(`Failed to notify designer: ${err instanceof Error ? err.message : err}`);
     });
+
+    this.dashboardRealtime?.notifyOverviewRefresh(
+      dto.status === 'Approved' ? 'regularization_approved' : 'regularization_rejected',
+    );
+    this.dashboardRealtime?.notifyUserNotificationRefresh(updated.designerId);
 
     return updated;
   }

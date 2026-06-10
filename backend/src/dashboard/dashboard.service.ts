@@ -11,7 +11,10 @@ import {
   InboxItem,
   DonutSegment,
 } from './projects-overview.dto';
-
+import {
+  aggregateStatusCounts,
+  COMPLETED_STATUS_FILTER,
+} from './task-status-buckets.util';
 const INBOX_ACTION_LABELS: Record<string, string> = {
   [ActivityAction.TASK_CREATED]: 'Task created',
   [ActivityAction.ASSIGNED_TASK]: 'Task assigned',
@@ -55,13 +58,16 @@ export class DashboardService {
     we.setUTCDate(we.getUTCDate() + 6);
     we.setUTCHours(23, 59, 59, 999);
 
+    const metricsWhere = viewerId && viewerRole
+      ? await this.buildMetricsTaskWhere(viewerId, viewerRole)
+      : {};
+
     const [
       assignmentRows,
       completedRows,
       onHoldRows,
       reassignRows,
     ] = await Promise.all([
-      // A — scheduled tasks this week
       this.prisma.schedulerAssignment.findMany({
         where: { weekStartDate: ws },
         select: {
@@ -81,11 +87,11 @@ export class DashboardService {
         },
         orderBy: [{ taskId: 'asc' }, { dayIndex: 'asc' }],
       }),
-      // B — completed this week
       this.prisma.task.findMany({
         where: {
-          status: { in: ['COMPLETED', 'APPROVED'] },
+          status: { in: COMPLETED_STATUS_FILTER },
           completedAt: { gte: ws, lte: we },
+          ...metricsWhere,
         },
         select: {
           taskNo: true,
@@ -98,9 +104,8 @@ export class DashboardService {
         orderBy: { completedAt: 'desc' },
         take: 50,
       }),
-      // C — on hold (global)
       this.prisma.task.findMany({
-        where: { status: 'ON_HOLD' },
+        where: { status: 'ON_HOLD', ...metricsWhere },
         select: {
           taskNo: true,
           title: true,
@@ -112,7 +117,6 @@ export class DashboardService {
         orderBy: { updatedAt: 'desc' },
         take: 50,
       }),
-      // D — reallocated (ASSIGNED_TASK activity this week)
       this.prisma.activityLog.findMany({
         where: {
           action: ActivityAction.ASSIGNED_TASK,
@@ -133,7 +137,7 @@ export class DashboardService {
           },
         },
         orderBy: { createdAt: 'desc' },
-        take: 50,
+        take: 100,
       }),
     ]);
 
@@ -141,9 +145,7 @@ export class DashboardService {
       activityRows,
       statusGroups,
       completedWithDue,
-      reallocDistinct,
     ] = await Promise.all([
-      // E — inbox (recent activity feed)
       this.prisma.activityLog.findMany({
         orderBy: { createdAt: 'desc' },
         take: 15,
@@ -152,33 +154,27 @@ export class DashboardService {
           action: true,
           details: true,
           createdAt: true,
+          taskId: true,
           user: { select: { fullName: true } },
-          task: { select: { taskNo: true } },
+          task: { select: { taskNo: true, id: true } },
         },
       }),
-      // F1 — status counts
       this.prisma.task.groupBy({
         by: ['status'],
+        where: metricsWhere,
         _count: { status: true },
       }),
-      // F2 — on-time %
       this.prisma.task.findMany({
         where: {
-          status: { in: ['COMPLETED', 'APPROVED'] },
+          status: { in: COMPLETED_STATUS_FILTER },
           completedAt: { not: null },
           dueDate: { not: null },
+          ...metricsWhere,
         },
         select: { completedAt: true, dueDate: true },
       }),
-      // F3 — reallocated %
-      this.prisma.activityLog.findMany({
-        where: { action: ActivityAction.ASSIGNED_TASK },
-        select: { taskId: true },
-        distinct: ['taskId'],
-      }),
     ]);
 
-    // --- Build scheduled tasks (deduplicate split rows) ---
     const seenScheduled = new Set<string>();
     const scheduledTasks: ScheduledTaskItem[] = [];
     for (const row of assignmentRows) {
@@ -197,7 +193,6 @@ export class DashboardService {
       });
     }
 
-    // --- Completed tasks ---
     const completedTasks: CompletedTaskItem[] = completedRows.map((r) => ({
       taskNo: r.taskNo,
       title: r.title ?? '',
@@ -207,7 +202,6 @@ export class DashboardService {
       completedAt: r.completedAt?.toISOString() ?? null,
     }));
 
-    // --- On hold tasks ---
     const onHoldTasks: OnHoldTaskItem[] = onHoldRows.map((r) => ({
       taskNo: r.taskNo,
       title: r.title ?? '',
@@ -215,22 +209,27 @@ export class DashboardService {
       designType: r.designType ?? null,
       revisionCode: r.revisionCode ?? null,
       holdDate: r.updatedAt?.toISOString() ?? null,
-      reason: null,
+      reason: 'On hold',
     }));
 
-    // --- Reallocated tasks (deduplicate by taskNo) ---
     const seenRealloc = new Set<string>();
     const reallocatedTasks: ReallocatedTaskItem[] = [];
     for (const row of reassignRows) {
       if (!row.task || seenRealloc.has(row.task.taskNo)) continue;
-      seenRealloc.add(row.task.taskNo);
       let newAssigneeName = 'Unknown';
       let fromAssigneeName: string | null = null;
       try {
-        const det = typeof row.details === 'string' ? JSON.parse(row.details) : (row.details as any);
-        newAssigneeName = det?.changes?.newAssigneeName ?? 'Unknown';
-        fromAssigneeName = det?.changes?.oldAssigneeName ?? null;
-      } catch { /* ignore malformed JSON */ }
+        const det = typeof row.details === 'string'
+          ? JSON.parse(row.details)
+          : (row.details as unknown as Record<string, unknown>);
+        const changes = det?.changes as Record<string, unknown> | undefined;
+        newAssigneeName = (changes?.newAssigneeName as string) ?? 'Unknown';
+        fromAssigneeName = (changes?.oldAssigneeName as string) ?? null;
+      } catch {
+        /* ignore malformed JSON */
+      }
+      if (!fromAssigneeName) continue;
+      seenRealloc.add(row.task.taskNo);
       reallocatedTasks.push({
         taskNo: row.task.taskNo,
         title: row.task.title ?? '',
@@ -243,11 +242,11 @@ export class DashboardService {
       });
     }
 
-    // --- Inbox: pending approvals (HOD) + recent activity ---
     const approvalInbox = await this.buildApprovalInbox(viewerId, viewerRole);
     const activityInbox: InboxItem[] = activityRows.map((row) => {
       const label = INBOX_ACTION_LABELS[row.action] ?? row.action;
       const actor = row.user?.fullName ?? 'System';
+      const itemKey = `activity-${row.id}`;
       return {
         id: row.id,
         summary: `${actor} — ${label}`,
@@ -255,30 +254,34 @@ export class DashboardService {
         taskNo: row.task?.taskNo ?? null,
         requestType: 'activity',
         requiresAction: false,
+        linkUrl: this.buildActivityLinkUrl(row.action, row.taskId, row.task?.id),
+        itemKey,
       };
     });
 
     const seenInbox = new Set<string>();
     const inbox: InboxItem[] = [];
     for (const item of [...approvalInbox, ...activityInbox]) {
-      const key = `${item.requestType ?? 'activity'}-${item.id}`;
+      const key = item.itemKey ?? `${item.requestType ?? 'activity'}-${item.id}`;
       if (seenInbox.has(key)) continue;
       seenInbox.add(key);
-      inbox.push(item);
+      inbox.push({ ...item, itemKey: key });
     }
-    inbox.sort((a, b) => new Date(b.occurredAt).getTime() - new Date(a.occurredAt).getTime());
+    inbox.sort((a, b) => {
+      if (a.requiresAction !== b.requiresAction) {
+        return a.requiresAction ? -1 : 1;
+      }
+      return new Date(b.occurredAt).getTime() - new Date(a.occurredAt).getTime();
+    });
     const trimmedInbox = inbox.slice(0, 50);
 
-    // --- Summary ---
     const counts = statusGroups.reduce((acc, r) => {
       acc[r.status] = r._count.status;
       return acc;
     }, {} as Record<string, number>);
 
-    const active = (counts['PENDING'] ?? 0) + (counts['WIP'] ?? 0) + (counts['REVISION'] ?? 0);
-    const onHold = counts['ON_HOLD'] ?? 0;
-    const completed = (counts['COMPLETED'] ?? 0) + (counts['APPROVED'] ?? 0);
-    const total = active + onHold + completed;
+    const buckets = aggregateStatusCounts(counts);
+    const { active, onHold, completed, total } = buckets;
     const safeTotal = total || 1;
 
     const onTimeCount = completedWithDue.filter(
@@ -288,7 +291,7 @@ export class DashboardService {
       ? Math.round((onTimeCount / completedWithDue.length) * 100)
       : 0;
 
-    const reallocatedPct = Math.round((reallocDistinct.length / safeTotal) * 100);
+    const reallocatedPct = Math.round((reallocatedTasks.length / safeTotal) * 100);
 
     const mkSegment = (value: number, color: string): DonutSegment => ({
       value,
@@ -321,11 +324,62 @@ export class DashboardService {
     };
   }
 
+  async getMetrics(userId: string, role: UserRole) {
+    const taskWhere = await this.buildMetricsTaskWhere(userId, role);
+
+    const [totalTasks, totalProjects, taskStatusGroup] = await Promise.all([
+      this.prisma.task.count({ where: taskWhere }),
+      role === UserRole.DESIGNER
+        ? this.prisma.task.findMany({ where: taskWhere, select: { projectId: true }, distinct: ['projectId'] }).then((r) => r.length)
+        : this.prisma.project.count(),
+      this.prisma.task.groupBy({
+        by: ['status'],
+        where: taskWhere,
+        _count: { status: true },
+      }),
+    ]);
+
+    const statuses = taskStatusGroup.reduce((acc, curr) => {
+      acc[curr.status] = curr._count.status;
+      return acc;
+    }, {} as Record<string, number>);
+
+    const buckets = aggregateStatusCounts(statuses);
+
+    return {
+      totalTasks,
+      totalProjects,
+      tasksByStatus: statuses,
+      activeTasks: buckets.active,
+      onHoldTasks: buckets.onHold,
+      completedTasks: buckets.completed,
+      approvedTasks: statuses['APPROVED'] ?? 0,
+      bucketTotals: buckets,
+    };
+  }
+
+  private async buildMetricsTaskWhere(userId: string, role: UserRole) {
+    if (role === UserRole.DESIGNER) {
+      return { assigneeId: userId };
+    }
+    if (role === UserRole.HOD) {
+      const viewer = await this.prisma.user.findUnique({
+        where: { id: userId },
+        select: { departmentId: true },
+      });
+      if (viewer?.departmentId) {
+        return { assignee: { departmentId: viewer.departmentId } };
+      }
+      return {};
+    }
+    return { assigneeId: userId };
+  }
+
   private async buildApprovalInbox(
     viewerId?: string,
     viewerRole?: UserRole,
   ): Promise<InboxItem[]> {
-    if (!viewerId || (viewerRole !== UserRole.HOD && viewerRole !== UserRole.ADMIN)) {
+    if (!viewerId || viewerRole !== UserRole.HOD) {
       return [];
     }
 
@@ -380,7 +434,7 @@ export class DashboardService {
     const regItems: InboxItem[] = regRows.map((row) => {
       const requester = row.designer?.fullName?.trim() || 'Designer';
       const taskLabel = row.task?.title?.trim() || row.task?.taskNo?.trim() || 'task';
-      const designerId = row.designer?.id ?? row.designerId ?? '';
+      const itemKey = `regularization-${row.id}`;
       return {
         id: row.id,
         summary: `${requester} — Regularization for ${taskLabel}`,
@@ -391,6 +445,7 @@ export class DashboardService {
         requiresAction: true,
         requesterName: requester,
         status: 'Pending',
+        itemKey,
       };
     });
 
@@ -398,6 +453,7 @@ export class DashboardService {
       const requester = row.designer?.fullName?.trim() || 'Designer';
       const taskLabel = row.task?.title?.trim() || row.task?.taskNo?.trim() || 'task';
       const projectName = row.task?.project?.name?.trim();
+      const itemKey = `overtime-${row.id}`;
       return {
         id: row.id,
         summary: `${requester} — Overtime${projectName ? ` (${projectName})` : ''} · ${taskLabel}`,
@@ -408,6 +464,7 @@ export class DashboardService {
         requiresAction: true,
         requesterName: requester,
         status: 'Pending Approval',
+        itemKey,
       };
     });
 
@@ -416,6 +473,7 @@ export class DashboardService {
       const designerId = row.user?.id ?? row.userId;
       const from = row.startDate.toISOString().split('T')[0];
       const to = (row.endDate ?? row.startDate).toISOString().split('T')[0];
+      const itemKey = `leave-${row.id}`;
       return {
         id: row.id,
         summary: `${requester} — Leave ${from} to ${to}`,
@@ -426,10 +484,26 @@ export class DashboardService {
         requiresAction: true,
         requesterName: requester,
         status: 'Pending',
+        itemKey,
       };
     });
 
     return [...regItems, ...otItems, ...leaveItems];
+  }
+
+  private buildActivityLinkUrl(
+    action: string,
+    taskId: string | null,
+    taskRowId?: string | null,
+  ): string | null {
+    if (action === ActivityAction.CREATED_CHATTER_POST || action === ActivityAction.CREATED_CHATTER_COMMENT) {
+      return '/chatter';
+    }
+    const id = taskRowId ?? taskId;
+    if (id) {
+      return `/design-list/tasks?taskId=${encodeURIComponent(id)}`;
+    }
+    return null;
   }
 
   private resolveProjectName(
@@ -452,7 +526,7 @@ export class DashboardService {
     return (parts[0][0] + parts[parts.length - 1][0]).toUpperCase();
   }
 
-  private parseWeekStart(weekStart: string): Date {
+  parseWeekStart(weekStart: string): Date {
     const trimmed = weekStart.trim();
     if (!/^\d{4}-\d{2}-\d{2}$/.test(trimmed)) {
       throw new BadRequestException('weekStart must be YYYY-MM-DD');
@@ -462,41 +536,12 @@ export class DashboardService {
     return d;
   }
 
-  private getCurrentMonday(): string {
+  getCurrentMonday(): string {
     const now = new Date();
     const day = now.getUTCDay();
     const diff = day === 0 ? -6 : 1 - day;
     const monday = new Date(now);
     monday.setUTCDate(now.getUTCDate() + diff);
     return monday.toISOString().split('T')[0];
-  }
-
-  async getMetrics(userId: string, role: string) {
-    const isDesigner = role === 'DESIGNER';
-    const taskWhere = isDesigner ? { assigneeId: userId } : {};
-
-    const [totalTasks, totalProjects, taskStatusGroup] = await Promise.all([
-      this.prisma.task.count({ where: taskWhere }),
-      this.prisma.project.count(), // HOD can see all projects or you could filter
-      this.prisma.task.groupBy({
-        by: ['status'],
-        where: taskWhere,
-        _count: { status: true },
-      }),
-    ]);
-
-    const statuses = taskStatusGroup.reduce((acc, curr) => {
-      acc[curr.status] = curr._count.status;
-      return acc;
-    }, {} as Record<string, number>);
-
-    return {
-      totalTasks,
-      totalProjects,
-      tasksByStatus: statuses,
-      activeTasks: (statuses['PENDING'] || 0) + (statuses['WIP'] || 0) + (statuses['REVISION'] || 0),
-      completedTasks: statuses['COMPLETED'] || 0,
-      approvedTasks: statuses['APPROVED'] || 0,
-    };
   }
 }

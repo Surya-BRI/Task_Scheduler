@@ -22,6 +22,10 @@ export function markNotificationRead(id: string) {
   return apiClient.patch(`/notifications/${encodeURIComponent(id)}/read`, {});
 }
 
+export function markNotificationUnread(id: string) {
+  return apiClient.patch(`/notifications/${encodeURIComponent(id)}/unread`, {});
+}
+
 export function markAllNotificationsRead() {
   return apiClient.post('/notifications/read-all', {});
 }

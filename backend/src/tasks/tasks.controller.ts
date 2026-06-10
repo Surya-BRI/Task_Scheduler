@@ -40,20 +40,20 @@ export class TasksController {
 
   /** POST /tasks — HOD/Admin/PM */
   @Post()
-  @Roles(UserRole.HOD, UserRole.ADMIN, UserRole.PROJECT_MANAGER)
+  @Roles(UserRole.HOD)
   create(@CurrentUser() user: JwtPayload, @Body() dto: CreateTaskDto) {
     return this.tasksService.create(user.sub, dto);
   }
 
   /** POST /tasks/extended — HOD/Admin/PM */
   @Post('extended')
-  @Roles(UserRole.HOD, UserRole.ADMIN, UserRole.PROJECT_MANAGER)
+  @Roles(UserRole.HOD)
   createExtended(@CurrentUser() user: JwtPayload, @Body() dto: CreateExtendedTaskDto) {
     return this.tasksService.createExtended(user.sub, dto);
   }
 
   @Post('upload-file')
-  @Roles(UserRole.HOD, UserRole.ADMIN, UserRole.PROJECT_MANAGER)
+  @Roles(UserRole.HOD)
   @UseInterceptors(
     FileInterceptor('file', {
       storage: memoryStorage(),
@@ -69,7 +69,7 @@ export class TasksController {
    *   ?projectId=&status=&priority=&assigneeId=&search=&page=1&limit=20
    */
   @Get()
-  @Roles(UserRole.HOD, UserRole.DESIGNER, UserRole.ADMIN, UserRole.PROJECT_MANAGER)
+  @Roles(UserRole.HOD, UserRole.DESIGNER)
   findAll(
     @CurrentUser() user: JwtPayload,
     @Query('projectId') projectId?: string,
@@ -93,7 +93,7 @@ export class TasksController {
 
   /** GET /tasks/summary — dashboard widget */
   @Get('next-revision')
-  @Roles(UserRole.HOD, UserRole.DESIGNER, UserRole.ADMIN, UserRole.PROJECT_MANAGER)
+  @Roles(UserRole.HOD, UserRole.DESIGNER)
   getNextRevision(
     @Query('projectId') projectId?: string,
     @Query('projectNo') projectNo?: string,
@@ -104,35 +104,35 @@ export class TasksController {
   }
 
   @Get('summary')
-  @Roles(UserRole.HOD, UserRole.DESIGNER, UserRole.ADMIN, UserRole.PROJECT_MANAGER)
+  @Roles(UserRole.HOD, UserRole.DESIGNER)
   getSummary(@CurrentUser() user: JwtPayload) {
     return this.tasksService.getStatusSummary(user.sub, user.role);
   }
 
   /** GET /tasks/:id */
   @Get(':id')
-  @Roles(UserRole.HOD, UserRole.DESIGNER, UserRole.ADMIN, UserRole.PROJECT_MANAGER)
+  @Roles(UserRole.HOD, UserRole.DESIGNER)
   findOne(@Param('id') id: string) {
     return this.tasksService.findOne(id);
   }
 
   /** PATCH /tasks/:id — HOD/Admin/PM */
   @Patch(':id')
-  @Roles(UserRole.HOD, UserRole.ADMIN, UserRole.PROJECT_MANAGER)
+  @Roles(UserRole.HOD)
   update(@Param('id') id: string, @Body() dto: UpdateTaskDto) {
     return this.tasksService.update(id, dto);
   }
 
   /** PATCH /tasks/:id/assign — HOD/Admin */
   @Patch(':id/assign')
-  @Roles(UserRole.HOD, UserRole.ADMIN)
+  @Roles(UserRole.HOD)
   assign(@Param('id') id: string, @CurrentUser() user: JwtPayload, @Body() dto: AssignTaskDto) {
     return this.tasksService.assign(id, user.sub, dto);
   }
 
   /** PATCH /tasks/:id/status — all authenticated roles */
   @Patch(':id/status')
-  @Roles(UserRole.HOD, UserRole.DESIGNER, UserRole.ADMIN, UserRole.PROJECT_MANAGER)
+  @Roles(UserRole.HOD, UserRole.DESIGNER)
   updateStatus(
     @Param('id') id: string,
     @CurrentUser() user: JwtPayload,
@@ -143,35 +143,35 @@ export class TasksController {
 
   /** GET /tasks/:id/sign-rows */
   @Get(':id/sign-rows')
-  @Roles(UserRole.HOD, UserRole.DESIGNER, UserRole.ADMIN, UserRole.PROJECT_MANAGER)
+  @Roles(UserRole.HOD, UserRole.DESIGNER)
   getSignRows(@Param('id') id: string) {
     return this.tasksService.getSignRows(id);
   }
 
   /** PUT /tasks/:id/sign-rows */
   @Put(':id/sign-rows')
-  @Roles(UserRole.HOD, UserRole.ADMIN, UserRole.PROJECT_MANAGER)
+  @Roles(UserRole.HOD)
   saveSignRows(@Param('id') id: string, @Body() dto: SaveSignRowsDto) {
     return this.tasksService.saveSignRows(id, dto);
   }
 
   /** GET /tasks/:id/submitted-session — fetch the most recent submitted work session */
   @Get(':id/submitted-session')
-  @Roles(UserRole.HOD, UserRole.DESIGNER, UserRole.ADMIN, UserRole.PROJECT_MANAGER)
+  @Roles(UserRole.HOD, UserRole.DESIGNER)
   getSubmittedSession(@Param('id') id: string) {
     return this.tasksService.getSubmittedSession(id);
   }
 
   /** GET /tasks/:id/timer-state — fetch draft session for cold-start restore */
   @Get(':id/timer-state')
-  @Roles(UserRole.HOD, UserRole.DESIGNER, UserRole.ADMIN, UserRole.PROJECT_MANAGER)
+  @Roles(UserRole.HOD, UserRole.DESIGNER)
   getTimerState(@Param('id') id: string, @CurrentUser() user: JwtPayload) {
     return this.tasksService.getTimerState(id, user.sub);
   }
 
   /** POST /tasks/:id/save-timer — upsert draft session on start/pause */
   @Post(':id/save-timer')
-  @Roles(UserRole.HOD, UserRole.DESIGNER, UserRole.ADMIN, UserRole.PROJECT_MANAGER)
+  @Roles(UserRole.HOD, UserRole.DESIGNER)
   saveTimerState(
     @Param('id') id: string,
     @CurrentUser() user: JwtPayload,
@@ -182,7 +182,7 @@ export class TasksController {
 
   /** POST /tasks/:id/submit-work — all authenticated roles (designer submits their timer work) */
   @Post(':id/submit-work')
-  @Roles(UserRole.HOD, UserRole.DESIGNER, UserRole.ADMIN, UserRole.PROJECT_MANAGER)
+  @Roles(UserRole.HOD, UserRole.DESIGNER)
   @UseInterceptors(
     FilesInterceptor('files', 10, {
       storage: memoryStorage(),
@@ -198,9 +198,9 @@ export class TasksController {
     return this.tasksService.submitWork(id, user.sub, dto, files ?? []);
   }
 
-  /** DELETE /tasks/:id — Admin only */
+  /** DELETE /tasks/:id — HOD only */
   @Delete(':id')
-  @Roles(UserRole.ADMIN)
+  @Roles(UserRole.HOD)
   remove(@Param('id') id: string) {
     return this.tasksService.remove(id);
   }

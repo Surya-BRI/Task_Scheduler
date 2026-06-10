@@ -17,7 +17,7 @@ export class RegularizationRequestsController {
   constructor(private readonly regularizationRequestsService: RegularizationRequestsService) {}
 
   @Get('task-options')
-  @Roles(UserRole.DESIGNER, UserRole.HOD, UserRole.ADMIN)
+  @Roles(UserRole.DESIGNER, UserRole.HOD)
   listTaskOptions(@Query('designerId') designerIdParam?: string, @CurrentUser() user?: JwtPayload) {
     const designerId = (designerIdParam ?? user?.sub ?? '').trim();
     if (!designerId) return [];
@@ -28,13 +28,13 @@ export class RegularizationRequestsController {
   }
 
   @Get('pending-approvals')
-  @Roles(UserRole.HOD, UserRole.ADMIN)
+  @Roles(UserRole.HOD)
   findPendingApprovals(@CurrentUser() user: JwtPayload) {
     return this.regularizationRequestsService.findPendingApprovals(user.sub, user.role);
   }
 
   @Get('team-requests')
-  @Roles(UserRole.HOD, UserRole.ADMIN)
+  @Roles(UserRole.HOD)
   findTeamRequests(
     @CurrentUser() user: JwtPayload,
     @Query('status') status?: string,
@@ -44,7 +44,7 @@ export class RegularizationRequestsController {
   }
 
   @Get()
-  @Roles(UserRole.DESIGNER, UserRole.HOD, UserRole.ADMIN)
+  @Roles(UserRole.DESIGNER, UserRole.HOD)
   findByDesigner(@Query('designerId') designerIdParam?: string, @CurrentUser() user?: JwtPayload) {
     const designerId = (designerIdParam ?? user?.sub ?? '').trim();
     if (!designerId) return [];
@@ -55,19 +55,19 @@ export class RegularizationRequestsController {
   }
 
   @Get(':id')
-  @Roles(UserRole.DESIGNER, UserRole.HOD, UserRole.ADMIN)
+  @Roles(UserRole.DESIGNER, UserRole.HOD)
   findOne(@Param('id') id: string, @CurrentUser() user: JwtPayload) {
     return this.regularizationRequestsService.findOne(id, user.sub, user.role);
   }
 
   @Post()
-  @Roles(UserRole.DESIGNER, UserRole.HOD, UserRole.ADMIN)
+  @Roles(UserRole.DESIGNER, UserRole.HOD)
   create(@CurrentUser() user: JwtPayload, @Body() dto: CreateRegularizationRequestDto) {
     return this.regularizationRequestsService.create(user.sub, user.role, dto);
   }
 
   @Post(':id/review')
-  @Roles(UserRole.HOD, UserRole.ADMIN)
+  @Roles(UserRole.HOD)
   review(
     @Param('id') id: string,
     @CurrentUser() user: JwtPayload,
@@ -77,7 +77,7 @@ export class RegularizationRequestsController {
   }
 
   @Patch(':id')
-  @Roles(UserRole.HOD, UserRole.ADMIN)
+  @Roles(UserRole.HOD)
   updateStatus(
     @Param('id') id: string,
     @CurrentUser() user: JwtPayload,

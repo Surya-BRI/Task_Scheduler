@@ -5,6 +5,7 @@ import {
   Logger,
   NotFoundException,
   OnModuleInit,
+  Optional,
 } from '@nestjs/common';
 import { randomUUID } from 'crypto';
 import type { Prisma } from '@prisma/client';
@@ -27,6 +28,7 @@ import {
   validateLeaveDates,
   type LeaveDateRange,
 } from './leave-request.validation';
+import { DashboardRealtimeService } from '../dashboard/dashboard-realtime.service';
 
 const UUID_RE =
   /^[0-9a-f]{8}-[0-9a-f]{4}-[1-5][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i;
@@ -59,6 +61,7 @@ export class RequestsService implements OnModuleInit {
   constructor(
     private readonly prisma: PrismaService,
     private readonly activityLogger: ActivityLoggerService,
+    @Optional() private readonly dashboardRealtime?: DashboardRealtimeService,
   ) {}
 
   async onModuleInit(): Promise<void> {
@@ -778,6 +781,11 @@ export class RequestsService implements OnModuleInit {
       req.approver?.fullName ?? 'Approver',
       reviewedAt,
     );
+
+    this.dashboardRealtime?.notifyOverviewRefresh(
+      status === 'APPROVED' ? 'leave_approved' : 'leave_rejected',
+    );
+    this.dashboardRealtime?.notifyUserNotificationRefresh(req.userId);
 
     return view;
   }
