@@ -1,36 +1,48 @@
 import { ActivitiesService } from './activities.service';
+import { UserRole } from '../common/constants/roles.enum';
 
-describe('ActivitiesService overtime summaries', () => {
-  const service = new ActivitiesService({} as any);
+describe('ActivitiesService', () => {
+  const prisma = {
+    task: { findMany: jest.fn() },
+    activityLog: { findMany: jest.fn().mockResolvedValue([]) },
+  };
+  const service = new ActivitiesService(prisma as any);
 
-  it('formats submitted overtime as actor + action only', () => {
-    const summary = (service as any).formatSummary(
-      'OVERTIME_REQUEST_SUBMITTED',
-      {
-        messageKey: 'overtime_request_submitted',
-        taskSnapshot: { taskNo: 'TSK-OP58199-20260604085458-55584' },
-        projectSnapshot: { name: 'Retail Revamp' },
-        changes: { overtimeDate: '2026-06-03', requestedHours: '2' },
-        context: { designerName: 'Alex Johnson' },
-      },
-      'Alex Johnson',
-    );
-
-    expect(summary).toBe('Alex Johnson submitted an overtime request');
+  beforeEach(() => {
+    jest.clearAllMocks();
   });
 
-  it('formats approved overtime without extra detail', () => {
-    const summary = (service as any).formatSummary(
-      'OVERTIME_REQUEST_APPROVED',
-      {
-        messageKey: 'overtime_request_approved',
-        taskSnapshot: { taskNo: 'T-001' },
-        changes: { approvedHours: '1.5' },
-        context: { designerName: 'Alex Johnson' },
-      },
-      'HOD User',
-    );
+  it('queries designer feed without invalid ActivityLog.projectId filter', async () => {
+    await service.findAll({
+      limit: 10,
+      requestingUserId: '11111111-1111-4111-8111-111111111111',
+      requestingUserRole: UserRole.DESIGNER,
+    });
 
-    expect(summary).toBe('HOD User approved an overtime request');
+    expect(prisma.activityLog.findMany).toHaveBeenCalledWith(
+      expect.objectContaining({
+        where: {
+          OR: [
+            { task: { assigneeId: '11111111-1111-4111-8111-111111111111' } },
+            { userId: '11111111-1111-4111-8111-111111111111' },
+          ],
+        },
+      }),
+    );
+  });
+
+  describe('overtime summaries', () => {
+    it('formats submitted overtime as actor + action only', () => {
+      const summary = (service as any).formatSummary(
+        'OVERTIME_REQUEST_SUBMITTED',
+        {
+          messageKey: 'overtime_request_submitted',
+          taskSnapshot: { taskNo: 'TSK-OP58199-20260604085458-55584' },
+        },
+        'Alex Johnson',
+      );
+
+      expect(summary).toBe('Alex Johnson submitted an overtime request');
+    });
   });
 });
