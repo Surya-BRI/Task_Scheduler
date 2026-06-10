@@ -109,7 +109,7 @@ model Task {
   revisionCode String?  @db.NVarChar(20)
   designType   String?  @db.NVarChar(80)
   description String?   @db.NVarChar(Max)
-  status      String    @default("PENDING") @db.NVarChar(20)
+  status      String    @default("DESIGN_NEW") @db.NVarChar(20)
   priority    String    @default("Medium") @db.NVarChar(50)
   projectId   String    @db.UniqueIdentifier
   assigneeId  String?   @db.UniqueIdentifier

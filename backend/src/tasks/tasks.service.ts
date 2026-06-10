@@ -993,7 +993,7 @@ export class TasksService {
       await tx.task.update({
         where: { id: taskId },
         data: {
-          status: 'COMPLETED',
+          status: 'DESIGN_COMPLETED',
           completedAt: new Date(),
           ...(task.startedAt ? {} : { startedAt: new Date() }),
         },
