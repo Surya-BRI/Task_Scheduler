@@ -37,7 +37,7 @@ export class RequestsController {
   }
 
   @Get()
-  @Roles(UserRole.DESIGNER)
+  @Roles(UserRole.DESIGNER, UserRole.HOD)
   findAll(@Query('designerId') designerId: string | undefined, @CurrentUser() user: JwtPayload) {
     const targetId = (designerId ?? user.sub ?? '').trim();
     if (!targetId) return [];
@@ -45,7 +45,7 @@ export class RequestsController {
   }
 
   @Post()
-  @Roles(UserRole.DESIGNER)
+  @Roles(UserRole.DESIGNER, UserRole.HOD)
   create(@CurrentUser() user: JwtPayload, @Body() createDto: CreateLeaveRequestDto) {
     return this.requestsService.create(user.sub, user.role, createDto);
   }

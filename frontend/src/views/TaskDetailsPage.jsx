@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useRef, useState } from 'react'
+import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import { toast } from 'sonner'
 import { Ban, Calendar, CheckCircle2, ChevronLeft, CircleCheck, Clock3, FileText, Flag, Hourglass, Info, Link, Pause, Pencil, Shield, Trash2, Upload } from 'lucide-react'
 import { useParams, usePathname, useRouter, useSearchParams } from 'next/navigation'
@@ -17,6 +17,19 @@ import {
   normalizePriority,
   resolveEmbeddedChatterTitle,
 } from '@/features/chatter/services/chatter-posts.api'
+import { MentionTextarea } from '@/features/chatter/components/MentionTextarea'
+import { EmbeddedChatterCommentComposer } from '@/features/chatter/components/EmbeddedChatterCommentComposer'
+import { ChatterMentionText } from '@/features/chatter/components/ChatterMentionText'
+import { parseMentionUserIdsFromMessage } from '@/features/chatter/utils/mention-utils'
+import {
+  resolveChatterMentionScope,
+  resolvePageChatterMentionScope,
+} from '@/features/chatter/utils/resolve-chatter-mention-scope'
+import {
+  updateCommentDraft,
+  updateCommentMentionIds,
+  updateMentionIdList,
+} from '@/features/chatter/utils/chatter-draft-handlers'
 import { emitChatterRefresh, onChatterRefresh } from '@/features/chatter/utils/chatter-events'
 import { mergeChatterPostLists } from '@/features/chatter/utils/chatter-merge'
 import {
@@ -727,7 +740,10 @@ export function TaskDetailsPage() {
   const [mentionSuggestions, setMentionSuggestions] = useState([])
   const [mentionQuery, setMentionQuery] = useState('')
   const [commentByPostId, setCommentByPostId] = useState({})
+  const [commentMentionIdsByPostId, setCommentMentionIdsByPostId] = useState({})
+  const [postMentionUserIds, setPostMentionUserIds] = useState([])
   const [commentSubmittingPostId, setCommentSubmittingPostId] = useState('')
+  const [mentionUsers, setMentionUsers] = useState([])
   const today = new Date()
   const tomorrow = new Date()
   tomorrow.setDate(tomorrow.getDate() + 1)
@@ -1161,6 +1177,46 @@ export function TaskDetailsPage() {
     })
   }, [activeTab, fetchChatterPosts, projectId, taskId])
 
+  const focusPostId = searchParams.get('postId')
+  const focusCommentId = searchParams.get('commentId')
+  const chatterMentionDirectory = useMemo(() => {
+    const map = new Map()
+    for (const user of mentionUsers) {
+      if (user?.id) map.set(user.id, user)
+    }
+    for (const post of chatterPosts) {
+      for (const user of post.mentionedUsers ?? []) {
+        if (user?.id) map.set(user.id, user)
+      }
+      for (const comment of post.comments ?? []) {
+        for (const user of comment.mentionedUsers ?? []) {
+          if (user?.id) map.set(user.id, user)
+        }
+      }
+    }
+    return [...map.values()]
+  }, [mentionUsers, chatterPosts])
+
+  useEffect(() => {
+    if (activeTab !== 'chatter') return
+    listChatterMentionUsers({
+      taskId: taskIdReady ? taskId : null,
+      projectId: projectId || null,
+    })
+      .then((rows) => setMentionUsers(Array.isArray(rows) ? rows : []))
+      .catch(() => setMentionUsers([]))
+  }, [activeTab, taskId, taskIdReady, projectId])
+
+  useEffect(() => {
+    if (activeTab !== 'chatter' || !focusPostId || chatterLoading) return
+    requestAnimationFrame(() => {
+      const targetId = focusCommentId
+        ? `chatter-comment-${focusCommentId}`
+        : `chatter-post-${focusPostId}`
+      document.getElementById(targetId)?.scrollIntoView({ behavior: 'smooth', block: 'center' })
+    })
+  }, [activeTab, focusPostId, focusCommentId, chatterLoading, chatterPosts.length])
+
   const fetchProjectFiles = useCallback(async () => {
     if (!projectId) {
       setProjectFiles([])
@@ -1241,17 +1297,21 @@ export function TaskDetailsPage() {
       return
     }
     try {
-      const mentionUserIds = resolveMentionUserIdsFromText(message)
+      const mentionUserIds =
+        postMentionUserIds.length > 0
+          ? postMentionUserIds
+          : parseMentionUserIdsFromMessage(message, mentionUsers)
       const created = await createChatterPost({
         message,
         postType: 'Posts',
         ...(mentionUserIds.length ? { mentionUserIds } : {}),
         ...(chatterPriority ? { priority: chatterPriority } : {}),
+        ...(mentionUserIds.length ? { mentionUserIds } : {}),
         ...(resolvedTaskId ? { taskId: resolvedTaskId } : { projectId: postProjectId }),
       })
       setChatterMessage('')
       setChatterPriority('')
-      setMentionSuggestions([])
+      setPostMentionUserIds([])
       setChatterPosts((prev) => {
         const next = [created, ...prev.filter((p) => p.id !== created.id)]
         next.sort((a, b) => new Date(b.createdAt).getTime() - new Date(a.createdAt).getTime())
@@ -1320,9 +1380,15 @@ export function TaskDetailsPage() {
     setCommentSubmittingPostId(postId)
     setChatterError('')
     try {
-      const mentionUserIds = resolveMentionUserIdsFromText(message)
-      const created = await createChatterComment(postId, message, mentionUserIds.length ? mentionUserIds : null)
-      setCommentByPostId((prev) => ({ ...prev, [postId]: '' }))
+      const post = chatterPosts.find((entry) => entry.id === postId)
+      const scopedIds = commentMentionIdsByPostId[postId] ?? []
+      const mentionUserIds =
+        scopedIds.length > 0
+          ? scopedIds
+          : parseMentionUserIdsFromMessage(message, mentionUsers)
+      const created = await createChatterComment(postId, message, mentionUserIds)
+      setCommentByPostId((prev) => updateCommentDraft(prev, postId, ''))
+      setCommentMentionIdsByPostId((prev) => updateCommentMentionIds(prev, postId, []))
       setChatterPosts((prev) =>
         prev.map((post) =>
           post.id === postId
@@ -1334,13 +1400,31 @@ export function TaskDetailsPage() {
             : post,
         ),
       )
-      emitChatterRefresh({ taskId, projectId, postId })
+      emitChatterRefresh({
+        taskId: post?.taskId ?? taskId,
+        projectId: post?.projectId ?? projectId,
+        postId,
+      })
     } catch (error) {
       toast.error(error instanceof Error ? error.message : 'Failed to post comment')
     } finally {
       setCommentSubmittingPostId('')
     }
   }
+
+  const pageMentionScope = resolvePageChatterMentionScope({ taskId, projectId, taskIdReady })
+
+  const handleCommentDraftChange = useCallback((postId, text) => {
+    setCommentByPostId((prev) => updateCommentDraft(prev, postId, text))
+  }, [])
+
+  const handleCommentMentionIdsChange = useCallback((postId, ids) => {
+    setCommentMentionIdsByPostId((prev) => updateCommentMentionIds(prev, postId, ids))
+  }, [])
+
+  const handlePostMentionIdsChange = useCallback((ids) => {
+    setPostMentionUserIds((prev) => updateMentionIdList(prev, ids))
+  }, [])
 
   async function handleSaveTeam() {
     if (!taskId) return
@@ -1750,33 +1834,16 @@ export function TaskDetailsPage() {
                     <label htmlFor="chatter-input" className="text-xs font-semibold text-slate-700">
                       Message
                     </label>
-                    <div className="relative mt-1.5">
-                      <textarea
-                        id="chatter-input"
-                        value={chatterMessage}
-                        onChange={(event) => handleChatterMessageChange(event.target.value)}
-                        onKeyDown={(e) => { if (e.key === 'Escape') setMentionSuggestions([]) }}
-                        rows={3}
-                        placeholder="Type your comment... use @ to mention someone"
-                        className="w-full resize-none rounded-md border border-slate-300 bg-white px-2.5 py-1.5 text-sm text-slate-900 outline-none focus:border-blue-500 focus:ring-2 focus:ring-blue-500/25"
-                      />
-                      {mentionSuggestions.length > 0 && (
-                        <ul className="absolute left-0 top-full z-30 mt-0.5 w-56 overflow-hidden rounded-md border border-slate-200 bg-white shadow-lg">
-                          {mentionSuggestions.map((user) => (
-                            <li key={user.id}>
-                              <button
-                                type="button"
-                                className="flex w-full items-center gap-2 px-3 py-2 text-left text-sm hover:bg-blue-50"
-                                onMouseDown={(e) => { e.preventDefault(); insertMentionIntoMessage(user) }}
-                              >
-                                <span className="font-semibold text-blue-600">@</span>
-                                <span>{user.fullName}</span>
-                              </button>
-                            </li>
-                          ))}
-                        </ul>
-                      )}
-                    </div>
+                    <MentionTextarea
+                      value={chatterMessage}
+                      onChange={setChatterMessage}
+                      taskId={pageMentionScope.taskId}
+                      projectId={pageMentionScope.projectId}
+                      onMentionIdsChange={handlePostMentionIdsChange}
+                      minRows={3}
+                      placeholder="Type your message... Use @ to mention someone"
+                      className="mt-1.5 w-full resize-none rounded-md border border-slate-300 bg-white px-2.5 py-1.5 text-sm text-slate-900 outline-none focus:border-blue-500 focus:ring-2 focus:ring-blue-500/25"
+                    />
                     <div className="mt-2">
                       <p className="text-[11px] font-semibold text-slate-600">Priority (optional)</p>
                       <div className="mt-1 flex flex-wrap gap-1.5">
@@ -1842,7 +1909,7 @@ export function TaskDetailsPage() {
                       </div>
                     ) : (
                       chatterPosts.map((entry) => (
-                        <article key={entry.id} className="rounded-md border border-slate-200 bg-white px-2.5 py-2 text-xs text-slate-800">
+                        <article key={entry.id} id={`chatter-post-${entry.id}`} className="overflow-visible rounded-md border border-slate-200 bg-white px-2.5 py-2 text-xs text-slate-800">
   <div className="flex items-start justify-between gap-2">
     <div className="min-w-0">
       <p className="text-[11px] font-semibold text-slate-900 truncate">
@@ -1859,36 +1926,33 @@ export function TaskDetailsPage() {
     </div>
     <p className="shrink-0 text-[10px] text-slate-500">{formatChatterDateTime(entry.createdAt)}</p>
   </div>
-  <p className="mt-1">{entry.message}</p>
+  <ChatterMentionText message={entry.message} users={chatterMentionDirectory} className="mt-1 block" />
   <div className="mt-2 space-y-1">
     {(entry.comments ?? []).map((comment) => (
-      <div key={comment.id} className="rounded border border-slate-200 bg-slate-50 px-2 py-1">
+      <div
+        key={comment.id}
+        id={`chatter-comment-${comment.id}`}
+        className={`rounded border border-slate-200 bg-slate-50 px-2 py-1 ${focusCommentId === comment.id ? 'ring-2 ring-blue-400' : ''}`}
+      >
         <div className="flex items-start justify-between gap-2">
           <p className="text-[10px] font-semibold text-slate-700">
             {comment.authorName ? `${comment.authorName}${comment.authorRole ? ` (${comment.authorRole})` : ''}` : (comment.authorId ? `User ${comment.authorId.slice(0, 8)}` : 'Unknown')}
           </p>
           <p className="shrink-0 text-[10px] text-slate-500">{formatChatterDateTime(comment.createdAt)}</p>
         </div>
-        <p className="mt-1">{comment.message}</p>
+        <ChatterMentionText message={comment.message} users={chatterMentionDirectory} className="mt-1 block" />
       </div>
     ))}
   </div>
-  <div className="mt-2 flex gap-2">
-                            <input
-                              value={String(commentByPostId[entry.id] ?? '')}
-                              onChange={(event) => setCommentByPostId((prev) => ({ ...prev, [entry.id]: event.target.value }))}
-                              placeholder="Write a comment..."
-                              className="w-full rounded border border-slate-300 px-2 py-1 text-xs"
-                            />
-                            <button
-                              type="button"
-                              onClick={() => handlePostComment(entry.id)}
-                              disabled={commentSubmittingPostId === entry.id}
-                              className="rounded bg-slate-900 px-2 py-1 text-[11px] font-semibold text-white disabled:opacity-60"
-                            >
-                              {commentSubmittingPostId === entry.id ? '...' : 'Reply'}
-                            </button>
-                          </div>
+  <EmbeddedChatterCommentComposer
+                            value={commentByPostId[entry.id] ?? ''}
+                            onChange={(value) => handleCommentDraftChange(entry.id, value)}
+                            onMentionIdsChange={(ids) => handleCommentMentionIdsChange(entry.id, ids)}
+                            taskId={resolveChatterMentionScope(entry, { taskId, projectId, taskIdReady }).taskId}
+                            projectId={resolveChatterMentionScope(entry, { taskId, projectId, taskIdReady }).projectId}
+                            onSubmit={() => handlePostComment(entry.id)}
+                            submitting={commentSubmittingPostId === entry.id}
+                          />
                         </article>
                       ))
                     )}
