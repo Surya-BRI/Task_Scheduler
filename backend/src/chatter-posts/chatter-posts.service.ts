@@ -449,7 +449,6 @@ export class ChatterPostsService implements OnModuleInit {
     listingLabel?: string | null;
     taskId?: string | null;
     projectId?: string | null;
-    isComment?: boolean;
   }): Promise<void> {
     const ref = params.listingLabel?.trim() || 'a discussion';
     const snippet = messageSnippet(params.messageText ?? '');
@@ -1128,7 +1127,6 @@ export class ChatterPostsService implements OnModuleInit {
         listingLabel: postMeta?.listingLabel,
         taskId: postMeta?.taskId,
         projectId: postMeta?.projectId,
-        isComment: true,
       });
     }
 

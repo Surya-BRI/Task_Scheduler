@@ -1,6 +1,6 @@
 "use client";
 
-import { useMemo, useState, useEffect, useRef } from "react";
+import { useMemo, useState, useEffect, useRef, useCallback } from "react";
 import { useSearchParams } from "next/navigation";
 import { toast } from "sonner";
 import { CalendarDays, Link2, MessageCircle, MoreHorizontal, PlusSquare, Search, ThumbsUp, X } from "lucide-react";
@@ -20,7 +20,7 @@ import {
   updateChatterComment,
   updateChatterPost,
 } from "@/features/chatter/services/chatter-posts.api";
-import { emitChatterRefresh } from "@/features/chatter/utils/chatter-events";
+import { emitChatterRefresh, onChatterRefresh } from "@/features/chatter/utils/chatter-events";
 import { connectDashboardRealtime } from "@/lib/realtime";
 import { apiClient } from "@/lib/api-client";
 import { getSession } from "@/lib/mock-auth";
