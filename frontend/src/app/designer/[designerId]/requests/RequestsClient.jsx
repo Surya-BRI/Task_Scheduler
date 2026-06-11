@@ -7,6 +7,13 @@ import { Navbar } from "@/components/Navbar";
 import StatsBar from "../components/StatsBar";
 import { Clock3, FileClock, TimerReset, X } from "lucide-react";
 import { formatDate } from "@/lib/utils";
+import {
+  isOvertimeDateAllowed,
+  isRegularizationDateAllowed,
+  maxRegularizationDate,
+  minRegularizationDate,
+  utcDateOnlyString,
+} from "@/lib/date-window";
 import { apiClient } from "@/lib/api-client";
 import {
   createRegularizationRequest,
@@ -224,6 +231,7 @@ export default function RequestsClient() {
   const [regularizationLoading, setRegularizationLoading] = useState(false);
   const [regTaskOptions, setRegTaskOptions] = useState([]);
   const [regTasksLoading, setRegTasksLoading] = useState(false);
+  const [regProjectOptions, setRegProjectOptions] = useState([]);
 
   const [previousOtRequests, setPreviousOtRequests] = useState([]);
   const [hodOvertimePending, setHodOvertimePending] = useState([]);
@@ -388,15 +396,34 @@ export default function RequestsClient() {
           ...EMPTY_OT_FORM,
           projectId: first.projectId,
           taskId: first.id,
+          date: utcDateOnlyString(),
         }));
       } else {
-        setOtForm(EMPTY_OT_FORM);
+        setOtForm({ ...EMPTY_OT_FORM, date: utcDateOnlyString() });
       }
     } catch (e) {
       setAssignedTasks([]);
       setAssignedTasksError(e?.message || "Could not load your assigned tasks.");
     } finally {
       setAssignedTasksLoading(false);
+    }
+  };
+
+  const loadRegProjectOptions = async () => {
+    try {
+      const res = await apiClient.get("/projects?limit=500");
+      const rows = Array.isArray(res?.data) ? res.data : (Array.isArray(res) ? res : []);
+      setRegProjectOptions(
+        rows
+          .map((p) => ({
+            id: String(p.id ?? "").trim(),
+            label: String(p.name ?? p.projectNo ?? p.id ?? "").trim(),
+          }))
+          .filter((p) => isUuidString(p.id) && p.label)
+          .sort((a, b) => a.label.localeCompare(b.label)),
+      );
+    } catch {
+      setRegProjectOptions([]);
     }
   };
 
@@ -496,6 +523,7 @@ export default function RequestsClient() {
     void loadRegularization();
     void loadOvertime();
     void loadRegTaskOptions();
+    void loadRegProjectOptions();
     void loadAssignedTasks(activeDesignerId);
     void loadDesignerStats(activeDesignerId);
     if (isHOD) {
@@ -573,13 +601,36 @@ export default function RequestsClient() {
         duration: "30 mins",
         reason: "",
         notes: "",
+        regularizationType: "task",
+        projectId: "",
+        projectName: "",
+        workDetails: "",
         status: "unsubmitted",
       },
     ]);
   };
 
   const handleIdleChange = (id, field, value) => {
-    setIdleRequests((prev) => prev.map((req) => (req.id === id ? { ...req, [field]: value } : req)));
+    setIdleRequests((prev) =>
+      prev.map((req) => {
+        if (req.id !== id) return req;
+        if (field === "regularizationType") {
+          if (value === "non-task") {
+            return { ...req, regularizationType: value, taskId: "", taskName: "" };
+          }
+          return { ...req, regularizationType: value, projectId: "", workDetails: "", projectName: "" };
+        }
+        if (field === "projectId") {
+          const selected = regProjectOptions.find((p) => p.id === value);
+          return {
+            ...req,
+            projectId: value,
+            projectName: selected?.label ?? req.projectName ?? "",
+          };
+        }
+        return { ...req, [field]: value };
+      }),
+    );
   };
 
   const handleIdleTaskSelect = (id, taskId) => {
@@ -593,6 +644,17 @@ export default function RequestsClient() {
     );
   };
 
+  const validateNonTaskDraft = (row) => {
+    const projectId = String(row.projectId ?? "").trim();
+    if (!projectId || !isUuidString(projectId)) {
+      return "Please select a project for non-task regularization.";
+    }
+    if (!String(row.workDetails ?? "").trim()) {
+      return "Work details are required for non-task regularization.";
+    }
+    return null;
+  };
+
   const handleSubmitIdleRow = async (id) => {
     const req = idleRequests.find((r) => r.id === id);
     if (!req || activeDesignerId == null) return;
@@ -600,15 +662,31 @@ export default function RequestsClient() {
       toast.warning("Please fill in the Date and Reason (Required).");
       return;
     }
+    if (!isRegularizationDateAllowed(req.date)) {
+      toast.warning("Regularization is only allowed for today and the previous 2 days.");
+      return;
+    }
+    const regType = req.regularizationType === "non-task" ? "non-task" : "task";
     const taskId = String(req.taskId ?? "").trim();
-    if (!isUuidString(taskId)) {
+    const projectId = String(req.projectId ?? "").trim();
+    if (regType === "task" && !isUuidString(taskId)) {
       toast.warning("Please select a task.");
       return;
+    }
+    if (regType === "non-task") {
+      const nonTaskError = validateNonTaskDraft(req);
+      if (nonTaskError) {
+        toast.warning(nonTaskError);
+        return;
+      }
     }
     try {
       await createRegularizationRequest({
         designerId: activeDesignerId,
-        taskId,
+        regularizationType: regType,
+        taskId: regType === "task" ? taskId : undefined,
+        projectId: regType === "non-task" ? projectId : undefined,
+        workDetails: regType === "non-task" ? String(req.workDetails).trim() : undefined,
         date: req.date,
         duration: req.duration,
         reason: req.reason,
@@ -616,7 +694,7 @@ export default function RequestsClient() {
         status: "Pending",
       });
       await loadRegularization();
-      toast.success("Regularization request submitted!");
+      toast.success(isHOD ? "Regularization auto-approved" : "Regularization request submitted!");
     } catch (e) {
       toast.error(e?.message || "Submit failed");
     }
@@ -674,16 +752,44 @@ export default function RequestsClient() {
       toast.warning("Please fill in Date and Reason for all draft rows.");
       return;
     }
-    if (drafts.some((r) => !isUuidString(String(r.taskId ?? "").trim()))) {
-      toast.warning("Please select a task for every draft row.");
+    const invalidTaskDraft = drafts.find((r) => {
+      const regType = r.regularizationType === "non-task" ? "non-task" : "task";
+      return regType === "task" && !isUuidString(String(r.taskId ?? "").trim());
+    });
+    if (invalidTaskDraft) {
+      toast.warning("Please select a task for every task-based draft row.");
+      return;
+    }
+    const invalidNonTaskDraft = drafts.find((r) => {
+      const regType = r.regularizationType === "non-task" ? "non-task" : "task";
+      return regType === "non-task" && validateNonTaskDraft(r);
+    });
+    if (invalidNonTaskDraft) {
+      toast.warning(validateNonTaskDraft(invalidNonTaskDraft));
       return;
     }
     if (activeDesignerId == null) return;
     try {
       for (const r of drafts) {
+        const regType = r.regularizationType === "non-task" ? "non-task" : "task";
+        if (regType === "non-task") {
+          await createRegularizationRequest({
+            designerId: activeDesignerId,
+            regularizationType: "non-task",
+            projectId: String(r.projectId).trim(),
+            workDetails: String(r.workDetails).trim(),
+            date: r.date,
+            duration: r.duration,
+            reason: r.reason,
+            notes: r.notes?.trim() || undefined,
+            status: "Pending",
+          });
+          continue;
+        }
         const taskId = String(r.taskId).trim();
         await createRegularizationRequest({
           designerId: activeDesignerId,
+          regularizationType: "task",
           taskId,
           date: r.date,
           duration: r.duration,
@@ -803,6 +909,10 @@ export default function RequestsClient() {
       toast.warning("Please select a date.");
       return;
     }
+    if (!isOvertimeDateAllowed(otForm.date)) {
+      toast.warning("Overtime can only be submitted for today.");
+      return;
+    }
     setOtSubmitting(true);
     setOvertimeError(null);
     try {
@@ -819,8 +929,8 @@ export default function RequestsClient() {
       }
       await createOvertimeRequest(payload);
       await Promise.all([loadOvertime(), isHOD ? loadHodOvertimeInbox() : Promise.resolve()]);
-      toast.success("Overtime request submitted successfully!");
-      setOtForm((f) => ({ ...f, date: "", reason: "" }));
+      toast.success(isHOD ? "Overtime auto-approved" : "Overtime request submitted successfully!");
+      setOtForm((f) => ({ ...f, date: utcDateOnlyString(), reason: "" }));
     } catch (err) {
       const message =
         err instanceof Error
@@ -882,16 +992,6 @@ export default function RequestsClient() {
     openOtReviewModal(request, "REJECTED_BY_MANAGER");
   };
 
-  const getStatusBadge = (status) => {
-    switch (status) {
-      case "Approved": return <span className="bg-emerald-500 text-white px-3 py-1.5 rounded-full text-xs font-semibold shadow-sm w-24 text-center inline-block">Approved</span>;
-      case "Pending Approval":
-      case "Pending": return <span className="bg-orange-500 text-white px-3 py-1.5 rounded-full text-xs font-semibold shadow-sm w-24 text-center inline-block">Pending</span>;
-      case "Rejected": return <span className="bg-red-500 text-white px-3 py-1.5 rounded-full text-xs font-semibold shadow-sm w-24 text-center inline-block">Rejected</span>;
-      default: return null;
-    }
-  };
-
   const getStatusColorTable = (status) => {
     switch (status) {
       case "Approved": return "bg-emerald-100 text-emerald-800";
@@ -900,6 +1000,43 @@ export default function RequestsClient() {
       case "Rejected": return "bg-red-100 text-red-800";
       default: return "bg-slate-100 text-slate-800";
     }
+  };
+
+  const renderStatusActionCell = (req, onApprove, onReject) => {
+    const isPending =
+      req._needsAction && (req.status === "Pending Approval" || req.status === "Pending");
+    if (isPending) {
+      return (
+        <div className="flex flex-col items-center gap-2">
+          <span className={`inline-block rounded-full px-3 py-1 text-xs font-semibold ${getStatusColorTable(req.status)}`}>
+            {req.status}
+          </span>
+          <div className="flex justify-center gap-2">
+            <button
+              type="button"
+              onClick={onApprove}
+              className="rounded-full bg-emerald-500 px-3 py-1.5 text-xs font-semibold text-white hover:bg-emerald-600"
+            >
+              Approve
+            </button>
+            <button
+              type="button"
+              onClick={onReject}
+              className="rounded-full bg-red-500 px-3 py-1.5 text-xs font-semibold text-white hover:bg-red-600"
+            >
+              Reject
+            </button>
+          </div>
+        </div>
+      );
+    }
+    return (
+      <span
+        className={`inline-block w-28 rounded-full px-3 py-1.5 text-xs font-semibold text-center tracking-wide shadow-sm ${getStatusColorTable(req.status)}`}
+      >
+        {req.status}
+      </span>
+    );
   };
 
   const unifiedRegularizationRows = useMemo(() => {
@@ -1043,7 +1180,7 @@ export default function RequestsClient() {
                 </h2>
                 {isHOD ? (
                   <p className="mt-0.5 text-xs text-slate-500">
-                    Unified list — pending approvals and requests for {activeDesignerName}
+                    Submit for {activeDesignerName} · unified history and pending approvals below
                   </p>
                 ) : null}
               </div>
@@ -1080,16 +1217,21 @@ export default function RequestsClient() {
               <div className="border-b border-slate-100 px-4 py-2 text-sm text-slate-500 sm:px-5">Loading regularization…</div>
             ) : null}
 
-            <div className="overflow-x-auto">
+            <div className="border-t border-slate-200">
+              <div className="flex items-center gap-2 px-4 py-3 sm:px-5">
+                <FileClock className="h-4 w-4 text-slate-500" />
+                <h3 className="text-base font-semibold text-slate-900">All Regularization Requests</h3>
+              </div>
+              <div className="overflow-x-auto">
               <table className="w-full min-w-0 text-sm text-left">
                 <thead className="ui-table-header">
                   <tr>
                     {isHOD ? <th className="px-4 py-3">Requester</th> : null}
-                    <th className="px-4 py-3">Completed Task</th>
-                    <th className="px-4 py-3 text-center">Date</th>
-                    <th className="px-4 py-3 text-center">Idle Duration</th>
-                    <th className="px-4 py-3">Reason (Required)</th>
-                    <th className="px-4 py-3">Optional Notes</th>
+                    <th className="px-4 py-3">Task</th>
+                    <th className="px-4 py-3">Request Date</th>
+                    <th className="px-4 py-3">Idle Duration</th>
+                    <th className="px-4 py-3">Reason</th>
+                    <th className="px-4 py-3">Notes</th>
                     <th className="px-4 py-3 text-center">Status / Action</th>
                   </tr>
                 </thead>
@@ -1102,89 +1244,95 @@ export default function RequestsClient() {
                     </tr>
                   ) : null}
                   {unifiedRegularizationRows.map((req) => {
-                    if (req._source === "team-pending") {
-                      return (
-                        <tr
-                          key={req.id}
-                          className={`transition-colors hover:bg-slate-50${highlightedRequestId === req.id ? " bg-blue-50 ring-1 ring-inset ring-blue-200" : ""}`}
-                        >
-                          <td className="px-4 py-3 font-medium text-slate-800">
-                            <p>{req._requester}</p>
-                            {req.departmentName && req.departmentName !== "—" ? (
-                              <p className="text-xs font-normal text-slate-500">{req.departmentName}</p>
-                            ) : null}
-                          </td>
-                          <td className="px-4 py-3 text-slate-700">{displayTaskName(req)}</td>
-                          <td className="px-4 py-3 text-center text-slate-600">{req.date ? formatDate(req.date) : "—"}</td>
-                          <td className="px-4 py-3 text-center text-slate-600">{req.duration || "—"}</td>
-                          <td className="px-4 py-3 text-slate-700">{req.reason || "—"}</td>
-                          <td className="px-4 py-3 text-slate-500">{req.notes || "—"}</td>
-                          <td className="px-4 py-3 text-center">
-                            <div className="flex flex-col items-center gap-2">
-                              {getStatusBadge(req.status)}
-                              <div className="flex justify-center gap-2">
-                                <button type="button" onClick={() => openReviewModal(req, "Approved")} className="rounded-full bg-emerald-500 px-3 py-1.5 text-xs font-semibold text-white hover:bg-emerald-600">Approve</button>
-                                <button type="button" onClick={() => openReviewModal(req, "Rejected")} className="rounded-full bg-red-500 px-3 py-1.5 text-xs font-semibold text-white hover:bg-red-600">Reject</button>
-                              </div>
-                            </div>
-                          </td>
-                        </tr>
-                      );
-                    }
+                    const isDraft = req.status === "unsubmitted";
                     return (
                     <tr
                       key={req.id}
-                      className={`transition-colors hover:bg-slate-50${highlightedRequestId === req.id ? " bg-blue-50 ring-1 ring-inset ring-blue-200" : ""}`}
+                      className={`transition-colors hover:bg-slate-50${
+                        highlightedRequestId === req.id ? " bg-blue-50 ring-1 ring-inset ring-blue-200" : ""
+                      }${req._needsAction && highlightedRequestId !== req.id ? " bg-orange-50/40" : ""}`}
                     >
                       {isHOD ? (
-                        <td className="px-4 py-3 text-center">
-                          <span className="text-xs font-semibold text-slate-600">{req._requester}</span>
+                        <td className="px-4 py-3 font-medium text-slate-800">
+                          <p>{req._requester}</p>
+                          {req.departmentName && req.departmentName !== "—" ? (
+                            <p className="text-xs font-normal text-slate-500">{req.departmentName}</p>
+                          ) : null}
                         </td>
                       ) : null}
                       <td className="px-4 py-3 font-medium text-slate-800">
-                        {req.status === "unsubmitted" ? (
-                          <div className="flex max-w-[260px] flex-col gap-1">
-                            <label className="text-[10px] font-semibold uppercase text-slate-500">Task Name</label>
+                        {isDraft ? (
+                          <div className="flex max-w-[280px] flex-col gap-2">
                             <select
-                              value={req.taskId === "" || req.taskId == null ? "" : req.taskId}
-                              onChange={(e) => handleIdleTaskSelect(req.id, e.target.value)}
+                              value={req.regularizationType ?? "task"}
+                              onChange={(e) => handleIdleChange(req.id, "regularizationType", e.target.value)}
                               className={inputClass}
-                              disabled={regTasksLoading}
                             >
-                              <option value="" disabled>
-                                {regTasksLoading
-                                  ? "Loading tasks…"
-                                  : regTaskOptions.length === 0
-                                    ? "No tasks assigned"
-                                    : "Select a task"}
-                              </option>
-                              {regTaskOptions.map((task) => (
-                                <option key={task.id} value={task.id}>
-                                  {task.label}
-                                </option>
-                              ))}
+                              <option value="task">Assigned Task</option>
+                              <option value="non-task">Non-Task Regularization</option>
                             </select>
+                            {(req.regularizationType ?? "task") === "non-task" ? (
+                              <>
+                                <select
+                                  value={req.projectId ?? ""}
+                                  onChange={(e) => handleIdleChange(req.id, "projectId", e.target.value)}
+                                  className={inputClass}
+                                >
+                                  <option value="" disabled>Select project</option>
+                                  {regProjectOptions.map((p) => (
+                                    <option key={p.id} value={p.id}>{p.label}</option>
+                                  ))}
+                                </select>
+                                <input
+                                  type="text"
+                                  placeholder="Work details / reason"
+                                  value={req.workDetails ?? ""}
+                                  onChange={(e) => handleIdleChange(req.id, "workDetails", e.target.value)}
+                                  className={inputClass}
+                                />
+                              </>
+                            ) : (
+                              <select
+                                value={req.taskId === "" || req.taskId == null ? "" : req.taskId}
+                                onChange={(e) => handleIdleTaskSelect(req.id, e.target.value)}
+                                className={inputClass}
+                                disabled={regTasksLoading}
+                              >
+                                <option value="" disabled>
+                                  {regTasksLoading
+                                    ? "Loading tasks…"
+                                    : regTaskOptions.length === 0
+                                      ? "No tasks assigned"
+                                      : "Select a task"}
+                                </option>
+                                {regTaskOptions.map((task) => (
+                                  <option key={task.id} value={task.id}>
+                                    {task.label}
+                                  </option>
+                                ))}
+                              </select>
+                            )}
                           </div>
                         ) : (
-                          displayTaskName(req)
+                          <span className="font-semibold text-slate-800">{displayTaskName(req)}</span>
                         )}
                       </td>
-                      <td className="px-4 py-3 text-center">
-                        {req.status === "unsubmitted" ? (
+                      <td className="px-4 py-3 font-medium text-slate-500">
+                        {isDraft ? (
                           <input
                             type="date"
                             value={req.date}
+                            min={minRegularizationDate()}
+                            max={maxRegularizationDate()}
                             onChange={(e) => handleIdleChange(req.id, "date", e.target.value)}
                             className="rounded-lg border border-slate-300 bg-white px-2 py-1.5 text-xs text-slate-700 outline-none focus:border-blue-500 focus:ring-2 focus:ring-blue-500/25"
                           />
                         ) : (
-                          <span className="inline-block rounded-md bg-slate-100 px-3 py-1.5 text-xs text-slate-700">
-                            {req.date ? formatDate(req.date) : "dd MMM yyyy"}
-                          </span>
+                          req.date ? formatDate(req.date) : "—"
                         )}
                       </td>
-                      <td className="px-4 py-3 text-center">
-                        {req.status === "unsubmitted" ? (
+                      <td className="px-4 py-3 text-slate-700">
+                        {isDraft ? (
                           <input
                             type="text"
                             value={req.duration ?? ""}
@@ -1192,14 +1340,11 @@ export default function RequestsClient() {
                             className="w-full max-w-[120px] rounded-lg border border-slate-300 bg-white px-2 py-1.5 text-center text-xs text-slate-800 outline-none focus:border-blue-500 focus:ring-2 focus:ring-blue-500/25"
                           />
                         ) : (
-                          <div className="inline-flex items-center gap-2">
-                            <span className="font-medium text-slate-800">{req.duration}</span>
-                            <span className="rounded bg-[#5d5baf] px-2 py-1 text-[10px] font-bold text-white">T - A</span>
-                          </div>
+                          req.duration || "—"
                         )}
                       </td>
                       <td className="px-4 py-3">
-                        {req.status === "unsubmitted" ? (
+                        {isDraft ? (
                           <select
                             value={req.reason ?? ""}
                             onChange={(e) => handleIdleChange(req.id, "reason", e.target.value)}
@@ -1215,13 +1360,11 @@ export default function RequestsClient() {
                             ))}
                           </select>
                         ) : (
-                          <div className="truncate rounded-lg bg-slate-100 px-3 py-2 text-sm text-slate-600">
-                            {req.reason}
-                          </div>
+                          <span className="text-slate-700">{req.reason || "—"}</span>
                         )}
                       </td>
                       <td className="px-4 py-3">
-                        {req.status === "unsubmitted" ? (
+                        {isDraft ? (
                           <input
                             type="text"
                             placeholder={req.reason === "Other" ? "Required when reason is Other" : "Optional notes"}
@@ -1230,37 +1373,24 @@ export default function RequestsClient() {
                             className={`${inputClass} ${req.reason === "Other" ? "border-amber-300 bg-amber-50/60" : ""}`}
                           />
                         ) : (
-                          <div className="truncate rounded-lg bg-slate-100 px-3 py-2 text-sm text-slate-600">{req.notes || "No notes"}</div>
+                          <span className="text-slate-500">{req.notes || "—"}</span>
                         )}
                       </td>
                       <td className="px-4 py-3 text-center">
-                        {req.status === "unsubmitted" ? (
+                        {isDraft ? (
                           <button
                             type="button"
                             onClick={() => void handleSubmitIdleRow(req.id)}
-                            className="rounded-lg bg-blue-600 px-3 py-2 text-xs font-semibold text-white shadow-sm transition-colors hover:bg-blue-700"
+                            className="rounded-lg bg-blue-600 px-3 py-1.5 text-xs font-semibold text-white shadow-sm transition-colors hover:bg-blue-700"
                           >
                             Submit Request
                           </button>
-                        ) : isHOD && req._needsAction && req.status === "Pending" ? (
-                          <div className="flex justify-center gap-2">
-                            <button
-                              type="button"
-                              onClick={() => void handleApproveIdle(req.id)}
-                              className="bg-emerald-500 text-white px-3 py-1.5 rounded-full text-xs font-semibold shadow-sm hover:bg-emerald-600 transition-colors"
-                            >
-                              Approve
-                            </button>
-                            <button
-                              type="button"
-                              onClick={() => void handleRejectIdle(req.id)}
-                              className="bg-red-500 text-white px-3 py-1.5 rounded-full text-xs font-semibold shadow-sm hover:bg-red-600 transition-colors"
-                            >
-                              Reject
-                            </button>
-                          </div>
                         ) : (
-                          getStatusBadge(req.status)
+                          renderStatusActionCell(
+                            req,
+                            () => void handleApproveIdle(req.id),
+                            () => void handleRejectIdle(req.id),
+                          )
                         )}
                       </td>
                     </tr>
@@ -1268,6 +1398,7 @@ export default function RequestsClient() {
                   })}
                 </tbody>
               </table>
+              </div>
             </div>
           </section>
 
@@ -1363,7 +1494,15 @@ export default function RequestsClient() {
                   </div>
                   <div>
                     <label className="mb-1.5 block text-sm font-medium text-slate-700">Date</label>
-                    <input type="date" value={otForm.date} onChange={(e) => setOtForm({ ...otForm, date: e.target.value })} className={inputClass} required />
+                    <input
+                      type="date"
+                      value={otForm.date}
+                      min={utcDateOnlyString()}
+                      max={utcDateOnlyString()}
+                      onChange={(e) => setOtForm({ ...otForm, date: e.target.value })}
+                      className={inputClass}
+                      required
+                    />
                   </div>
                   <div>
                     <label className="mb-1.5 block text-sm font-medium text-slate-700">Estimated Remaining Work</label>
@@ -1448,16 +1587,10 @@ export default function RequestsClient() {
                         <td className="px-4 py-3 text-slate-700">{req.requested}</td>
                         <td className="px-4 py-3 text-slate-700">{req.approved}</td>
                         <td className="px-4 py-3 text-center">
-                          {req._needsAction && (req.status === "Pending Approval" || req.status === "Pending") ? (
-                            <div className="flex flex-col items-center gap-2">
-                              <span className={`inline-block rounded-full px-3 py-1 text-xs font-semibold ${getStatusColorTable(req.status)}`}>{req.status}</span>
-                              <div className="flex justify-center gap-2">
-                                <button type="button" onClick={() => void handleApproveOt(req.id)} className="rounded-full bg-emerald-500 px-3 py-1.5 text-xs font-semibold text-white hover:bg-emerald-600">Approve</button>
-                                <button type="button" onClick={() => void handleRejectOt(req.id)} className="rounded-full bg-red-500 px-3 py-1.5 text-xs font-semibold text-white hover:bg-red-600">Reject</button>
-                              </div>
-                            </div>
-                          ) : (
-                            <span className={`inline-block w-28 rounded-full px-3 py-1.5 text-xs font-semibold text-center tracking-wide shadow-sm ${getStatusColorTable(req.status)}`}>{req.status}</span>
+                          {renderStatusActionCell(
+                            req,
+                            () => void handleApproveOt(req.id),
+                            () => void handleRejectOt(req.id),
                           )}
                         </td>
                       </tr>

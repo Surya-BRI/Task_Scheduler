@@ -1,6 +1,7 @@
 "use client";
 
 import { useMemo, useState, useEffect, useRef } from "react";
+import { useSearchParams } from "next/navigation";
 import { toast } from "sonner";
 import { CalendarDays, Link2, MessageCircle, PlusSquare, Search, ThumbsUp, X } from "lucide-react";
 import { Navbar } from "@/components/Navbar";
@@ -22,6 +23,9 @@ import {
   isValidExternalUrl,
   normalizeExternalUrl,
 } from "../utils/chatterLinkAttachments";
+import { MentionTextarea } from "./MentionTextarea";
+import { ChatterMentionText } from "./ChatterMentionText";
+import { parseMentionUserIdsFromMessage } from "../utils/mention-utils";
 
 const PRIORITY_STYLES = {
   low: "bg-emerald-500",
@@ -41,26 +45,8 @@ function formatTaskCatalogLabel(task) {
   return "Task";
 }
 
-function toFormattedHtml(text) {
-  return (text ?? '')
-    .replace(/&/g, '&amp;')
-    .replace(/</g, '&lt;')
-    .replace(/>/g, '&gt;')
-    .replace(/@([A-Za-z][A-Za-z0-9._\s-]{1,80})/g, '<span class="font-semibold text-blue-600">@$1</span>')
-    .replace(/\*\*(.+?)\*\*/gs, '<strong>$1</strong>')
-    .replace(/~~(.+?)~~/gs, '<del>$1</del>')
-    .replace(/__(.+?)__/gs, '<u>$1</u>')
-    .replace(/\*(.+?)\*/gs, '<em>$1</em>')
-    .replace(/\n/g, '<br />')
-}
-
-function FormattedText({ text, className }) {
-  return (
-    <span
-      className={className}
-      dangerouslySetInnerHTML={{ __html: toFormattedHtml(text) }}
-    />
-  )
+function FormattedText({ text, mentionUsers = [], className }) {
+  return <ChatterMentionText message={text} users={mentionUsers} className={className} />;
 }
 
 function SegmentButton({ label, isActive, onClick }) {
@@ -315,7 +301,7 @@ function CreatePostModal({ isOpen, onClose, onSubmit, isSubmitting }) {
     setShowTaskResults(false);
 
     let cancelled = false;
-    listChatterMentionUsers()
+    listChatterMentionUsers({ taskId: selectedTaskId })
       .then((users) => {
         if (!cancelled && Array.isArray(users)) setMentionUsers(users);
       })
@@ -325,7 +311,7 @@ function CreatePostModal({ isOpen, onClose, onSubmit, isSubmitting }) {
     return () => {
       cancelled = true;
     };
-  }, [isOpen]);
+  }, [isOpen, selectedTaskId]);
 
   if (!isOpen) return null;
 
@@ -338,10 +324,12 @@ function CreatePostModal({ isOpen, onClose, onSubmit, isSubmitting }) {
       return;
     }
     setErrors({});
+    const idsFromMessage = parseMentionUserIdsFromMessage(message, mentionUsers);
+    const mentionUserIds = [...new Set([...selectedMentions.map((m) => m.id), ...idsFromMessage])];
     onSubmit({
       title,
       mention,
-      mentionUserIds: selectedMentions.map((m) => m.id),
+      mentionUserIds,
       mentionedUsers: selectedMentions,
       message,
       ...(priority ? { priority } : {}),
@@ -492,14 +480,15 @@ function CreatePostModal({ isOpen, onClose, onSubmit, isSubmitting }) {
               <label className="text-sm font-semibold text-slate-700">Description *</label>
               <span className="text-xs text-slate-500">{message.length}/500</span>
             </div>
-            <textarea
+            <MentionTextarea
               value={message}
-              maxLength={500}
-              onChange={(e) => setMessage(e.target.value)}
+              onChange={setMessage}
+              taskId={selectedTaskId}
+              minRows={5}
+              placeholder="Write your post details... Use @ to mention someone"
               className={`min-h-[140px] w-full resize-y rounded-lg border bg-white px-3 py-2 text-sm text-slate-900 outline-none focus:ring-2 focus:ring-blue-500/25 ${
                 errors.message ? "border-red-300 focus:border-red-400" : "border-slate-300 focus:border-blue-500"
               }`}
-              placeholder="Write your post details..."
             />
             {errors.message ? <p className="mt-1 text-xs text-red-600">{errors.message}</p> : null}
           </div>
@@ -660,11 +649,14 @@ function CreatePostModal({ isOpen, onClose, onSubmit, isSubmitting }) {
 
 function ChatterCard({
   post,
+  mentionUsers = [],
+  focusCommentId = null,
   isComposerOpen,
   draftComment,
   isSubmittingComment,
   onOpenComposer,
   onDraftChange,
+  onMentionIdsChange,
   onSubmitComment,
 }) {
   const hasComments = (post.comments?.length ?? 0) > 0;
@@ -699,7 +691,7 @@ function ChatterCard({
   }
 
   return (
-    <article className="ui-surface ui-card-pad flex flex-col gap-3">
+    <article id={`chatter-post-${post.id}`} className="ui-surface ui-card-pad flex flex-col gap-3">
       <div className="flex gap-4">
         <div className="flex-1 min-w-0">
           <div className="flex items-start gap-3">
@@ -725,7 +717,7 @@ function ChatterCard({
                 {post.mention && post.mention !== '—' ? (
                   <p className="text-sm font-medium text-blue-600 mb-1">{post.mention}</p>
                 ) : null}
-                <FormattedText text={post.message} className="text-sm text-slate-800 leading-relaxed" />
+                <FormattedText text={post.message} mentionUsers={mentionUsers} className="text-sm text-slate-800 leading-relaxed" />
                 
                 <ChatterPostAttachments post={post} />
 
@@ -783,20 +775,28 @@ function ChatterCard({
       {hasComments ? (
         <ul className="mt-1 space-y-2 border-t border-slate-100 pt-3">
           {(post.comments ?? []).map((comment) => (
-            <li key={comment.id} className="rounded-md bg-slate-50 px-3 py-2 text-sm">
+            <li
+              key={comment.id}
+              id={`chatter-comment-${comment.id}`}
+              className={`rounded-md bg-slate-50 px-3 py-2 text-sm ${focusCommentId === comment.id ? "ring-2 ring-blue-400" : ""}`}
+            >
               <p className="font-semibold text-slate-800">{comment.author}</p>
-              <FormattedText text={comment.message} className="mt-0.5 block text-slate-700" />
+              <FormattedText text={comment.message} mentionUsers={mentionUsers} className="mt-0.5 block text-slate-700" />
             </li>
           ))}
         </ul>
       ) : null}
       {isComposerOpen ? (
         <div className="mt-2 rounded-lg border border-slate-200 bg-slate-50 p-3">
-          <textarea
+          <MentionTextarea
             ref={textareaRef}
             value={draftComment}
-            onChange={(event) => onDraftChange(event.target.value)}
-            placeholder="Write a comment..."
+            onChange={onDraftChange}
+            onMentionIdsChange={onMentionIdsChange}
+            placeholder="Write a comment... Use @ to mention someone"
+            minRows={3}
+            taskId={post.taskId}
+            projectId={post.projectId}
             className="min-h-[80px] w-full resize-none rounded-md border border-slate-300 bg-white px-3 py-2 text-sm text-slate-900 outline-none focus:border-blue-500 focus:ring-1 focus:ring-blue-500"
           />
           <div className="mt-3 flex items-center justify-between">
@@ -825,6 +825,7 @@ function ChatterCard({
 }
 
 export function ChatterScreen() {
+  const searchParams = useSearchParams();
   const [posts, setPosts] = useState([]);
   const [openComposerPostId, setOpenComposerPostId] = useState(null);
   const [draftByPostId, setDraftByPostId] = useState({});
@@ -842,8 +843,23 @@ export function ChatterScreen() {
   const [mentionFeedPosts, setMentionFeedPosts] = useState([]);
   const [commentedFeedPosts, setCommentedFeedPosts] = useState([]);
   const mentionUsersRef = useRef([]);
+  const commentMentionIdsRef = useRef({});
+  const urlPostId = searchParams.get("postId");
+  const urlCommentId = searchParams.get("commentId");
 
   const currentUserId = useMemo(() => getSession()?.id ?? null, []);
+  const mentionUsersDirectory = useMemo(() => {
+    const map = new Map();
+    for (const user of mentionUsersRef.current) {
+      if (user?.id) map.set(user.id, user);
+    }
+    for (const post of posts) {
+      for (const user of post.mentionedUsers ?? []) {
+        if (user?.id) map.set(user.id, user);
+      }
+    }
+    return [...map.values()];
+  }, [posts]);
   const currentUserName = useMemo(() => getSession()?.fullName ?? '', []);
 
   const reloadPrivateFeeds = async () => {
@@ -910,6 +926,17 @@ export function ChatterScreen() {
       });
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [currentUserId]);
+
+  useEffect(() => {
+    if (!urlPostId || postsLoading) return;
+    setFocusedPostId(urlPostId);
+    setActiveTab("posts");
+    setOpenComposerPostId(urlCommentId ? urlPostId : null);
+    requestAnimationFrame(() => {
+      const targetId = urlCommentId ? `chatter-comment-${urlCommentId}` : `chatter-post-${urlPostId}`;
+      document.getElementById(targetId)?.scrollIntoView({ behavior: "smooth", block: "center" });
+    });
+  }, [urlPostId, urlCommentId, postsLoading, posts.length]);
 
   useEffect(() => {
     return onChatterRefresh(() => {
@@ -1083,20 +1110,8 @@ export function ChatterScreen() {
     setOpenComposerPostId(postId);
   };
 
-  const resolveMentionUserIds = (message) => {
-    const ids = [];
-    const pattern = /@([A-Za-z][A-Za-z0-9._\s-]{1,80})/g;
-    let match;
-    while ((match = pattern.exec(message)) !== null) {
-      const needle = match[1].trim().toLowerCase();
-      const user = mentionUsersRef.current.find((u) => {
-        const name = String(u.fullName ?? "").trim().toLowerCase();
-        return name === needle || name.startsWith(needle);
-      });
-      if (user && !ids.includes(user.id)) ids.push(user.id);
-    }
-    return ids;
-  };
+  const resolveMentionUserIds = (message) =>
+    parseMentionUserIdsFromMessage(message, mentionUsersRef.current);
 
   const submitComment = async (postId) => {
     const content = (draftByPostId[postId] ?? "").trim();
@@ -1104,7 +1119,10 @@ export function ChatterScreen() {
 
     setSubmittingCommentPostId(postId);
     try {
-      const mentionUserIds = resolveMentionUserIds(content);
+      const scopedIds = commentMentionIdsRef.current[postId] ?? [];
+      const mentionUserIds =
+        scopedIds.length > 0 ? scopedIds : resolveMentionUserIds(content);
+      delete commentMentionIdsRef.current[postId];
       const created = await createChatterComment(postId, content, mentionUserIds);
       const feedComment = mapCommentDtoToFeedComment(created, currentUserId);
       const now = new Date().toISOString();
@@ -1319,11 +1337,16 @@ export function ChatterScreen() {
               >
               <ChatterCard
                 post={post}
+                mentionUsers={mentionUsersDirectory}
+                focusCommentId={focusedPostId === post.id ? urlCommentId : null}
                 isComposerOpen={openComposerPostId === post.id}
                 draftComment={draftByPostId[post.id] ?? ""}
                 isSubmittingComment={submittingCommentPostId === post.id}
                 onOpenComposer={() => openComposer(post.id)}
                 onDraftChange={(value) => changeDraft(post.id, value)}
+                onMentionIdsChange={(ids) => {
+                  commentMentionIdsRef.current[post.id] = ids;
+                }}
                 onSubmitComment={() => submitComment(post.id)}
               />
               </div>

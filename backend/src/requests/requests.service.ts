@@ -13,6 +13,7 @@ import { PrismaService } from '../prisma/prisma.service';
 import { ActivityLoggerService } from '../activities/activity-logger.service';
 import { ActivityAction } from '../activities/activity-events';
 import { UserRole } from '../common/constants/roles.enum';
+import { assertValidLeaveReason } from '../common/constants/leave-reasons';
 import { CreateLeaveRequestDto } from './dto/create-request.dto';
 import { ReviewLeaveRequestDto } from './dto/review-leave-request.dto';
 import { UpdateLeaveRequestDto } from './dto/update-leave-request.dto';
@@ -392,8 +393,11 @@ export class RequestsService implements OnModuleInit {
   }
 
   private assertCreateAccess(submitterId: string, role: UserRole, targetUserId: string) {
+    if (role === UserRole.HOD) {
+      return;
+    }
     if (role !== UserRole.DESIGNER) {
-      throw new ForbiddenException('Only designers can submit leave requests');
+      throw new ForbiddenException('Only designers or HOD can submit leave requests');
     }
     if (submitterId !== targetUserId) {
       throw new ForbiddenException('You can only submit leave requests for yourself');
@@ -446,6 +450,15 @@ export class RequestsService implements OnModuleInit {
     if (role === UserRole.DESIGNER && resolvedId !== requesterId) {
       throw new ForbiddenException('You can only view your own leave requests');
     }
+    if (role === UserRole.HOD && userId && resolvedId !== requesterId) {
+      const target = await this.prisma.user.findUnique({
+        where: { id: resolvedId },
+        select: { role: { select: { name: true } } },
+      });
+      if (target?.role.name !== UserRole.DESIGNER) {
+        throw new ForbiddenException('HOD can only view designer leave records for others');
+      }
+    }
 
     const requests = await this.prisma.leaveRequest.findMany({
       where: { userId: resolvedId },
@@ -492,27 +505,27 @@ export class RequestsService implements OnModuleInit {
       throw new ForbiddenException('Only HOD can view team leave requests');
     }
 
-    const where: {
-      user?: { role?: { name?: string }; departmentId?: string };
-      status?: string;
-      userId?: string;
-    } = {};
+    const manager = await this.prisma.user.findUnique({
+      where: { id: managerId },
+      select: { departmentId: true },
+    });
+
+    const designerScope: Prisma.LeaveRequestWhereInput['user'] = {
+      role: { name: UserRole.DESIGNER },
+      ...(manager?.departmentId ? { departmentId: manager.departmentId } : {}),
+    };
+
+    const where: Prisma.LeaveRequestWhereInput = {};
 
     if (filters?.status?.trim()) {
       where.status = filters.status.trim();
     }
     if (filters?.designerId?.trim() && this.isUuid(filters.designerId)) {
       where.userId = filters.designerId.trim();
+    } else {
+      // Include HOD self-leave alongside designers in the department.
+      where.OR = [{ userId: managerId }, { user: designerScope }];
     }
-
-    const manager = await this.prisma.user.findUnique({
-      where: { id: managerId },
-      select: { departmentId: true },
-    });
-    where.user = {
-      role: { name: UserRole.DESIGNER },
-      ...(manager?.departmentId ? { departmentId: manager.departmentId } : {}),
-    };
 
     const requests = await this.prisma.leaveRequest.findMany({
       where,
@@ -533,20 +546,31 @@ export class RequestsService implements OnModuleInit {
       include: { role: { select: { name: true } } },
     });
     if (!requester) throw new BadRequestException('User not found');
-    if (requester.role.name !== UserRole.DESIGNER) {
-      throw new ForbiddenException('Only designers can submit leave requests');
-    }
     if (!this.isUuid(resolvedId)) {
       throw new BadRequestException('A valid user id is required to submit a leave request');
     }
 
-    const reason = dto.reason?.trim();
-    if (!reason) {
-      throw new BadRequestException('Reason is required for leave requests');
+    if (role === UserRole.HOD && resolvedId !== submitterId) {
+      if (requester.role.name !== UserRole.DESIGNER) {
+        throw new ForbiddenException('HOD can only apply leave on behalf of designers');
+      }
+    } else if (role === UserRole.DESIGNER && requester.role.name !== UserRole.DESIGNER) {
+      throw new ForbiddenException('Only designers can submit leave requests');
+    }
+
+    let reason: string;
+    try {
+      reason = assertValidLeaveReason(dto.reasonCategory, dto.reasonOther);
+    } catch (err) {
+      throw new BadRequestException(err instanceof Error ? err.message : 'Invalid leave reason');
     }
 
     const range = this.assertDatesOrThrow(dto.startDate, dto.endDate);
     await this.assertNoOverlappingLeave(resolvedId, range);
+
+    const hodAutoApprove = role === UserRole.HOD;
+    const status = hodAutoApprove ? 'Approved' : 'Pending';
+    const reviewedAt = hodAutoApprove ? new Date() : undefined;
 
     const req = await this.prisma.leaveRequest.create({
       data: {
@@ -556,29 +580,64 @@ export class RequestsService implements OnModuleInit {
         startDate: range.startDate,
         endDate: range.endDate,
         reason,
-        status: 'Pending',
+        status,
+        approverId: hodAutoApprove ? submitterId : null,
+        approverRemarks: hodAutoApprove
+          ? 'Auto-approved by system (HOD submission)'
+          : null,
+        reviewedAt,
       },
       include: this.leaveInclude(),
     });
 
     const view = this.mapRequest(req, dto.userId);
 
+    const submitAction = hodAutoApprove
+      ? ActivityAction.LEAVE_AUTO_APPROVED
+      : ActivityAction.LEAVE_REQUEST_SUBMITTED;
+    const submitMessageKey = hodAutoApprove
+      ? 'leave_auto_approved'
+      : 'leave_request_submitted';
+
     await this.activityLogger.log({
-      action: ActivityAction.LEAVE_REQUEST_SUBMITTED,
-      userId: resolvedId,
+      action: submitAction,
+      userId: submitterId,
       details: {
-        event: ActivityAction.LEAVE_REQUEST_SUBMITTED,
-        messageKey: 'leave_request_submitted',
+        event: submitAction,
+        messageKey: submitMessageKey,
         context: {
           requestId: req.id,
           type: dto.type,
           startDate: dto.startDate,
           endDate: dto.endDate ?? null,
+          beneficiaryUserId: resolvedId,
+          autoApproved: hodAutoApprove,
+          submittedByHod: hodAutoApprove,
+          reasonCategory: dto.reasonCategory,
         },
       },
     });
 
-    await this.notifyApproversOnCreate(view);
+    if (hodAutoApprove) {
+      const submitter = await this.prisma.user.findUnique({
+        where: { id: submitterId },
+        select: { fullName: true },
+      });
+      if (resolvedId !== submitterId) {
+        await this.notifyRequesterOnReview(
+          view,
+          'APPROVED',
+          submitter?.fullName ?? 'HOD',
+          reviewedAt!,
+        );
+      }
+      this.dashboardRealtime?.notifyOverviewRefresh('leave_approved');
+      if (resolvedId) {
+        this.dashboardRealtime?.notifyUserNotificationRefresh(resolvedId);
+      }
+    } else {
+      await this.notifyApproversOnCreate(view);
+    }
 
     return view;
   }

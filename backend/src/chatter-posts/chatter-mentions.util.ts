@@ -21,25 +21,50 @@ export function uniqueUuids(ids: Array<string | null | undefined>): string[] {
 
 export type MentionUserRef = { id: string; fullName: string };
 
-/** Parse @Full Name tokens from message text against a user directory. */
+/** Parse @Full Name tokens from message text (longest-match) against a user directory. */
 export function parseMentionUserIdsFromMessage(
   message: string,
   users: MentionUserRef[],
 ): string[] {
   const text = message ?? '';
+  const sorted = [...users].sort(
+    (a, b) => b.fullName.trim().length - a.fullName.trim().length,
+  );
   const found: string[] = [];
-  const pattern = /@([A-Za-z][A-Za-z0-9._\s-]{1,80})/g;
-  let match: RegExpExecArray | null;
-  while ((match = pattern.exec(text)) !== null) {
-    const needle = match[1].trim().toLowerCase();
-    if (!needle) continue;
-    const user = users.find((u) => {
-      const name = u.fullName.trim().toLowerCase();
-      return name === needle || name.startsWith(`${needle} `) || needle.startsWith(name);
-    });
-    if (user) found.push(user.id);
+  let i = 0;
+  while (i < text.length) {
+    if (text[i] !== '@') {
+      i += 1;
+      continue;
+    }
+    const rest = text.slice(i + 1);
+    let matched: MentionUserRef | null = null;
+    for (const user of sorted) {
+      const name = user.fullName.trim();
+      if (!name) continue;
+      const lowerRest = rest.toLowerCase();
+      const lowerName = name.toLowerCase();
+      if (!lowerRest.startsWith(lowerName)) continue;
+      const nextChar = rest[name.length];
+      if (!nextChar || /[\s.,!?;:\n]/.test(nextChar)) {
+        matched = user;
+        break;
+      }
+    }
+    if (matched) {
+      found.push(matched.id);
+      i += 1 + matched.fullName.trim().length;
+    } else {
+      i += 1;
+    }
   }
   return uniqueUuids(found);
+}
+
+export function messageSnippet(message: string, maxLen = 120): string {
+  const compact = (message ?? '').replace(/\s+/g, ' ').trim();
+  if (compact.length <= maxLen) return compact;
+  return `${compact.slice(0, maxLen - 1)}…`;
 }
 
 /** Monday 00:00:00.000 — Sunday 23:59:59.999 UTC for the week containing `dateStr` (YYYY-MM-DD). */

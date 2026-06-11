@@ -318,8 +318,12 @@ export type ChatterMentionUser = {
   fullName: string;
 };
 
-export function listChatterMentionUsers() {
-  return apiClient.get<ChatterMentionUser[]>('/chatter-posts/mention-users');
+export function listChatterMentionUsers(params?: { taskId?: string | null; projectId?: string | null }) {
+  const qs = new URLSearchParams();
+  if (params?.taskId?.trim()) qs.set('taskId', params.taskId.trim());
+  if (params?.projectId?.trim()) qs.set('projectId', params.projectId.trim());
+  const suffix = qs.toString() ? `?${qs.toString()}` : '';
+  return apiClient.get<ChatterMentionUser[]>(`/chatter-posts/mention-users${suffix}`);
 }
 
 export function listChatterPosts(params?: {

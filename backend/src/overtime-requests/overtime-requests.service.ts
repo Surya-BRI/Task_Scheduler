@@ -8,6 +8,7 @@ import { CreateOvertimeRequestDto } from './dto/create-overtime-request.dto';
 import { UpdateOvertimeRequestDto } from './dto/update-overtime-request.dto';
 import { ReviewOvertimeRequestDto } from './dto/review-overtime-request.dto';
 import { UserRole } from '../common/constants/roles.enum';
+import { assertOvertimeDateIsToday } from '../common/utils/date-window.util';
 import { Decimal } from '@prisma/client/runtime/library';
 import { DashboardRealtimeService } from '../dashboard/dashboard-realtime.service';
 
@@ -79,7 +80,22 @@ export class OvertimeRequestsService {
       throw new BadRequestException('Overtime cannot exceed 8 hours per day');
     }
 
-    // 2. Prevent Duplicate Submissions for same date & task
+    // 2. One OT submission per designer per day (single project/day)
+    const duplicateDay = await this.prisma.overtimeRequest.findFirst({
+      where: {
+        id: excludeRequestId ? { not: excludeRequestId } : undefined,
+        designerId,
+        date: requestDate,
+        status: { in: ['DRAFT', 'SUBMITTED', 'APPROVED_BY_MANAGER', 'APPROVED'] },
+      },
+    });
+    if (duplicateDay) {
+      throw new BadRequestException(
+        'An overtime request already exists for this date. Only one project per day is allowed.',
+      );
+    }
+
+    // Prevent duplicate for same date & task
     const duplicate = await this.prisma.overtimeRequest.findFirst({
       where: {
         id: excludeRequestId ? { not: excludeRequestId } : undefined,
@@ -408,6 +424,8 @@ export class OvertimeRequestsService {
       throw new ForbiddenException('You can only submit overtime for tasks assigned to you');
     }
 
+    assertOvertimeDateIsToday(dto.date);
+
     const schedule = this.resolveSchedule(dto);
 
     await this.validatePolicyRules(
@@ -421,7 +439,9 @@ export class OvertimeRequestsService {
     const totalHours = new Decimal(
       (this.timeToMinutes(schedule.endTime) - this.timeToMinutes(schedule.startTime)) / 60,
     );
-    const status = this.normalizeCreateStatus(dto.status);
+    const hodOnBehalf = creatorRole === UserRole.HOD && creatorId !== designerId;
+    const status = hodOnBehalf ? 'APPROVED' : this.normalizeCreateStatus(dto.status);
+    const now = new Date();
 
     const request = await this.prisma.overtimeRequest.create({
       data: {
@@ -435,6 +455,14 @@ export class OvertimeRequestsService {
         estimatedRemaining: dto.estimatedRemaining?.trim() || null,
         reason: dto.reason,
         status,
+        ...(hodOnBehalf
+          ? {
+              approvedById: creatorId,
+              approvedAt: now,
+              approvedHours: totalHours,
+              managerComments: 'Auto-approved by system (HOD submission on behalf of designer)',
+            }
+          : {}),
       },
       include: {
         designer: { select: { id: true, fullName: true, email: true, departmentId: true } },
@@ -459,7 +487,42 @@ export class OvertimeRequestsService {
       );
     }
 
-    if (status === 'SUBMITTED') {
+    if (hodOnBehalf) {
+      try {
+        await this.prisma.overtimeApprovalHistory.create({
+          data: {
+            requestId: request.id,
+            action: 'APPROVED',
+            actionById: creatorId,
+            comments: 'Auto-approved by system (HOD submission on behalf of designer)',
+          },
+        });
+      } catch (err) {
+        this.logger.warn(`Overtime history log failed: ${err instanceof Error ? err.message : err}`);
+      }
+      await this.logOvertimeActivity({
+        action: ActivityAction.OVERTIME_AUTO_APPROVED,
+        messageKey: 'overtime_auto_approved',
+        userId: creatorId,
+        request,
+        changes: {
+          autoApproved: true,
+          submittedByHod: true,
+          beneficiaryDesignerId: designerId,
+        },
+      });
+      await this.notifyDesignerOfReview(
+        request,
+        'APPROVED',
+        'Auto-approved by system (HOD submission on behalf of designer)',
+      ).catch((err) => {
+        this.logger.warn(`Designer OT notification failed: ${err instanceof Error ? err.message : err}`);
+      });
+      this.dashboardRealtime?.notifyOverviewRefresh('overtime_approved');
+      if (designerId) {
+        this.dashboardRealtime?.notifyUserNotificationRefresh(designerId);
+      }
+    } else if (status === 'SUBMITTED') {
       await this.logOvertimeActivity({
         action: ActivityAction.OVERTIME_REQUEST_SUBMITTED,
         messageKey: 'overtime_request_submitted',
@@ -502,6 +565,9 @@ export class OvertimeRequestsService {
     }
 
     const nextDate = dto.date || request.date?.toISOString().split('T')[0];
+    if (dto.date) {
+      assertOvertimeDateIsToday(dto.date);
+    }
     const nextStart = dto.startTime || request.startTime;
     const nextEnd = dto.endTime || request.endTime;
     const nextTaskId = dto.taskId || request.taskId;
