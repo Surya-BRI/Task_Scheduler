@@ -6,9 +6,18 @@ function getSocketOrigin(): string {
   return env.apiBaseUrl.replace(/\/api\/v1\/?$/, '');
 }
 
+export type ChatterRefreshPayload = {
+  event: 'chatter_post_created' | 'chatter_post_updated' | 'chatter_post_deleted' | 'chatter_comment_created' | 'chatter_comment_deleted';
+  postId?: string | null;
+  taskId?: string | null;
+  projectId?: string | null;
+  at: string;
+};
+
 export type DashboardRealtimeHandlers = {
   onDashboardRefresh?: () => void;
   onNotificationsRefresh?: () => void;
+  onChatterRefresh?: (payload: ChatterRefreshPayload) => void;
 };
 
 export function connectDashboardRealtime(handlers: DashboardRealtimeHandlers): () => void {
@@ -31,6 +40,9 @@ export function connectDashboardRealtime(handlers: DashboardRealtimeHandlers): (
     });
     socket.on('notifications:refresh', () => {
       handlers.onNotificationsRefresh?.();
+    });
+    socket.on('chatter:refresh', (payload: ChatterRefreshPayload) => {
+      handlers.onChatterRefresh?.(payload);
     });
   } catch {
     return () => {};

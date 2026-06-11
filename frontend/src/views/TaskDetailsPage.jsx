@@ -1,6 +1,6 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import { toast } from 'sonner'
-import { Calendar, CheckCircle2, ChevronLeft, CircleCheck, Clock3, FileText, Flag, Hourglass, Info, Link, Pencil, Shield, Trash2, Upload } from 'lucide-react'
+import { Ban, Calendar, CheckCircle2, ChevronLeft, CircleCheck, Clock3, FileText, Flag, Hourglass, Info, Link, Pause, Pencil, Shield, Trash2, Upload } from 'lucide-react'
 import { useParams, usePathname, useRouter, useSearchParams } from 'next/navigation'
 import DatePicker from 'react-datepicker'
 import { CreateTaskModal } from '../components/CreateTaskModal'
@@ -70,14 +70,20 @@ function deriveFileNameFromUrl(value) {
 }
 
 const STAGE_ITEMS = [
-  { id: 'new', label: 'Design Task New', hint: 'Awaiting project allocation', icon: Flag },
-  { id: 'planned', label: 'Design Planned', hint: 'Task scheduled for production', icon: Clock3 },
-  { id: 'progress', label: 'In Progress', hint: 'Active design and drafting', icon: Hourglass },
-  { id: 'completed', label: 'Design Completed', hint: 'Submitted for internal review', icon: CircleCheck },
-  { id: 'review', label: 'HOD Review', hint: 'Verified and approved by HOD', icon: Shield },
-  { id: 'sales', label: 'Sales Review', hint: 'Final sales and client check', icon: Pencil },
-  { id: 'rework', label: 'Rework / Error', hint: 'Corrections needed', icon: Info },
+  { id: 'new',       label: 'Design Task New',   hint: 'Awaiting project allocation',   icon: Flag,         status: 'DESIGN_NEW' },
+  { id: 'planned',   label: 'Design Planned',    hint: 'Task scheduled for production', icon: Clock3,       status: 'DESIGN_PLANNED' },
+  { id: 'progress',  label: 'In Progress',       hint: 'Active design and drafting',    icon: Hourglass,    status: 'IN_PROGRESS' },
+  { id: 'completed', label: 'Design Completed',  hint: 'Submitted for internal review', icon: CircleCheck,  status: 'DESIGN_COMPLETED' },
+  { id: 'review',    label: 'HOD Review',        hint: 'Verified and approved by HOD',  icon: Shield,       status: 'HOD_REVIEW' },
+  { id: 'sales',     label: 'Sales Review',      hint: 'Final sales and client check',  icon: Pencil,       status: 'SALES_REVIEW' },
+  { id: 'rework',    label: 'Rework / Error',    hint: 'Corrections needed',            icon: Info,         status: 'REWORK' },
 ]
+
+const SPECIAL_STATUS = {
+  REVIEW_COMPLETED: { label: 'Completed',       hint: 'Task fully reviewed & closed', icon: CheckCircle2, border: 'border-emerald-400', bg: 'bg-emerald-50', iconBg: 'bg-emerald-500', text: 'text-emerald-800', hint2: 'text-emerald-600' },
+  CLIENT_REJECTED:  { label: 'Client Rejected', hint: 'Rejected by client',           icon: Ban,          border: 'border-red-400',     bg: 'bg-red-50',     iconBg: 'bg-red-500',     text: 'text-red-800',     hint2: 'text-red-500' },
+  ON_HOLD:          { label: 'On Hold',          hint: 'Task paused',                  icon: Pause,        border: 'border-amber-400',   bg: 'bg-amber-50',   iconBg: 'bg-amber-500',   text: 'text-amber-800',   hint2: 'text-amber-600' },
+}
 
 const TABS = [
   { id: 'details', label: 'Details' },
@@ -191,17 +197,38 @@ function HistoryDialog({ title, projectId, type, onClose }) {
   )
 }
 
-function StagePill({ item }) {
+function StagePill({ item, active }) {
   const Icon = item.icon
   return (
-    <div className="min-w-[148px] rounded-lg border border-slate-200 bg-white px-2 py-1.5">
+    <div className={`min-w-[148px] rounded-lg border px-2 py-1.5 transition-colors ${
+      active ? 'border-blue-500 bg-blue-50' : 'border-slate-200 bg-white'
+    }`}>
       <div className="flex items-start gap-1.5">
-        <div className="mt-0.5 grid h-[18px] w-[18px] place-items-center rounded-full bg-slate-900 text-white">
+        <div className={`mt-0.5 grid h-[18px] w-[18px] place-items-center rounded-full text-white ${
+          active ? 'bg-blue-600' : 'bg-slate-900'
+        }`}>
           <Icon className="h-2.5 w-2.5" />
         </div>
         <div>
-          <p className="text-[11px] font-semibold text-slate-900">{item.label}</p>
+          <p className={`text-[11px] font-semibold ${active ? 'text-blue-700' : 'text-slate-900'}`}>{item.label}</p>
           <p className="text-[10px] leading-tight text-slate-500">{item.hint}</p>
+        </div>
+      </div>
+    </div>
+  )
+}
+
+function SpecialStatusPill({ config }) {
+  const Icon = config.icon
+  return (
+    <div className={`shrink-0 min-w-[148px] rounded-lg border px-2 py-1.5 ${config.border} ${config.bg}`}>
+      <div className="flex items-start gap-1.5">
+        <div className={`mt-0.5 grid h-[18px] w-[18px] place-items-center rounded-full text-white ${config.iconBg}`}>
+          <Icon className="h-2.5 w-2.5" />
+        </div>
+        <div>
+          <p className={`text-[11px] font-semibold ${config.text}`}>{config.label}</p>
+          <p className={`text-[10px] leading-tight ${config.hint2}`}>{config.hint}</p>
         </div>
       </div>
     </div>
@@ -710,6 +737,8 @@ export function TaskDetailsPage() {
   const [chatterLoading, setChatterLoading] = useState(false)
   const [chatterError, setChatterError] = useState('')
   const [chatterSubmitting, setChatterSubmitting] = useState(false)
+  const [mentionSuggestions, setMentionSuggestions] = useState([])
+  const [mentionQuery, setMentionQuery] = useState('')
   const [commentByPostId, setCommentByPostId] = useState({})
   const [commentMentionIdsByPostId, setCommentMentionIdsByPostId] = useState({})
   const [postMentionUserIds, setPostMentionUserIds] = useState([])
@@ -733,6 +762,7 @@ export function TaskDetailsPage() {
   const [uploadingProjectFiles, setUploadingProjectFiles] = useState(false)
   const [resolvingProjectId, setResolvingProjectId] = useState(false)
   const [resolvingTaskId, setResolvingTaskId] = useState(false)
+  const mentionUsersRef = useRef([])
   const isCreationRoute = Boolean(pathname?.includes('-task-creation'))
   const [activityMode] = useState(isCreationRoute ? 'project' : 'task')
   const [activityItems, setActivityItems] = useState([])
@@ -900,7 +930,7 @@ export function TaskDetailsPage() {
   const taskStatus = record?.status ?? null
   const isTerminalStatus = taskStatus === 'COMPLETED' || taskStatus === 'APPROVED'
   const showTimer = !isCreationRoute && hasExistingTask && Boolean(taskId) && !isTerminalStatus && (from === 'designer-queue' || from === 'designer-design-list')
-  const tabs = hasExistingTask && !isRetail ? [...TABS, PROJECT_TAB] : TABS
+  const tabs = isCreationRoute && !isRetail ? [...TABS, PROJECT_TAB] : TABS
   useEffect(() => {
     let alive = true
     async function resolveProjectId() {
@@ -1108,10 +1138,11 @@ export function TaskDetailsPage() {
     setChatterError('')
     if (!silent) setChatterLoading(true)
     try {
-      const posts = queryTaskId
+      const res = queryTaskId
         ? await listChatterPosts({ taskId: queryTaskId, limit: 200 })
         : await listChatterPosts({ projectId, limit: 200 })
-      const normalized = Array.isArray(posts) ? [...posts] : []
+      const posts = Array.isArray(res?.data) ? res.data : (Array.isArray(res) ? res : [])
+      const normalized = [...posts]
       setChatterPosts((prev) =>
         mergeChatterPostLists(normalized, prev, { taskId: queryTaskId, projectId }),
       )
@@ -1127,6 +1158,11 @@ export function TaskDetailsPage() {
     if (activeTab !== 'chatter') return
     chatterRefreshPendingRef.current = false
     fetchChatterPosts()
+    if (mentionUsersRef.current.length === 0) {
+      listChatterMentionUsers()
+        .then((users) => { mentionUsersRef.current = Array.isArray(users) ? users : [] })
+        .catch(() => {})
+    }
   }, [activeTab, fetchChatterPosts])
 
   useEffect(() => {
@@ -1268,6 +1304,7 @@ export function TaskDetailsPage() {
       const created = await createChatterPost({
         message,
         postType: 'Posts',
+        ...(mentionUserIds.length ? { mentionUserIds } : {}),
         ...(chatterPriority ? { priority: chatterPriority } : {}),
         ...(mentionUserIds.length ? { mentionUserIds } : {}),
         ...(resolvedTaskId ? { taskId: resolvedTaskId } : { projectId: postProjectId }),
@@ -1290,6 +1327,51 @@ export function TaskDetailsPage() {
     } finally {
       setChatterSubmitting(false)
     }
+  }
+
+  function handleChatterMessageChange(value) {
+    setChatterMessage(value)
+    const lastAt = value.lastIndexOf('@')
+    if (lastAt !== -1) {
+      const fragment = value.slice(lastAt + 1)
+      if (/^[A-Za-z][A-Za-z0-9._\s-]{0,49}$/.test(fragment)) {
+        const needle = fragment.trim().toLowerCase()
+        if (needle.length >= 1) {
+          const matches = mentionUsersRef.current
+            .filter((u) => u.fullName.toLowerCase().includes(needle))
+            .slice(0, 6)
+          setMentionSuggestions(matches)
+          setMentionQuery(fragment)
+          return
+        }
+      }
+    }
+    setMentionSuggestions([])
+    setMentionQuery('')
+  }
+
+  function insertMentionIntoMessage(user) {
+    const lastAt = chatterMessage.lastIndexOf('@')
+    const before = chatterMessage.slice(0, lastAt)
+    const after = chatterMessage.slice(lastAt + 1 + mentionQuery.length).trimStart()
+    setChatterMessage(`${before}@${user.fullName} ${after}`)
+    setMentionSuggestions([])
+    setMentionQuery('')
+  }
+
+  function resolveMentionUserIdsFromText(text) {
+    const pattern = /@([A-Za-z][A-Za-z0-9._-]{1,50}(?:\s[A-Za-z][A-Za-z0-9._-]{1,40})?)/g
+    const ids = []
+    let match
+    while ((match = pattern.exec(text)) !== null) {
+      const needle = match[1].trim().toLowerCase()
+      const user = mentionUsersRef.current.find((u) => {
+        const name = String(u.fullName ?? '').trim().toLowerCase()
+        return name === needle || name.startsWith(needle)
+      })
+      if (user && !ids.includes(user.id)) ids.push(user.id)
+    }
+    return ids
   }
 
   async function handlePostComment(postId) {
@@ -1404,10 +1486,15 @@ export function TaskDetailsPage() {
             {pageTitle}
           </h1>
 
-          <div className="flex gap-2 overflow-x-auto pb-0.5">
-            {STAGE_ITEMS.map((item) => (
-              <StagePill key={item.id} item={item} />
-            ))}
+          <div className="flex items-start gap-2 pb-0.5">
+            <div className="flex flex-1 gap-2 overflow-x-auto">
+              {STAGE_ITEMS.map((item) => (
+                <StagePill key={item.id} item={item} active={record?.status === item.status} />
+              ))}
+            </div>
+            {SPECIAL_STATUS[record?.status] ? (
+              <SpecialStatusPill config={SPECIAL_STATUS[record.status]} />
+            ) : null}
           </div>
 
           <div className="grid gap-2.5 lg:grid-cols-[1fr_265px]">
@@ -1578,6 +1665,68 @@ export function TaskDetailsPage() {
                           </div>
                         </div>
                       ) : null}
+                      {!isRetail ? (
+                        <div className="mt-4 border-t border-slate-200 pt-3">
+                          <div className="mb-2 flex items-center justify-between">
+                            <p className="text-xs font-semibold text-slate-700">Sign Rows</p>
+                            <div className="flex gap-2">
+                              <button
+                                type="button"
+                                onClick={() => setSignRows((prev) => [...prev, { tNo: '', no: '', signType: '', planCode: '', estQty: '', qsQty: '', areaZone: '', levelParcel: '', sequence: '', status: '', comment: '', contRef: '' }])}
+                                className="rounded border border-slate-300 bg-white px-2 py-1 text-[11px] font-medium text-slate-700 hover:bg-slate-50"
+                              >
+                                + Add Row
+                              </button>
+                              <button
+                                type="button"
+                                onClick={handleSaveSignRows}
+                                disabled={signRowsSaving}
+                                className="rounded-md bg-[#10a6e3] px-3 py-1 text-[11px] font-semibold text-white transition hover:bg-[#0f96cd] disabled:opacity-60"
+                              >
+                                {signRowsSaving ? 'Saving…' : 'Save Rows'}
+                              </button>
+                            </div>
+                          </div>
+                          <div className="overflow-auto rounded-md border border-slate-200">
+                            <table className="w-full text-[11px]">
+                              <thead className="bg-slate-100 text-slate-600">
+                                <tr>
+                                  {['T.No','No','Sign Type','Plan Code','Est QTY','Qs QTY','Area/Zone','Level/Parcel','Sequence','Status','Comment','Cont.Ref',''].map((h) => (
+                                    <th key={h} className="px-2 py-1.5 text-left font-semibold whitespace-nowrap">{h}</th>
+                                  ))}
+                                </tr>
+                              </thead>
+                              <tbody className="divide-y divide-slate-100">
+                                {signRows.length === 0 ? (
+                                  <tr><td colSpan={13} className="px-3 py-6 text-center text-slate-500">No rows yet. Click + Add Row.</td></tr>
+                                ) : null}
+                                {signRows.map((row, idx) => (
+                                  <tr key={row.id ?? idx} className="hover:bg-slate-50">
+                                    {['tNo','no','signType','planCode','estQty','qsQty','areaZone','levelParcel','sequence','status','comment','contRef'].map((field) => (
+                                      <td key={field} className="px-1 py-0.5">
+                                        <input
+                                          value={row[field] ?? ''}
+                                          onChange={(e) => setSignRows((prev) => prev.map((r, i) => i === idx ? { ...r, [field]: e.target.value } : r))}
+                                          className="h-6 w-full min-w-[60px] rounded border border-slate-200 px-1.5 text-[11px] text-slate-900 focus:border-blue-400 focus:outline-none"
+                                        />
+                                      </td>
+                                    ))}
+                                    <td className="px-1 py-0.5">
+                                      <button
+                                        type="button"
+                                        onClick={() => setSignRows((prev) => prev.filter((_, i) => i !== idx))}
+                                        className="text-slate-400 hover:text-red-500"
+                                      >
+                                        ✕
+                                      </button>
+                                    </td>
+                                  </tr>
+                                ))}
+                              </tbody>
+                            </table>
+                          </div>
+                        </div>
+                      ) : null}
                     </div>
                   ) : isRetail ? (
                     <div className="mt-3 border-t border-slate-200 pt-3">
@@ -1656,6 +1805,27 @@ export function TaskDetailsPage() {
                   onLoadMore={() => fetchActivities({ append: true, cursor: activityCursor })}
                   onRetry={() => fetchActivities({ append: false, cursor: null })}
                 />
+              ) : null}
+
+              {activeTab === 'team' && isCreationRoute && !isRetail ? (
+                <div className="mt-3 space-y-2.5">
+                  <div className="grid gap-2.5 sm:grid-cols-2">
+                    <FormFieldWithPencil id="team-technical-head" label="Technical Head" value={technicalHead} onChange={setTechnicalHead} placeholder="" />
+                    <FormFieldWithPencil id="team-team-lead" label="Team Lead" value={teamLead} onChange={setTeamLead} placeholder="" />
+                    <FormFieldWithPencil id="team-sub-team-lead" label="Sub Team Lead" value={subTeamLead} onChange={setSubTeamLead} placeholder="" />
+                    <FormFieldWithPencil id="team-designers" label="Designers" value={designers} onChange={setDesigners} placeholder="" />
+                  </div>
+                  <div className="flex items-center justify-between border-t border-slate-200 pt-2.5">
+                    <p className="text-[11px] text-slate-400">Team will be assigned when the task is created.</p>
+                    <button
+                      type="button"
+                      onClick={() => setProjectCreateModalOpen(true)}
+                      className="rounded-md bg-[#10a6e3] px-5 py-1.5 text-xs font-semibold text-white shadow-sm transition hover:bg-[#0f96cd] focus:outline-none focus-visible:ring-2 focus-visible:ring-blue-500 focus-visible:ring-offset-2"
+                    >
+                      Create
+                    </button>
+                  </div>
+                </div>
               ) : null}
 
               {activeTab === 'chatter' ? (
@@ -1790,85 +1960,6 @@ export function TaskDetailsPage() {
                 </div>
               ) : null}
 
-              {activeTab === 'team' && !isRetail ? (
-                <div className="mt-3 space-y-4">
-                  <div className="grid gap-2.5 sm:grid-cols-2">
-                    <FormFieldWithPencil id="team-technical-head" label="Technical Head" value={technicalHead} onChange={setTechnicalHead} placeholder="" />
-                    <FormFieldWithPencil id="team-team-lead" label="Team Lead" value={teamLead} onChange={setTeamLead} placeholder="" />
-                    <FormFieldWithPencil id="team-sub-team-lead" label="Sub Team Lead" value={subTeamLead} onChange={setSubTeamLead} placeholder="" />
-                    <FormFieldWithPencil id="team-designers" label="Designers" value={designers} onChange={setDesigners} placeholder="" />
-                  </div>
-                  <div className="flex justify-end">
-                    <button
-                      type="button"
-                      onClick={handleSaveTeam}
-                      disabled={teamSaving}
-                      className="rounded-md bg-slate-900 px-4 py-1.5 text-xs font-semibold text-white transition hover:bg-slate-700 disabled:opacity-60"
-                    >
-                      {teamSaving ? 'Saving…' : 'Save Team'}
-                    </button>
-                  </div>
-                  <div className="border-t border-slate-200 pt-3">
-                    <div className="mb-2 flex items-center justify-between">
-                      <p className="text-xs font-semibold text-slate-700">Sign Rows</p>
-                      <div className="flex gap-2">
-                        <button
-                          type="button"
-                          onClick={() => setSignRows((prev) => [...prev, { tNo: '', no: '', signType: '', planCode: '', estQty: '', qsQty: '', areaZone: '', levelParcel: '', sequence: '', status: '', comment: '', contRef: '' }])}
-                          className="rounded border border-slate-300 bg-white px-2 py-1 text-[11px] font-medium text-slate-700 hover:bg-slate-50"
-                        >
-                          + Add Row
-                        </button>
-                        <button
-                          type="button"
-                          onClick={handleSaveSignRows}
-                          disabled={signRowsSaving}
-                          className="rounded-md bg-[#10a6e3] px-3 py-1 text-[11px] font-semibold text-white transition hover:bg-[#0f96cd] disabled:opacity-60"
-                        >
-                          {signRowsSaving ? 'Saving…' : 'Save Rows'}
-                        </button>
-                      </div>
-                    </div>
-                    <div className="overflow-auto rounded-md border border-slate-200">
-                      <table className="w-full text-[11px]">
-                        <thead className="bg-slate-100 text-slate-600">
-                          <tr>
-                            {['T.No','No','Sign Type','Plan Code','Est QTY','Qs QTY','Area/Zone','Level/Parcel','Sequence','Status','Comment','Cont.Ref',''].map((h) => (
-                              <th key={h} className="px-2 py-1.5 text-left font-semibold whitespace-nowrap">{h}</th>
-                            ))}
-                          </tr>
-                        </thead>
-                        <tbody className="divide-y divide-slate-100">
-                          {signRows.length === 0 ? (
-                            <tr><td colSpan={13} className="px-3 py-6 text-center text-slate-500">No rows yet. Click + Add Row.</td></tr>
-                          ) : signRows.map((row, idx) => (
-                            <tr key={row.id ?? idx} className="hover:bg-slate-50">
-                              {['tNo','no','signType','planCode','estQty','qsQty','areaZone','levelParcel','sequence','status','comment','contRef'].map((field) => (
-                                <td key={field} className="px-1 py-0.5">
-                                  <input
-                                    value={row[field] ?? ''}
-                                    onChange={(e) => setSignRows((prev) => prev.map((r, i) => i === idx ? { ...r, [field]: e.target.value } : r))}
-                                    className="h-6 w-full min-w-[60px] rounded border border-slate-200 px-1.5 text-[11px] text-slate-900 focus:border-blue-400 focus:outline-none"
-                                  />
-                                </td>
-                              ))}
-                              <td className="px-1 py-0.5">
-                                <button
-                                  type="button"
-                                  onClick={() => setSignRows((prev) => prev.filter((_, i) => i !== idx))}
-                                  className="text-slate-400 hover:text-red-500"
-                                >
-                                  ✕
-                                </button>
-                              </td>
-                            </tr>
-                          ))}
-                        </tbody>
-                      </table>
-                    </div>
-                  </div>
-                </div>
-              ) : null}
             </section>
 
             <aside className="space-y-2.5">
@@ -1939,9 +2030,17 @@ export function TaskDetailsPage() {
       <ProjectCreateTaskModal
         open={projectCreateModalOpen}
         onClose={() => setProjectCreateModalOpen(false)}
-        onCreated={(task) => {
+        onCreated={async (task) => {
           setProjectCreateModalOpen(false)
           if (task?.taskNo ?? task?.id) setCreatedTasks((prev) => [...prev, task?.taskNo ?? task?.id])
+          const newTaskId = task?.id
+          if (newTaskId && (technicalHead || teamLead || subTeamLead || designers)) {
+            try {
+              await apiClient.patch(`/tasks/${newTaskId}`, { technicalHead, teamLead, subTeamLead, designers })
+            } catch {
+              toast.error('Task created but team assignment failed — please edit the task to retry.')
+            }
+          }
         }}
         submissionDate={dateSubmission}
         record={record}

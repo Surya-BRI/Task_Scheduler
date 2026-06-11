@@ -10,6 +10,7 @@ import {
 import { Server, Socket } from 'socket.io';
 import { UserRole } from '../common/constants/roles.enum';
 import {
+  ChatterRefreshPayload,
   DashboardRealtimeService,
   DashboardRefreshPayload,
 } from './dashboard-realtime.service';
@@ -37,6 +38,7 @@ export class DashboardGateway
     this.dashboardRealtime.registerEmitter({
       emitDashboardRefresh: (payload) => this.broadcastOverviewRefresh(payload),
       emitNotificationRefresh: (userId) => this.emitNotificationRefresh(userId),
+      emitChatterRefresh: (payload) => this.broadcastChatterRefresh(payload),
     });
     this.logger.log('Dashboard realtime gateway initialized');
   }
@@ -62,6 +64,7 @@ export class DashboardGateway
 
       client.data.user = { id: userId, role };
       await client.join(`user:${userId}`);
+      await client.join('chatter');
       if (role && OVERVIEW_ROLES.has(role)) {
         await client.join(`role:${role}`);
         await client.join('overview');
@@ -84,5 +87,9 @@ export class DashboardGateway
     this.server?.to(`user:${userId}`).emit('notifications:refresh', {
       at: new Date().toISOString(),
     });
+  }
+
+  private broadcastChatterRefresh(payload: ChatterRefreshPayload) {
+    this.server?.to('chatter').emit('chatter:refresh', payload);
   }
 }

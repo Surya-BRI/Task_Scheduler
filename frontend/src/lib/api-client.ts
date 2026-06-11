@@ -42,11 +42,16 @@ async function request<T>(path: string, init?: RequestInit): Promise<T> {
     throw new Error(parseApiErrorMessage(errorBody, response.status));
   }
 
+  // 204 No Content — return undefined cast to T (callers that use void are fine)
+  if (response.status === 204) {
+    return undefined as unknown as T;
+  }
+
   // Use a date-aware reviver so ISO strings are automatically parsed into
   // Date objects — this keeps all date fields as Date throughout the app.
   const text = await response.text();
   if (!text.trim()) {
-    throw new Error(`Empty response from server (${response.status})`);
+    return undefined as unknown as T;
   }
   try {
     return JSON.parse(text, dateReviver) as T;

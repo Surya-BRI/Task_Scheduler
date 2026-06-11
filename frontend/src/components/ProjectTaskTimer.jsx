@@ -271,8 +271,8 @@ export function ProjectTaskTimer({
     setRunStartAt(startedAt)
     writePersisted(taskId, accumulatedSeconds, startedAt)
     saveTimerStateToDb(taskId, accumulatedSeconds)
-    // Move task to WIP so it reflects active work
-    apiClient.patch(`/tasks/${taskId}/status`, { status: 'WIP' }).catch(() => {})
+    // Move task to IN_PROGRESS so it reflects active work
+    apiClient.patch(`/tasks/${taskId}/status`, { status: 'IN_PROGRESS' }).catch(() => {})
   }
 
   const handlePauseClick = () => {

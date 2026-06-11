@@ -80,7 +80,9 @@ export function mapTaskToDesignRow(task) {
     projectName: task?.project?.name || task?.project?.projectNo || "—",
     designType: task?.project?.category || "Project",
     businessUnit: task?.project?.category || "Project",
-    name: task?.revisionCode || task?.title || "Untitled Task",
+    name: task?.revisionCode
+      ? `${task?.opNo || task?.project?.projectNo || ''}${task?.opNo || task?.project?.projectNo ? '-' : ''}${task.revisionCode}`
+      : task?.opNo || task?.project?.projectNo || "No ID",
     status: normalizeStatusCode(task?.status),
     salesPerson: task?.project?.salesPerson || "Unassigned",
     created: formatDisplayDate(createdDate) || "—",

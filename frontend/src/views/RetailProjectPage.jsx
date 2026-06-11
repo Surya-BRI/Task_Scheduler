@@ -362,6 +362,8 @@ export function RetailProjectPage() {
   const [chatterLoading, setChatterLoading] = useState(false)
   const [chatterError, setChatterError] = useState('')
   const [chatterSubmitting, setChatterSubmitting] = useState(false)
+  const [mentionSuggestions, setMentionSuggestions] = useState([])
+  const [mentionQuery, setMentionQuery] = useState('')
   const [commentByPostId, setCommentByPostId] = useState({})
   const [commentMentionIdsByPostId, setCommentMentionIdsByPostId] = useState({})
   const [postMentionUserIds, setPostMentionUserIds] = useState([])
@@ -376,6 +378,7 @@ export function RetailProjectPage() {
   const [projectFiles, setProjectFiles] = useState([])
   const [uploadingProjectFiles, setUploadingProjectFiles] = useState(false)
   const [resolvingTaskId, setResolvingTaskId] = useState(false)
+  const mentionUsersRef = useRef([])
   const [activityMode, setActivityMode] = useState('project')
   const [activityItems, setActivityItems] = useState([])
   const [activityLoading, setActivityLoading] = useState(false)
@@ -570,10 +573,11 @@ export function RetailProjectPage() {
     if (!silent) setChatterLoading(true)
     setChatterError('')
     try {
-      const posts = queryTaskId
+      const res = queryTaskId
         ? await listChatterPosts({ taskId: queryTaskId, limit: 200 })
         : await listChatterPosts({ projectId, limit: 200 })
-      const normalized = Array.isArray(posts) ? [...posts] : []
+      const posts = Array.isArray(res?.data) ? res.data : (Array.isArray(res) ? res : [])
+      const normalized = [...posts]
       setChatterPosts((prev) =>
         mergeChatterPostLists(normalized, prev, { taskId: queryTaskId, projectId }),
       )
@@ -589,6 +593,11 @@ export function RetailProjectPage() {
     if (activeTab !== 'chatter') return
     chatterRefreshPendingRef.current = false
     fetchChatterPosts()
+    if (mentionUsersRef.current.length === 0) {
+      listChatterMentionUsers()
+        .then((users) => { mentionUsersRef.current = Array.isArray(users) ? users : [] })
+        .catch(() => {})
+    }
   }, [activeTab, fetchChatterPosts])
 
   useEffect(() => {
@@ -728,6 +737,7 @@ export function RetailProjectPage() {
       const created = await createChatterPost({
         message,
         postType: 'Posts',
+        ...(mentionUserIds.length ? { mentionUserIds } : {}),
         ...(chatterPriority ? { priority: chatterPriority } : {}),
         ...(mentionUserIds.length ? { mentionUserIds } : {}),
         ...(resolvedTaskId ? { taskId: resolvedTaskId } : { projectId }),
@@ -746,6 +756,51 @@ export function RetailProjectPage() {
     } finally {
       setChatterSubmitting(false)
     }
+  }
+
+  function handleChatterMessageChange(value) {
+    setChatterMessage(value)
+    const lastAt = value.lastIndexOf('@')
+    if (lastAt !== -1) {
+      const fragment = value.slice(lastAt + 1)
+      if (/^[A-Za-z][A-Za-z0-9._\s-]{0,49}$/.test(fragment)) {
+        const needle = fragment.trim().toLowerCase()
+        if (needle.length >= 1) {
+          const matches = mentionUsersRef.current
+            .filter((u) => u.fullName.toLowerCase().includes(needle))
+            .slice(0, 6)
+          setMentionSuggestions(matches)
+          setMentionQuery(fragment)
+          return
+        }
+      }
+    }
+    setMentionSuggestions([])
+    setMentionQuery('')
+  }
+
+  function insertMentionIntoMessage(user) {
+    const lastAt = chatterMessage.lastIndexOf('@')
+    const before = chatterMessage.slice(0, lastAt)
+    const after = chatterMessage.slice(lastAt + 1 + mentionQuery.length).trimStart()
+    setChatterMessage(`${before}@${user.fullName} ${after}`)
+    setMentionSuggestions([])
+    setMentionQuery('')
+  }
+
+  function resolveMentionUserIdsFromText(text) {
+    const pattern = /@([A-Za-z][A-Za-z0-9._-]{1,50}(?:\s[A-Za-z][A-Za-z0-9._-]{1,40})?)/g
+    const ids = []
+    let match
+    while ((match = pattern.exec(text)) !== null) {
+      const needle = match[1].trim().toLowerCase()
+      const user = mentionUsersRef.current.find((u) => {
+        const name = String(u.fullName ?? '').trim().toLowerCase()
+        return name === needle || name.startsWith(needle)
+      })
+      if (user && !ids.includes(user.id)) ids.push(user.id)
+    }
+    return ids
   }
 
   async function handlePostComment(postId) {

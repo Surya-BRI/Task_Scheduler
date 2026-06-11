@@ -13,6 +13,7 @@ export type DashboardRealtimeEvent =
   | 'regularization_approved'
   | 'regularization_rejected'
   | 'chatter_post_created'
+  | 'chatter_updated'
   | 'notification_created';
 
 export interface DashboardRefreshPayload {
@@ -20,9 +21,18 @@ export interface DashboardRefreshPayload {
   at: string;
 }
 
+export interface ChatterRefreshPayload {
+  event: 'chatter_post_created' | 'chatter_post_updated' | 'chatter_post_deleted' | 'chatter_comment_created' | 'chatter_comment_deleted';
+  postId?: string | null;
+  taskId?: string | null;
+  projectId?: string | null;
+  at: string;
+}
+
 type DashboardEmitter = {
   emitDashboardRefresh: (payload: DashboardRefreshPayload) => void;
   emitNotificationRefresh: (userId: string) => void;
+  emitChatterRefresh: (payload: ChatterRefreshPayload) => void;
 };
 
 const OVERVIEW_ROLES: UserRole[] = [UserRole.HOD];
@@ -51,6 +61,15 @@ export class DashboardRealtimeService {
       this.emitter.emitNotificationRefresh(userId);
     } catch (err) {
       this.logger.warn(`Failed to emit notification refresh: ${(err as Error).message}`);
+    }
+  }
+
+  notifyChatterRefresh(payload: ChatterRefreshPayload) {
+    if (!this.emitter) return;
+    try {
+      this.emitter.emitChatterRefresh(payload);
+    } catch (err) {
+      this.logger.warn(`Failed to emit chatter refresh (${payload.event}): ${(err as Error).message}`);
     }
   }
 
