@@ -4,6 +4,7 @@ import {
   Injectable,
   Logger,
   NotFoundException,
+  Optional,
 } from '@nestjs/common';
 import { randomUUID } from 'crypto';
 import { Prisma } from '@prisma/client';
@@ -11,11 +12,13 @@ import { PrismaService } from '../prisma/prisma.service';
 import { ActivityLoggerService } from '../activities/activity-logger.service';
 import { ActivityAction } from '../activities/activity-events';
 import { UserRole } from '../common/constants/roles.enum';
+import { assertRegularizationDateAllowed } from '../common/utils/date-window.util';
 import { CreateRegularizationRequestDto } from './dto/create-regularization-request.dto';
 import { ReviewRegularizationRequestDto } from './dto/review-regularization-request.dto';
 import { UpdateRegularizationStatusDto } from './dto/update-regularization-status.dto';
 import { isUuidString } from './sql-uuid.util';
 import type { RegularizationRequestsContract } from './regularization-requests.contract';
+import { DashboardRealtimeService } from '../dashboard/dashboard-realtime.service';
 
 export type RegularizationTaskOption = {
   id: string;
@@ -66,6 +69,7 @@ export class RegularizationRequestsService implements RegularizationRequestsCont
   constructor(
     private readonly prisma: PrismaService,
     private readonly activityLogger: ActivityLoggerService,
+    @Optional() private readonly dashboardRealtime?: DashboardRealtimeService,
   ) {}
 
   private formatDuration(value: string | null | undefined): string {
@@ -224,7 +228,7 @@ export class RegularizationRequestsService implements RegularizationRequestsCont
   }
 
   private assertDesignerOwnership(submitterId: string, role: UserRole, designerId: string) {
-    if (role === UserRole.HOD || role === UserRole.ADMIN) return;
+    if (role === UserRole.HOD) return;
     if (submitterId !== designerId) {
       throw new ForbiddenException('You can only submit regularization requests for yourself');
     }
@@ -235,10 +239,8 @@ export class RegularizationRequestsService implements RegularizationRequestsCont
     role: UserRole,
     request: RegularizationRequestView,
   ) {
-    if (role === UserRole.ADMIN) return;
-
     if (role !== UserRole.HOD) {
-      throw new ForbiddenException('Only HOD or Admin can review regularization requests');
+      throw new ForbiddenException('Only HOD can review regularization requests');
     }
 
     const [reviewer, designer] = await Promise.all([
@@ -328,10 +330,8 @@ export class RegularizationRequestsService implements RegularizationRequestsCont
     if (!isUuidString(id)) throw new BadRequestException('id must be a UUID.');
     const request = await this.loadRowById(id);
 
-    if (role === UserRole.ADMIN || role === UserRole.HOD) {
-      if (role === UserRole.HOD) {
-        await this.assertReviewerAccess(userId, role, request);
-      }
+    if (role === UserRole.HOD) {
+      await this.assertReviewerAccess(userId, role, request);
       return request;
     }
 
@@ -345,20 +345,18 @@ export class RegularizationRequestsService implements RegularizationRequestsCont
     managerId: string,
     role: UserRole,
   ): Promise<RegularizationRequestView[]> {
-    if (role !== UserRole.HOD && role !== UserRole.ADMIN) {
-      throw new ForbiddenException('Only HOD or Admin can view pending approvals');
+    if (role !== UserRole.HOD) {
+      throw new ForbiddenException('Only HOD can view pending approvals');
     }
 
     const where: Prisma.RegularizationRequestWhereInput = { status: 'Pending' };
 
-    if (role === UserRole.HOD) {
-      const manager = await this.prisma.user.findUnique({
-        where: { id: managerId },
-        select: { departmentId: true },
-      });
-      if (manager?.departmentId) {
-        where.designer = { departmentId: manager.departmentId };
-      }
+    const manager = await this.prisma.user.findUnique({
+      where: { id: managerId },
+      select: { departmentId: true },
+    });
+    if (manager?.departmentId) {
+      where.designer = { departmentId: manager.departmentId };
     }
 
     const rows = await this.prisma.regularizationRequest.findMany({
@@ -375,8 +373,8 @@ export class RegularizationRequestsService implements RegularizationRequestsCont
     role: UserRole,
     filters: { status?: string; designerId?: string },
   ): Promise<RegularizationRequestView[]> {
-    if (role !== UserRole.HOD && role !== UserRole.ADMIN) {
-      throw new ForbiddenException('Only HOD or Admin can view team requests');
+    if (role !== UserRole.HOD) {
+      throw new ForbiddenException('Only HOD can view team requests');
     }
 
     const where: Prisma.RegularizationRequestWhereInput = {};
@@ -387,7 +385,7 @@ export class RegularizationRequestsService implements RegularizationRequestsCont
     if (filters.designerId?.trim() && isUuidString(filters.designerId)) {
       where.designerId = filters.designerId.trim();
     }
-    if (role === UserRole.HOD) {
+    {
       const manager = await this.prisma.user.findUnique({
         where: { id: managerId },
         select: { departmentId: true },
@@ -409,16 +407,42 @@ export class RegularizationRequestsService implements RegularizationRequestsCont
     return rows.map((r) => this.mapRow(r));
   }
 
+  private async resolveNonTaskProject(
+    projectRef: string,
+  ): Promise<{ id: string; name: string; projectNo: string | null } | null> {
+    const key = projectRef.trim();
+    if (!key) return null;
+
+    const select = { id: true, name: true, projectNo: true } as const;
+
+    if (isUuidString(key)) {
+      const byId = await this.prisma.project.findUnique({
+        where: { id: key },
+        select,
+      });
+      if (byId) return byId;
+    }
+
+    return this.prisma.project.findFirst({
+      where: { OR: [{ projectNo: key }, { id: key }] },
+      select,
+    });
+  }
+
   async create(
     submitterId: string,
     role: UserRole,
     dto: CreateRegularizationRequestDto,
   ): Promise<RegularizationRequestView> {
     this.assertDesignerOwnership(submitterId, role, dto.designerId);
+    assertRegularizationDateAllowed(dto.date);
 
     if (dto.reason?.trim() === 'Other' && !dto.notes?.trim()) {
       throw new BadRequestException('Notes are required when reason is Other');
     }
+
+    const regType = dto.regularizationType ?? 'task';
+    const isNonTask = regType === 'non-task';
 
     const designer = await this.prisma.user.findUnique({
       where: { id: dto.designerId },
@@ -426,57 +450,111 @@ export class RegularizationRequestsService implements RegularizationRequestsCont
     });
     if (!designer) throw new BadRequestException('Designer not found');
 
-    const task = await this.prisma.task.findUnique({
-      where: { id: dto.taskId },
-      select: { id: true, taskNo: true, title: true },
-    });
-    if (!task) throw new BadRequestException('Task not found');
+    let task: { id: string; taskNo: string | null; title: string | null } | null = null;
+    let project: { id: string; name: string; projectNo: string | null } | null = null;
+    let storedNotes = dto.notes?.trim() || null;
+
+    if (isNonTask) {
+      if (!dto.projectId?.trim()) {
+        throw new BadRequestException('Project is required for non-task regularization');
+      }
+      if (!dto.workDetails?.trim()) {
+        throw new BadRequestException('Work details are required for non-task regularization');
+      }
+      project = await this.resolveNonTaskProject(dto.projectId);
+      if (!project) throw new BadRequestException('Project not found');
+      storedNotes = `[NON-TASK] Project: ${project.name}\n${dto.workDetails.trim()}${
+        storedNotes ? `\n\n${storedNotes}` : ''
+      }`;
+    } else {
+      if (!dto.taskId?.trim()) {
+        throw new BadRequestException('Task is required for assigned-task regularization');
+      }
+      task = await this.prisma.task.findUnique({
+        where: { id: dto.taskId },
+        select: { id: true, taskNo: true, title: true },
+      });
+      if (!task) throw new BadRequestException('Task not found');
+    }
 
     const hods = await this.findDepartmentHods(designer.departmentId);
     const assignedHodId = hods[0]?.id ?? null;
-
-    const status = dto.status?.trim() || 'Pending';
+    const hodOnBehalf = role === UserRole.HOD && submitterId !== dto.designerId;
+    const status = hodOnBehalf ? 'Approved' : dto.status?.trim() || 'Pending';
+    const reviewedAt = hodOnBehalf ? new Date() : undefined;
+    const approverRemarks = hodOnBehalf
+      ? 'Auto-approved by system (HOD submission on behalf of designer)'
+      : undefined;
 
     const newRow = await this.prisma.regularizationRequest.create({
       data: {
         designerId: dto.designerId,
-        taskId: dto.taskId,
+        taskId: isNonTask ? null : dto.taskId,
         date: new Date(dto.date),
         duration: dto.duration.trim(),
         reason: dto.reason,
-        notes: dto.notes?.trim() || null,
+        notes: storedNotes,
         status,
-        approverId: assignedHodId,
+        approverId: hodOnBehalf ? submitterId : assignedHodId,
+        approverRemarks: approverRemarks ?? null,
+        reviewedAt,
       },
       include: INCLUDE,
     });
 
     const request = this.mapRow(newRow);
 
+    const submitAction = hodOnBehalf
+      ? ActivityAction.REGULARIZATION_AUTO_APPROVED
+      : ActivityAction.REGULARIZATION_SUBMITTED;
+    const submitMessageKey = hodOnBehalf
+      ? 'regularization_auto_approved'
+      : 'regularization_submitted';
+
     await this.activityLogger.log({
-      action: ActivityAction.REGULARIZATION_SUBMITTED,
+      action: submitAction,
       userId: submitterId,
-      taskId: dto.taskId,
+      taskId: task?.id,
       details: {
-        event: ActivityAction.REGULARIZATION_SUBMITTED,
-        messageKey: 'regularization_submitted',
+        event: submitAction,
+        messageKey: submitMessageKey,
         changes: {
           requestId: newRow.id,
           date: dto.date,
           reason: dto.reason,
           status,
-          assignedHodId,
+          regularizationType: regType,
+          autoApproved: hodOnBehalf,
+          submittedByHod: hodOnBehalf,
+          beneficiaryDesignerId: dto.designerId,
         },
-        taskSnapshot: { id: task.id, taskNo: task.taskNo, title: task.title ?? undefined },
+        taskSnapshot: task
+          ? { id: task.id, taskNo: task.taskNo ?? undefined, title: task.title ?? undefined }
+          : undefined,
+        projectSnapshot: project
+          ? { id: project.id, name: project.name, projectNo: project.projectNo }
+          : undefined,
         context: {
           designerId: dto.designerId,
           departmentId: designer.departmentId ?? null,
           designerName: designer.fullName,
+          submitterId,
+          submitterRole: role,
         },
       },
     });
 
-    await this.notifyHods(request, designer.fullName);
+    if (hodOnBehalf) {
+      await this.notifyDesigner(request, 'Approved', approverRemarks).catch((err) => {
+        this.logger.warn(`Failed to notify designer: ${err instanceof Error ? err.message : err}`);
+      });
+      this.dashboardRealtime?.notifyOverviewRefresh('regularization_approved');
+      if (dto.designerId) {
+        this.dashboardRealtime?.notifyUserNotificationRefresh(dto.designerId);
+      }
+    } else {
+      await this.notifyHods(request, designer.fullName);
+    }
 
     return request;
   }
@@ -551,6 +629,11 @@ export class RegularizationRequestsService implements RegularizationRequestsCont
     await this.notifyDesigner(updated, dto.status, remarks).catch((err) => {
       this.logger.warn(`Failed to notify designer: ${err instanceof Error ? err.message : err}`);
     });
+
+    this.dashboardRealtime?.notifyOverviewRefresh(
+      dto.status === 'Approved' ? 'regularization_approved' : 'regularization_rejected',
+    );
+    this.dashboardRealtime?.notifyUserNotificationRefresh(updated.designerId);
 
     return updated;
   }

@@ -50,11 +50,15 @@ model User {
   chatterMentions          ChatterPost[]              @relation("MentionedUser")
   chatterComments          ChatterComment[]           @relation("CommentAuthor")
   chatterCommentMentions   ChatterComment[]           @relation("CommentMentionedUser")
+  chatterPostMentions      ChatterPostMention[]       @relation("ChatterPostMentions")
+  chatterCommentMentionEntries ChatterCommentMention[] @relation("ChatterCommentMentions")
+  chatterPostLikes         ChatterPostLike[]          @relation("ChatterPostLikes")
   activities               ActivityLog[]
   leaveRequests            LeaveRequest[]
   leaveRequestsApproved    LeaveRequest[]             @relation("LeaveApprover")
   leaveRequestsRevoked     LeaveRequest[]             @relation("LeaveRevoker")
   notifications            Notification[]
+  inboxReadMarkers         InboxReadMarker[]          @relation("InboxReadMarkers")
   regularizationAsDesigner RegularizationRequest[]    @relation("RegularizationDesigner")
   regularizationAsApprover RegularizationRequest[]    @relation("RegularizationApprover")
   overtimeRequests         OvertimeRequest[]          @relation("OvertimeDesigner")
@@ -109,7 +113,7 @@ model Task {
   revisionCode String?  @db.NVarChar(20)
   designType   String?  @db.NVarChar(80)
   description String?   @db.NVarChar(Max)
-  status      String    @default("PENDING") @db.NVarChar(20)
+  status      String    @default("DESIGN_NEW") @db.NVarChar(20)
   priority    String    @default("Medium") @db.NVarChar(50)
   projectId   String    @db.UniqueIdentifier
   assigneeId  String?   @db.UniqueIdentifier
@@ -334,9 +338,11 @@ model ChatterPost {
   mentionUserId String? @db.UniqueIdentifier
   mentionUser   User?   @relation("MentionedUser", fields: [mentionUserId], references: [id], onDelete: NoAction, onUpdate: NoAction)
 
-  attachments Attachment[]
-  links       LinkAttachment[]
-  comments    ChatterComment[]
+  attachments     Attachment[]
+  links           LinkAttachment[]
+  comments        ChatterComment[]
+  mentionEntries  ChatterPostMention[]
+  likes           ChatterPostLike[]
 
   createdAt DateTime? @default(now()) @db.DateTime
   updatedAt DateTime? @default(now()) @updatedAt @db.DateTime
@@ -355,7 +361,47 @@ model ChatterComment {
   message  String?   @db.NVarChar(Max)
   createdAt DateTime? @default(now()) @db.DateTime
 
+  mentionEntries ChatterCommentMention[]
+
   @@map("ErpTSChatterComment")
+}
+
+model ChatterPostMention {
+  id        String      @id @default(dbgenerated("newid()")) @db.UniqueIdentifier
+  postId    String      @db.UniqueIdentifier
+  post      ChatterPost @relation(fields: [postId], references: [id], onDelete: Cascade, onUpdate: NoAction)
+  userId    String      @db.UniqueIdentifier
+  user      User        @relation("ChatterPostMentions", fields: [userId], references: [id], onDelete: NoAction, onUpdate: NoAction)
+  createdAt DateTime    @default(dbgenerated("sysutcdatetime()")) @db.DateTime
+
+  @@unique([postId, userId], name: "UQ_ErpTSChatterPostMention_post_user")
+  @@index([userId], name: "IX_ErpTSChatterPostMention_userId")
+  @@map("ErpTSChatterPostMention")
+}
+
+model ChatterCommentMention {
+  id        String         @id @default(dbgenerated("newid()")) @db.UniqueIdentifier
+  commentId String         @db.UniqueIdentifier
+  comment   ChatterComment @relation(fields: [commentId], references: [id], onDelete: Cascade, onUpdate: NoAction)
+  userId    String         @db.UniqueIdentifier
+  user      User           @relation("ChatterCommentMentions", fields: [userId], references: [id], onDelete: NoAction, onUpdate: NoAction)
+  createdAt DateTime       @default(dbgenerated("sysutcdatetime()")) @db.DateTime
+
+  @@unique([commentId, userId], name: "UQ_ErpTSChatterCommentMention_comment_user")
+  @@index([userId], name: "IX_ErpTSChatterCommentMention_userId")
+  @@map("ErpTSChatterCommentMention")
+}
+
+model ChatterPostLike {
+  id        String      @id @default(dbgenerated("newid()")) @db.UniqueIdentifier
+  postId    String      @db.UniqueIdentifier
+  post      ChatterPost @relation(fields: [postId], references: [id], onDelete: Cascade, onUpdate: NoAction)
+  userId    String      @db.UniqueIdentifier
+  user      User        @relation("ChatterPostLikes", fields: [userId], references: [id], onDelete: NoAction, onUpdate: NoAction)
+  createdAt DateTime    @default(dbgenerated("sysutcdatetime()")) @db.DateTime
+
+  @@unique([postId, userId], name: "UQ_ErpTSChatterPostLike_post_user")
+  @@map("ErpTSChatterPostLike")
 }
 
 model Attachment {
@@ -572,6 +618,19 @@ model Notification {
 
   @@index([userId, createdAt(sort: Desc)])
   @@map("ErpTSNotification")
+}
+
+model InboxReadMarker {
+  id        String   @id @default(dbgenerated("newid()")) @db.UniqueIdentifier
+  userId    String   @db.UniqueIdentifier
+  user      User     @relation("InboxReadMarkers", fields: [userId], references: [id], onDelete: Cascade, onUpdate: NoAction)
+  itemKey   String   @db.NVarChar(200)
+  isRead    Boolean  @default(true)
+  updatedAt DateTime @updatedAt
+
+  @@unique([userId, itemKey])
+  @@index([userId])
+  @@map("ErpTSInboxRead")
 }
 
 // ---------------------------------------------------------

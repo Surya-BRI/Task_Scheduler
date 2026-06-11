@@ -24,14 +24,14 @@ export class UsersController {
 
   /** POST /users — HOD/Admin only */
   @Post()
-  @Roles(UserRole.HOD, UserRole.ADMIN)
+  @Roles(UserRole.HOD)
   create(@Body() dto: CreateUserDto) {
     return this.usersService.create(dto);
   }
 
   /** GET /users?role=DESIGNER&departmentId=x&search=john — HOD/Admin only */
   @Get()
-  @Roles(UserRole.HOD, UserRole.ADMIN)
+  @Roles(UserRole.HOD)
   findAll(
     @Query('role') role?: string,
     @Query('departmentId') departmentId?: string,
@@ -48,14 +48,14 @@ export class UsersController {
 
   /** PATCH /users/:id — HOD/Admin only */
   @Patch(':id')
-  @Roles(UserRole.HOD, UserRole.ADMIN)
+  @Roles(UserRole.HOD)
   update(@Param('id') id: string, @Body() dto: UpdateUserDto) {
     return this.usersService.update(id, dto);
   }
 
   /** DELETE /users/:id — Admin only */
   @Delete(':id')
-  @Roles(UserRole.ADMIN)
+  @Roles(UserRole.HOD)
   remove(@Param('id') id: string) {
     return this.usersService.remove(id);
   }

@@ -92,7 +92,7 @@ export class JwtStrategy extends PassportStrategy(Strategy) {
 
   /**
    * Reads EXTERNAL_ROLE_MAP as a JSON string like:
-   *   '{"Hod":"HOD","Designer":"DESIGNER","ProjectManager":"PROJECT_MANAGER"}'
+   *   '{"Hod":"HOD","Designer":"DESIGNER"}'
    * Falls back to identity mapping.
    */
   private buildExternalRoleMap(): Record<string, string> {

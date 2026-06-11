@@ -45,7 +45,8 @@ export function createLeaveRequest(data: {
   type: string;
   startDate: string;
   endDate?: string;
-  reason?: string;
+  reasonCategory: string;
+  reasonOther?: string;
 }) {
   return apiClient.post<LeaveRequestDto>('/requests', data);
 }

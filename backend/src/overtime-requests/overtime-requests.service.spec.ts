@@ -10,6 +10,8 @@ import { UpdateOvertimeRequestDto } from './dto/update-overtime-request.dto';
 import { ReviewOvertimeRequestDto } from './dto/review-overtime-request.dto';
 import { Decimal } from '@prisma/client/runtime/library';
 
+const todayOtDate = () => new Date().toISOString().split('T')[0];
+
 describe('OvertimeRequestsService', () => {
   let service: OvertimeRequestsService;
 
@@ -86,7 +88,7 @@ describe('OvertimeRequestsService', () => {
     const baseDto: CreateOvertimeRequestDto = {
       designerId: 'd1',
       taskId: 't1',
-      date: '2026-06-03',
+      date: todayOtDate(),
       startTime: '17:00',
       endTime: '19:00',
       requestedHours: '2.0',
@@ -123,7 +125,7 @@ describe('OvertimeRequestsService', () => {
         id: 'r1',
         designerId: 'd2',
         taskId: 't1',
-        date: new Date('2026-06-03'),
+        date: new Date(`${todayOtDate()}T00:00:00.000Z`),
         startTime: '17:00',
         endTime: '19:00',
         totalHours: new Decimal(2.0),
@@ -171,7 +173,7 @@ describe('OvertimeRequestsService', () => {
         id: 'r1',
         designerId: 'd1',
         taskId: 't1',
-        date: new Date('2026-06-03'),
+        date: new Date(`${todayOtDate()}T00:00:00.000Z`),
         startTime: '17:00',
         endTime: '19:00',
         totalHours: new Decimal(2.0),
@@ -206,7 +208,7 @@ describe('OvertimeRequestsService', () => {
         id: 'r1',
         designerId: 'd1',
         taskId: 't1',
-        date: new Date('2026-06-03'),
+        date: new Date(`${todayOtDate()}T00:00:00.000Z`),
         requestedHours: new Decimal(2.0),
         totalHours: new Decimal(2.0),
         status: 'SUBMITTED',
@@ -252,7 +254,7 @@ describe('OvertimeRequestsService', () => {
         id: 'r1',
         designerId: 'd1',
         taskId: 't1',
-        date: new Date('2026-06-03'),
+        date: new Date(`${todayOtDate()}T00:00:00.000Z`),
         requestedHours: new Decimal(2.0),
         totalHours: new Decimal(2.0),
         status: 'SUBMITTED',
@@ -319,7 +321,7 @@ describe('OvertimeRequestsService', () => {
         id: 'r1',
         designerId: 'd1',
         status: 'DRAFT',
-        date: new Date('2026-06-03'),
+        date: new Date(`${todayOtDate()}T00:00:00.000Z`),
         startTime: '17:00',
         endTime: '19:00',
         taskId: 't1',
@@ -344,7 +346,7 @@ describe('OvertimeRequestsService', () => {
         id: 'r1',
         designerId: 'd1',
         status: 'DRAFT',
-        date: new Date('2026-06-03'),
+        date: new Date(`${todayOtDate()}T00:00:00.000Z`),
         startTime: '17:00',
         endTime: '19:00',
         taskId: 't1',
@@ -356,9 +358,9 @@ describe('OvertimeRequestsService', () => {
       mockPrismaService.overtimeRequest.findMany.mockResolvedValue([]);
       mockPrismaService.overtimeRequest.update.mockResolvedValue(existing);
 
-      // Admin updating someone else's request should not throw
+      // HOD updating someone else's request should not throw
       await expect(
-        service.update('r1', 'admin1', UserRole.ADMIN, { reason: 'Admin fix' }),
+        service.update('r1', 'hod1', UserRole.HOD, { reason: 'HOD fix' }),
       ).resolves.toBeDefined();
     });
   });
@@ -398,7 +400,7 @@ describe('OvertimeRequestsService', () => {
         designer: { id: 'd1', fullName: 'Designer 1', email: 'd1@x.com', departmentId: 'dept1' },
         task: { id: 't1', title: 'Task 1', taskNo: 'T-001' },
         totalHours: new Decimal(2.0),
-        date: new Date('2026-06-03'),
+        date: new Date(`${todayOtDate()}T00:00:00.000Z`),
         attachments: [],
       };
 
@@ -599,7 +601,7 @@ describe('OvertimeRequestsService', () => {
       expect(result.attachments[0].sizeBytes).toBe(1024);
     });
 
-    it('should allow ADMIN to view any request', async () => {
+    it('should allow HOD to view team request', async () => {
       mockPrismaService.overtimeRequest.findUnique.mockResolvedValue({
         id: 'r1',
         designerId: 'd1',
@@ -607,8 +609,9 @@ describe('OvertimeRequestsService', () => {
         attachments: [],
         history: [],
       });
+      mockPrismaService.user.findUnique.mockResolvedValue({ departmentId: 'dept1' });
 
-      const result = await service.findOne('r1', 'admin1', UserRole.ADMIN);
+      const result = await service.findOne('r1', 'hod1', UserRole.HOD);
       expect(result).toBeDefined();
     });
   });
@@ -723,18 +726,17 @@ describe('OvertimeRequestsService', () => {
         status: 'SUBMITTED',
         designerId: 'd1',
         totalHours: new Decimal(2.0),
-        date: new Date('2026-06-03'),
+        date: new Date(`${todayOtDate()}T00:00:00.000Z`),
         designer: { id: 'd1', fullName: 'Designer 1', departmentId: 'dept1' },
       };
       mockPrismaService.overtimeRequest.findUnique.mockResolvedValue(mockRequest);
       mockPrismaService.overtimeRequest.update.mockResolvedValue({
         ...mockRequest,
-        status: 'APPROVED_BY_MANAGER',
+        status: 'APPROVED',
         designerId: 'd1',
-        date: new Date('2026-06-03'),
+        date: new Date(`${todayOtDate()}T00:00:00.000Z`),
         designer: { id: 'd1', fullName: 'Designer 1', email: 'd1@x.com' },
       });
-      mockPrismaService.user.findMany.mockResolvedValue([{ id: 'admin1', fullName: 'Admin' }]);
 
       const reviewDto: ReviewOvertimeRequestDto = {
         status: 'APPROVED_BY_MANAGER',
@@ -742,10 +744,9 @@ describe('OvertimeRequestsService', () => {
       };
 
       const result = await service.review('r1', 'h1', UserRole.HOD, reviewDto);
-      expect(result.status).toBe('APPROVED_BY_MANAGER');
+      expect(result.status).toBe('APPROVED');
       expect(mockPrismaService.overtimeRequest.update).toHaveBeenCalled();
       expect(mockPrismaService.overtimeApprovalHistory.create).toHaveBeenCalled();
-      // Should notify designer and HR
       expect(mockPrismaService.notification.create).toHaveBeenCalled();
     });
 
@@ -755,7 +756,7 @@ describe('OvertimeRequestsService', () => {
         status: 'SUBMITTED',
         designerId: 'd1',
         totalHours: new Decimal(2.0),
-        date: new Date('2026-06-03'),
+        date: new Date(`${todayOtDate()}T00:00:00.000Z`),
         designer: { id: 'd1', fullName: 'Designer 1', departmentId: 'dept1' },
       };
       mockPrismaService.overtimeRequest.findUnique.mockResolvedValue(mockRequest);
@@ -763,7 +764,7 @@ describe('OvertimeRequestsService', () => {
         ...mockRequest,
         status: 'REJECTED_BY_MANAGER',
         designerId: 'd1',
-        date: new Date('2026-06-03'),
+        date: new Date(`${todayOtDate()}T00:00:00.000Z`),
         designer: { id: 'd1', fullName: 'Designer 1', email: 'd1@x.com' },
       });
 
@@ -772,57 +773,6 @@ describe('OvertimeRequestsService', () => {
         comments: 'Not justified',
       });
       expect(result.status).toBe('REJECTED_BY_MANAGER');
-    });
-
-    it('should throw ForbiddenException if non-admin tries HR review', async () => {
-      mockPrismaService.overtimeRequest.findUnique.mockResolvedValue({
-        id: 'r1',
-        status: 'APPROVED_BY_MANAGER',
-        designer: { id: 'd1', fullName: 'D1', departmentId: 'dept1' },
-      });
-
-      await expect(
-        service.review('r1', 'h1', UserRole.HOD, { status: 'APPROVED', comments: 'final ok' }),
-      ).rejects.toThrow(ForbiddenException);
-    });
-
-    it('should throw BadRequestException if request is not APPROVED_BY_MANAGER for HR review', async () => {
-      mockPrismaService.overtimeRequest.findUnique.mockResolvedValue({
-        id: 'r1',
-        status: 'SUBMITTED',
-        designer: { id: 'd1', fullName: 'D1', departmentId: 'dept1' },
-      });
-
-      await expect(
-        service.review('r1', 'admin1', UserRole.ADMIN, { status: 'APPROVED', comments: 'ok' }),
-      ).rejects.toThrow(BadRequestException);
-    });
-
-    it('should allow ADMIN to do final HR approval', async () => {
-      const mockRequest = {
-        id: 'r1',
-        status: 'APPROVED_BY_MANAGER',
-        designerId: 'd1',
-        totalHours: new Decimal(2.0),
-        approvedHours: new Decimal(2.0),
-        date: new Date('2026-06-03'),
-        designer: { id: 'd1', fullName: 'Designer 1', departmentId: 'dept1' },
-      };
-      mockPrismaService.overtimeRequest.findUnique.mockResolvedValue(mockRequest);
-      mockPrismaService.overtimeRequest.update.mockResolvedValue({
-        ...mockRequest,
-        status: 'APPROVED',
-        designerId: 'd1',
-        date: new Date('2026-06-03'),
-        designer: { id: 'd1', fullName: 'Designer 1', email: 'd1@x.com' },
-      });
-
-      const result = await service.review('r1', 'admin1', UserRole.ADMIN, {
-        status: 'APPROVED',
-        comments: 'Approved',
-      });
-      expect(result.status).toBe('APPROVED');
-      expect(mockPrismaService.notification.create).toHaveBeenCalled();
     });
 
     it('should throw BadRequestException for invalid review status action', async () => {
@@ -857,10 +807,11 @@ describe('OvertimeRequestsService', () => {
       );
     });
 
-    it('should return all submitted requests for ADMIN', async () => {
+    it('should return submitted requests for HOD without department filter', async () => {
+      mockPrismaService.user.findUnique.mockResolvedValue({ departmentId: null });
       mockPrismaService.overtimeRequest.findMany.mockResolvedValue([{ id: 'r1' }, { id: 'r2' }]);
 
-      const result = await service.findPendingApprovals('admin1', UserRole.ADMIN);
+      const result = await service.findPendingApprovals('hod1', UserRole.HOD);
       expect(result).toHaveLength(2);
     });
   });

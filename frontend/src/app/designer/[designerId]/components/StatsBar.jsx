@@ -2,7 +2,7 @@
 import { Flame, Star } from "lucide-react";
 import { useRouter } from "next/navigation";
 
-export default function StatsBar({ stats, isDesignerMode = true, isHOD = false }) {
+export default function StatsBar({ stats, isDesignerMode = true, isHOD = false, isViewingOther = false }) {
   const router = useRouter();
   const { workLoad, workTill, monthlyTaskCount, monthlyHourCount, score, pendingRegularization, xp, streak } = stats;
 
@@ -62,7 +62,7 @@ export default function StatsBar({ stats, isDesignerMode = true, isHOD = false }
       <div className="h-4 w-px bg-slate-200 hidden sm:block" />
 
       {/* Pending Regularization */}
-      {(isDesignerMode || isHOD) ? (
+      {isDesignerMode ? (
         <button
           type="button"
           onClick={() => router.push(`/designer/requests#regularization`)}

@@ -1,28 +1,34 @@
 import { randomUUID } from 'crypto';
 import {
   BadRequestException,
+  ForbiddenException,
   Injectable,
   InternalServerErrorException,
   Logger,
   NotFoundException,
   OnModuleInit,
+  Optional,
 } from '@nestjs/common';
 import { Prisma } from '@prisma/client';
 import { PrismaService } from '../prisma/prisma.service';
 import { UsersService } from '../users/users.service';
 import { CreateChatterCommentDto } from './dto/create-chatter-comment.dto';
 import { CreateChatterPostDto } from './dto/create-chatter-post.dto';
+import { UpdateChatterCommentDto, UpdateChatterPostDto } from './dto/update-chatter-post.dto';
 import { ActivityAction } from '../activities/activity-events';
 import { ActivityLoggerService } from '../activities/activity-logger.service';
 import { TaskFilesService } from '../tasks/task-files.service';
 import {
   MentionUserRef,
+  messageSnippet,
   parseMentionUserIdsFromMessage,
   resolveProjectNo,
   resolveTaskOpNo,
   uniqueUuids,
   weekRangeContaining,
 } from './chatter-mentions.util';
+import { DashboardRealtimeService } from '../dashboard/dashboard-realtime.service';
+import { UserRole } from '../common/constants/roles.enum';
 
 const UUID_RE =
   /^[0-9a-f]{8}-[0-9a-f]{4}-[1-5][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i;
@@ -106,12 +112,15 @@ export type ChatterPostDto = {
 @Injectable()
 export class ChatterPostsService implements OnModuleInit {
   private readonly logger = new Logger(ChatterPostsService.name);
+  private mentionDirectoryCache: { data: MentionUserRef[]; expiresAt: number } | null = null;
+  private readonly MENTION_CACHE_TTL_MS = 60_000;
 
   constructor(
     private readonly prisma: PrismaService,
     private readonly usersService: UsersService,
     private readonly activityLogger: ActivityLoggerService,
     private readonly taskFilesService: TaskFilesService,
+    @Optional() private readonly dashboardRealtime?: DashboardRealtimeService,
   ) {}
 
   async onModuleInit(): Promise<void> {
@@ -147,6 +156,16 @@ export class ChatterPostsService implements OnModuleInit {
           );
           CREATE NONCLUSTERED INDEX IX_ErpTSChatterCommentMention_userId ON dbo.ErpTSChatterCommentMention (userId);
         END
+        IF NOT EXISTS (SELECT 1 FROM sys.tables WHERE name = 'ErpTSChatterPostLike')
+        BEGIN
+          CREATE TABLE dbo.ErpTSChatterPostLike (
+            id UNIQUEIDENTIFIER NOT NULL DEFAULT NEWID() PRIMARY KEY,
+            postId UNIQUEIDENTIFIER NOT NULL,
+            userId UNIQUEIDENTIFIER NOT NULL,
+            createdAt DATETIME NOT NULL DEFAULT SYSUTCDATETIME(),
+            CONSTRAINT UQ_ErpTSChatterPostLike_post_user UNIQUE (postId, userId)
+          );
+        END
       `);
     } catch (err) {
       const detail = err instanceof Error ? err.message : String(err);
@@ -163,63 +182,171 @@ export class ChatterPostsService implements OnModuleInit {
     return String(a).trim().toLowerCase() === String(b).trim().toLowerCase();
   }
 
-  private async loadMentionDirectory(): Promise<MentionUserRef[]> {
-    const users = await this.usersService.findAll();
-    return users.map((user) => ({ id: user.id, fullName: user.fullName }));
+  private async loadChatterParticipantUserIds(
+    taskId?: string | null,
+    projectId?: string | null,
+  ): Promise<string[]> {
+    const resolvedTaskId = optionalUuid(taskId);
+    const resolvedProjectId = optionalUuid(projectId);
+    if (!resolvedTaskId && !resolvedProjectId) return [];
+
+    const whereParts: string[] = [];
+    if (resolvedTaskId) {
+      whereParts.push(`p.taskId = ${sqlQuotedUuid(resolvedTaskId)}`);
+    } else if (resolvedProjectId) {
+      const projectSql = sqlQuotedUuid(resolvedProjectId);
+      whereParts.push(`(p.projectId = ${projectSql} OR t.projectId = ${projectSql})`);
+    } else {
+      return [];
+    }
+
+    const rows = await this.prisma.$queryRawUnsafe<Array<{ userId: string }>>(`
+      SELECT DISTINCT CONVERT(varchar(36), u.id) AS userId
+      FROM ErpTSChatterPost p
+      LEFT JOIN ErpTSTask t ON t.id = p.taskId
+      LEFT JOIN ErpTSChatterComment c ON c.postId = p.id
+      INNER JOIN ErpTSUser u ON u.id = p.authorId OR u.id = c.authorId
+      WHERE ${whereParts[0]}
+    `);
+    return rows.map((row) => String(row.userId)).filter(Boolean);
+  }
+
+  async resolveEligibleMentionUsers(
+    viewerId: string,
+    role: UserRole | string,
+    taskId?: string | null,
+    projectId?: string | null,
+  ): Promise<MentionUserRef[]> {
+    const allUsers = await this.usersService.findAll();
+    const byId = new Map(allUsers.map((user) => [user.id, user]));
+    const eligibleIds = new Set<string>();
+
+    if (role === UserRole.HOD) {
+      const hod = await this.prisma.user.findUnique({
+        where: { id: viewerId },
+        select: { departmentId: true },
+      });
+      for (const user of allUsers) {
+        if (user.id === viewerId) {
+          eligibleIds.add(user.id);
+          continue;
+        }
+        const userRole = user.role?.name;
+        if (userRole === UserRole.HOD) {
+          eligibleIds.add(user.id);
+          continue;
+        }
+        if (userRole === UserRole.DESIGNER) {
+          const userDeptId = user.department?.id ?? null;
+          if (!hod?.departmentId || userDeptId === hod.departmentId) {
+            eligibleIds.add(user.id);
+          }
+        }
+      }
+    } else {
+      eligibleIds.add(viewerId);
+      const viewer = await this.prisma.user.findUnique({
+        where: { id: viewerId },
+        select: { departmentId: true },
+      });
+      for (const user of allUsers) {
+        if (user.role?.name === UserRole.HOD) {
+          const userDeptId = user.department?.id ?? null;
+          if (!viewer?.departmentId || userDeptId === viewer.departmentId) {
+            eligibleIds.add(user.id);
+          }
+        }
+      }
+
+      const resolvedTaskId = optionalUuid(taskId);
+      let resolvedProjectId = optionalUuid(projectId);
+      if (resolvedTaskId) {
+        const task = await this.prisma.task.findUnique({
+          where: { id: resolvedTaskId },
+          select: { assigneeId: true, projectId: true },
+        });
+        if (task?.assigneeId) eligibleIds.add(task.assigneeId);
+        if (task?.projectId) resolvedProjectId = task.projectId;
+      }
+      if (resolvedProjectId) {
+        const projectTasks = await this.prisma.task.findMany({
+          where: { projectId: resolvedProjectId, assigneeId: { not: null } },
+          select: { assigneeId: true },
+        });
+        for (const row of projectTasks) {
+          if (row.assigneeId) eligibleIds.add(row.assigneeId);
+        }
+      }
+
+      const participants = await this.loadChatterParticipantUserIds(resolvedTaskId, resolvedProjectId);
+      for (const id of participants) eligibleIds.add(id);
+    }
+
+    return [...eligibleIds]
+      .map((id) => byId.get(id))
+      .filter((user): user is NonNullable<typeof user> => Boolean(user))
+      .map((user) => ({ id: user.id, fullName: user.fullName }))
+      .sort((a, b) => a.fullName.localeCompare(b.fullName));
   }
 
   private async collectPostMentionUserIds(
     dto: CreateChatterPostDto,
     message: string,
+    authorId: string,
+    role: UserRole | string,
+    taskId?: string | null,
+    projectId?: string | null,
   ): Promise<string[]> {
-    const directory = await this.loadMentionDirectory();
+    const directory = await this.resolveEligibleMentionUsers(authorId, role, taskId, projectId);
+    const eligible = new Set(directory.map((user) => user.id));
     return uniqueUuids([
       dto.mentionUserId,
       ...(dto.mentionUserIds ?? []),
       ...parseMentionUserIdsFromMessage(message, directory),
-    ]);
+    ]).filter((id) => eligible.has(id));
   }
 
   private async collectCommentMentionUserIds(
     dto: CreateChatterCommentDto,
     message: string,
+    authorId: string,
+    role: UserRole | string,
+    taskId?: string | null,
+    projectId?: string | null,
   ): Promise<string[]> {
-    const directory = await this.loadMentionDirectory();
+    const directory = await this.resolveEligibleMentionUsers(authorId, role, taskId, projectId);
+    const eligible = new Set(directory.map((user) => user.id));
     return uniqueUuids([
       dto.mentionUserId,
       ...(dto.mentionUserIds ?? []),
       ...parseMentionUserIdsFromMessage(message, directory),
-    ]);
+    ]).filter((id) => eligible.has(id));
   }
 
   private async insertPostMentions(postId: string, userIds: string[]): Promise<void> {
     const ids = uniqueUuids(userIds);
     if (!ids.length) return;
     const postSql = sqlQuotedUuid(postId);
-    for (const userId of ids) {
-      await this.prisma.$executeRawUnsafe(`
-        IF NOT EXISTS (
-          SELECT 1 FROM ErpTSChatterPostMention
-          WHERE postId = ${postSql} AND userId = ${sqlQuotedUuid(userId)}
-        )
-        INSERT INTO ErpTSChatterPostMention (postId, userId) VALUES (${postSql}, ${sqlQuotedUuid(userId)});
-      `);
-    }
+    const valueRows = ids.map((uid) => `(${postSql}, ${sqlQuotedUuid(uid)})`).join(', ');
+    await this.prisma.$executeRawUnsafe(`
+      MERGE INTO ErpTSChatterPostMention AS target
+      USING (VALUES ${valueRows}) AS src(postId, userId)
+      ON target.postId = src.postId AND target.userId = src.userId
+      WHEN NOT MATCHED THEN INSERT (postId, userId) VALUES (src.postId, src.userId);
+    `);
   }
 
   private async insertCommentMentions(commentId: string, userIds: string[]): Promise<void> {
     const ids = uniqueUuids(userIds);
     if (!ids.length) return;
     const commentSql = sqlQuotedUuid(commentId);
-    for (const userId of ids) {
-      await this.prisma.$executeRawUnsafe(`
-        IF NOT EXISTS (
-          SELECT 1 FROM ErpTSChatterCommentMention
-          WHERE commentId = ${commentSql} AND userId = ${sqlQuotedUuid(userId)}
-        )
-        INSERT INTO ErpTSChatterCommentMention (commentId, userId) VALUES (${commentSql}, ${sqlQuotedUuid(userId)});
-      `);
-    }
+    const valueRows = ids.map((uid) => `(${commentSql}, ${sqlQuotedUuid(uid)})`).join(', ');
+    await this.prisma.$executeRawUnsafe(`
+      MERGE INTO ErpTSChatterCommentMention AS target
+      USING (VALUES ${valueRows}) AS src(commentId, userId)
+      ON target.commentId = src.commentId AND target.userId = src.userId
+      WHEN NOT MATCHED THEN INSERT (commentId, userId) VALUES (src.commentId, src.userId);
+    `);
   }
 
   private async loadPostMentionsMap(
@@ -291,21 +418,49 @@ export class ChatterPostsService implements OnModuleInit {
     return null;
   }
 
+  private buildChatterDeepLink(params: {
+    postId: string;
+    commentId?: string | null;
+    taskId?: string | null;
+    projectId?: string | null;
+  }): string {
+    const q = new URLSearchParams();
+    q.set('postId', params.postId);
+    if (params.commentId) q.set('commentId', params.commentId);
+    if (params.taskId) {
+      q.set('tab', 'chatter');
+      return `/task-summary/${params.taskId}?${q.toString()}`;
+    }
+    if (params.projectId) {
+      q.set('tab', 'chatter');
+      return `/chatter?${q.toString()}&projectId=${params.projectId}`;
+    }
+    return `/chatter?${q.toString()}`;
+  }
+
   private async notifyMentionedUsers(params: {
     mentionedUserIds: string[];
     authorId: string;
     authorName: string;
     postId: string;
+    commentId?: string | null;
+    isComment?: boolean;
+    messageText?: string;
     listingLabel?: string | null;
     taskId?: string | null;
     projectId?: string | null;
   }): Promise<void> {
     const ref = params.listingLabel?.trim() || 'a discussion';
-    const link = params.taskId
-      ? `/tasks/${params.taskId}?tab=chatter`
-      : params.projectId
-        ? `/projects/${params.projectId}?tab=chatter`
-        : '/chatter';
+    const snippet = messageSnippet(params.messageText ?? '');
+    const kind = params.isComment ? 'comment' : 'post';
+    const link = this.buildChatterDeepLink({
+      postId: params.postId,
+      commentId: params.commentId,
+      taskId: params.taskId,
+      projectId: params.projectId,
+    });
+
+    const verb = params.isComment ? 'commented and mentioned you' : 'mentioned you';
 
     for (const userId of uniqueUuids(params.mentionedUserIds)) {
       if (userId === params.authorId) continue;
@@ -315,8 +470,28 @@ export class ChatterPostsService implements OnModuleInit {
             id: randomUUID(),
             userId,
             title: 'You were mentioned in Chatter',
-            message: `${params.authorName} mentioned you in a post about ${ref}.`,
+            message: `${params.authorName} mentioned you in a ${kind} about ${ref}${snippet ? `: "${snippet}"` : '.'}`,
             linkUrl: link,
+          },
+        });
+        this.dashboardRealtime?.notifyUserNotificationRefresh(userId);
+        await this.activityLogger.log({
+          action: ActivityAction.CHATTER_MENTION,
+          userId: params.authorId,
+          taskId: params.taskId ?? null,
+          details: {
+            event: ActivityAction.CHATTER_MENTION,
+            messageKey: 'chatter_mention',
+            changes: {
+              mentionedUserId: userId,
+              postId: params.postId,
+              commentId: params.commentId ?? null,
+            },
+            context: {
+              projectId: params.projectId ?? null,
+              postId: params.postId,
+              commentId: params.commentId ?? null,
+            },
           },
         });
       } catch (err) {
@@ -346,15 +521,25 @@ export class ChatterPostsService implements OnModuleInit {
     `);
 
     const row = rows[0];
-    return row ? this.mapCommentRow(row) : null;
+    if (!row) return null;
+    const dto = this.mapCommentRow(row);
+    const mentionMap = await this.loadCommentMentionsMap([id]);
+    const mentionedUsers = mentionMap.get(id) ?? [];
+    if (!mentionedUsers.length) return dto;
+    return {
+      ...dto,
+      mentionedUsers,
+      mentionUserId: mentionedUsers[0]?.id ?? dto.mentionUserId,
+    };
   }
 
-  async listMentionUsers() {
-    const users = await this.usersService.findAll();
-    return users.map((user) => ({
-      id: user.id,
-      fullName: user.fullName,
-    }));
+  async listMentionUsers(
+    viewerId: string,
+    role: UserRole | string,
+    taskId?: string,
+    projectId?: string,
+  ) {
+    return this.resolveEligibleMentionUsers(viewerId, role, taskId, projectId);
   }
 
   private mapCommentRow(
@@ -722,8 +907,9 @@ export class ChatterPostsService implements OnModuleInit {
     commentedByUserIdFilter?: string,
     postTypeFilter?: string,
     weekStartFilter?: string,
-  ): Promise<ChatterPostDto[]> {
-    const limit = Math.min(1000, Math.max(1, Number.parseInt(limitParam ?? '500', 10) || 500));
+    cursor?: string,
+  ): Promise<{ data: ChatterPostDto[]; pageInfo: { hasMore: boolean; nextCursor: string | null } }> {
+    const limit = Math.min(200, Math.max(1, Number.parseInt(limitParam ?? '50', 10) || 50));
     const taskId = optionalUuid(taskIdFilter);
     const projectId = optionalUuid(projectIdFilter);
     const mentionUserId = optionalUuid(mentionUserIdFilter);
@@ -776,25 +962,38 @@ export class ChatterPostsService implements OnModuleInit {
         whereParts.push(`p.createdAt >= ${startSql} AND p.createdAt <= ${endSql}`);
       }
     }
+    if (cursor?.trim()) {
+      const cursorDate = new Date(cursor.trim());
+      if (!Number.isNaN(cursorDate.getTime())) {
+        const cursorSql = `'${cursorDate.toISOString().replace(/'/g, "''")}'`;
+        whereParts.push(`p.updatedAt < ${cursorSql}`);
+      }
+    }
 
     const whereSql = whereParts.length > 0 ? `WHERE ${whereParts.join(' AND ')}` : '';
+    const fetchLimit = limit + 1;
 
     const rows = await this.prisma.$queryRawUnsafe<Array<Record<string, unknown>>>(`
-      SELECT TOP (${limit})
+      SELECT TOP (${fetchLimit})
         ${this.postSelectColumns('p')}
       ${this.postJoinSql('p')}
       ${whereSql}
       ORDER BY p.updatedAt DESC, p.createdAt DESC
     `);
 
-    const posts = rows.map((r) => ({
+    const hasMore = rows.length > limit;
+    const slicedRows = hasMore ? rows.slice(0, limit) : rows;
+    const posts = slicedRows.map((r) => ({
       ...this.mapRow(r),
       comments: [] as ChatterCommentDto[],
       attachments: [] as ChatterAttachmentDto[],
       linkAttachments: [] as ChatterLinkAttachmentDto[],
     }));
 
-    return this.enrichPosts(posts);
+    const data = await this.enrichPosts(posts);
+    const lastItem = data[data.length - 1];
+    const nextCursor = hasMore && lastItem ? lastItem.updatedAt : null;
+    return { data, pageInfo: { hasMore, nextCursor } };
   }
 
   async loadPostById(postId: string): Promise<ChatterPostDto | null> {
@@ -831,6 +1030,7 @@ export class ChatterPostsService implements OnModuleInit {
     postId: string,
     dto: CreateChatterCommentDto,
     authorId: string,
+    authorRole: UserRole | string,
   ): Promise<ChatterCommentDto> {
     const normalizedPostId = postId.trim();
     if (!optionalUuid(normalizedPostId)) {
@@ -846,7 +1046,15 @@ export class ChatterPostsService implements OnModuleInit {
       throw new NotFoundException('Chatter post not found');
     }
 
-    const mentionUserIds = await this.collectCommentMentionUserIds(dto, dto.message);
+    const postContext = postExists[0];
+    const mentionUserIds = await this.collectCommentMentionUserIds(
+      dto,
+      dto.message,
+      authorId,
+      authorRole,
+      postContext.taskId,
+      postContext.projectId,
+    );
     const mentionUserId = mentionUserIds[0] ?? optionalUuid(dto.mentionUserId);
     const messageSql = `N'${dto.message.trim().replace(/'/g, "''")}'`;
     const mentionSql = mentionUserId ? sqlQuotedUuid(mentionUserId) : 'NULL';
@@ -899,12 +1107,23 @@ export class ChatterPostsService implements OnModuleInit {
       },
     });
 
+    this.dashboardRealtime?.notifyChatterRefresh({
+      event: 'chatter_comment_created',
+      postId: normalizedPostId,
+      taskId: postExists[0].taskId ?? null,
+      projectId: postExists[0].projectId ?? null,
+      at: new Date().toISOString(),
+    });
+
     if (mentionUserIds.length > 0) {
       await this.notifyMentionedUsers({
         mentionedUserIds: mentionUserIds,
         authorId,
         authorName: author?.fullName?.trim() || 'Someone',
         postId: normalizedPostId,
+        commentId: newCommentId,
+        isComment: true,
+        messageText: dto.message,
         listingLabel: postMeta?.listingLabel,
         taskId: postMeta?.taskId,
         projectId: postMeta?.projectId,
@@ -924,7 +1143,12 @@ export class ChatterPostsService implements OnModuleInit {
     throw new BadRequestException('Comment created but could not be loaded');
   }
 
-  async create(dto: CreateChatterPostDto, authorId: string, files?: Express.Multer.File[]): Promise<ChatterPostDto> {
+  async create(
+    dto: CreateChatterPostDto,
+    authorId: string,
+    authorRole: UserRole | string,
+    files?: Express.Multer.File[],
+  ): Promise<ChatterPostDto> {
     // Upload files to S3 first
     const uploadResults: Array<{ key: string; fileName: string; mimeType: string; size: number; url: string }> = [];
 
@@ -1000,9 +1224,16 @@ export class ChatterPostsService implements OnModuleInit {
       taskMeta.projectNo ?? projectMeta.projectNo,
     );
     const resolvedTitle = listingLabel ?? this.resolveDisplayTitle(dto.title, taskMeta.taskOpNo);
-    const mentionUserIds = await this.collectPostMentionUserIds(dto, dto.message);
-    const primaryMentionUserId = mentionUserIds[0] ?? optionalUuid(dto.mentionUserId);
     const resolvedProjectId = taskMeta.projectId ?? dtoProjectId;
+    const mentionUserIds = await this.collectPostMentionUserIds(
+      dto,
+      dto.message,
+      authorId,
+      authorRole,
+      taskId,
+      resolvedProjectId,
+    );
+    const primaryMentionUserId = mentionUserIds[0] ?? optionalUuid(dto.mentionUserId);
 
     let newPost: any;
     try {
@@ -1079,6 +1310,8 @@ export class ChatterPostsService implements OnModuleInit {
         authorId,
         authorName: author?.fullName?.trim() || 'Someone',
         postId: newPost.id,
+        isComment: false,
+        messageText: dto.message,
         listingLabel,
         taskId: newPost.taskId,
         projectId,
@@ -1106,6 +1339,14 @@ export class ChatterPostsService implements OnModuleInit {
       },
     });
 
+    this.dashboardRealtime?.notifyChatterRefresh({
+      event: 'chatter_post_created',
+      postId: newPost.id,
+      taskId: newPost.taskId ?? null,
+      projectId: projectId ?? null,
+      at: new Date().toISOString(),
+    });
+
     const loaded = await this.loadPostById(newPost.id);
     if (loaded) return loaded;
 
@@ -1122,5 +1363,162 @@ export class ChatterPostsService implements OnModuleInit {
       attachments: attachmentDtos,
       linkAttachments: linkDtos,
     };
+  }
+
+  async updatePost(postId: string, dto: UpdateChatterPostDto, requesterId: string): Promise<ChatterPostDto> {
+    const id = optionalUuid(postId);
+    if (!id) throw new BadRequestException('postId must be a valid UUID');
+
+    const rows = await this.prisma.$queryRawUnsafe<Array<{ authorId: string | null; taskId: string | null; projectId: string | null }>>(
+      `SELECT TOP 1 CONVERT(varchar(36), authorId) AS authorId, CONVERT(varchar(36), taskId) AS taskId, CONVERT(varchar(36), projectId) AS projectId FROM ErpTSChatterPost WHERE id = ${sqlQuotedUuid(id)}`,
+    );
+    if (!rows.length) throw new NotFoundException('Chatter post not found');
+    if (rows[0].authorId !== requesterId) throw new ForbiddenException('Only the post author can edit this post');
+
+    const setParts: string[] = [`updatedAt = SYSUTCDATETIME()`, `editedAt = SYSUTCDATETIME()`];
+    if (dto.message !== undefined) setParts.push(`message = N'${dto.message.replace(/'/g, "''")}'`);
+    if (dto.title !== undefined) setParts.push(`title = N'${dto.title.replace(/'/g, "''")}'`);
+
+    await this.prisma.$executeRawUnsafe(
+      `UPDATE ErpTSChatterPost SET ${setParts.join(', ')} WHERE id = ${sqlQuotedUuid(id)}`,
+    );
+
+    this.dashboardRealtime?.notifyChatterRefresh({
+      event: 'chatter_post_updated',
+      postId: id,
+      taskId: rows[0].taskId ?? null,
+      projectId: rows[0].projectId ?? null,
+      at: new Date().toISOString(),
+    });
+
+    const updated = await this.loadPostById(id);
+    if (!updated) throw new BadRequestException('Post updated but could not be reloaded');
+    return updated;
+  }
+
+  async deletePost(postId: string, requesterId: string): Promise<void> {
+    const id = optionalUuid(postId);
+    if (!id) throw new BadRequestException('postId must be a valid UUID');
+
+    const rows = await this.prisma.$queryRawUnsafe<Array<{ authorId: string | null; taskId: string | null; projectId: string | null }>>(
+      `SELECT TOP 1 CONVERT(varchar(36), authorId) AS authorId, CONVERT(varchar(36), taskId) AS taskId, CONVERT(varchar(36), projectId) AS projectId FROM ErpTSChatterPost WHERE id = ${sqlQuotedUuid(id)}`,
+    );
+    if (!rows.length) throw new NotFoundException('Chatter post not found');
+    if (rows[0].authorId !== requesterId) throw new ForbiddenException('Only the post author can delete this post');
+
+    await this.prisma.$executeRawUnsafe(`DELETE FROM ErpTSChatterPost WHERE id = ${sqlQuotedUuid(id)}`);
+
+    this.dashboardRealtime?.notifyChatterRefresh({
+      event: 'chatter_post_deleted',
+      postId: id,
+      taskId: rows[0].taskId ?? null,
+      projectId: rows[0].projectId ?? null,
+      at: new Date().toISOString(),
+    });
+  }
+
+  async updateComment(postId: string, commentId: string, dto: UpdateChatterCommentDto, requesterId: string): Promise<ChatterCommentDto> {
+    const cid = optionalUuid(commentId);
+    const pid = optionalUuid(postId);
+    if (!cid || !pid) throw new BadRequestException('postId and commentId must be valid UUIDs');
+
+    const rows = await this.prisma.$queryRawUnsafe<Array<{ authorId: string | null }>>(
+      `SELECT TOP 1 CONVERT(varchar(36), authorId) AS authorId FROM ErpTSChatterComment WHERE id = ${sqlQuotedUuid(cid)} AND postId = ${sqlQuotedUuid(pid)}`,
+    );
+    if (!rows.length) throw new NotFoundException('Comment not found');
+    if (rows[0].authorId !== requesterId) throw new ForbiddenException('Only the comment author can edit this comment');
+
+    await this.prisma.$executeRawUnsafe(
+      `UPDATE ErpTSChatterComment SET message = N'${dto.message.replace(/'/g, "''")}' WHERE id = ${sqlQuotedUuid(cid)}`,
+    );
+    await this.prisma.$executeRawUnsafe(
+      `UPDATE ErpTSChatterPost SET updatedAt = SYSUTCDATETIME() WHERE id = ${sqlQuotedUuid(pid)}`,
+    );
+
+    this.dashboardRealtime?.notifyChatterRefresh({
+      event: 'chatter_comment_created',
+      postId: pid,
+      at: new Date().toISOString(),
+    });
+
+    const loaded = await this.loadCommentById(cid);
+    if (!loaded) throw new BadRequestException('Comment updated but could not be reloaded');
+    return loaded;
+  }
+
+  async deleteComment(postId: string, commentId: string, requesterId: string): Promise<void> {
+    const cid = optionalUuid(commentId);
+    const pid = optionalUuid(postId);
+    if (!cid || !pid) throw new BadRequestException('postId and commentId must be valid UUIDs');
+
+    const rows = await this.prisma.$queryRawUnsafe<Array<{ authorId: string | null }>>(
+      `SELECT TOP 1 CONVERT(varchar(36), authorId) AS authorId FROM ErpTSChatterComment WHERE id = ${sqlQuotedUuid(cid)} AND postId = ${sqlQuotedUuid(pid)}`,
+    );
+    if (!rows.length) throw new NotFoundException('Comment not found');
+    if (rows[0].authorId !== requesterId) throw new ForbiddenException('Only the comment author can delete this comment');
+
+    await this.prisma.$executeRawUnsafe(`DELETE FROM ErpTSChatterComment WHERE id = ${sqlQuotedUuid(cid)}`);
+    await this.prisma.$executeRawUnsafe(
+      `UPDATE ErpTSChatterPost SET updatedAt = SYSUTCDATETIME() WHERE id = ${sqlQuotedUuid(pid)}`,
+    );
+
+    this.dashboardRealtime?.notifyChatterRefresh({
+      event: 'chatter_comment_deleted',
+      postId: pid,
+      at: new Date().toISOString(),
+    });
+  }
+
+  async likePost(postId: string, userId: string): Promise<{ seenByCount: number; liked: boolean }> {
+    const id = optionalUuid(postId);
+    const uid = optionalUuid(userId);
+    if (!id || !uid) throw new BadRequestException('Invalid postId or userId');
+
+    const existing = await this.prisma.$queryRawUnsafe<Array<{ id: string }>>(
+      `SELECT TOP 1 id FROM ErpTSChatterPostLike WHERE postId = ${sqlQuotedUuid(id)} AND userId = ${sqlQuotedUuid(uid)}`,
+    );
+
+    let liked: boolean;
+    if (existing.length > 0) {
+      await this.prisma.$executeRawUnsafe(
+        `DELETE FROM ErpTSChatterPostLike WHERE postId = ${sqlQuotedUuid(id)} AND userId = ${sqlQuotedUuid(uid)}`,
+      );
+      liked = false;
+    } else {
+      await this.prisma.$executeRawUnsafe(
+        `INSERT INTO ErpTSChatterPostLike (postId, userId) VALUES (${sqlQuotedUuid(id)}, ${sqlQuotedUuid(uid)})`,
+      );
+      liked = true;
+    }
+
+    const countRows = await this.prisma.$queryRawUnsafe<Array<{ cnt: number }>>(
+      `SELECT COUNT(*) AS cnt FROM ErpTSChatterPostLike WHERE postId = ${sqlQuotedUuid(id)}`,
+    );
+    const seenByCount = Number(countRows[0]?.cnt ?? 0);
+
+    await this.prisma.$executeRawUnsafe(
+      `UPDATE ErpTSChatterPost SET seenByCount = ${seenByCount} WHERE id = ${sqlQuotedUuid(id)}`,
+    );
+
+    return { seenByCount, liked };
+  }
+
+  async togglePin(postId: string, isPinned: boolean, requesterId: string): Promise<{ isPinned: boolean }> {
+    const id = optionalUuid(postId);
+    if (!id) throw new BadRequestException('postId must be a valid UUID');
+
+    const requester = await this.prisma.user.findUnique({
+      where: { id: requesterId },
+      select: { role: { select: { name: true } } },
+    });
+    const roleName = requester?.role?.name ?? '';
+    if (!['HOD', 'ADMIN'].includes(roleName)) throw new ForbiddenException('Only HOD or ADMIN can pin posts');
+
+    const pinVal = isPinned ? '1' : '0';
+    await this.prisma.$executeRawUnsafe(
+      `UPDATE ErpTSChatterPost SET isPinned = ${pinVal} WHERE id = ${sqlQuotedUuid(id)}`,
+    );
+
+    return { isPinned };
   }
 }

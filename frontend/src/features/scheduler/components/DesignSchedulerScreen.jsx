@@ -8,7 +8,6 @@ import { Navbar } from "@/components/Navbar";
 import {
     SCHEDULER_DASHBOARD_SYNC_EVENT,
     SCHEDULER_DASHBOARD_SYNC_KEY,
-    buildDesignerSnapshot,
     buildSchedulerSnapshot
 } from "../utils/designerDashboardSync";
 import {
@@ -437,7 +436,7 @@ export function DesignSchedulerScreen() {
     const [tasks, setTasks] = useState({});
     const [schedules, setSchedules] = useState({});
     const [loadedFromErp, setLoadedFromErp] = useState(false);
-    const [weekVersion, weekVersionRef, setWeekVersion] = useStateRef(0);
+    const [, weekVersionRef, setWeekVersion] = useStateRef(0);
     const persistInFlightRef = useRef(false);
     const pendingPersistRef  = useRef(null);
     const flushPersistRef    = useRef(null);
@@ -1049,11 +1048,9 @@ export function DesignSchedulerScreen() {
     })).length, [schedules, tasks]);
     const totalScheduledTaskCount = useMemo(() => Object.values(schedules).reduce((acc, curr) => acc + Object.values(curr).flat().length, 0), [schedules]);
 
-    const openDesignerDashboard = useCallback((designerId, designerDays) => {
-        const routeData = buildDesignerSnapshot(tasks, designerDays);
-        sessionStorage.setItem(`designer_data_${designerId}`, JSON.stringify(routeData));
-        router.push(`/designer/dashboard`);
-    }, [router, tasks]);
+    const openDesignerDashboard = useCallback((designerId) => {
+        router.push(`/designer/${designerId}`);
+    }, [router]);
 
     return (<div className="app-shell h-screen flex flex-col overflow-hidden font-sans">
       <Navbar 
@@ -1211,7 +1208,7 @@ export function DesignSchedulerScreen() {
                       {/* Left: Designer Info */}
                       <div
                         className="w-[180px] shrink-0 py-1.5 px-3 flex items-center gap-2 border-r border-slate-200 bg-white z-10 transition-colors group-hover:bg-blue-50 cursor-pointer"
-                        onClick={() => openDesignerDashboard(designer.id, designerDays)}
+                        onClick={() => openDesignerDashboard(designer.id)}
                         title={`Open ${designer.name}'s dashboard`}
                       >
                         <div className="w-6 h-6 rounded-full bg-slate-800 text-white flex items-center justify-center text-[10px] font-bold leading-none shrink-0 shadow-sm">

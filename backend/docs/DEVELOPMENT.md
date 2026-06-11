@@ -91,6 +91,11 @@ npm run start:dev
 - Overtime Requests
 - Scheduler Assignments
 - Chatter Posts
+- Activities
+- Requests (Leave)
+- Dashboard
+- Notifications
+- Chat (Conversations)
 
 ## Auth Endpoints
 
@@ -155,14 +160,92 @@ For `POST /api/v1/tasks/extended`:
 - `GET /api/v1/chatter-posts?limit=200`
 - `GET /api/v1/chatter-posts?taskId=<taskUuid>&limit=200`
 - `GET /api/v1/chatter-posts?projectId=<projectUuid>&limit=200`
+- Additional filters: `mentionUserId`, `commentedByUserId`, `postType`, `weekStart`
+- `GET /api/v1/chatter-posts/mention-users`
 - `POST /api/v1/chatter-posts`
   - `message` required
   - `title` optional (backend defaults to `"Chatter Post"` when omitted)
+  - Supports multipart (up to 10 files)
+- `GET /api/v1/chatter-posts/:postId/comments`
 - `POST /api/v1/chatter-posts/:postId/comments`
 
-Chatter list responses now include:
-- `authorName`
-- `authorRole`
+Chatter list responses include `authorName` and `authorRole`.
+
+## Requests (Leave) Endpoints
+
+- `GET /api/v1/requests` — list own requests (query: `designerId`)
+- `GET /api/v1/requests/pending-approvals` — HOD: pending approvals queue
+- `GET /api/v1/requests/team-requests` — HOD: team requests (query: `status`, `designerId`)
+- `POST /api/v1/requests` — create leave request
+- `PATCH /api/v1/requests/:id` — update own request
+- `POST /api/v1/requests/:id/cancel` — cancel request (Designer)
+- `POST /api/v1/requests/:id/review` — approve/reject request (HOD)
+- `POST /api/v1/requests/:id/revoke` — revoke approved request (HOD)
+- `PATCH /api/v1/requests/:id/status` — update status (HOD)
+
+## Regularization Request Endpoints
+
+- `GET /api/v1/regularization-requests` — list (query: `designerId` UUID)
+- `GET /api/v1/regularization-requests/:id` — get by ID
+- `GET /api/v1/regularization-requests/task-options` — tasks available for regularization
+- `GET /api/v1/regularization-requests/pending-approvals` — HOD: pending approvals
+- `GET /api/v1/regularization-requests/team-requests` — HOD: team requests (query: `status`, `designerId`)
+- `POST /api/v1/regularization-requests` — create
+- `POST /api/v1/regularization-requests/:id/review` — HOD: review
+- `PATCH /api/v1/regularization-requests/:id` — update status
+
+## Overtime Request Endpoints
+
+- `GET /api/v1/overtime-requests` — list for designer (query: `designerId`)
+- `GET /api/v1/overtime-requests/:id` — get by ID
+- `GET /api/v1/overtime-requests/my-requests` — own requests (query: `status`, `startDate`, `endDate`)
+- `GET /api/v1/overtime-requests/pending-approvals` — HOD: pending approvals
+- `GET /api/v1/overtime-requests/team-requests` — HOD: team requests (query: `status`, `designerId`)
+- `GET /api/v1/overtime-requests/all` — HOD: paginated all (query: `status`, `designerId`, `search`, `page`, `limit`)
+- `GET /api/v1/overtime-requests/statistics` — HOD: overtime statistics
+- `GET /api/v1/overtime-requests/export` — HOD: export report (query: `status`)
+- `POST /api/v1/overtime-requests` — create (optional file attachment)
+- `PUT /api/v1/overtime-requests/:id` — update (optional file)
+- `POST /api/v1/overtime-requests/:id/submit` — submit request
+- `POST /api/v1/overtime-requests/:id/withdraw` — withdraw request
+- `POST /api/v1/overtime-requests/:id/attachment` — upload attachment to existing request
+- `POST /api/v1/overtime-requests/:id/review` — HOD: review/approve
+- `DELETE /api/v1/overtime-requests/:id` — delete
+
+## Notifications Endpoints
+
+- `GET /api/v1/notifications` — user's notifications (query: `limit`)
+- `GET /api/v1/notifications/unread-count` — unread count
+- `PATCH /api/v1/notifications/:id/read` — mark as read
+- `PATCH /api/v1/notifications/:id/unread` — mark as unread
+- `POST /api/v1/notifications/read-all` — mark all as read
+
+Model: `ErpTSNotification` (userId, title, message, isRead, linkUrl)
+
+## Chat / Conversations Endpoints
+
+Real-time messaging module. Uses WebSocket gateway (`ChatGateway`) for broadcast events.
+
+REST endpoints:
+- `POST /api/v1/conversations` — create DM or group conversation (or retrieve existing DM)
+- `GET /api/v1/conversations` — list all conversations for current user
+- `GET /api/v1/conversations/:id/messages` — paginated message history (query: `limit`, `before`)
+- `POST /api/v1/conversations/:id/messages` — send message (broadcasts `message` event via WebSocket)
+- `POST /api/v1/conversations/:id/read` — mark conversation as read (broadcasts `messageRead` event)
+- `DELETE /api/v1/conversations/:id` — delete / leave conversation
+
+WebSocket events emitted to room `conv:{conversationId}`:
+- `message` — new message broadcast
+- `messageRead` — read confirmation broadcast
+
+Models: `ErpTSConversation`, `ErpTSConversationParticipant`, `ErpTSMessage`
+
+## Task Sign Rows Endpoints
+
+- `GET /api/v1/tasks/:id/sign-rows` — fetch project sign rows
+- `PUT /api/v1/tasks/:id/sign-rows` — bulk save/update sign rows
+
+Model: `ErpTSProjectSignRow` (signType, planCode, estQty, qsQty, areaZone, levelParcel, sequence, status, contRef)
 
 ## Troubleshooting
 

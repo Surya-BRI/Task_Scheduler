@@ -33,7 +33,7 @@ export class OvertimeRequestsController {
   // --- Employee (DESIGNER) APIs ---
 
   @Post()
-  @Roles(UserRole.DESIGNER, UserRole.HOD, UserRole.ADMIN)
+  @Roles(UserRole.DESIGNER, UserRole.HOD)
   @UseInterceptors(
     FileInterceptor('file', {
       storage: memoryStorage(),
@@ -54,7 +54,7 @@ export class OvertimeRequestsController {
   }
 
   @Put(':id')
-  @Roles(UserRole.DESIGNER, UserRole.HOD, UserRole.ADMIN)
+  @Roles(UserRole.DESIGNER, UserRole.HOD)
   @UseInterceptors(
     FileInterceptor('file', {
       storage: memoryStorage(),
@@ -76,28 +76,28 @@ export class OvertimeRequestsController {
   }
 
   @Post(':id/submit')
-  @Roles(UserRole.DESIGNER, UserRole.HOD, UserRole.ADMIN)
+  @Roles(UserRole.DESIGNER, UserRole.HOD)
   submit(@Param('id') id: string, @CurrentUser() user: JwtPayload) {
     const userId = user.sub;
     return this.service.submit(id, userId);
   }
 
   @Post(':id/withdraw')
-  @Roles(UserRole.DESIGNER, UserRole.HOD, UserRole.ADMIN)
+  @Roles(UserRole.DESIGNER, UserRole.HOD)
   withdraw(@Param('id') id: string, @CurrentUser() user: JwtPayload) {
     const userId = user.sub;
     return this.service.withdraw(id, userId);
   }
 
   @Delete(':id')
-  @Roles(UserRole.DESIGNER, UserRole.HOD, UserRole.ADMIN)
+  @Roles(UserRole.DESIGNER, UserRole.HOD)
   delete(@Param('id') id: string, @CurrentUser() user: JwtPayload) {
     const userId = user.sub;
     return this.service.delete(id, userId);
   }
 
   @Get('my-requests')
-  @Roles(UserRole.DESIGNER, UserRole.HOD, UserRole.ADMIN)
+  @Roles(UserRole.DESIGNER, UserRole.HOD)
   findOwnRequests(
     @CurrentUser() user: JwtPayload,
     @Query('status') status?: string,
@@ -109,7 +109,7 @@ export class OvertimeRequestsController {
   }
 
   @Post(':id/attachment')
-  @Roles(UserRole.DESIGNER, UserRole.HOD, UserRole.ADMIN)
+  @Roles(UserRole.DESIGNER, UserRole.HOD)
   @UseInterceptors(
     FileInterceptor('file', {
       storage: memoryStorage(),
@@ -129,14 +129,14 @@ export class OvertimeRequestsController {
   // --- Manager (HOD) APIs ---
 
   @Get('pending-approvals')
-  @Roles(UserRole.HOD, UserRole.ADMIN)
+  @Roles(UserRole.HOD)
   findPendingApprovals(@CurrentUser() user: JwtPayload) {
     const userId = user.sub;
     return this.service.findPendingApprovalsForView(userId, user.role);
   }
 
   @Post(':id/review')
-  @Roles(UserRole.HOD, UserRole.ADMIN)
+  @Roles(UserRole.HOD)
   review(
     @Param('id') id: string,
     @CurrentUser() user: JwtPayload,
@@ -147,7 +147,7 @@ export class OvertimeRequestsController {
   }
 
   @Get('team-requests')
-  @Roles(UserRole.HOD, UserRole.ADMIN)
+  @Roles(UserRole.HOD)
   findTeamRequests(
     @CurrentUser() user: JwtPayload,
     @Query('status') status?: string,
@@ -160,7 +160,7 @@ export class OvertimeRequestsController {
   // --- HR/Admin APIs ---
 
   @Get('all')
-  @Roles(UserRole.ADMIN)
+  @Roles(UserRole.HOD)
   findAllRequests(
     @Query('status') status?: string,
     @Query('designerId') designerId?: string,
@@ -174,13 +174,13 @@ export class OvertimeRequestsController {
   }
 
   @Get('statistics')
-  @Roles(UserRole.ADMIN, UserRole.HOD)
+  @Roles(UserRole.HOD)
   getStatistics() {
     return this.service.getStatistics();
   }
 
   @Get('export')
-  @Roles(UserRole.ADMIN)
+  @Roles(UserRole.HOD)
   exportReport(@Query('status') status?: string) {
     return this.service.exportReport(status);
   }
@@ -189,7 +189,7 @@ export class OvertimeRequestsController {
 
   /** GET /overtime-requests?designerId= — list for designer requests page */
   @Get()
-  @Roles(UserRole.DESIGNER, UserRole.HOD, UserRole.ADMIN)
+  @Roles(UserRole.DESIGNER, UserRole.HOD)
   findForDesigner(
     @Query('designerId') designerId?: string,
     @CurrentUser() user?: JwtPayload,
@@ -200,7 +200,7 @@ export class OvertimeRequestsController {
   }
 
   @Get(':id')
-  @Roles(UserRole.DESIGNER, UserRole.HOD, UserRole.ADMIN)
+  @Roles(UserRole.DESIGNER, UserRole.HOD)
   findOne(@Param('id') id: string, @CurrentUser() user: JwtPayload) {
     const userId = user.sub;
     return this.service.findOne(id, userId, user.role);
