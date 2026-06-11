@@ -18,6 +18,7 @@ import {
 } from "@/features/requests/services/requests.api";
 import { LEAVE_REASON_OPTIONS } from "@/lib/date-window";
 import { apiClient } from "@/lib/api-client";
+import { StatusBadge } from "@/components/ui/StatusBadge";
 
 const MONTHS = [
   "January", "February", "March", "April", "May", "June",
@@ -168,14 +169,6 @@ function findOverlappingLeaveClient(leaves, fromDate, toDate) {
   return null;
 }
 
-function statusBadgeClasses(status) {
-  const normalized = normalizeLeaveStatus(status);
-  if (normalized === "APPROVED") return "bg-emerald-50 text-emerald-700";
-  if (normalized === "REJECTED") return "bg-red-50 text-red-700";
-  if (normalized === "REVOKED") return "bg-orange-50 text-orange-700";
-  if (normalized === "CANCELLED") return "bg-slate-100 text-slate-600";
-  return "bg-amber-50 text-amber-700";
-}
 
 function filterHistoryRows(rows, { statusFilter, searchQuery }) {
   let list = Array.isArray(rows) ? [...rows] : [];
@@ -218,7 +211,7 @@ function LeaveHistoryTable({ rows, variant, onOpen }) {
   return (
     <div className="overflow-x-auto -mx-1">
       <table className="min-w-full text-left text-xs">
-        <thead className="border-b border-slate-200 bg-slate-50 text-[10px] font-semibold uppercase tracking-wide text-slate-500">
+        <thead className="ui-table-header">
           <tr>
             {variant === "team" ? <th className="px-3 py-2.5">Designer</th> : null}
             <th className="px-3 py-2.5">Type</th>
@@ -253,9 +246,7 @@ function LeaveHistoryTable({ rows, variant, onOpen }) {
                   {formatAppliedDate(req.createdAt ?? req.fromDate)}
                 </td>
                 <td className="px-3 py-3 whitespace-nowrap">
-                  <span className={`rounded-full px-2 py-0.5 text-[10px] font-bold uppercase ${statusBadgeClasses(status)}`}>
-                    {status}
-                  </span>
+                  <StatusBadge status={status} label={status} size="sm" />
                 </td>
                 <td className="px-3 py-3 text-slate-600 max-w-[180px] truncate" title={req.reason}>
                   {req.reason ?? "—"}
@@ -1187,9 +1178,7 @@ export default function LeavePlannerClient() {
                         </p>
                       </div>
                       <div className="flex flex-col items-end gap-2 shrink-0">
-                        <span className={`rounded-full px-2.5 py-1 text-[10px] font-bold uppercase tracking-wide ${statusBadgeClasses(status)}`}>
-                          {status}
-                        </span>
+                        <StatusBadge status={status} label={status} size="sm" />
                         <button
                           type="button"
                           onClick={() => {

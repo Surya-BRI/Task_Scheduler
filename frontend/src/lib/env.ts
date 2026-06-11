@@ -3,7 +3,7 @@
  * Reads NEXT_PUBLIC_* vars at runtime so they can be swapped per-environment
  * without a code change.
  */
-const LOCAL_API = 'http://localhost:7000/api/v1';
+const LOCAL_API = 'http://localhost:7600/api/v1';
 const PRODUCTION_API = 'https://task-scheduler.app-brisigns.com/api/v1';
 
 export const env = {
