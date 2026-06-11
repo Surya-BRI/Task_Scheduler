@@ -25,6 +25,9 @@ import {
   getUtcMondayOfDate,
 } from '@/lib/week-utils';
 import { connectDashboardRealtime } from '@/lib/realtime';
+import { Button } from '@/components/ui/button';
+import { Modal } from '@/components/ui/Modal';
+import { UI_INPUT_CLASS, UI_LABEL_CLASS } from '@/lib/ui/form-classes';
 
 const POLL_MS = 45_000;
 
@@ -235,26 +238,26 @@ function InboxCard({ inbox, fmt, onNavigate, onRefresh, cardState, errorMessage 
                     <div className="mt-2 flex flex-wrap gap-2">
                       {item.requiresAction ? (
                         <>
-                          <button
+                          <Button
                             type="button"
+                            variant="approve"
                             disabled={actingId === item.id}
                             onClick={() => handleApprove(item)}
-                            className="rounded-md bg-emerald-600 px-2.5 py-1 text-[10px] font-semibold text-white hover:bg-emerald-700 disabled:opacity-60"
                           >
                             {actingId === item.id ? 'Working…' : 'Approve'}
-                          </button>
-                          <button
+                          </Button>
+                          <Button
                             type="button"
+                            variant="reject-outline"
                             disabled={actingId === item.id}
                             onClick={() => {
                               setActionError('');
                               setRejectTarget(item);
                               setRejectRemarks('');
                             }}
-                            className="rounded-md border border-red-200 bg-red-50 px-2.5 py-1 text-[10px] font-semibold text-red-700 hover:bg-red-100 disabled:opacity-60"
                           >
                             Reject
-                          </button>
+                          </Button>
                         </>
                       ) : null}
                     </div>
@@ -292,52 +295,49 @@ function InboxCard({ inbox, fmt, onNavigate, onRefresh, cardState, errorMessage 
         </>
       )}
 
-      {rejectTarget ? (
-        <div
-          className="fixed inset-0 z-50 flex items-center justify-center bg-slate-900/30 p-4"
-          onKeyDown={(e) => {
-            if (e.key === 'Escape') {
-              setRejectTarget(null);
-              setRejectRemarks('');
-              setActionError('');
-            }
-          }}
-          role="presentation"
-        >
-          <div className="w-full max-w-md rounded-xl border border-slate-200 bg-white p-4 shadow-xl" role="dialog">
-            <h3 className="text-sm font-semibold text-slate-900">{rejectTitle}</h3>
-            <p className="mt-1 text-xs text-slate-500">{rejectTarget.summary}</p>
-            <textarea
-              value={rejectRemarks}
-              onChange={(e) => setRejectRemarks(e.target.value)}
-              rows={3}
-              placeholder="Reason for rejection (required)"
-              className="mt-3 w-full rounded-md border border-slate-300 px-3 py-2 text-sm outline-none focus:border-blue-500 focus:ring-2 focus:ring-blue-500/25"
-            />
-            <div className="mt-3 flex justify-end gap-2">
-              <button
-                type="button"
-                onClick={() => {
-                  setRejectTarget(null);
-                  setRejectRemarks('');
-                  setActionError('');
-                }}
-                className="rounded-md border border-slate-200 px-3 py-1.5 text-xs font-semibold text-slate-600"
-              >
-                Cancel
-              </button>
-              <button
-                type="button"
-                onClick={handleReject}
-                disabled={actingId === rejectTarget.id}
-                className="rounded-md bg-red-600 px-3 py-1.5 text-xs font-semibold text-white hover:bg-red-700 disabled:opacity-60"
-              >
-                {actingId === rejectTarget.id ? 'Rejecting…' : 'Confirm reject'}
-              </button>
-            </div>
-          </div>
-        </div>
-      ) : null}
+      <Modal
+        open={Boolean(rejectTarget)}
+        onClose={() => {
+          setRejectTarget(null);
+          setRejectRemarks('');
+          setActionError('');
+        }}
+        title={rejectTitle}
+        subtitle={rejectTarget?.summary}
+        size="sm"
+        footer={(
+          <>
+            <Button
+              type="button"
+              variant="cancel"
+              onClick={() => {
+                setRejectTarget(null);
+                setRejectRemarks('');
+                setActionError('');
+              }}
+            >
+              Cancel
+            </Button>
+            <Button
+              type="button"
+              variant="danger"
+              onClick={handleReject}
+              disabled={actingId === rejectTarget?.id}
+            >
+              {actingId === rejectTarget?.id ? 'Rejecting…' : 'Confirm reject'}
+            </Button>
+          </>
+        )}
+      >
+        <label className={UI_LABEL_CLASS}>Rejection remarks (required)</label>
+        <textarea
+          value={rejectRemarks}
+          onChange={(e) => setRejectRemarks(e.target.value)}
+          rows={3}
+          placeholder="Reason for rejection (required)"
+          className={UI_INPUT_CLASS}
+        />
+      </Modal>
     </CompactCard>
   );
 }

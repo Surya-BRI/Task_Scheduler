@@ -15,6 +15,7 @@ import {
   likeChatterPost,
   listChatterMentionUsers,
   listChatterPosts,
+  normalizePaginationCursor,
   mapChatterPostDtoToFeedPost,
   mapCommentDtoToFeedComment,
   updateChatterComment,
@@ -32,6 +33,7 @@ import {
 import { MentionTextarea } from "./MentionTextarea";
 import { ChatterMentionText } from "./ChatterMentionText";
 import { parseMentionUserIdsFromMessage } from "../utils/mention-utils";
+import { isSameUserId, normalizeUserId } from "@/lib/user-id";
 
 const PRIORITY_STYLES = {
   low: "bg-emerald-500",
@@ -750,7 +752,7 @@ function ChatterCard({
                   >
                     <MessageCircle className="w-4 h-4" /> {hasComments ? "Commented" : "Comment"}
                   </button>
-                  {currentUserId && post.authorId === currentUserId && (
+                  {currentUserId && isSameUserId(post.authorId, currentUserId) && (
                     <div className="relative ml-auto">
                       <details className="group">
                         <summary className="list-none cursor-pointer rounded p-1 hover:bg-slate-100">
@@ -823,7 +825,18 @@ function ChatterCard({
               id={`chatter-comment-${comment.id}`}
               className={`rounded-md bg-slate-50 px-3 py-2 text-sm ${focusCommentId === comment.id ? "ring-2 ring-blue-400" : ""}`}
             >
-              <p className="font-semibold text-slate-800">{comment.author}</p>
+              <div className="flex items-start justify-between gap-2">
+                <p className="font-semibold text-slate-800">{comment.author}</p>
+                {currentUserId && isSameUserId(comment.authorId, currentUserId) ? (
+                  <button
+                    type="button"
+                    onClick={() => onDeleteComment?.(post.id, comment.id)}
+                    className="text-[11px] font-semibold text-red-600 hover:text-red-700"
+                  >
+                    Delete
+                  </button>
+                ) : null}
+              </div>
               <FormattedText text={comment.message} mentionUsers={mentionUsers} className="mt-0.5 block text-slate-700" />
             </li>
           ))}
@@ -893,10 +906,15 @@ export function ChatterScreen() {
   const [isSavingEdit, setIsSavingEdit] = useState(false);
   const mentionUsersRef = useRef([]);
   const commentMentionIdsRef = useRef({});
+  const privateTabLoadedRef = useRef(false);
+  const loadMoreSentinelRef = useRef(null);
+  const loadingMoreRef = useRef(false);
+  const hasMorePostsRef = useRef(false);
+  const nextCursorRef = useRef(null);
   const urlPostId = searchParams.get("postId");
   const urlCommentId = searchParams.get("commentId");
 
-  const currentUserId = useMemo(() => getSession()?.id ?? null, []);
+  const currentUserId = useMemo(() => normalizeUserId(getSession()?.id ?? null), []);
   const mentionUsersDirectory = useMemo(() => {
     const map = new Map();
     for (const user of mentionUsersRef.current) {
@@ -951,8 +969,8 @@ export function ChatterScreen() {
       }
       setPostsLoadError(null);
       setPosts(rows.map((row) => mapChatterPostDtoToFeedPost(row, currentUserId)));
-      setNextCursor(res?.pageInfo?.nextCursor ?? null);
-      setHasMorePosts(res?.pageInfo?.hasMore ?? false);
+      setNextCursor(normalizePaginationCursor(res?.pageInfo?.nextCursor));
+      setHasMorePosts(Boolean(res?.pageInfo?.hasMore));
     } catch (err) {
       setPosts([]);
       setPostsLoadError(err instanceof Error ? err.message : String(err));
@@ -962,20 +980,66 @@ export function ChatterScreen() {
   }, [currentUserId, activeWeekStart]);
 
   const loadMorePosts = useCallback(async () => {
-    if (!nextCursor || loadingMore) return;
+    const cursor = normalizePaginationCursor(nextCursorRef.current);
+    if (!cursor || loadingMoreRef.current || !hasMorePostsRef.current) return;
+    loadingMoreRef.current = true;
     setLoadingMore(true);
     try {
-      const res = await listChatterPosts({ limit: 50, cursor: nextCursor });
+      const weekStart = activeWeekStart ?? undefined;
+      const res = await listChatterPosts({
+        limit: 50,
+        cursor,
+        ...(weekStart ? { weekStart } : {}),
+      });
       const rows = Array.isArray(res?.data) ? res.data : [];
-      setPosts((prev) => [...prev, ...rows.map((row) => mapChatterPostDtoToFeedPost(row, currentUserId))]);
-      setNextCursor(res?.pageInfo?.nextCursor ?? null);
-      setHasMorePosts(res?.pageInfo?.hasMore ?? false);
+      const mapped = rows.map((row) => mapChatterPostDtoToFeedPost(row, currentUserId));
+      let addedCount = 0;
+      setPosts((prev) => {
+        const seen = new Set(prev.map((post) => post.id));
+        const appended = mapped.filter((post) => !seen.has(post.id));
+        addedCount = appended.length;
+        return appended.length > 0 ? [...prev, ...appended] : prev;
+      });
+      const next = normalizePaginationCursor(res?.pageInfo?.nextCursor);
+      const stillHasMore = Boolean(res?.pageInfo?.hasMore && next && addedCount > 0);
+      setNextCursor(stillHasMore ? next : null);
+      setHasMorePosts(stillHasMore);
     } catch (err) {
       toast.error(err instanceof Error ? err.message : "Could not load more posts.");
     } finally {
+      loadingMoreRef.current = false;
       setLoadingMore(false);
     }
-  }, [nextCursor, loadingMore, currentUserId]);
+  }, [currentUserId, activeWeekStart]);
+
+  useEffect(() => {
+    loadingMoreRef.current = loadingMore;
+  }, [loadingMore]);
+
+  useEffect(() => {
+    hasMorePostsRef.current = hasMorePosts;
+  }, [hasMorePosts]);
+
+  useEffect(() => {
+    nextCursorRef.current = nextCursor;
+  }, [nextCursor]);
+
+  useEffect(() => {
+    if (activeTab !== "posts" || postsLoading || !hasMorePosts) return undefined;
+    const sentinel = loadMoreSentinelRef.current;
+    if (!sentinel) return undefined;
+
+    const observer = new IntersectionObserver(
+      (entries) => {
+        if (entries.some((entry) => entry.isIntersecting)) {
+          void loadMorePosts();
+        }
+      },
+      { root: null, rootMargin: "240px", threshold: 0 },
+    );
+    observer.observe(sentinel);
+    return () => observer.disconnect();
+  }, [activeTab, postsLoading, hasMorePosts, loadMorePosts, posts.length]);
 
   useEffect(() => {
     void reloadPosts();
@@ -1078,9 +1142,9 @@ export function ChatterScreen() {
     if (!currentUserId) return [];
     const source = commentedFeedPosts.length > 0 ? commentedFeedPosts : sortedPosts;
     return source
-      .filter((post) => (post.comments ?? []).some((comment) => comment.authorId === currentUserId))
+      .filter((post) => (post.comments ?? []).some((comment) => isSameUserId(comment.authorId, currentUserId)))
       .map((post) => {
-        const myComments = (post.comments ?? []).filter((comment) => comment.authorId === currentUserId);
+        const myComments = (post.comments ?? []).filter((comment) => isSameUserId(comment.authorId, currentUserId));
         const latestMyComment = [...myComments].sort(
           (a, b) => new Date(b.createdAt ?? 0).getTime() - new Date(a.createdAt ?? 0).getTime(),
         )[0];
@@ -1487,18 +1551,19 @@ export function ChatterScreen() {
               />
               </div>
             ))}
-            {hasMorePosts && (
-              <div className="mt-2 flex justify-center">
-                <button
-                  type="button"
-                  onClick={loadMorePosts}
-                  disabled={loadingMore}
-                  className="rounded-md border border-slate-300 px-5 py-2 text-sm font-medium text-slate-700 hover:bg-slate-50 disabled:opacity-50"
-                >
-                  {loadingMore ? "Loading…" : "Load more"}
-                </button>
+            {hasMorePosts ? (
+              <div
+                ref={loadMoreSentinelRef}
+                className="flex justify-center py-4"
+                aria-hidden={!loadingMore}
+              >
+                {loadingMore ? (
+                  <p className="text-sm text-slate-500">Loading more posts…</p>
+                ) : (
+                  <span className="h-1 w-1" />
+                )}
               </div>
-            )}
+            ) : null}
           </section>
         ) : null}
 

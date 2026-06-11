@@ -29,6 +29,7 @@ import {
 } from './chatter-mentions.util';
 import { DashboardRealtimeService } from '../dashboard/dashboard-realtime.service';
 import { UserRole } from '../common/constants/roles.enum';
+import { isSameUserId, normalizeUserId } from '../common/utils/user-id.util';
 
 const UUID_RE =
   /^[0-9a-f]{8}-[0-9a-f]{4}-[1-5][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i;
@@ -37,6 +38,15 @@ function optionalUuid(value?: string | null): string | null {
   if (!value?.trim()) return null;
   const trimmed = value.trim();
   return UUID_RE.test(trimmed) ? trimmed : null;
+}
+
+function optionalPaginationCursor(value?: string | null): string | null {
+  if (value == null) return null;
+  const trimmed = String(value).trim();
+  if (!trimmed) return null;
+  const parsed = new Date(trimmed);
+  if (Number.isNaN(parsed.getTime())) return null;
+  return parsed.toISOString();
 }
 
 function sqlQuotedUuid(value: string): string {
@@ -552,7 +562,7 @@ export class ChatterPostsService implements OnModuleInit {
     return {
       id: String(row.id),
       postId: row.postId != null ? String(row.postId) : null,
-      authorId: row.authorId != null ? String(row.authorId) : null,
+      authorId: normalizeUserId(row.authorId != null ? String(row.authorId) : null),
       authorName: row.authorName != null ? String(row.authorName) : null,
       authorRole: row.authorRole != null ? String(row.authorRole) : null,
       mentionUserId: primaryMention,
@@ -877,7 +887,7 @@ export class ChatterPostsService implements OnModuleInit {
       projectId: row.projectId != null ? String(row.projectId) : null,
       projectNo,
       listingLabel,
-      authorId: row.authorId != null ? String(row.authorId) : null,
+      authorId: normalizeUserId(row.authorId != null ? String(row.authorId) : null),
       authorName: row.authorName != null ? String(row.authorName) : null,
       authorRole: row.authorRole != null ? String(row.authorRole) : null,
       mentionUserName: row.mentionUserName != null ? String(row.mentionUserName) : null,
@@ -962,12 +972,10 @@ export class ChatterPostsService implements OnModuleInit {
         whereParts.push(`p.createdAt >= ${startSql} AND p.createdAt <= ${endSql}`);
       }
     }
-    if (cursor?.trim()) {
-      const cursorDate = new Date(cursor.trim());
-      if (!Number.isNaN(cursorDate.getTime())) {
-        const cursorSql = `'${cursorDate.toISOString().replace(/'/g, "''")}'`;
-        whereParts.push(`p.updatedAt < ${cursorSql}`);
-      }
+    const cursorIso = optionalPaginationCursor(cursor);
+    if (cursorIso) {
+      const cursorSql = `'${cursorIso.replace(/'/g, "''")}'`;
+      whereParts.push(`p.updatedAt < ${cursorSql}`);
     }
 
     const whereSql = whereParts.length > 0 ? `WHERE ${whereParts.join(' AND ')}` : '';
@@ -992,8 +1000,9 @@ export class ChatterPostsService implements OnModuleInit {
 
     const data = await this.enrichPosts(posts);
     const lastItem = data[data.length - 1];
-    const nextCursor = hasMore && lastItem ? lastItem.updatedAt : null;
-    return { data, pageInfo: { hasMore, nextCursor } };
+    const nextCursor =
+      hasMore && lastItem ? optionalPaginationCursor(lastItem.updatedAt) : null;
+    return { data, pageInfo: { hasMore: hasMore && Boolean(nextCursor), nextCursor } };
   }
 
   async loadPostById(postId: string): Promise<ChatterPostDto | null> {
@@ -1373,7 +1382,9 @@ export class ChatterPostsService implements OnModuleInit {
       `SELECT TOP 1 CONVERT(varchar(36), authorId) AS authorId, CONVERT(varchar(36), taskId) AS taskId, CONVERT(varchar(36), projectId) AS projectId FROM ErpTSChatterPost WHERE id = ${sqlQuotedUuid(id)}`,
     );
     if (!rows.length) throw new NotFoundException('Chatter post not found');
-    if (rows[0].authorId !== requesterId) throw new ForbiddenException('Only the post author can edit this post');
+    if (!isSameUserId(rows[0].authorId, requesterId)) {
+      throw new ForbiddenException('Only the post author can edit this post');
+    }
 
     const setParts: string[] = [`updatedAt = SYSUTCDATETIME()`, `editedAt = SYSUTCDATETIME()`];
     if (dto.message !== undefined) setParts.push(`message = N'${dto.message.replace(/'/g, "''")}'`);
@@ -1404,7 +1415,9 @@ export class ChatterPostsService implements OnModuleInit {
       `SELECT TOP 1 CONVERT(varchar(36), authorId) AS authorId, CONVERT(varchar(36), taskId) AS taskId, CONVERT(varchar(36), projectId) AS projectId FROM ErpTSChatterPost WHERE id = ${sqlQuotedUuid(id)}`,
     );
     if (!rows.length) throw new NotFoundException('Chatter post not found');
-    if (rows[0].authorId !== requesterId) throw new ForbiddenException('Only the post author can delete this post');
+    if (!isSameUserId(rows[0].authorId, requesterId)) {
+      throw new ForbiddenException('Only the post author can delete this post');
+    }
 
     await this.prisma.$executeRawUnsafe(`DELETE FROM ErpTSChatterPost WHERE id = ${sqlQuotedUuid(id)}`);
 
@@ -1426,7 +1439,9 @@ export class ChatterPostsService implements OnModuleInit {
       `SELECT TOP 1 CONVERT(varchar(36), authorId) AS authorId FROM ErpTSChatterComment WHERE id = ${sqlQuotedUuid(cid)} AND postId = ${sqlQuotedUuid(pid)}`,
     );
     if (!rows.length) throw new NotFoundException('Comment not found');
-    if (rows[0].authorId !== requesterId) throw new ForbiddenException('Only the comment author can edit this comment');
+    if (!isSameUserId(rows[0].authorId, requesterId)) {
+      throw new ForbiddenException('Only the comment author can edit this comment');
+    }
 
     await this.prisma.$executeRawUnsafe(
       `UPDATE ErpTSChatterComment SET message = N'${dto.message.replace(/'/g, "''")}' WHERE id = ${sqlQuotedUuid(cid)}`,
@@ -1455,7 +1470,9 @@ export class ChatterPostsService implements OnModuleInit {
       `SELECT TOP 1 CONVERT(varchar(36), authorId) AS authorId FROM ErpTSChatterComment WHERE id = ${sqlQuotedUuid(cid)} AND postId = ${sqlQuotedUuid(pid)}`,
     );
     if (!rows.length) throw new NotFoundException('Comment not found');
-    if (rows[0].authorId !== requesterId) throw new ForbiddenException('Only the comment author can delete this comment');
+    if (!isSameUserId(rows[0].authorId, requesterId)) {
+      throw new ForbiddenException('Only the comment author can delete this comment');
+    }
 
     await this.prisma.$executeRawUnsafe(`DELETE FROM ErpTSChatterComment WHERE id = ${sqlQuotedUuid(cid)}`);
     await this.prisma.$executeRawUnsafe(

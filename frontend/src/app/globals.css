@@ -20,6 +20,8 @@ body {
   --text-muted: #64748b;
   --brand-500: #2563eb;
   --brand-600: #1d4ed8;
+  --brand-purple-500: #5d5baf;
+  --brand-purple-600: #4b4991;
 }
 
 .app-shell {
@@ -48,6 +50,95 @@ body {
 
 .ui-table-header {
   @apply bg-slate-100 text-[11px] font-semibold uppercase tracking-wide text-slate-600;
+}
+
+.ui-table-header th {
+  @apply px-4 py-2.5;
+}
+
+.ui-page-title {
+  @apply text-xl font-semibold tracking-tight text-slate-900 sm:text-2xl;
+}
+
+.ui-page-subtitle {
+  @apply mt-1 text-sm text-slate-500;
+}
+
+.ui-empty-state {
+  @apply px-4 py-8 text-center text-sm text-slate-500;
+}
+
+.ui-input {
+  @apply w-full rounded-lg border border-slate-300 bg-white px-3 py-2 text-sm text-slate-800 outline-none transition-colors focus:border-blue-500 focus:ring-2 focus:ring-blue-500/25;
+}
+
+.ui-btn-primary {
+  @apply inline-flex items-center justify-center rounded-lg bg-blue-600 px-4 py-2 text-sm font-semibold text-white shadow-sm transition-colors hover:bg-blue-700 focus:outline-none focus-visible:ring-2 focus-visible:ring-blue-400 disabled:cursor-not-allowed disabled:opacity-50;
+}
+
+.ui-btn-brand {
+  @apply inline-flex items-center justify-center rounded-lg px-5 py-2.5 text-sm font-semibold text-white shadow-sm transition-colors focus:outline-none focus-visible:ring-2 focus-visible:ring-[#5d5baf]/40 disabled:cursor-not-allowed disabled:opacity-50;
+  background-color: var(--brand-purple-500);
+}
+
+.ui-btn-brand:hover:not(:disabled) {
+  background-color: var(--brand-purple-600);
+}
+
+.ui-btn-approve {
+  @apply inline-flex items-center justify-center rounded-full bg-emerald-500 px-3 py-1.5 text-xs font-semibold text-white transition-colors hover:bg-emerald-600 focus:outline-none focus-visible:ring-2 focus-visible:ring-emerald-400 disabled:cursor-not-allowed disabled:opacity-60;
+}
+
+.ui-btn-approve-solid {
+  @apply inline-flex items-center justify-center rounded-lg bg-emerald-600 px-4 py-2 text-sm font-semibold text-white transition-colors hover:bg-emerald-700 focus:outline-none focus-visible:ring-2 focus-visible:ring-emerald-400 disabled:cursor-not-allowed disabled:opacity-60;
+}
+
+.ui-btn-reject {
+  @apply inline-flex items-center justify-center rounded-full bg-red-500 px-3 py-1.5 text-xs font-semibold text-white transition-colors hover:bg-red-600 focus:outline-none focus-visible:ring-2 focus-visible:ring-red-400 disabled:cursor-not-allowed disabled:opacity-60;
+}
+
+.ui-btn-reject-outline {
+  @apply inline-flex items-center justify-center rounded-lg border border-red-200 bg-red-50 px-3 py-1.5 text-xs font-semibold text-red-700 transition-colors hover:bg-red-100 focus:outline-none focus-visible:ring-2 focus-visible:ring-red-300 disabled:cursor-not-allowed disabled:opacity-60;
+}
+
+.ui-btn-cancel {
+  @apply inline-flex items-center justify-center rounded-lg border border-slate-300 bg-white px-4 py-2 text-sm font-medium text-slate-700 transition-colors hover:bg-slate-50 focus:outline-none focus-visible:ring-2 focus-visible:ring-slate-300 disabled:cursor-not-allowed disabled:opacity-50;
+}
+
+.ui-btn-danger-solid {
+  @apply inline-flex items-center justify-center rounded-lg bg-red-600 px-4 py-2 text-sm font-semibold text-white transition-colors hover:bg-red-700 focus:outline-none focus-visible:ring-2 focus-visible:ring-red-400 disabled:cursor-not-allowed disabled:opacity-60;
+}
+
+.ui-module-tabs {
+  @apply flex border-b border-slate-200 bg-white rounded-t-xl overflow-hidden shadow-sm;
+}
+
+.ui-module-tab {
+  @apply flex-1 sm:flex-none px-6 py-3.5 text-sm font-semibold transition-colors border-b-2 flex items-center justify-center gap-2 border-transparent text-slate-500 hover:text-slate-800;
+}
+
+.ui-module-tab-active {
+  @apply border-[#5d5baf] text-[#5d5baf] bg-slate-50/50;
+}
+
+.ui-modal-overlay {
+  @apply fixed inset-0 z-[100] flex items-center justify-center bg-slate-900/40 backdrop-blur-sm p-4;
+}
+
+.ui-modal-panel {
+  @apply relative z-10 w-full rounded-xl border border-slate-200 bg-white p-5 shadow-xl;
+}
+
+.ui-alert-warning {
+  @apply border-b border-amber-200 bg-amber-50 px-4 py-3 text-sm text-amber-950 sm:px-5;
+}
+
+.ui-alert-error {
+  @apply border-b border-red-200 bg-red-50 px-4 py-3 text-sm text-red-800 sm:px-5;
+}
+
+.ui-alert-info {
+  @apply border-b border-blue-100 bg-blue-50 px-4 py-3 text-sm text-blue-900 sm:px-5;
 }
 
 .ui-card-pad {
