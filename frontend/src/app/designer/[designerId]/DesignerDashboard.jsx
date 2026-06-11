@@ -276,7 +276,7 @@ export default function DesignerDashboard({ designer: designerProp } = {}) {
     donut: DEFAULT_DONUT,
   };
 
-  const [activePanel, setActivePanel] = useState(null);
+  const [activePanel, setActivePanel] = useState("onHold");
   const [currentDate, setCurrentDate] = useState(DEFAULT_SCHEDULER_REFERENCE_DATE);
   const currentDateRef = useRef(currentDate);
   useEffect(() => { currentDateRef.current = currentDate; }, [currentDate]);
@@ -501,7 +501,7 @@ export default function DesignerDashboard({ designer: designerProp } = {}) {
         </div>
       </div>
 
-      <StatsBar stats={displayStats} isDesignerMode={isDesignerMode} isHOD={isHOD} />
+      <StatsBar stats={displayStats} isDesignerMode={isDesignerMode} isHOD={isHOD} isViewingOther={isViewingOther} />
 
       <div className="flex min-w-0 flex-1 gap-6 px-4 py-5 sm:px-6 sm:py-6">
         <div className="flex-1 flex flex-col gap-3 min-w-0">
@@ -546,7 +546,7 @@ export default function DesignerDashboard({ designer: designerProp } = {}) {
             >
               Completed Tasks
             </button>
-            {(isDesignerMode || isHOD) && (
+            {isDesignerMode && (
               <div className="ml-auto flex gap-3">
                 <button
                   type="button"

@@ -1,20 +1,26 @@
 "use client";
 
-import { useMemo, useState, useEffect, useRef } from "react";
+import { useMemo, useState, useEffect, useRef, useCallback } from "react";
 import { toast } from "sonner";
-import { CalendarDays, Link2, MessageCircle, PlusSquare, Search, ThumbsUp, X } from "lucide-react";
+import { CalendarDays, Link2, MessageCircle, MoreHorizontal, PlusSquare, Search, ThumbsUp, X } from "lucide-react";
 import { Navbar } from "@/components/Navbar";
 import {
   createChatterComment,
   createChatterPost,
+  deleteChatterComment,
+  deleteChatterPost,
   formatChatterTime,
   getMondayOfWeek,
+  likeChatterPost,
   listChatterMentionUsers,
   listChatterPosts,
   mapChatterPostDtoToFeedPost,
   mapCommentDtoToFeedComment,
+  updateChatterComment,
+  updateChatterPost,
 } from "@/features/chatter/services/chatter-posts.api";
-import { emitChatterRefresh, onChatterRefresh } from "@/features/chatter/utils/chatter-events";
+import { emitChatterRefresh } from "@/features/chatter/utils/chatter-events";
+import { connectDashboardRealtime } from "@/lib/realtime";
 import { apiClient } from "@/lib/api-client";
 import { getSession } from "@/lib/mock-auth";
 import {
@@ -28,6 +34,14 @@ const PRIORITY_STYLES = {
   medium: "bg-amber-400",
   high: "bg-red-500",
 };
+
+function getInitials(name) {
+  if (!name) return 'BR';
+  const parts = name.trim().split(/\s+/);
+  return parts.length >= 2
+    ? (parts[0][0] + parts[parts.length - 1][0]).toUpperCase()
+    : name.slice(0, 2).toUpperCase();
+}
 
 function formatTaskCatalogLabel(task) {
   const title = String(task?.title ?? "").trim();
@@ -46,7 +60,7 @@ function toFormattedHtml(text) {
     .replace(/&/g, '&amp;')
     .replace(/</g, '&lt;')
     .replace(/>/g, '&gt;')
-    .replace(/@([A-Za-z][A-Za-z0-9._\s-]{1,80})/g, '<span class="font-semibold text-blue-600">@$1</span>')
+    .replace(/@([A-Za-z][A-Za-z0-9._-]{1,50}(?:\s[A-Za-z][A-Za-z0-9._-]{1,40})?)/g, '<span class="font-semibold text-blue-600">@$1</span>')
     .replace(/\*\*(.+?)\*\*/gs, '<strong>$1</strong>')
     .replace(/~~(.+?)~~/gs, '<del>$1</del>')
     .replace(/__(.+?)__/gs, '<u>$1</u>')
@@ -666,6 +680,11 @@ function ChatterCard({
   onOpenComposer,
   onDraftChange,
   onSubmitComment,
+  currentUserId,
+  onLike,
+  onEditPost,
+  onDeletePost,
+  onDeleteComment,
 }) {
   const hasComments = (post.comments?.length ?? 0) > 0;
   const textareaRef = useRef(null)
@@ -703,15 +722,9 @@ function ChatterCard({
       <div className="flex gap-4">
         <div className="flex-1 min-w-0">
           <div className="flex items-start gap-3">
-            {post.author === "Fahad Quazi" ? (
-              <img src="https://ui-avatars.com/api/?name=Fahad+Quazi&background=random" alt="Fahad" className="h-10 w-10 rounded-full object-cover shrink-0" />
-            ) : post.author === "Delbin Delbin" ? (
-              <img src="https://ui-avatars.com/api/?name=Delbin+Delbin&background=random" alt="Delbin" className="h-10 w-10 rounded-full object-cover shrink-0" />
-            ) : (
-              <div className="h-10 w-10 rounded-md bg-blue-600 text-white flex items-center justify-center font-bold italic text-lg shrink-0">
-                BR
-              </div>
-            )}
+            <div className="h-10 w-10 rounded-md bg-blue-600 text-white flex items-center justify-center font-bold text-sm shrink-0">
+              {getInitials(post.author)}
+            </div>
             <div className="flex-1 min-w-0">
               <div className="flex flex-wrap items-center gap-x-1 gap-y-0.5">
                 <p className="text-[15px] font-semibold uppercase tracking-tight text-blue-600">
@@ -730,8 +743,13 @@ function ChatterCard({
                 <ChatterPostAttachments post={post} />
 
                 <div className="mt-4 flex items-center gap-4 text-xs font-semibold text-slate-500">
-                  <button type="button" className="flex items-center gap-1.5 hover:text-slate-800 transition-colors">
-                    <ThumbsUp className="w-4 h-4" /> Like
+                  <button
+                    type="button"
+                    className="flex items-center gap-1.5 hover:text-blue-600 transition-colors"
+                    onClick={() => onLike?.(post.id)}
+                  >
+                    <ThumbsUp className="w-4 h-4" />
+                    {post.seenBy > 0 ? post.seenBy : "Like"}
                   </button>
                   <button
                     type="button"
@@ -740,6 +758,31 @@ function ChatterCard({
                   >
                     <MessageCircle className="w-4 h-4" /> {hasComments ? "Commented" : "Comment"}
                   </button>
+                  {currentUserId && post.authorId === currentUserId && (
+                    <div className="relative ml-auto">
+                      <details className="group">
+                        <summary className="list-none cursor-pointer rounded p-1 hover:bg-slate-100">
+                          <MoreHorizontal className="w-4 h-4" />
+                        </summary>
+                        <div className="absolute right-0 top-6 z-10 w-28 rounded-md border border-slate-200 bg-white shadow-md text-xs">
+                          <button
+                            type="button"
+                            className="block w-full px-3 py-2 text-left hover:bg-slate-50"
+                            onClick={() => onEditPost?.(post)}
+                          >
+                            Edit
+                          </button>
+                          <button
+                            type="button"
+                            className="block w-full px-3 py-2 text-left text-red-600 hover:bg-red-50"
+                            onClick={() => onDeletePost?.(post.id)}
+                          >
+                            Delete
+                          </button>
+                        </div>
+                      </details>
+                    </div>
+                  )}
                 </div>
               </div>
             </div>
@@ -784,7 +827,18 @@ function ChatterCard({
         <ul className="mt-1 space-y-2 border-t border-slate-100 pt-3">
           {(post.comments ?? []).map((comment) => (
             <li key={comment.id} className="rounded-md bg-slate-50 px-3 py-2 text-sm">
-              <p className="font-semibold text-slate-800">{comment.author}</p>
+              <div className="flex items-center justify-between gap-2">
+                <p className="font-semibold text-slate-800">{comment.author}</p>
+                {currentUserId && comment.authorId === currentUserId && (
+                  <button
+                    type="button"
+                    className="text-xs text-red-500 hover:text-red-700"
+                    onClick={() => onDeleteComment?.(post.id, comment.id)}
+                  >
+                    Delete
+                  </button>
+                )}
+              </div>
               <FormattedText text={comment.message} className="mt-0.5 block text-slate-700" />
             </li>
           ))}
@@ -807,7 +861,6 @@ function ChatterCard({
               <button type="button" title="Strikethrough (~~text~~)" onClick={() => applyFormat(['~~', '~~'])} className="rounded px-1.5 py-0.5 line-through hover:bg-slate-200 hover:text-slate-800 transition-colors">S</button>
               <span className="mx-1 text-slate-300">|</span>
               <button type="button" title="Mention someone" onClick={() => insertAtCursor('@')} className="rounded px-1.5 py-0.5 hover:bg-slate-200 hover:text-slate-800 transition-colors">@</button>
-              <button type="button" title="Add tag" onClick={() => insertAtCursor('#')} className="rounded px-1.5 py-0.5 hover:bg-slate-200 hover:text-slate-800 transition-colors">#</button>
             </div>
             <button
               type="button"
@@ -826,6 +879,8 @@ function ChatterCard({
 
 export function ChatterScreen() {
   const [posts, setPosts] = useState([]);
+  const [nextCursor, setNextCursor] = useState(null);
+  const [hasMorePosts, setHasMorePosts] = useState(false);
   const [openComposerPostId, setOpenComposerPostId] = useState(null);
   const [draftByPostId, setDraftByPostId] = useState({});
   const [activeTab, setActiveTab] = useState("posts");
@@ -834,73 +889,92 @@ export function ChatterScreen() {
   const [currentDate, setCurrentDate] = useState(() => new Date());
   const [activeWeekStart, setActiveWeekStart] = useState(null);
   const [taskCatalog, setTaskCatalog] = useState([]);
+  const [taskCatalogLoaded, setTaskCatalogLoaded] = useState(false);
   const [isCreatePostOpen, setIsCreatePostOpen] = useState(false);
   const [isSubmitting, setIsSubmitting] = useState(false);
   const [postsLoadError, setPostsLoadError] = useState(null);
   const [postsLoading, setPostsLoading] = useState(false);
+  const [loadingMore, setLoadingMore] = useState(false);
   const [submittingCommentPostId, setSubmittingCommentPostId] = useState(null);
   const [mentionFeedPosts, setMentionFeedPosts] = useState([]);
   const [commentedFeedPosts, setCommentedFeedPosts] = useState([]);
+  const [editingPost, setEditingPost] = useState(null);
+  const [editMessage, setEditMessage] = useState("");
+  const [isSavingEdit, setIsSavingEdit] = useState(false);
   const mentionUsersRef = useRef([]);
+  const privateTabLoadedRef = useRef(false);
 
   const currentUserId = useMemo(() => getSession()?.id ?? null, []);
   const currentUserName = useMemo(() => getSession()?.fullName ?? '', []);
 
-  const reloadPrivateFeeds = async () => {
+  const reloadPrivateFeeds = useCallback(async () => {
     if (!currentUserId) {
       setMentionFeedPosts([]);
       setCommentedFeedPosts([]);
       return;
     }
     try {
-      const [mentionedRows, commentedRows] = await Promise.all([
+      const [mentionedRes, commentedRes] = await Promise.all([
         listChatterPosts({ mentionUserId: currentUserId, limit: 200 }),
         listChatterPosts({ commentedByUserId: currentUserId, limit: 200 }),
       ]);
-      setMentionFeedPosts(
-        (Array.isArray(mentionedRows) ? mentionedRows : []).map((row) =>
-          mapChatterPostDtoToFeedPost(row, currentUserId),
-        ),
-      );
-      setCommentedFeedPosts(
-        (Array.isArray(commentedRows) ? commentedRows : []).map((row) =>
-          mapChatterPostDtoToFeedPost(row, currentUserId),
-        ),
-      );
+      const mentionedRows = Array.isArray(mentionedRes?.data) ? mentionedRes.data : (Array.isArray(mentionedRes) ? mentionedRes : []);
+      const commentedRows = Array.isArray(commentedRes?.data) ? commentedRes.data : (Array.isArray(commentedRes) ? commentedRes : []);
+      setMentionFeedPosts(mentionedRows.map((row) => mapChatterPostDtoToFeedPost(row, currentUserId)));
+      setCommentedFeedPosts(commentedRows.map((row) => mapChatterPostDtoToFeedPost(row, currentUserId)));
     } catch {
       setMentionFeedPosts([]);
       setCommentedFeedPosts([]);
     }
-  };
+  }, [currentUserId]);
 
-  const reloadPosts = async (weekStartOverride) => {
+  const reloadPosts = useCallback(async (weekStartOverride) => {
     setPostsLoading(true);
+    setNextCursor(null);
     try {
       const weekStart =
         weekStartOverride === undefined
           ? (activeWeekStart ?? undefined)
           : (weekStartOverride || undefined);
-      const rows = await listChatterPosts({ limit: 500, ...(weekStart ? { weekStart } : {}) });
-      if (!Array.isArray(rows)) {
+      const res = await listChatterPosts({ limit: 50, ...(weekStart ? { weekStart } : {}) });
+      const rows = Array.isArray(res?.data) ? res.data : (Array.isArray(res) ? res : null);
+      if (!rows) {
         setPosts([]);
         setPostsLoadError(
-          `Unexpected response: expected a JSON array, received ${rows === null || rows === undefined ? String(rows) : typeof rows}`,
+          `Unexpected response: expected a JSON array, received ${res === null || res === undefined ? String(res) : typeof res}`,
         );
         return;
       }
       setPostsLoadError(null);
       setPosts(rows.map((row) => mapChatterPostDtoToFeedPost(row, currentUserId)));
+      setNextCursor(res?.pageInfo?.nextCursor ?? null);
+      setHasMorePosts(res?.pageInfo?.hasMore ?? false);
     } catch (err) {
       setPosts([]);
       setPostsLoadError(err instanceof Error ? err.message : String(err));
     } finally {
       setPostsLoading(false);
     }
-  };
+  }, [currentUserId, activeWeekStart]);
+
+  const loadMorePosts = useCallback(async () => {
+    if (!nextCursor || loadingMore) return;
+    setLoadingMore(true);
+    try {
+      const res = await listChatterPosts({ limit: 50, cursor: nextCursor });
+      const rows = Array.isArray(res?.data) ? res.data : [];
+      setPosts((prev) => [...prev, ...rows.map((row) => mapChatterPostDtoToFeedPost(row, currentUserId))]);
+      setNextCursor(res?.pageInfo?.nextCursor ?? null);
+      setHasMorePosts(res?.pageInfo?.hasMore ?? false);
+    } catch (err) {
+      toast.error(err instanceof Error ? err.message : "Could not load more posts.");
+    } finally {
+      setLoadingMore(false);
+    }
+  }, [nextCursor, loadingMore, currentUserId]);
 
   useEffect(() => {
     void reloadPosts();
-    void reloadPrivateFeeds();
     listChatterMentionUsers()
       .then((users) => {
         mentionUsersRef.current = Array.isArray(users) ? users : [];
@@ -908,18 +982,22 @@ export function ChatterScreen() {
       .catch(() => {
         mentionUsersRef.current = [];
       });
-    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [currentUserId]);
 
   useEffect(() => {
-    return onChatterRefresh(() => {
-      void reloadPosts();
-      void reloadPrivateFeeds();
+    return connectDashboardRealtime({
+      onChatterRefresh: () => {
+        void reloadPosts();
+        if (privateTabLoadedRef.current) {
+          void reloadPrivateFeeds();
+        }
+      },
     });
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [currentUserId]);
+  }, [reloadPosts, reloadPrivateFeeds]);
 
-  useEffect(() => {
+  const loadTaskCatalog = useCallback(() => {
+    if (taskCatalogLoaded) return;
+    setTaskCatalogLoaded(true);
     apiClient
       .get("/tasks?limit=500")
       .then((res) => {
@@ -933,7 +1011,7 @@ export function ChatterScreen() {
         );
       })
       .catch(() => setTaskCatalog([]));
-  }, []);
+  }, [taskCatalogLoaded]);
 
   const weekLabel = useMemo(() => {
     const monday = new Date(getMondayOfWeek(currentDate));
@@ -1085,7 +1163,7 @@ export function ChatterScreen() {
 
   const resolveMentionUserIds = (message) => {
     const ids = [];
-    const pattern = /@([A-Za-z][A-Za-z0-9._\s-]{1,80})/g;
+    const pattern = /@([A-Za-z][A-Za-z0-9._-]{1,50}(?:\s[A-Za-z][A-Za-z0-9._-]{1,40})?)/g;
     let match;
     while ((match = pattern.exec(message)) !== null) {
       const needle = match[1].trim().toLowerCase();
@@ -1123,12 +1201,72 @@ export function ChatterScreen() {
       setOpenComposerPostId(null);
       const targetPost = posts.find((p) => p.id === postId);
       emitChatterRefresh({ postId, taskId: targetPost?.taskId, projectId: targetPost?.projectId });
-      void reloadPrivateFeeds();
+      if (privateTabLoadedRef.current) void reloadPrivateFeeds();
     } catch (err) {
       console.error("Failed to save comment:", err);
       toast.error(err instanceof Error ? err.message : "Could not save comment. Please try again.");
     } finally {
       setSubmittingCommentPostId(null);
+    }
+  };
+
+  const handleLikePost = async (postId) => {
+    try {
+      const result = await likeChatterPost(postId);
+      setPosts((prev) =>
+        prev.map((p) => p.id === postId ? { ...p, seenBy: result.seenByCount } : p),
+      );
+    } catch (err) {
+      toast.error(err instanceof Error ? err.message : "Could not like post.");
+    }
+  };
+
+  const handleEditPost = (post) => {
+    setEditingPost(post);
+    setEditMessage(post.message);
+  };
+
+  const handleSaveEdit = async () => {
+    if (!editingPost) return;
+    setIsSavingEdit(true);
+    try {
+      const updated = await updateChatterPost(editingPost.id, { message: editMessage });
+      setPosts((prev) =>
+        prev.map((p) => p.id === editingPost.id ? mapChatterPostDtoToFeedPost(updated, currentUserId) : p),
+      );
+      setEditingPost(null);
+      toast.success("Post updated.");
+    } catch (err) {
+      toast.error(err instanceof Error ? err.message : "Could not update post.");
+    } finally {
+      setIsSavingEdit(false);
+    }
+  };
+
+  const handleDeletePost = async (postId) => {
+    if (!window.confirm("Delete this post? This cannot be undone.")) return;
+    try {
+      await deleteChatterPost(postId);
+      setPosts((prev) => prev.filter((p) => p.id !== postId));
+      toast.success("Post deleted.");
+    } catch (err) {
+      toast.error(err instanceof Error ? err.message : "Could not delete post.");
+    }
+  };
+
+  const handleDeleteComment = async (postId, commentId) => {
+    if (!window.confirm("Delete this comment?")) return;
+    try {
+      await deleteChatterComment(postId, commentId);
+      setPosts((prev) =>
+        prev.map((p) =>
+          p.id === postId
+            ? { ...p, comments: (p.comments ?? []).filter((c) => c.id !== commentId) }
+            : p,
+        ),
+      );
+    } catch (err) {
+      toast.error(err instanceof Error ? err.message : "Could not delete comment.");
     }
   };
 
@@ -1188,7 +1326,7 @@ export function ChatterScreen() {
         projectId: createdDto.projectId,
         postId: createdDto.id,
       });
-      void reloadPrivateFeeds();
+      privateTabLoadedRef.current = false;
       toast.success("Post created successfully");
     } catch (err) {
       console.error("Failed to create post:", err);
@@ -1216,12 +1354,21 @@ export function ChatterScreen() {
             <SegmentButton
               label="Private"
               isActive={activeTab === "private"}
-              onClick={() => setActiveTab("private")}
+              onClick={() => {
+                setActiveTab("private");
+                if (!privateTabLoadedRef.current) {
+                  privateTabLoadedRef.current = true;
+                  void reloadPrivateFeeds();
+                }
+              }}
             />
             <SegmentButton
               label="Task Updates"
               isActive={activeTab === "task-updates"}
-              onClick={() => setActiveTab("task-updates")}
+              onClick={() => {
+                setActiveTab("task-updates");
+                loadTaskCatalog();
+              }}
             />
           </div>
           <div className="flex items-center gap-3 text-slate-600">
@@ -1325,9 +1472,26 @@ export function ChatterScreen() {
                 onOpenComposer={() => openComposer(post.id)}
                 onDraftChange={(value) => changeDraft(post.id, value)}
                 onSubmitComment={() => submitComment(post.id)}
+                currentUserId={currentUserId}
+                onLike={handleLikePost}
+                onEditPost={handleEditPost}
+                onDeletePost={handleDeletePost}
+                onDeleteComment={handleDeleteComment}
               />
               </div>
             ))}
+            {hasMorePosts && (
+              <div className="mt-2 flex justify-center">
+                <button
+                  type="button"
+                  onClick={loadMorePosts}
+                  disabled={loadingMore}
+                  className="rounded-md border border-slate-300 px-5 py-2 text-sm font-medium text-slate-700 hover:bg-slate-50 disabled:opacity-50"
+                >
+                  {loadingMore ? "Loading…" : "Load more"}
+                </button>
+              </div>
+            )}
           </section>
         ) : null}
 
@@ -1464,6 +1628,37 @@ export function ChatterScreen() {
           onSubmit={handleCreatePost}
           isSubmitting={isSubmitting}
         />
+
+        {editingPost && (
+          <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/40">
+            <div className="w-full max-w-lg rounded-xl bg-white p-6 shadow-xl">
+              <h3 className="mb-3 text-base font-semibold text-slate-900">Edit Post</h3>
+              <textarea
+                value={editMessage}
+                onChange={(e) => setEditMessage(e.target.value)}
+                rows={6}
+                className="w-full resize-none rounded-md border border-slate-300 px-3 py-2 text-sm outline-none focus:border-blue-500 focus:ring-1 focus:ring-blue-500"
+              />
+              <div className="mt-4 flex justify-end gap-2">
+                <button
+                  type="button"
+                  onClick={() => setEditingPost(null)}
+                  className="rounded-md border border-slate-300 px-4 py-2 text-sm text-slate-700 hover:bg-slate-50"
+                >
+                  Cancel
+                </button>
+                <button
+                  type="button"
+                  onClick={handleSaveEdit}
+                  disabled={isSavingEdit || !editMessage.trim()}
+                  className="rounded-md bg-blue-600 px-4 py-2 text-sm font-semibold text-white hover:bg-blue-700 disabled:opacity-50"
+                >
+                  {isSavingEdit ? "Saving…" : "Save"}
+                </button>
+              </div>
+            </div>
+          </div>
+        )}
 
       </main>
     </div>

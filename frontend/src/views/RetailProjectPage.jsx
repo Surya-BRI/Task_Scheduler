@@ -12,6 +12,7 @@ import { fetchProjectActivities, fetchTaskActivities } from '@/features/team-act
 import {
   createChatterComment,
   createChatterPost,
+  listChatterMentionUsers,
   listChatterPosts,
   normalizePriority,
   resolveEmbeddedChatterTitle,
@@ -348,6 +349,8 @@ export function RetailProjectPage() {
   const [chatterLoading, setChatterLoading] = useState(false)
   const [chatterError, setChatterError] = useState('')
   const [chatterSubmitting, setChatterSubmitting] = useState(false)
+  const [mentionSuggestions, setMentionSuggestions] = useState([])
+  const [mentionQuery, setMentionQuery] = useState('')
   const [commentByPostId, setCommentByPostId] = useState({})
   const [commentSubmittingPostId, setCommentSubmittingPostId] = useState('')
   const [priorityLevel, setPriorityLevel] = useState('')
@@ -359,6 +362,7 @@ export function RetailProjectPage() {
   const [projectFiles, setProjectFiles] = useState([])
   const [uploadingProjectFiles, setUploadingProjectFiles] = useState(false)
   const [resolvingTaskId, setResolvingTaskId] = useState(false)
+  const mentionUsersRef = useRef([])
   const [activityMode, setActivityMode] = useState('project')
   const [activityItems, setActivityItems] = useState([])
   const [activityLoading, setActivityLoading] = useState(false)
@@ -553,10 +557,11 @@ export function RetailProjectPage() {
     if (!silent) setChatterLoading(true)
     setChatterError('')
     try {
-      const posts = queryTaskId
+      const res = queryTaskId
         ? await listChatterPosts({ taskId: queryTaskId, limit: 200 })
         : await listChatterPosts({ projectId, limit: 200 })
-      const normalized = Array.isArray(posts) ? [...posts] : []
+      const posts = Array.isArray(res?.data) ? res.data : (Array.isArray(res) ? res : [])
+      const normalized = [...posts]
       setChatterPosts((prev) =>
         mergeChatterPostLists(normalized, prev, { taskId: queryTaskId, projectId }),
       )
@@ -572,6 +577,11 @@ export function RetailProjectPage() {
     if (activeTab !== 'chatter') return
     chatterRefreshPendingRef.current = false
     fetchChatterPosts()
+    if (mentionUsersRef.current.length === 0) {
+      listChatterMentionUsers()
+        .then((users) => { mentionUsersRef.current = Array.isArray(users) ? users : [] })
+        .catch(() => {})
+    }
   }, [activeTab, fetchChatterPosts])
 
   useEffect(() => {
@@ -664,14 +674,17 @@ export function RetailProjectPage() {
       return
     }
     try {
+      const mentionUserIds = resolveMentionUserIdsFromText(message)
       const created = await createChatterPost({
         message,
         postType: 'Posts',
+        ...(mentionUserIds.length ? { mentionUserIds } : {}),
         ...(chatterPriority ? { priority: chatterPriority } : {}),
         ...(resolvedTaskId ? { taskId: resolvedTaskId } : { projectId }),
       })
       setChatterMessage('')
       setChatterPriority('')
+      setMentionSuggestions([])
       setChatterPosts((prev) => {
         const next = [created, ...prev.filter((p) => p.id !== created.id)]
         next.sort((a, b) => new Date(b.createdAt).getTime() - new Date(a.createdAt).getTime())
@@ -685,13 +698,59 @@ export function RetailProjectPage() {
     }
   }
 
+  function handleChatterMessageChange(value) {
+    setChatterMessage(value)
+    const lastAt = value.lastIndexOf('@')
+    if (lastAt !== -1) {
+      const fragment = value.slice(lastAt + 1)
+      if (/^[A-Za-z][A-Za-z0-9._\s-]{0,49}$/.test(fragment)) {
+        const needle = fragment.trim().toLowerCase()
+        if (needle.length >= 1) {
+          const matches = mentionUsersRef.current
+            .filter((u) => u.fullName.toLowerCase().includes(needle))
+            .slice(0, 6)
+          setMentionSuggestions(matches)
+          setMentionQuery(fragment)
+          return
+        }
+      }
+    }
+    setMentionSuggestions([])
+    setMentionQuery('')
+  }
+
+  function insertMentionIntoMessage(user) {
+    const lastAt = chatterMessage.lastIndexOf('@')
+    const before = chatterMessage.slice(0, lastAt)
+    const after = chatterMessage.slice(lastAt + 1 + mentionQuery.length).trimStart()
+    setChatterMessage(`${before}@${user.fullName} ${after}`)
+    setMentionSuggestions([])
+    setMentionQuery('')
+  }
+
+  function resolveMentionUserIdsFromText(text) {
+    const pattern = /@([A-Za-z][A-Za-z0-9._-]{1,50}(?:\s[A-Za-z][A-Za-z0-9._-]{1,40})?)/g
+    const ids = []
+    let match
+    while ((match = pattern.exec(text)) !== null) {
+      const needle = match[1].trim().toLowerCase()
+      const user = mentionUsersRef.current.find((u) => {
+        const name = String(u.fullName ?? '').trim().toLowerCase()
+        return name === needle || name.startsWith(needle)
+      })
+      if (user && !ids.includes(user.id)) ids.push(user.id)
+    }
+    return ids
+  }
+
   async function handlePostComment(postId) {
     const message = String(commentByPostId[postId] ?? '').trim()
     if (!postId || !message) return
     setCommentSubmittingPostId(postId)
     setChatterError('')
     try {
-      const created = await createChatterComment(postId, message)
+      const mentionUserIds = resolveMentionUserIdsFromText(message)
+      const created = await createChatterComment(postId, message, mentionUserIds.length ? mentionUserIds : null)
       setCommentByPostId((prev) => ({ ...prev, [postId]: '' }))
       setChatterPosts((prev) =>
         prev.map((post) =>
@@ -845,14 +904,33 @@ export function RetailProjectPage() {
                     <label htmlFor="retail-chatter-input" className="text-xs font-semibold text-slate-700">
                       Message
                     </label>
-                    <textarea
-                      id="retail-chatter-input"
-                      value={chatterMessage}
-                      onChange={(event) => setChatterMessage(event.target.value)}
-                      rows={3}
-                      placeholder="Type your comment..."
-                      className="mt-1.5 w-full resize-none rounded-md border border-slate-300 bg-white px-2.5 py-1.5 text-sm text-slate-900 outline-none focus:border-blue-500 focus:ring-2 focus:ring-blue-500/25"
-                    />
+                    <div className="relative mt-1.5">
+                      <textarea
+                        id="retail-chatter-input"
+                        value={chatterMessage}
+                        onChange={(event) => handleChatterMessageChange(event.target.value)}
+                        onKeyDown={(e) => { if (e.key === 'Escape') setMentionSuggestions([]) }}
+                        rows={3}
+                        placeholder="Type your comment... use @ to mention someone"
+                        className="w-full resize-none rounded-md border border-slate-300 bg-white px-2.5 py-1.5 text-sm text-slate-900 outline-none focus:border-blue-500 focus:ring-2 focus:ring-blue-500/25"
+                      />
+                      {mentionSuggestions.length > 0 && (
+                        <ul className="absolute left-0 top-full z-30 mt-0.5 w-56 overflow-hidden rounded-md border border-slate-200 bg-white shadow-lg">
+                          {mentionSuggestions.map((user) => (
+                            <li key={user.id}>
+                              <button
+                                type="button"
+                                className="flex w-full items-center gap-2 px-3 py-2 text-left text-sm hover:bg-blue-50"
+                                onMouseDown={(e) => { e.preventDefault(); insertMentionIntoMessage(user) }}
+                              >
+                                <span className="font-semibold text-blue-600">@</span>
+                                <span>{user.fullName}</span>
+                              </button>
+                            </li>
+                          ))}
+                        </ul>
+                      )}
+                    </div>
                     <div className="mt-2">
                       <p className="text-[11px] font-semibold text-slate-600">Priority (optional)</p>
                       <div className="mt-1 flex flex-wrap gap-1.5">

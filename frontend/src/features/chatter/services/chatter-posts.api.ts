@@ -58,6 +58,7 @@ export type ChatterPostDto = {
   attachmentCount: number;
   isPinned: boolean;
   editedAt: string | null;
+  likedByMe?: boolean;
   visibility: string | null;
   createdAt: string;
   updatedAt: string;
@@ -322,6 +323,11 @@ export function listChatterMentionUsers() {
   return apiClient.get<ChatterMentionUser[]>('/chatter-posts/mention-users');
 }
 
+export type ChatterPostsPagedResponse = {
+  data: ChatterPostDto[];
+  pageInfo: { hasMore: boolean; nextCursor: string | null };
+};
+
 export function listChatterPosts(params?: {
   limit?: number;
   taskId?: string;
@@ -330,6 +336,7 @@ export function listChatterPosts(params?: {
   commentedByUserId?: string;
   postType?: string;
   weekStart?: string;
+  cursor?: string;
 }) {
   const qs = new URLSearchParams();
   if (params?.limit != null) qs.set('limit', String(params.limit));
@@ -339,8 +346,9 @@ export function listChatterPosts(params?: {
   if (params?.commentedByUserId?.trim()) qs.set('commentedByUserId', params.commentedByUserId.trim());
   if (params?.postType?.trim()) qs.set('postType', params.postType.trim());
   if (params?.weekStart?.trim()) qs.set('weekStart', params.weekStart.trim());
+  if (params?.cursor?.trim()) qs.set('cursor', params.cursor.trim());
   const suffix = qs.toString() ? `?${qs.toString()}` : '';
-  return apiClient.get<ChatterPostDto[]>(`/chatter-posts${suffix}`);
+  return apiClient.get<ChatterPostsPagedResponse>(`/chatter-posts${suffix}`);
 }
 
 export function listChatterComments(postId: string) {
@@ -423,4 +431,32 @@ export function createChatterPost(
     return apiClient.post<ChatterPostDto>('/chatter-posts', formData);
   }
   return apiClient.post<ChatterPostDto>('/chatter-posts', payload);
+}
+
+export function updateChatterPost(id: string, data: { message?: string; title?: string }) {
+  return apiClient.patch<ChatterPostDto>(`/chatter-posts/${encodeURIComponent(id)}`, data);
+}
+
+export function deleteChatterPost(id: string) {
+  return apiClient.delete<void>(`/chatter-posts/${encodeURIComponent(id)}`);
+}
+
+export function updateChatterComment(postId: string, commentId: string, message: string) {
+  return apiClient.patch<ChatterCommentDto>(
+    `/chatter-posts/${encodeURIComponent(postId)}/comments/${encodeURIComponent(commentId)}`,
+    { message },
+  );
+}
+
+export function deleteChatterComment(postId: string, commentId: string) {
+  return apiClient.delete<void>(
+    `/chatter-posts/${encodeURIComponent(postId)}/comments/${encodeURIComponent(commentId)}`,
+  );
+}
+
+export function likeChatterPost(id: string) {
+  return apiClient.post<{ seenByCount: number; liked: boolean }>(
+    `/chatter-posts/${encodeURIComponent(id)}/like`,
+    {},
+  );
 }

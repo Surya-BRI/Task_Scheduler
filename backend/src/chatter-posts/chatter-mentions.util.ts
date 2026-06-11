@@ -28,7 +28,7 @@ export function parseMentionUserIdsFromMessage(
 ): string[] {
   const text = message ?? '';
   const found: string[] = [];
-  const pattern = /@([A-Za-z][A-Za-z0-9._\s-]{1,80})/g;
+  const pattern = /@([A-Za-z][A-Za-z0-9._-]{1,50}(?:\s[A-Za-z][A-Za-z0-9._-]{1,40})?)/g;
   let match: RegExpExecArray | null;
   while ((match = pattern.exec(text)) !== null) {
     const needle = match[1].trim().toLowerCase();

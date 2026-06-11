@@ -1,5 +1,5 @@
 import { Transform } from 'class-transformer';
-import { IsArray, IsIn, IsNotEmpty, IsOptional, IsString, IsUUID, ValidateIf } from 'class-validator';
+import { IsArray, IsIn, IsNotEmpty, IsOptional, IsString, IsUUID, MaxLength, ValidateIf } from 'class-validator';
 
 function emptyToUndefined(value: unknown): unknown {
   if (value === null || value === undefined) return undefined;
@@ -26,6 +26,7 @@ export class CreateChatterPostDto {
 
   @IsNotEmpty()
   @IsString()
+  @MaxLength(5000)
   message: string;
 
   @IsOptional()

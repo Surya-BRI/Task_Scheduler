@@ -1,9 +1,13 @@
 import {
   Body,
   Controller,
+  Delete,
   Get,
+  HttpCode,
+  HttpStatus,
   Logger,
   Param,
+  Patch,
   Post,
   Query,
   UploadedFiles,
@@ -14,6 +18,7 @@ import { FilesInterceptor } from '@nestjs/platform-express';
 import { memoryStorage } from 'multer';
 import { CreateChatterCommentDto } from './dto/create-chatter-comment.dto';
 import { CreateChatterPostDto } from './dto/create-chatter-post.dto';
+import { UpdateChatterCommentDto, UpdateChatterPostDto } from './dto/update-chatter-post.dto';
 import { ChatterPostsService } from './chatter-posts.service';
 import { JwtAuthGuard } from '../common/guards/jwt-auth.guard';
 import { CurrentUser } from '../common/decorators/current-user.decorator';
@@ -42,6 +47,7 @@ export class ChatterPostsController {
     @Query('commentedByUserId') commentedByUserId?: string,
     @Query('postType') postType?: string,
     @Query('weekStart') weekStart?: string,
+    @Query('cursor') cursor?: string,
   ) {
     return this.chatterPostsService.findAll(
       limit,
@@ -51,6 +57,7 @@ export class ChatterPostsController {
       commentedByUserId,
       postType,
       weekStart,
+      cursor,
     );
   }
 
@@ -66,6 +73,26 @@ export class ChatterPostsController {
     @CurrentUser() user: { sub: string },
   ) {
     return this.chatterPostsService.createComment(postId, dto, user.sub);
+  }
+
+  @Patch(':postId/comments/:commentId')
+  updateComment(
+    @Param('postId') postId: string,
+    @Param('commentId') commentId: string,
+    @Body() dto: UpdateChatterCommentDto,
+    @CurrentUser() user: { sub: string },
+  ) {
+    return this.chatterPostsService.updateComment(postId, commentId, dto, user.sub);
+  }
+
+  @Delete(':postId/comments/:commentId')
+  @HttpCode(HttpStatus.NO_CONTENT)
+  deleteComment(
+    @Param('postId') postId: string,
+    @Param('commentId') commentId: string,
+    @CurrentUser() user: { sub: string },
+  ) {
+    return this.chatterPostsService.deleteComment(postId, commentId, user.sub);
   }
 
   @Post()
@@ -99,5 +126,39 @@ export class ChatterPostsController {
     }
     return this.chatterPostsService.create(createChatterPostDto, user.sub, files);
   }
-}
 
+  @Patch(':id/pin')
+  togglePin(
+    @Param('id') id: string,
+    @Body('isPinned') isPinned: boolean,
+    @CurrentUser() user: { sub: string },
+  ) {
+    return this.chatterPostsService.togglePin(id, isPinned, user.sub);
+  }
+
+  @Post(':id/like')
+  likePost(
+    @Param('id') id: string,
+    @CurrentUser() user: { sub: string },
+  ) {
+    return this.chatterPostsService.likePost(id, user.sub);
+  }
+
+  @Patch(':id')
+  updatePost(
+    @Param('id') id: string,
+    @Body() dto: UpdateChatterPostDto,
+    @CurrentUser() user: { sub: string },
+  ) {
+    return this.chatterPostsService.updatePost(id, dto, user.sub);
+  }
+
+  @Delete(':id')
+  @HttpCode(HttpStatus.NO_CONTENT)
+  deletePost(
+    @Param('id') id: string,
+    @CurrentUser() user: { sub: string },
+  ) {
+    return this.chatterPostsService.deletePost(id, user.sub);
+  }
+}
