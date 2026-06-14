@@ -216,7 +216,17 @@ export function ProjectCreateTaskModal({ open, onClose, onCreated, submissionDat
   }
 
   function updateRowField(rowId, field, value) {
-    setRows((prev) => prev.map((row) => row.id === rowId ? { ...row, [field]: value } : row))
+    setRows((prev) =>
+      prev.map((row) => {
+        if (row.id !== rowId) return row
+        const updates = { [field]: value }
+        if (field === 'artwork' && value && !row.artHours) updates.artHours = '1'
+        if (field === 'technical' && value && !row.techHours) updates.techHours = '1'
+        if (field === 'location' && value && !row.locationHours) updates.locationHours = '1'
+        if (field === 'asBuilt' && value && !row.asBuiltHours) updates.asBuiltHours = '1'
+        return { ...row, ...updates }
+      }),
+    )
   }
 
   function updateChildField(rowId, childId, field, value) {

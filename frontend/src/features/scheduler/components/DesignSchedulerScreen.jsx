@@ -559,7 +559,7 @@ export function DesignSchedulerScreen() {
                             status: task?.status,
                             updatedAt: task?.updatedAt,
                             holdStartedAt: task?.updatedAt,
-                            estimatedHours: Number(retailHours ?? (projectHours || null) ?? 0) || 0,
+                            estimatedHours: Math.max(1, Number(retailHours ?? (projectHours || null) ?? 0) || 0),
                         };
                     })
                     : [];
@@ -1260,7 +1260,7 @@ export function DesignSchedulerScreen() {
                         </span>
                       )}
                       <div className="flex items-center gap-1 ml-auto shrink-0">
-                        <span className="text-[9px] font-bold bg-slate-200 text-slate-700 px-1.5 py-0.5 rounded">{task.estimatedHours > 0 ? `${task.estimatedHours}h` : '—'}</span>
+                        <span className="text-[9px] font-bold bg-slate-200 text-slate-700 px-1.5 py-0.5 rounded">{`${task.estimatedHours}h`}</span>
                       </div>
                     </div>
                     <div className="text-[9px] font-bold mt-1.5 bg-red-100 text-red-600 inline-block px-1.5 py-0.5 rounded uppercase self-start">Hold: {formatHoldDuration(task.holdStartedAt)}</div>
@@ -1288,7 +1288,7 @@ export function DesignSchedulerScreen() {
                         </span>
                       )}
                       <div className="flex items-center gap-1 ml-auto shrink-0">
-                        <span className="text-[9px] font-bold bg-slate-200 text-slate-700 px-1.5 py-0.5 rounded">{task.estimatedHours > 0 ? `${task.estimatedHours}h` : '—'}</span>
+                        <span className="text-[9px] font-bold bg-slate-200 text-slate-700 px-1.5 py-0.5 rounded">{`${task.estimatedHours}h`}</span>
                       </div>
                     </div>
                   </div>))}

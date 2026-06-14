@@ -64,7 +64,7 @@ export function CreateTaskModal({ open, onClose, onCreated, submissionDate, reco
   const [designType, setDesignType] = useState('')
   const [priorityLevel, setPriorityLevel] = useState('Medium')
   const [revisionCode, setRevisionCode] = useState('')
-  const [hoursRequired, setHoursRequired] = useState('')
+  const [hoursRequired, setHoursRequired] = useState('1')
   const [comment, setComment] = useState('')
   const [localDeadline, setLocalDeadline] = useState(null)
   const [submitting, setSubmitting] = useState(false)
@@ -92,7 +92,7 @@ export function CreateTaskModal({ open, onClose, onCreated, submissionDate, reco
     setDesignType('')
     setHod('')
     setPriorityLevel('Medium')
-    setHoursRequired('')
+    setHoursRequired('1')
     setComment('')
     setSelectedFiles([])
     setUploadedFiles([])
@@ -454,10 +454,10 @@ export function CreateTaskModal({ open, onClose, onCreated, submissionDate, reco
               <input
                 id="create-hours"
                 type="number"
-                min={0}
+                min={1}
                 value={hoursRequired}
                 onChange={(e) => setHoursRequired(e.target.value)}
-                placeholder="0"
+                placeholder="1"
                 className="mt-1.5 w-full rounded-md border border-slate-300 bg-white px-3 py-2 text-sm text-slate-900 outline-none transition-colors focus:border-blue-500 focus:ring-2 focus:ring-blue-500/20"
               />
             </div>
