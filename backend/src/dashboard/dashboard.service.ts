@@ -353,7 +353,7 @@ export class DashboardService {
       activeTasks: buckets.active,
       onHoldTasks: buckets.onHold,
       completedTasks: buckets.completed,
-      approvedTasks: statuses['APPROVED'] ?? 0,
+      approvedTasks: (statuses['REVIEW_COMPLETED'] ?? 0) + (statuses['APPROVED'] ?? 0),
       bucketTotals: buckets,
     };
   }

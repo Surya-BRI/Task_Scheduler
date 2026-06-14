@@ -1,4 +1,4 @@
-import { BadRequestException, ForbiddenException, Injectable, NotFoundException, Optional } from '@nestjs/common';
+import { BadRequestException, ForbiddenException, Injectable, Logger, NotFoundException, Optional } from '@nestjs/common';
 import { Prisma } from '@prisma/client';
 import { PrismaService } from '../prisma/prisma.service';
 import { CreateTaskDto } from './dto/create-task.dto';
@@ -15,6 +15,7 @@ import { SubmitWorkDto } from './dto/submit-work.dto';
 import { SaveTimerStateDto } from './dto/save-timer-state.dto';
 import { DashboardRealtimeService } from '../dashboard/dashboard-realtime.service';
 import { COMPLETED_STATUS_FILTER } from '../dashboard/task-status-buckets.util';
+import { NotificationsService } from '../notifications/notifications.service';
 
 const TASK_SELECT = {
   id: true,
@@ -143,10 +144,12 @@ export type NextRevisionQuery = {
 
 @Injectable()
 export class TasksService {
+  private readonly logger = new Logger(TasksService.name);
   constructor(
     private readonly prisma: PrismaService,
     private readonly taskFilesService: TaskFilesService,
     private readonly activityLogger: ActivityLoggerService,
+    private readonly notificationsService: NotificationsService,
     @Optional() private readonly dashboardRealtime?: DashboardRealtimeService,
   ) {}
 
@@ -836,6 +839,26 @@ export class TasksService {
       this.dashboardRealtime?.notifyOverviewRefresh('task_reassigned');
     }
 
+    const linkUrlAssign =
+      updatedTask.designType?.toLowerCase() === 'retail'
+        ? `/retail-task-view/${id}`
+        : `/project-task-view/${id}`;
+    const assignMessage = `${updatedTask.taskNo} — ${updatedTask.project?.name ?? 'Unknown Project'} has been assigned to ${assignee.fullName}`;
+    const hodUsersAssign = await this.prisma.user.findMany({
+      where: { role: { name: { in: ['HOD', 'ADMIN'] } } },
+      select: { id: true },
+    });
+    this.notificationsService
+      .create({ userId: dto.assigneeId, title: 'Task Assigned to You', message: assignMessage, linkUrl: linkUrlAssign })
+      .catch((err) => this.logger.error('Failed to send assign notification to designer', err));
+    for (const hod of hodUsersAssign) {
+      if (hod.id !== dto.assigneeId) {
+        this.notificationsService
+          .create({ userId: hod.id, title: 'Task Assigned', message: assignMessage, linkUrl: linkUrlAssign })
+          .catch((err) => this.logger.error('Failed to send assign notification to HOD', err));
+      }
+    }
+
     const withUrls = await this.withSignedAttachmentUrls(updatedTask);
     return this.normalizeTaskForApi(withUrls);
   }
@@ -895,6 +918,30 @@ export class TasksService {
       this.dashboardRealtime?.notifyOverviewRefresh('task_completed');
     } else {
       this.dashboardRealtime?.notifyOverviewRefresh('task_status_changed');
+    }
+
+    if (COMPLETED_STATUS_FILTER.includes(newStatusApi)) {
+      const linkUrlStatus =
+        updatedTask.designType?.toLowerCase() === 'retail'
+          ? `/retail-task-view/${id}`
+          : `/project-task-view/${id}`;
+      const statusMessage = `${updatedTask.taskNo} — ${updatedTask.project?.name ?? 'Unknown Project'} status changed to ${newStatusApi}`;
+      const hodUsersStatus = await this.prisma.user.findMany({
+        where: { role: { name: { in: ['HOD', 'ADMIN'] } } },
+        select: { id: true },
+      });
+      if (updatedTask.assigneeId) {
+        this.notificationsService
+          .create({ userId: updatedTask.assigneeId, title: 'Task Marked Complete', message: statusMessage, linkUrl: linkUrlStatus })
+          .catch((err) => this.logger.error('Failed to send complete notification to designer', err));
+      }
+      for (const hod of hodUsersStatus) {
+        if (hod.id !== updatedTask.assigneeId) {
+          this.notificationsService
+            .create({ userId: hod.id, title: 'Task Completed', message: statusMessage, linkUrl: linkUrlStatus })
+            .catch((err) => this.logger.error('Failed to send complete notification to HOD', err));
+        }
+      }
     }
 
     const withUrls = await this.withSignedAttachmentUrls(updatedTask);

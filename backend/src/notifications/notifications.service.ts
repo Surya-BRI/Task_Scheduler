@@ -49,4 +49,18 @@ export class NotificationsService {
       where: { userId, isRead: false },
     });
   }
+
+  async create(data: { userId: string; title: string; message: string; linkUrl?: string }) {
+    return this.prisma.notification.create({ data });
+  }
+
+  // Returns true if the same userId+title+linkUrl notification was already sent today (midnight reset)
+  async existsToday(userId: string, title: string, linkUrl: string): Promise<boolean> {
+    const startOfDay = new Date();
+    startOfDay.setHours(0, 0, 0, 0);
+    const count = await this.prisma.notification.count({
+      where: { userId, title, linkUrl, createdAt: { gte: startOfDay } },
+    });
+    return count > 0;
+  }
 }

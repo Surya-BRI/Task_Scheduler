@@ -92,8 +92,10 @@ function computeStatsFromTasks(tasks) {
   const currentMonth = now.getMonth();
   const currentYear = now.getFullYear();
   const onHold = tasks.filter((t) => t.status === "ON_HOLD");
-  const completed = tasks.filter((t) => t.status === "COMPLETED");
-  const active = tasks.filter((t) => ["PENDING", "WIP"].includes(String(t.status ?? "")));
+  const completed = tasks.filter((t) => t.status === "REVIEW_COMPLETED");
+  const active = tasks.filter((t) =>
+    ["DESIGN_NEW", "DESIGN_PLANNED", "IN_PROGRESS", "DESIGN_COMPLETED", "HOD_REVIEW", "SALES_REVIEW", "REWORK"].includes(String(t.status ?? ""))
+  );
 
   const workLoadHours = [...active, ...onHold].reduce((acc, t) => acc + taskHours(t), 0);
   const upcomingDeadline = active

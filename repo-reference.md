@@ -668,7 +668,7 @@ frontend/src/
 | `/` | `app/page.jsx` | — | — | Redirect → `/login` |
 | `/(auth)/login` | `login-form.jsx` | None | — | Login with demo account options |
 | `/design-list` | `DesignListScreen.jsx` | Session | HOD | Full ERP design task list with filters |
-| `/design-list/my-work` | `DesignerDesignListScreen.jsx` | Session | Designer | Personal assigned work queue |
+| `/design-list/tasks` | `DesignerDesignListScreen.jsx` | Session | Designer | Personal assigned work queue |
 | `/design-list/record/[taskId]` | `DesignListRecordPage.jsx` | Session | Any | Task record detail (legacy, 3-tab) |
 | `/design-list/task/[taskId]` | `page.jsx` | Session | Any | Task detail view |
 | `/task-summary/[taskId]` | `page.jsx` | Session | Any | Task summary view |
@@ -716,7 +716,7 @@ export const apiClient = {
 1. POST /auth/login → { accessToken, user: {id, email, fullName, role} }
 2. setAccessToken(accessToken) → localStorage['br_token']
 3. setSession({id, email, fullName, role}) → localStorage['br_session']
-4. getHomeRoute(role) → HOD: '/design-list', Designer: '/design-list/my-work'
+4. getHomeRoute(role) → HOD: '/design-list', Designer: '/design-list/tasks'
 5. Every request: Authorization: Bearer <token>
 6. 401 → clearAccessToken(), redirect /login
 ```
@@ -870,7 +870,7 @@ getTaskCreateRoute(projectId, designType)  // → retail-task-creation or projec
 ### Session & Auth Helpers
 - `getAccessToken()` / `setAccessToken(token)` / `clearAccessToken()` — `localStorage['br_token']`
 - `getSession()` / `setSession(user)` — `localStorage['br_session']`
-- `getHomeRoute(role)` — returns `/design-list` (HOD) or `/design-list/my-work` (Designer)
+- `getHomeRoute(role)` — returns `/design-list` (HOD) or `/design-list/tasks` (Designer)
 - `logout()` — clears both localStorage keys
 
 ### Error Handling (Frontend)

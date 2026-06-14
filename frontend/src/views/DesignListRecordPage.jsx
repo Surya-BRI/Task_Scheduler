@@ -90,7 +90,7 @@ export function DesignListRecordPage() {
   const record = records.find((item) => item.id === recordKey)
   const [providedFile, setProvidedFile] = useState('Design.ZIP')
   const [submittedSession, setSubmittedSession] = useState(null)
-  const isTerminalStatus = record?.status === 'COMPLETED' || record?.status === 'APPROVED'
+  const isTerminalStatus = record?.status === 'REVIEW_COMPLETED' || record?.status === 'CLIENT_REJECTED'
   const rawTab = searchParams.get('tab')
   const activeTab = RECORD_TAB_IDS.includes(rawTab) ? rawTab : 'details'
   const from = searchParams.get('from')
@@ -235,7 +235,7 @@ export function DesignListRecordPage() {
                       <RowField label="Project Location" value={`${record.businessUnit} — Retail Level 1, Kiosk DM1`} />
                       <RowField label="Sales Person" value={record.salesPerson} />
                       <RowField label="Technical Head" value="Vikram" />
-                      <RowField label="Hours Required" value={String(record.agingDays + 20)} />
+                      <RowField label="Hours Required" value={record.hoursRequired != null ? String(record.hoursRequired) : undefined} />
                       <RowField label="Date of Submission" value={record.deadline} />
                     </div>
                   </div>

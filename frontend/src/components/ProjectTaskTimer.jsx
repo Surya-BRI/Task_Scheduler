@@ -116,7 +116,7 @@ export function ProjectTaskTimer({
     'System issue',
   ]
 
-  const isLocked = taskStatus === 'COMPLETED' || taskStatus === 'APPROVED'
+  const isLocked = taskStatus === 'REVIEW_COMPLETED' || taskStatus === 'CLIENT_REJECTED'
   const isRunning = runStartAt !== null && !isLocked
 
   useEffect(() => {

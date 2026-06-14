@@ -157,7 +157,7 @@ model RetailTaskDetail {
   fileUrl        String?  @db.NVarChar(2000)
   hodName        String?  @db.NVarChar(255)
   designTypes    String?  @db.NVarChar(500)
-  hoursRequired  Decimal? @db.Decimal(10, 2)
+  hoursRequired  Int?
   comment        String?  @db.NVarChar(Max)
   signFamily     String?  @db.NVarChar(255)
   signType       String?  @db.NVarChar(255)
@@ -181,13 +181,13 @@ model ProjectTaskDetail {
   area           String?  @db.NVarChar(100)
   level          String?  @db.NVarChar(100)
   artwork        Boolean? @default(false)
-  artworkHours   Decimal? @db.Decimal(10, 2)
+  artworkHours   Int?
   technical      Boolean? @default(false)
-  technicalHours Decimal? @db.Decimal(10, 2)
+  technicalHours Int?
   location       Boolean? @default(false)
-  locationHours  Decimal? @db.Decimal(10, 2)
+  locationHours  Int?
   asBuilt        Boolean? @default(false)
-  asBuiltHours   Decimal? @db.Decimal(10, 2)
+  asBuiltHours   Int?
   bim            Boolean? @default(false)
   deadline       DateTime?
   comment        String?  @db.NVarChar(Max)

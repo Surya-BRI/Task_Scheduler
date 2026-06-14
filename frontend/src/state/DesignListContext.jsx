@@ -18,7 +18,10 @@ function dedupeDesignRecords(items) {
   )
 }
 
-const STATUS_ORDER = ['WIP', 'Pending', 'Revision', 'Approved', 'Completed']
+const STATUS_ORDER = [
+  'DESIGN_NEW', 'DESIGN_PLANNED', 'IN_PROGRESS', 'DESIGN_COMPLETED',
+  'HOD_REVIEW', 'SALES_REVIEW', 'REWORK', 'REVIEW_COMPLETED', 'CLIENT_REJECTED', 'ON_HOLD',
+]
 
 function parseRecordDate(value) {
   return parseDesignListDate(value)
