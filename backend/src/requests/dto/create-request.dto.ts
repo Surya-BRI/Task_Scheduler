@@ -1,14 +1,15 @@
-import { IsDateString, IsNotEmpty, IsOptional, IsString, MaxLength } from 'class-validator';
+import { IsDateString, IsIn, IsNotEmpty, IsOptional, IsString, MaxLength, ValidateIf } from 'class-validator';
+import { LEAVE_REASON_OPTIONS } from '../../common/constants/leave-reasons';
 
 export class CreateLeaveRequestDto {
   @IsNotEmpty()
   @IsString()
-  userId: string; // The user the request is for (designerId in frontend)
+  userId: string;
 
   @IsNotEmpty()
   @IsString()
   @MaxLength(255)
-  type: string; // "Leave", "Half Day", etc.
+  type: string;
 
   @IsNotEmpty()
   @IsDateString()
@@ -20,6 +21,12 @@ export class CreateLeaveRequestDto {
 
   @IsNotEmpty()
   @IsString()
+  @IsIn([...LEAVE_REASON_OPTIONS])
+  reasonCategory: string;
+
+  @ValidateIf((o) => o.reasonCategory === 'Other')
+  @IsNotEmpty()
+  @IsString()
   @MaxLength(4000)
-  reason: string;
+  reasonOther?: string;
 }

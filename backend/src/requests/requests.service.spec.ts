@@ -83,7 +83,7 @@ describe('RequestsService', () => {
           userId: designerId,
           type: 'Leave',
           startDate: '2020-01-01',
-          reason: 'Old leave',
+          reasonCategory: 'Vacation',
         }),
       ).rejects.toThrow(BadRequestException);
     });
@@ -96,7 +96,7 @@ describe('RequestsService', () => {
           type: 'Leave',
           startDate: start,
           endDate: '2020-01-01',
-          reason: 'Invalid range',
+          reasonCategory: 'Vacation',
         }),
       ).rejects.toThrow(BadRequestException);
     });
@@ -107,7 +107,7 @@ describe('RequestsService', () => {
           userId: designerId,
           type: 'Leave',
           startDate: futureStart(),
-          reason: '   ',
+          reasonCategory: 'Other',
         }),
       ).rejects.toThrow(BadRequestException);
     });
@@ -130,7 +130,7 @@ describe('RequestsService', () => {
           type: 'Leave',
           startDate: start,
           endDate: start,
-          reason: 'Overlap',
+          reasonCategory: 'Vacation',
         }),
       ).rejects.toThrow(DUPLICATE_LEAVE_ERROR_MESSAGE);
     });
@@ -160,7 +160,7 @@ describe('RequestsService', () => {
           type: 'Leave',
           startDate: start,
           endDate: end,
-          reason: 'Range overlap',
+          reasonCategory: 'Vacation',
         }),
       ).rejects.toThrow(DUPLICATE_LEAVE_ERROR_MESSAGE);
     });
@@ -179,7 +179,7 @@ describe('RequestsService', () => {
         type: 'Leave',
         startDate: start,
         endDate: start,
-        reason: 'Valid leave',
+        reasonCategory: 'Vacation',
       });
 
       expect(result.status).toBe('PENDING');
@@ -354,6 +354,35 @@ describe('RequestsService', () => {
       await expect(
         service.revoke(leaveId, designerId, UserRole.DESIGNER, { reason: 'Nope' }),
       ).rejects.toThrow(ForbiddenException);
+    });
+  });
+
+  describe('findTeamRequests', () => {
+    it('includes HOD self-leave alongside designer leaves', async () => {
+      const hodLeave = {
+        ...pendingLeave,
+        id: '44444444-4444-4444-8444-444444444444',
+        userId: hodId,
+        status: 'Approved',
+        user: {
+          id: hodId,
+          fullName: 'Sarah Mitchell',
+          role: { name: UserRole.HOD },
+          departmentId: 'dept-1',
+        },
+      };
+      mockPrisma.user.findUnique.mockResolvedValue({ departmentId: 'dept-1' });
+      mockPrisma.leaveRequest.findMany.mockResolvedValue([pendingLeave, hodLeave]);
+
+      await service.findTeamRequests(hodId, UserRole.HOD);
+
+      expect(mockPrisma.leaveRequest.findMany).toHaveBeenCalledWith(
+        expect.objectContaining({
+          where: expect.objectContaining({
+            OR: [{ userId: hodId }, { user: { role: { name: UserRole.DESIGNER }, departmentId: 'dept-1' } }],
+          }),
+        }),
+      );
     });
   });
 });

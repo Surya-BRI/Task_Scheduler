@@ -35,7 +35,10 @@ export function getRegularizationRequest(id: string) {
 
 export function createRegularizationRequest(data: {
   designerId: string;
-  taskId: string;
+  regularizationType?: 'task' | 'non-task';
+  taskId?: string;
+  projectId?: string;
+  workDetails?: string;
   date: string;
   duration: string;
   reason: string;

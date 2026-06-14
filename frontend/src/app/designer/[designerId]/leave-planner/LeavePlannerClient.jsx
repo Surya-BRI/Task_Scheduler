@@ -16,6 +16,9 @@ import {
   revokeLeaveRequest,
   updateLeaveRequest,
 } from "@/features/requests/services/requests.api";
+import { LEAVE_REASON_OPTIONS } from "@/lib/date-window";
+import { apiClient } from "@/lib/api-client";
+import { StatusBadge } from "@/components/ui/StatusBadge";
 
 const MONTHS = [
   "January", "February", "March", "April", "May", "June",
@@ -75,6 +78,14 @@ function findLeavesOnDate(leaves, dateStr) {
   });
 }
 
+/** Active leaves only — revoked/cancelled/rejected do not block calendar colors */
+function findActiveLeavesOnDate(leaves, dateStr) {
+  return findLeavesOnDate(leaves, dateStr).filter((leave) => {
+    const status = normalizeLeaveStatus(leave.status);
+    return status === "PENDING" || status === "APPROVED";
+  });
+}
+
 function designerInitials(name) {
   return String(name ?? "Team")
     .split(" ")
@@ -91,6 +102,40 @@ function formatLeaveDuration(fromDate, toDate) {
   return from === to ? formatDate(from) : `${formatDate(from)} to ${formatDate(to)}`;
 }
 
+function leaveDurationLabel(fromDate, toDate) {
+  const from = normalizeDateOnly(fromDate);
+  const to = normalizeDateOnly(toDate);
+  if (!from || !to) return "—";
+  const start = new Date(`${from}T12:00:00`);
+  const end = new Date(`${to}T12:00:00`);
+  const days = Math.round((end.getTime() - start.getTime()) / 86400000) + 1;
+  if (days <= 0) return "—";
+  return days === 1 ? "1 day" : `${days} days`;
+}
+
+function formatAppliedDate(value) {
+  if (!value) return "—";
+  return formatDate(value);
+}
+
+function approvalDetailLine(req) {
+  const status = normalizeLeaveStatus(req.status);
+  if (status === "PENDING") return "Awaiting approval";
+  if (status === "REVOKED") {
+    const who = req.revokedByName ? `Revoked by ${req.revokedByName}` : "Revoked";
+    const reason = req.revocationReason?.trim();
+    return reason ? `${who} — ${reason}` : who;
+  }
+  if (req.approverName) {
+    const verb = status === "APPROVED" ? "Approved" : status === "REJECTED" ? "Rejected" : "Reviewed";
+    const remarks = req.approverRemarks?.trim();
+    return remarks ? `${verb} by ${req.approverName} — ${remarks}` : `${verb} by ${req.approverName}`;
+  }
+  return req.approverRemarks?.trim() || "—";
+}
+
+const HISTORY_STATUS_OPTIONS = ["ALL", "PENDING", "APPROVED", "REJECTED", "REVOKED", "CANCELLED"];
+
 function statusStripClass(status) {
   const normalized = normalizeLeaveStatus(status);
   if (normalized === "APPROVED") return "bg-emerald-500";
@@ -99,6 +144,17 @@ function statusStripClass(status) {
   if (normalized === "CANCELLED") return "bg-slate-400";
   if (normalized === "PENDING") return "bg-amber-300/90";
   return "bg-slate-300";
+}
+
+function mergeLeaveLists(...lists) {
+  const byId = new Map();
+  for (const list of lists) {
+    if (!Array.isArray(list)) continue;
+    for (const row of list) {
+      if (row?.id) byId.set(row.id, row);
+    }
+  }
+  return [...byId.values()];
 }
 
 function findOverlappingLeaveClient(leaves, fromDate, toDate) {
@@ -113,55 +169,110 @@ function findOverlappingLeaveClient(leaves, fromDate, toDate) {
   return null;
 }
 
-function statusBadgeClasses(status) {
-  const normalized = normalizeLeaveStatus(status);
-  if (normalized === "APPROVED") return "bg-emerald-50 text-emerald-700";
-  if (normalized === "REJECTED") return "bg-red-50 text-red-700";
-  if (normalized === "REVOKED") return "bg-orange-50 text-orange-700";
-  if (normalized === "CANCELLED") return "bg-slate-100 text-slate-600";
-  return "bg-amber-50 text-amber-700";
+
+function filterHistoryRows(rows, { statusFilter, searchQuery }) {
+  let list = Array.isArray(rows) ? [...rows] : [];
+  if (statusFilter && statusFilter !== "ALL") {
+    list = list.filter((row) => normalizeLeaveStatus(row.status) === statusFilter);
+  }
+  const q = searchQuery?.trim().toLowerCase();
+  if (q) {
+    list = list.filter((row) => {
+      const haystack = [
+        row.reason,
+        row.type,
+        row.requesterName,
+        row.approverName,
+        row.revokedByName,
+        normalizeLeaveStatus(row.status),
+      ]
+        .filter(Boolean)
+        .join(" ")
+        .toLowerCase();
+      return haystack.includes(q);
+    });
+  }
+  return list.sort(
+    (a, b) =>
+      new Date(b.createdAt ?? b.fromDate ?? 0).getTime() -
+      new Date(a.createdAt ?? a.fromDate ?? 0).getTime(),
+  );
 }
 
-function LeaveHistoryRow({
-  req,
-  showRequester = false,
-  onOpen,
-  actionLabel = "View",
-  actionClassName = "rounded-lg border border-slate-200 px-3 py-1.5 text-xs font-semibold text-slate-700 hover:bg-slate-50",
-}) {
-  const status = normalizeLeaveStatus(req.status);
+function LeaveHistoryTable({ rows, variant, onOpen }) {
+  if (!rows.length) {
+    return (
+      <p className="py-10 text-center text-sm text-slate-500">
+        {variant === "team" ? "No team leave records match your filters." : "No leave records match your filters."}
+      </p>
+    );
+  }
+
   return (
-    <li className="flex flex-wrap items-center justify-between gap-3 py-3">
-      <div className="min-w-0">
-        <p className="text-sm font-medium text-slate-900">
-          {showRequester ? `${req.requesterName ?? "Team member"} — ` : ""}
-          {formatDate(req.fromDate)}
-          {req.toDate !== req.fromDate ? ` to ${formatDate(req.toDate)}` : ""}
-        </p>
-        <p className="text-xs text-slate-500 truncate">{req.reason}</p>
-        <p className="text-[10px] text-slate-400">ID: {req.id.slice(0, 8)}…</p>
-        {!showRequester && status === "REVOKED" && req.revokedByName ? (
-          <p className="text-[10px] text-slate-500 mt-0.5">
-            Revoked by {req.revokedByName}
-            {req.revokedAt ? ` · ${formatDate(req.revokedAt)}` : ""}
-          </p>
-        ) : null}
-        {!showRequester && req.approverName && status !== "PENDING" && status !== "REVOKED" ? (
-          <p className="text-[10px] text-slate-500 mt-0.5">
-            {status === "APPROVED" ? "Approved" : "Rejected"} by {req.approverName}
-            {req.reviewedAt ? ` · ${formatDate(req.reviewedAt)}` : ""}
-          </p>
-        ) : null}
-      </div>
-      <div className="flex items-center gap-2">
-        <span className={`rounded-full px-2.5 py-1 text-[10px] font-bold uppercase tracking-wide ${statusBadgeClasses(status)}`}>
-          {status}
-        </span>
-        <button type="button" onClick={onOpen} className={actionClassName}>
-          {actionLabel}
-        </button>
-      </div>
-    </li>
+    <div className="overflow-x-auto -mx-1">
+      <table className="min-w-full text-left text-xs">
+        <thead className="ui-table-header">
+          <tr>
+            {variant === "team" ? <th className="px-3 py-2.5">Designer</th> : null}
+            <th className="px-3 py-2.5">Type</th>
+            <th className="px-3 py-2.5">Date range</th>
+            <th className="px-3 py-2.5">Duration</th>
+            <th className="px-3 py-2.5">Applied</th>
+            <th className="px-3 py-2.5">Status</th>
+            <th className="px-3 py-2.5">Remarks</th>
+            <th className="px-3 py-2.5">{variant === "team" ? "Approver" : "Approval"}</th>
+            <th className="px-3 py-2.5 text-right">Action</th>
+          </tr>
+        </thead>
+        <tbody className="divide-y divide-slate-100">
+          {rows.map((req) => {
+            const status = normalizeLeaveStatus(req.status);
+            const isPending = status === "PENDING";
+            return (
+              <tr key={req.id} className="hover:bg-slate-50/80">
+                {variant === "team" ? (
+                  <td className="px-3 py-3 font-medium text-slate-900 whitespace-nowrap">
+                    {req.requesterName ?? "—"}
+                  </td>
+                ) : null}
+                <td className="px-3 py-3 text-slate-700 whitespace-nowrap">{req.type ?? "Leave"}</td>
+                <td className="px-3 py-3 text-slate-700 whitespace-nowrap">
+                  {formatLeaveDuration(req.fromDate, req.toDate)}
+                </td>
+                <td className="px-3 py-3 text-slate-600 whitespace-nowrap">
+                  {leaveDurationLabel(req.fromDate, req.toDate)}
+                </td>
+                <td className="px-3 py-3 text-slate-600 whitespace-nowrap">
+                  {formatAppliedDate(req.createdAt ?? req.fromDate)}
+                </td>
+                <td className="px-3 py-3 whitespace-nowrap">
+                  <StatusBadge status={status} label={status} size="sm" />
+                </td>
+                <td className="px-3 py-3 text-slate-600 max-w-[180px] truncate" title={req.reason}>
+                  {req.reason ?? "—"}
+                </td>
+                <td className="px-3 py-3 text-slate-600 max-w-[200px] truncate" title={variant === "team" ? req.approverName : approvalDetailLine(req)}>
+                  {variant === "team" ? (req.approverName ?? "—") : approvalDetailLine(req)}
+                </td>
+                <td className="px-3 py-3 text-right whitespace-nowrap">
+                  <button
+                    type="button"
+                    onClick={() => onOpen(req)}
+                    className={
+                      variant === "team" && isPending
+                        ? "rounded-lg bg-[#5d5baf] px-3 py-1.5 text-[11px] font-semibold text-white hover:bg-[#4b4991]"
+                        : "rounded-lg border border-slate-200 px-3 py-1.5 text-[11px] font-semibold text-slate-700 hover:bg-slate-50"
+                    }
+                  >
+                    {variant === "team" && isPending ? "Review" : "View"}
+                  </button>
+                </td>
+              </tr>
+            );
+          })}
+        </tbody>
+      </table>
+    </div>
   );
 }
 
@@ -212,8 +323,33 @@ export default function LeavePlannerClient() {
   const [isHOD, setIsHOD] = useState(false);
   const [sessionName, setSessionName] = useState(null);
   const [sessionUser, setSessionUser] = useState(null);
+  const [leaveApplyMode, setLeaveApplyMode] = useState("self");
+  const [designerList, setDesignerList] = useState([]);
+  const [selectedDesignerId, setSelectedDesignerId] = useState("");
+  const [historyTab, setHistoryTab] = useState("hod");
+  const [historyStatusFilter, setHistoryStatusFilter] = useState("ALL");
+  const [historySearch, setHistorySearch] = useState("");
 
   const canReview = isHOD;
+
+  const closeLeaveApplyModal = useCallback(() => {
+    setIsModalOpen(false);
+    setLeaveApplyMode("self");
+    setSelectedDesignerId("");
+    setFormData({ reasonCategory: "", reasonOther: "", fromDate: "", toDate: "" });
+  }, []);
+
+  const openLeaveApplyModal = useCallback((dateStr) => {
+    setLeaveApplyMode("self");
+    setSelectedDesignerId("");
+    setFormData({
+      reasonCategory: "",
+      reasonOther: "",
+      fromDate: dateStr,
+      toDate: dateStr,
+    });
+    setIsModalOpen(true);
+  }, []);
 
   useEffect(() => {
     import("@/lib/mock-auth").then(({ getSession }) => {
@@ -223,6 +359,14 @@ export default function LeavePlannerClient() {
       if (session) setSessionUser(session);
     });
   }, []);
+
+  useEffect(() => {
+    if (!isHOD) return;
+    apiClient.get("/users?role=DESIGNER").then((res) => {
+      const rows = Array.isArray(res) ? res : (Array.isArray(res?.data) ? res.data : []);
+      setDesignerList(rows.map((u) => ({ id: u.id, name: u.fullName })));
+    }).catch(() => setDesignerList([]));
+  }, [isHOD]);
 
   const designer = {
     id: sessionUser?.id ?? '',
@@ -234,31 +378,37 @@ export default function LeavePlannerClient() {
   };
 
   const activeCalendarLeaves = useMemo(() => {
-    if (canReview) return teamLeaves;
-    return leaves;
+    if (!canReview) return leaves;
+    return mergeLeaveLists(teamLeaves, leaves);
   }, [canReview, leaves, teamLeaves]);
+
+  const designerTeamLeaves = useMemo(
+    () => teamLeaves.filter((req) => (req.designerId ?? req.userId) !== designer.id),
+    [teamLeaves, designer.id],
+  );
 
   const calendarScope = canReview ? "team" : "mine";
 
-  const sortLeavesByLatest = (rows) =>
-    [...rows].sort(
-      (a, b) =>
-        new Date(b.createdAt ?? b.fromDate ?? 0).getTime() -
-        new Date(a.createdAt ?? a.fromDate ?? 0).getTime(),
-    );
+  const filteredHodHistory = useMemo(
+    () => filterHistoryRows(leaves, { statusFilter: historyStatusFilter, searchQuery: historySearch }),
+    [leaves, historyStatusFilter, historySearch],
+  );
 
-  const sortedTeamLeaves = useMemo(() => sortLeavesByLatest(teamLeaves), [teamLeaves]);
-  const sortedLeaves = useMemo(() => sortLeavesByLatest(leaves), [leaves]);
+  const filteredTeamHistory = useMemo(
+    () => filterHistoryRows(designerTeamLeaves, { statusFilter: historyStatusFilter, searchQuery: historySearch }),
+    [designerTeamLeaves, historyStatusFilter, historySearch],
+  );
 
   const reloadLeaves = useCallback(async () => {
-    if (!designer.id || canReview) return;
+    if (!designer.id) return;
+    const targetId = canReview ? designer.id : designer.id;
     try {
-      const res = await fetchLeaveRequests(designer.id);
+      const res = await fetchLeaveRequests(targetId);
       setLeaves(Array.isArray(res) ? res : []);
     } catch {
       setLeaves([]);
     }
-  }, [designer.id, canReview]);
+  }, [designer.id]);
 
   const reloadTeamData = useCallback(async () => {
     if (!canReview) {
@@ -280,9 +430,10 @@ export default function LeavePlannerClient() {
   }, [canReview]);
 
   const [formData, setFormData] = useState({
-    reason: "",
+    reasonCategory: "",
+    reasonOther: "",
     fromDate: "",
-    toDate: ""
+    toDate: "",
   });
 
   useEffect(() => {
@@ -338,32 +489,25 @@ export default function LeavePlannerClient() {
     if (day > DAYS_IN_MONTH[monthIndex]) return;
 
     const dateStr = `${YEAR}-${String(monthIndex + 1).padStart(2, '0')}-${String(day).padStart(2, '0')}`;
-    const dayLeaves = findLeavesOnDate(activeCalendarLeaves, dateStr);
+    const activeDayLeaves = findActiveLeavesOnDate(activeCalendarLeaves, dateStr);
 
-    if (dayLeaves.length === 1) {
-      openReviewModal(dayLeaves[0]);
+    if (activeDayLeaves.length === 1) {
+      openReviewModal(activeDayLeaves[0]);
       return;
     }
-    if (dayLeaves.length > 1) {
-      setDayLeavesList(dayLeaves);
+    if (activeDayLeaves.length > 1) {
+      setDayLeavesList(activeDayLeaves);
       setDayLeavesDate(dateStr);
       setIsDayLeavesModalOpen(true);
       return;
     }
 
-    if (canReview) return;
-
-    if (isPastDateOnly(dateStr, todayStr)) {
+    if (!canReview && isPastDateOnly(dateStr, todayStr)) {
       toast.error("Leave cannot be requested for past dates. Select today or a future date.");
       return;
     }
 
-    setFormData({
-      reason: "",
-      fromDate: dateStr,
-      toDate: dateStr
-    });
-    setIsModalOpen(true);
+    openLeaveApplyModal(dateStr);
   };
 
   const applyReviewResult = (updated) => {
@@ -497,16 +641,28 @@ export default function LeavePlannerClient() {
 
   const handleModalSubmit = async (e) => {
     e.preventDefault();
-    if (!formData.reason || !formData.fromDate || !formData.toDate) {
+    if (!formData.reasonCategory || !formData.fromDate || !formData.toDate) {
       alert("Please fill in all fields.");
       return;
     }
-    if (!designer.id?.trim()) {
+    if (formData.reasonCategory === "Other" && !formData.reasonOther?.trim()) {
+      toast.error("Please provide details when reason is Other.");
+      return;
+    }
+
+    if (canReview && leaveApplyMode === "others" && !selectedDesignerId?.trim()) {
+      toast.error("Select a designer in Others mode to apply leave on their behalf.");
+      return;
+    }
+
+    const targetUserId =
+      canReview && leaveApplyMode === "others" ? selectedDesignerId : designer.id;
+    if (!targetUserId?.trim()) {
       toast.error("Your session is still loading. Please try again in a moment.");
       return;
     }
 
-    if (isPastDateOnly(formData.fromDate, todayStr) || isPastDateOnly(formData.toDate, todayStr)) {
+    if (!canReview && (isPastDateOnly(formData.fromDate, todayStr) || isPastDateOnly(formData.toDate, todayStr))) {
       toast.error("Leave cannot be requested for past dates. Select today or a future date.");
       return;
     }
@@ -515,9 +671,15 @@ export default function LeavePlannerClient() {
       return;
     }
 
-    const overlap = findOverlappingLeaveClient(leaves, formData.fromDate, formData.toDate);
+    const overlapPool =
+      canReview && leaveApplyMode === "others"
+        ? teamLeaves
+        : canReview
+          ? mergeLeaveLists(leaves, teamLeaves)
+          : leaves;
+    const overlap = findOverlappingLeaveClient(overlapPool, formData.fromDate, formData.toDate);
     if (overlap) {
-      setIsModalOpen(false);
+      closeLeaveApplyModal();
       toast.error(DUPLICATE_LEAVE_MSG);
       openReviewModal(overlap);
       return;
@@ -525,21 +687,27 @@ export default function LeavePlannerClient() {
 
     try {
       const res = await createLeaveRequest({
-        userId: designer.id,
+        userId: targetUserId,
         type: "Leave",
-        reason: formData.reason,
+        reasonCategory: formData.reasonCategory,
+        reasonOther: formData.reasonCategory === "Other" ? formData.reasonOther.trim() : undefined,
         startDate: formData.fromDate,
-        endDate: formData.toDate
+        endDate: formData.toDate,
       });
-      setLeaves([...leaves, res]);
-      setIsModalOpen(false);
-      toast.success("Leave request submitted successfully");
+      if (canReview && leaveApplyMode === "others") {
+        setTeamLeaves((prev) => [...prev, res]);
+      } else {
+        setLeaves((prev) => [...prev, res]);
+      }
+      closeLeaveApplyModal();
+      toast.success(canReview ? "Leave auto-approved" : "Leave request submitted successfully");
+      void reloadLeaves();
       void reloadTeamData();
     } catch (error) {
       const message = error instanceof Error ? error.message : "Failed to submit leave request. Please try again.";
       if (message.toLowerCase().includes("overlap") || message.includes(DUPLICATE_LEAVE_MSG)) {
         const conflict = findOverlappingLeaveClient(leaves, formData.fromDate, formData.toDate);
-        setIsModalOpen(false);
+        closeLeaveApplyModal();
         toast.error(DUPLICATE_LEAVE_MSG);
         if (conflict) openReviewModal(conflict);
         void reloadLeaves();
@@ -550,7 +718,7 @@ export default function LeavePlannerClient() {
     }
   };
 
-  const getLeavesOnDate = (dateStr) => findLeavesOnDate(activeCalendarLeaves, dateStr);
+  const getLeavesOnDate = (dateStr) => findActiveLeavesOnDate(activeCalendarLeaves, dateStr);
 
   const getCellClass = (monthIndex, day) => {
     if (day > DAYS_IN_MONTH[monthIndex]) return "bg-slate-100/50 pointer-events-none";
@@ -746,57 +914,93 @@ export default function LeavePlannerClient() {
             ) : null}
           </div>
 
-          {canReview ? (
-            <div className="ui-surface rounded-xl border border-slate-200 bg-white p-4 shadow-sm">
-              <div className="border-b border-slate-100 pb-3">
-                <h2 className="text-sm font-semibold text-slate-900">Designer Team Leaves</h2>
-                <p className="mt-0.5 text-xs text-slate-500">
-                  {pendingApprovals.length > 0
-                    ? `${pendingApprovals.length} awaiting review · ${sortedTeamLeaves.length} total`
-                    : `${sortedTeamLeaves.length} team request${sortedTeamLeaves.length === 1 ? "" : "s"}`}
-                </p>
-              </div>
-              {sortedTeamLeaves.length > 0 ? (
-                <ul className="divide-y divide-slate-100">
-                  {sortedTeamLeaves.map((req) => {
-                    const isPending = normalizeLeaveStatus(req.status) === "PENDING";
-                    return (
-                      <LeaveHistoryRow
-                        key={req.id}
-                        req={req}
-                        showRequester
-                        actionLabel={isPending ? "Review" : "View"}
-                        actionClassName={
-                          isPending
-                            ? "rounded-lg bg-[#5d5baf] px-3 py-1.5 text-xs font-semibold text-white hover:bg-[#4b4991]"
-                            : "rounded-lg border border-slate-200 px-3 py-1.5 text-xs font-semibold text-slate-700 hover:bg-slate-50"
-                        }
-                        onOpen={() => openReviewModal(req)}
-                      />
-                    );
-                  })}
-                </ul>
-              ) : (
-                <p className="py-8 text-center text-sm text-slate-500">No designer leave requests yet.</p>
-              )}
-            </div>
-          ) : leaves.length > 0 ? (
-            <div className="ui-surface rounded-xl border border-slate-200 bg-white p-4 shadow-sm">
-              <div className="flex flex-wrap items-center justify-between gap-2 border-b border-slate-100 pb-3">
-                <div>
-                  <h2 className="text-sm font-semibold text-slate-900">My leave request history</h2>
-                  <p className="mt-0.5 text-xs text-slate-500">Your submitted leave requests</p>
+          {(canReview || leaves.length > 0) ? (
+            <div className="ui-surface overflow-hidden rounded-xl border border-slate-200 bg-white shadow-sm">
+              <div className="border-b border-slate-100 px-4 pt-4 sm:px-5">
+                <div className="flex flex-col gap-3 pb-3 sm:flex-row sm:items-end sm:justify-between">
+                  <div>
+                    <h2 className="text-sm font-semibold text-slate-900">Leave History</h2>
+                    <p className="mt-0.5 text-xs text-slate-500">
+                      {canReview
+                        ? pendingApprovals.length > 0
+                          ? `${pendingApprovals.length} awaiting review · ${leaves.length} HOD · ${designerTeamLeaves.length} team`
+                          : `${leaves.length} HOD · ${designerTeamLeaves.length} team record${designerTeamLeaves.length === 1 ? "" : "s"}`
+                        : "Your submitted leave requests"}
+                    </p>
+                  </div>
+                  <div className="flex w-full flex-col gap-2 sm:w-auto sm:flex-row sm:items-center">
+                    <input
+                      type="search"
+                      value={historySearch}
+                      onChange={(e) => setHistorySearch(e.target.value)}
+                      placeholder="Search type, remarks, status…"
+                      className="w-full rounded-lg border border-slate-200 px-3 py-2 text-sm text-slate-800 shadow-sm focus:border-[#5d5baf] focus:outline-none focus:ring-2 focus:ring-[#5d5baf]/20 sm:min-w-[220px]"
+                    />
+                    <select
+                      value={historyStatusFilter}
+                      onChange={(e) => setHistoryStatusFilter(e.target.value)}
+                      className="w-full rounded-lg border border-slate-200 px-3 py-2 text-sm text-slate-800 shadow-sm focus:border-[#5d5baf] focus:outline-none focus:ring-2 focus:ring-[#5d5baf]/20 sm:min-w-[140px]"
+                    >
+                      {HISTORY_STATUS_OPTIONS.map((option) => (
+                        <option key={option} value={option}>
+                          {option === "ALL" ? "All statuses" : option}
+                        </option>
+                      ))}
+                    </select>
+                  </div>
                 </div>
+                {canReview ? (
+                  <div className="flex border-t border-slate-100">
+                    <button
+                      type="button"
+                      onClick={() => setHistoryTab("hod")}
+                      className={`flex-1 px-4 py-3 text-sm font-semibold transition-colors sm:flex-none sm:px-6 ${
+                        historyTab === "hod"
+                          ? "border-b-2 border-[#5d5baf] text-[#5d5baf]"
+                          : "text-slate-500 hover:text-slate-800"
+                      }`}
+                    >
+                      HOD Leave History
+                      <span className="ml-1.5 text-xs font-normal text-slate-400">({filteredHodHistory.length})</span>
+                    </button>
+                    <button
+                      type="button"
+                      onClick={() => setHistoryTab("team")}
+                      className={`flex-1 px-4 py-3 text-sm font-semibold transition-colors sm:flex-none sm:px-6 ${
+                        historyTab === "team"
+                          ? "border-b-2 border-[#5d5baf] text-[#5d5baf]"
+                          : "text-slate-500 hover:text-slate-800"
+                      }`}
+                    >
+                      Team Leave History
+                      <span className="ml-1.5 text-xs font-normal text-slate-400">({filteredTeamHistory.length})</span>
+                    </button>
+                  </div>
+                ) : null}
               </div>
-              <ul className="divide-y divide-slate-100">
-                {sortedLeaves.map((req) => (
-                  <LeaveHistoryRow
-                    key={req.id}
-                    req={req}
-                    onOpen={() => openReviewModal(req)}
+              <div className="p-4 sm:p-5">
+                {canReview ? (
+                  historyTab === "hod" ? (
+                    <LeaveHistoryTable
+                      rows={filteredHodHistory}
+                      variant="hod"
+                      onOpen={openReviewModal}
+                    />
+                  ) : (
+                    <LeaveHistoryTable
+                      rows={filteredTeamHistory}
+                      variant="team"
+                      onOpen={openReviewModal}
+                    />
+                  )
+                ) : (
+                  <LeaveHistoryTable
+                    rows={filteredHodHistory}
+                    variant="hod"
+                    onOpen={openReviewModal}
                   />
-                ))}
-              </ul>
+                )}
+              </div>
             </div>
           ) : null}
 
@@ -804,9 +1008,15 @@ export default function LeavePlannerClient() {
       </div>
 
       {/* Leave Request Modal */}
-      {isModalOpen && !canReview && (
-        <div className="fixed inset-0 z-50 flex items-center justify-center bg-slate-900/40 backdrop-blur-sm p-4 animate-in fade-in duration-200">
-          <div className="bg-white rounded-2xl shadow-2xl w-full max-w-md overflow-hidden transform transition-all scale-100">
+      {isModalOpen && (!canReview || leaveApplyMode === "self" || leaveApplyMode === "others") && (
+        <div
+          className="fixed inset-0 z-50 flex items-center justify-center bg-slate-900/40 backdrop-blur-sm p-4 animate-in fade-in duration-200"
+          onClick={closeLeaveApplyModal}
+        >
+          <div
+            className="bg-white rounded-2xl shadow-2xl w-full max-w-md overflow-hidden transform transition-all scale-100"
+            onClick={(e) => e.stopPropagation()}
+          >
             <div className="flex items-center justify-between px-6 py-5 border-b border-slate-100 bg-gradient-to-r from-slate-50 to-white">
               <h2 className="text-lg font-semibold text-slate-900 flex items-center gap-2.5">
                 <div className="p-2 bg-[#f0f1fa] rounded-lg">
@@ -815,7 +1025,8 @@ export default function LeavePlannerClient() {
                 Submit Leave Request
               </h2>
               <button 
-                onClick={() => setIsModalOpen(false)}
+                type="button"
+                onClick={closeLeaveApplyModal}
                 className="p-2 text-slate-400 hover:text-slate-600 hover:bg-slate-100 rounded-full transition-colors"
               >
                 <X className="w-5 h-5" />
@@ -823,16 +1034,68 @@ export default function LeavePlannerClient() {
             </div>
             
             <form onSubmit={handleModalSubmit} className="p-6 space-y-5">
+              {canReview ? (
+                <div className="space-y-3 rounded-xl border border-slate-200 bg-slate-50 p-4">
+                  <p className="text-xs font-semibold uppercase tracking-wide text-slate-500">Apply leave for</p>
+                  <div className="flex gap-2">
+                    <button
+                      type="button"
+                      onClick={() => {
+                        setLeaveApplyMode("self");
+                        setSelectedDesignerId("");
+                      }}
+                      className={`flex-1 rounded-lg px-3 py-2 text-sm font-medium ${leaveApplyMode === "self" ? "bg-[#5d5baf] text-white" : "bg-white border border-slate-200 text-slate-700"}`}
+                    >
+                      Self
+                    </button>
+                    <button
+                      type="button"
+                      onClick={() => setLeaveApplyMode("others")}
+                      className={`flex-1 rounded-lg px-3 py-2 text-sm font-medium ${leaveApplyMode === "others" ? "bg-[#5d5baf] text-white" : "bg-white border border-slate-200 text-slate-700"}`}
+                    >
+                      Others
+                    </button>
+                  </div>
+                  {leaveApplyMode === "others" ? (
+                    <select
+                      value={selectedDesignerId}
+                      onChange={(e) => setSelectedDesignerId(e.target.value)}
+                      className="w-full rounded-xl border border-slate-200 px-4 py-2.5 text-sm"
+                    >
+                      <option value="" disabled>Select designer</option>
+                      {designerList.map((d) => (
+                        <option key={d.id} value={d.id}>{d.name}</option>
+                      ))}
+                    </select>
+                  ) : null}
+                </div>
+              ) : null}
               <div>
                 <label className="block text-sm font-medium text-slate-700 mb-2">Reason for Leave</label>
-                <textarea 
-                  value={formData.reason}
-                  onChange={e => setFormData({...formData, reason: e.target.value})}
-                  className="w-full rounded-xl border border-slate-200 px-4 py-3 text-sm text-slate-800 focus:outline-none focus:ring-2 focus:ring-[#5d5baf]/20 focus:border-[#5d5baf] min-h-[100px] shadow-sm transition-all resize-none bg-slate-50 focus:bg-white"
-                  placeholder="E.g., Vacation, Medical, Personal..."
+                <select
+                  value={formData.reasonCategory}
+                  onChange={(e) => setFormData({ ...formData, reasonCategory: e.target.value })}
+                  className="w-full rounded-xl border border-slate-200 px-4 py-2.5 text-sm text-slate-800 focus:outline-none focus:ring-2 focus:ring-[#5d5baf]/20 focus:border-[#5d5baf] shadow-sm bg-slate-50 focus:bg-white"
                   required
-                ></textarea>
+                >
+                  <option value="" disabled>Select reason</option>
+                  {LEAVE_REASON_OPTIONS.map((option) => (
+                    <option key={option} value={option}>{option}</option>
+                  ))}
+                </select>
               </div>
+              {formData.reasonCategory === "Other" ? (
+                <div>
+                  <label className="block text-sm font-medium text-slate-700 mb-2">Please specify</label>
+                  <textarea
+                    value={formData.reasonOther}
+                    onChange={(e) => setFormData({ ...formData, reasonOther: e.target.value })}
+                    className="w-full rounded-xl border border-slate-200 px-4 py-3 text-sm min-h-[80px] resize-none"
+                    placeholder="Describe your reason..."
+                    required
+                  />
+                </div>
+              ) : null}
               
               <div className="grid grid-cols-2 gap-5">
                 <div>
@@ -862,7 +1125,7 @@ export default function LeavePlannerClient() {
               <div className="pt-6 flex justify-end gap-3 border-t border-slate-100 mt-6">
                 <button
                   type="button"
-                  onClick={() => setIsModalOpen(false)}
+                  onClick={closeLeaveApplyModal}
                   className="px-5 py-2.5 text-sm font-medium text-slate-600 bg-white border border-slate-200 rounded-xl hover:bg-slate-50 hover:text-slate-900 transition-colors"
                 >
                   Cancel
@@ -915,9 +1178,7 @@ export default function LeavePlannerClient() {
                         </p>
                       </div>
                       <div className="flex flex-col items-end gap-2 shrink-0">
-                        <span className={`rounded-full px-2.5 py-1 text-[10px] font-bold uppercase tracking-wide ${statusBadgeClasses(status)}`}>
-                          {status}
-                        </span>
+                        <StatusBadge status={status} label={status} size="sm" />
                         <button
                           type="button"
                           onClick={() => {

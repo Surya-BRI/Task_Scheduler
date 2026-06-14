@@ -10,6 +10,8 @@ import { UpdateOvertimeRequestDto } from './dto/update-overtime-request.dto';
 import { ReviewOvertimeRequestDto } from './dto/review-overtime-request.dto';
 import { Decimal } from '@prisma/client/runtime/library';
 
+const todayOtDate = () => new Date().toISOString().split('T')[0];
+
 describe('OvertimeRequestsService', () => {
   let service: OvertimeRequestsService;
 
@@ -86,7 +88,7 @@ describe('OvertimeRequestsService', () => {
     const baseDto: CreateOvertimeRequestDto = {
       designerId: 'd1',
       taskId: 't1',
-      date: '2026-06-03',
+      date: todayOtDate(),
       startTime: '17:00',
       endTime: '19:00',
       requestedHours: '2.0',
@@ -123,7 +125,7 @@ describe('OvertimeRequestsService', () => {
         id: 'r1',
         designerId: 'd2',
         taskId: 't1',
-        date: new Date('2026-06-03'),
+        date: new Date(`${todayOtDate()}T00:00:00.000Z`),
         startTime: '17:00',
         endTime: '19:00',
         totalHours: new Decimal(2.0),
@@ -171,7 +173,7 @@ describe('OvertimeRequestsService', () => {
         id: 'r1',
         designerId: 'd1',
         taskId: 't1',
-        date: new Date('2026-06-03'),
+        date: new Date(`${todayOtDate()}T00:00:00.000Z`),
         startTime: '17:00',
         endTime: '19:00',
         totalHours: new Decimal(2.0),
@@ -206,7 +208,7 @@ describe('OvertimeRequestsService', () => {
         id: 'r1',
         designerId: 'd1',
         taskId: 't1',
-        date: new Date('2026-06-03'),
+        date: new Date(`${todayOtDate()}T00:00:00.000Z`),
         requestedHours: new Decimal(2.0),
         totalHours: new Decimal(2.0),
         status: 'SUBMITTED',
@@ -252,7 +254,7 @@ describe('OvertimeRequestsService', () => {
         id: 'r1',
         designerId: 'd1',
         taskId: 't1',
-        date: new Date('2026-06-03'),
+        date: new Date(`${todayOtDate()}T00:00:00.000Z`),
         requestedHours: new Decimal(2.0),
         totalHours: new Decimal(2.0),
         status: 'SUBMITTED',
@@ -319,7 +321,7 @@ describe('OvertimeRequestsService', () => {
         id: 'r1',
         designerId: 'd1',
         status: 'DRAFT',
-        date: new Date('2026-06-03'),
+        date: new Date(`${todayOtDate()}T00:00:00.000Z`),
         startTime: '17:00',
         endTime: '19:00',
         taskId: 't1',
@@ -344,7 +346,7 @@ describe('OvertimeRequestsService', () => {
         id: 'r1',
         designerId: 'd1',
         status: 'DRAFT',
-        date: new Date('2026-06-03'),
+        date: new Date(`${todayOtDate()}T00:00:00.000Z`),
         startTime: '17:00',
         endTime: '19:00',
         taskId: 't1',
@@ -398,7 +400,7 @@ describe('OvertimeRequestsService', () => {
         designer: { id: 'd1', fullName: 'Designer 1', email: 'd1@x.com', departmentId: 'dept1' },
         task: { id: 't1', title: 'Task 1', taskNo: 'T-001' },
         totalHours: new Decimal(2.0),
-        date: new Date('2026-06-03'),
+        date: new Date(`${todayOtDate()}T00:00:00.000Z`),
         attachments: [],
       };
 
@@ -724,7 +726,7 @@ describe('OvertimeRequestsService', () => {
         status: 'SUBMITTED',
         designerId: 'd1',
         totalHours: new Decimal(2.0),
-        date: new Date('2026-06-03'),
+        date: new Date(`${todayOtDate()}T00:00:00.000Z`),
         designer: { id: 'd1', fullName: 'Designer 1', departmentId: 'dept1' },
       };
       mockPrismaService.overtimeRequest.findUnique.mockResolvedValue(mockRequest);
@@ -732,7 +734,7 @@ describe('OvertimeRequestsService', () => {
         ...mockRequest,
         status: 'APPROVED',
         designerId: 'd1',
-        date: new Date('2026-06-03'),
+        date: new Date(`${todayOtDate()}T00:00:00.000Z`),
         designer: { id: 'd1', fullName: 'Designer 1', email: 'd1@x.com' },
       });
 
@@ -754,7 +756,7 @@ describe('OvertimeRequestsService', () => {
         status: 'SUBMITTED',
         designerId: 'd1',
         totalHours: new Decimal(2.0),
-        date: new Date('2026-06-03'),
+        date: new Date(`${todayOtDate()}T00:00:00.000Z`),
         designer: { id: 'd1', fullName: 'Designer 1', departmentId: 'dept1' },
       };
       mockPrismaService.overtimeRequest.findUnique.mockResolvedValue(mockRequest);
@@ -762,7 +764,7 @@ describe('OvertimeRequestsService', () => {
         ...mockRequest,
         status: 'REJECTED_BY_MANAGER',
         designerId: 'd1',
-        date: new Date('2026-06-03'),
+        date: new Date(`${todayOtDate()}T00:00:00.000Z`),
         designer: { id: 'd1', fullName: 'Designer 1', email: 'd1@x.com' },
       });
 

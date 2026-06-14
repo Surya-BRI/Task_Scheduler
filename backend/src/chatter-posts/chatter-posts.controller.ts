@@ -34,8 +34,12 @@ export class ChatterPostsController {
   constructor(private readonly chatterPostsService: ChatterPostsService) {}
 
   @Get('mention-users')
-  listMentionUsers() {
-    return this.chatterPostsService.listMentionUsers();
+  listMentionUsers(
+    @CurrentUser() user: { sub: string; role: string },
+    @Query('taskId') taskId?: string,
+    @Query('projectId') projectId?: string,
+  ) {
+    return this.chatterPostsService.listMentionUsers(user.sub, user.role, taskId, projectId);
   }
 
   @Get()
@@ -70,9 +74,9 @@ export class ChatterPostsController {
   createComment(
     @Param('postId') postId: string,
     @Body() dto: CreateChatterCommentDto,
-    @CurrentUser() user: { sub: string },
+    @CurrentUser() user: { sub: string; role: string },
   ) {
-    return this.chatterPostsService.createComment(postId, dto, user.sub);
+    return this.chatterPostsService.createComment(postId, dto, user.sub, user.role);
   }
 
   @Patch(':postId/comments/:commentId')
@@ -124,7 +128,7 @@ export class ChatterPostsController {
     } else {
       this.logger.log('File parsed: no files in multipart payload');
     }
-    return this.chatterPostsService.create(createChatterPostDto, user.sub, files);
+    return this.chatterPostsService.create(createChatterPostDto, user.sub, user.role, files);
   }
 
   @Patch(':id/pin')

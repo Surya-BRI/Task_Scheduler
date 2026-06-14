@@ -1,4 +1,4 @@
-import { IsOptional, IsString, Matches, MaxLength, MinLength } from 'class-validator';
+import { IsIn, IsOptional, IsString, Matches, MaxLength, MinLength, ValidateIf } from 'class-validator';
 
 const UUID_RE = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
 
@@ -7,9 +7,26 @@ export class CreateRegularizationRequestDto {
   @Matches(UUID_RE, { message: 'designerId must be a UUID string' })
   designerId!: string;
 
+  @IsOptional()
+  @IsIn(['task', 'non-task'])
+  regularizationType?: 'task' | 'non-task';
+
+  @ValidateIf((o) => (o.regularizationType ?? 'task') === 'task')
   @IsString()
   @Matches(UUID_RE, { message: 'taskId must be a UUID string' })
-  taskId!: string;
+  taskId?: string;
+
+  @ValidateIf((o) => o.regularizationType === 'non-task')
+  @IsString()
+  @MinLength(1)
+  @MaxLength(100)
+  projectId?: string;
+
+  @ValidateIf((o) => o.regularizationType === 'non-task')
+  @IsString()
+  @MinLength(1)
+  @MaxLength(2000)
+  workDetails?: string;
 
   /** YYYY-MM-DD */
   @IsString()
