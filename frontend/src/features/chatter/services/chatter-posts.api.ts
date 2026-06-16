@@ -1,6 +1,7 @@
 import { apiClient } from '@/lib/api-client';
 import { getAccessToken } from '@/lib/auth-token';
 import { isSameUserId } from '@/lib/user-id';
+import { parseMentionUserIdsFromMessage } from '../utils/mention-utils';
 
 export type ChatterMentionedUserDto = {
   id: string;
@@ -95,6 +96,7 @@ export type ChatterFeedPost = {
     author: string;
     authorId: string | null;
     mentionUserId?: string | null;
+    mentionedUsers?: ChatterMentionedUserDto[];
     createdAt: string;
   }>;
   updatedAt: string;
@@ -211,15 +213,18 @@ export function formatMentionSummary(
   fallbackName?: string | null,
   message?: string | null,
 ): string {
-  const msgLower = (message ?? '').toLowerCase();
-  const names = (users ?? [])
-    .map((u) => u.fullName?.trim())
-    .filter(Boolean)
-    .filter((name) => !msgLower.includes(`@${name.toLowerCase()}`)) as string[];
-  if (names.length > 0) return names.map((n) => `@${n}`).join(', ');
+  const directory = users ?? [];
+  const idsInMessage = new Set(parseMentionUserIdsFromMessage(message ?? '', directory));
+  const namesNotInBody = directory
+    .filter((u) => u?.id && u.fullName?.trim() && !idsInMessage.has(u.id))
+    .map((u) => u.fullName!.trim());
+  if (namesNotInBody.length > 0) return namesNotInBody.map((n) => `@${n}`).join(', ');
   const single = fallbackName?.trim();
-  if (single && !isUuidLike(single) && !msgLower.includes(`@${single.toLowerCase()}`)) {
-    return `@${single}`;
+  if (single && !isUuidLike(single)) {
+    const fallbackInMessage =
+      parseMentionUserIdsFromMessage(message ?? '', [{ id: '__fallback__', fullName: single }])
+        .length > 0;
+    if (!fallbackInMessage) return `@${single}`;
   }
   return '—';
 }
@@ -234,7 +239,15 @@ export function getMondayOfWeek(date: Date): string {
 export function mapCommentDtoToFeedComment(
   dto: ChatterCommentDto,
   currentUserId?: string | null,
-): { id: string; message: string; author: string; authorId: string | null; mentionUserId?: string | null; createdAt: string } {
+): {
+  id: string;
+  message: string;
+  author: string;
+  authorId: string | null;
+  mentionUserId?: string | null;
+  mentionedUsers?: ChatterMentionedUserDto[];
+  createdAt: string;
+} {
   const full = dto.authorName?.trim();
   const role = dto.authorRole?.trim();
   const pretty = full ? `${full}${role ? ` (${role})` : ''}` : null;
@@ -248,6 +261,7 @@ export function mapCommentDtoToFeedComment(
     author: authorLabel,
     authorId: dto.authorId,
     mentionUserId: dto.mentionUserId ?? null,
+    mentionedUsers: dto.mentionedUsers ?? [],
     createdAt: dto.createdAt,
   };
 }

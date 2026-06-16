@@ -20,7 +20,7 @@ import {
 import { MentionTextarea } from '@/features/chatter/components/MentionTextarea'
 import { EmbeddedChatterCommentComposer } from '@/features/chatter/components/EmbeddedChatterCommentComposer'
 import { ChatterMentionText } from '@/features/chatter/components/ChatterMentionText'
-import { parseMentionUserIdsFromMessage } from '@/features/chatter/utils/mention-utils'
+import { parseMentionUserIdsFromMessage, resolveMentionUsersForDisplay } from '@/features/chatter/utils/mention-utils'
 import {
   resolveChatterMentionScope,
   resolvePageChatterMentionScope,
@@ -1187,7 +1187,11 @@ export function RetailProjectPage() {
     </div>
     <p className="shrink-0 text-[10px] text-slate-500">{formatChatterDateTime(entry.createdAt)}</p>
   </div>
-  <ChatterMentionText message={entry.message} users={chatterMentionDirectory} className="mt-1 block" />
+  <ChatterMentionText
+    message={entry.message}
+    users={resolveMentionUsersForDisplay(entry.message, entry.mentionedUsers, chatterMentionDirectory)}
+    className="mt-1 block"
+  />
   <div className="mt-2 space-y-1">
     {(entry.comments ?? []).map((comment) => (
       <div
@@ -1201,7 +1205,11 @@ export function RetailProjectPage() {
           </p>
           <p className="shrink-0 text-[10px] text-slate-500">{formatChatterDateTime(comment.createdAt)}</p>
         </div>
-        <ChatterMentionText message={comment.message} users={chatterMentionDirectory} className="mt-1 block" />
+        <ChatterMentionText
+          message={comment.message}
+          users={resolveMentionUsersForDisplay(comment.message, comment.mentionedUsers, chatterMentionDirectory)}
+          className="mt-1 block"
+        />
       </div>
     ))}
   </div>

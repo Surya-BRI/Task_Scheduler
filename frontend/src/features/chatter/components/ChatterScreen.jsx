@@ -11,6 +11,7 @@ import {
   deleteChatterComment,
   deleteChatterPost,
   formatChatterTime,
+  formatMentionSummary,
   getMondayOfWeek,
   likeChatterPost,
   listChatterMentionUsers,
@@ -32,7 +33,7 @@ import {
 } from "../utils/chatterLinkAttachments";
 import { MentionTextarea } from "./MentionTextarea";
 import { ChatterMentionText } from "./ChatterMentionText";
-import { parseMentionUserIdsFromMessage } from "../utils/mention-utils";
+import { parseMentionUserIdsFromMessage, mergeMentionUsers, parseMentionedUsersFromMessage, resolveMentionUsersForDisplay } from "../utils/mention-utils";
 import { isSameUserId, normalizeUserId } from "@/lib/user-id";
 
 const PRIORITY_STYLES = {
@@ -681,7 +682,11 @@ function ChatterCard({
   onDeleteComment,
 }) {
   const hasComments = (post.comments?.length ?? 0) > 0;
-  const textareaRef = useRef(null)
+  const textareaRef = useRef(null);
+  const postMentionUsers = useMemo(
+    () => resolveMentionUsersForDisplay(post.message, post.mentionedUsers, mentionUsers),
+    [post.message, post.mentionedUsers, mentionUsers],
+  );
 
   function applyFormat(syntax) {
     const el = textareaRef.current
@@ -732,7 +737,7 @@ function ChatterCard({
                 {post.mention && post.mention !== '—' ? (
                   <p className="text-sm font-medium text-blue-600 mb-1">{post.mention}</p>
                 ) : null}
-                <FormattedText text={post.message} mentionUsers={mentionUsers} className="text-sm text-slate-800 leading-relaxed" />
+                <FormattedText text={post.message} mentionUsers={postMentionUsers} className="text-sm text-slate-800 leading-relaxed" />
                 
                 <ChatterPostAttachments post={post} />
 
@@ -837,7 +842,15 @@ function ChatterCard({
                   </button>
                 ) : null}
               </div>
-              <FormattedText text={comment.message} mentionUsers={mentionUsers} className="mt-0.5 block text-slate-700" />
+              <FormattedText
+                text={comment.message}
+                mentionUsers={resolveMentionUsersForDisplay(
+                  comment.message,
+                  comment.mentionedUsers,
+                  mentionUsers,
+                )}
+                className="mt-0.5 block text-slate-700"
+              />
             </li>
           ))}
         </ul>
@@ -923,6 +936,11 @@ export function ChatterScreen() {
     for (const post of posts) {
       for (const user of post.mentionedUsers ?? []) {
         if (user?.id) map.set(user.id, user);
+      }
+      for (const comment of post.comments ?? []) {
+        for (const user of comment.mentionedUsers ?? []) {
+          if (user?.id) map.set(user.id, user);
+        }
       }
     }
     return [...map.values()];
@@ -1186,6 +1204,7 @@ export function ChatterScreen() {
         message: post.message,
         author: post.author,
         mention: post.mention,
+        mentionedUsers: post.mentionedUsers,
         time: post.time,
         createdAt: post.updatedAt,
         updatedAt: post.updatedAt,
@@ -1373,6 +1392,19 @@ export function ChatterScreen() {
       }
 
       const newFeedPost = mapChatterPostDtoToFeedPost(createdDto, currentUserId);
+      const mergedMentionedUsers = mergeMentionUsers(
+        createdDto.mentionedUsers,
+        postData.mentionedUsers,
+        parseMentionedUsersFromMessage(postData.message, mentionUsersRef.current),
+      );
+      if (mergedMentionedUsers.length > 0) {
+        newFeedPost.mentionedUsers = mergedMentionedUsers;
+        newFeedPost.mention = formatMentionSummary(
+          mergedMentionedUsers,
+          createdDto.mentionUserName,
+          createdDto.message,
+        );
+      }
       // Keep local File objects as fallback for optimistic rendering
       // (in case the server response doesn't include signed URLs yet)
       if (postData.fileAttachments?.length && (!newFeedPost.fileAttachments || newFeedPost.fileAttachments.length === 0)) {
@@ -1664,7 +1696,15 @@ export function ChatterScreen() {
                                 {chat.mention && chat.mention !== "—" ? (
                                   <p className="mt-0.5 text-xs font-medium text-blue-600">{chat.mention}</p>
                                 ) : null}
-                                <p className="mt-1.5 text-sm text-slate-700">{chat.message}</p>
+                                <ChatterMentionText
+                                  message={chat.message}
+                                  users={resolveMentionUsersForDisplay(
+                                    chat.message,
+                                    chat.mentionedUsers,
+                                    mentionUsersDirectory,
+                                  )}
+                                  className="mt-1.5 text-sm text-slate-700"
+                                />
                                 <p className="mt-2 text-xs text-slate-500 font-medium">
                                   {chat.author} · {chat.time}
                                 </p>
