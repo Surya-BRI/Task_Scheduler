@@ -764,6 +764,14 @@ export function RetailProjectPage() {
     fetchProjectTasks()
   }, [fetchProjectTasks])
 
+  useEffect(() => {
+    if (!taskId || projectTasks.length === 0) return
+    const task = projectTasks.find((t) => t.id === taskId)
+    if (!task) return
+    const hrs = task.retailDetails?.[0]?.hoursRequired
+    setHoursRequired(String(Math.max(1, Number(hrs) || 0)))
+  }, [taskId, projectTasks])
+
   async function handleProjectFilesPicked(files) {
     if (!projectId || files.length === 0) return
     setUploadingProjectFiles(true)

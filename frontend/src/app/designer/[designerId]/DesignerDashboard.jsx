@@ -486,8 +486,8 @@ export default function DesignerDashboard({ designer: designerProp } = {}) {
   return (
     <div className="app-shell flex flex-col font-sans">
       <Navbar
-        currentDate={currentDate}
-        onCalendarChange={setCurrentDate}
+        currentDate={isHOD ? null : currentDate}
+        onCalendarChange={isHOD ? undefined : setCurrentDate}
         dateRangeText={dateRangeText}
       />
 
