@@ -206,13 +206,21 @@ export function resolveEmbeddedChatterTitle(
   return 'Discussion';
 }
 
-export function formatMentionSummary(users?: ChatterMentionedUserDto[], fallbackName?: string | null): string {
+export function formatMentionSummary(
+  users?: ChatterMentionedUserDto[],
+  fallbackName?: string | null,
+  message?: string | null,
+): string {
+  const msgLower = (message ?? '').toLowerCase();
   const names = (users ?? [])
     .map((u) => u.fullName?.trim())
-    .filter(Boolean) as string[];
+    .filter(Boolean)
+    .filter((name) => !msgLower.includes(`@${name.toLowerCase()}`)) as string[];
   if (names.length > 0) return names.map((n) => `@${n}`).join(', ');
   const single = fallbackName?.trim();
-  if (single && !isUuidLike(single)) return `@${single}`;
+  if (single && !isUuidLike(single) && !msgLower.includes(`@${single.toLowerCase()}`)) {
+    return `@${single}`;
+  }
   return '—';
 }
 
@@ -258,7 +266,7 @@ export function mapChatterPostDtoToFeedPost(
       ? 'You'
       : pretty ?? 'Unknown';
   const mentionedUsers = dto.mentionedUsers ?? [];
-  const mention = formatMentionSummary(mentionedUsers, dto.mentionUserName);
+  const mention = formatMentionSummary(mentionedUsers, dto.mentionUserName, dto.message);
 
   const rawType = (dto.postType ?? '').trim();
   const lower = rawType.toLowerCase();
