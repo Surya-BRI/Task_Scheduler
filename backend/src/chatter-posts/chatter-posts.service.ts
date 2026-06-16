@@ -21,6 +21,7 @@ import { TaskFilesService } from '../tasks/task-files.service';
 import {
   MentionUserRef,
   messageSnippet,
+  mergeCollectedMentionUserIds,
   parseMentionUserIdsFromMessage,
   resolveProjectNo,
   resolveTaskOpNo,
@@ -177,6 +178,24 @@ export class ChatterPostsService implements OnModuleInit {
           );
         END
       `);
+      await this.prisma.$executeRawUnsafe(`
+        INSERT INTO ErpTSChatterPostMention (postId, userId)
+        SELECT p.id, p.mentionUserId
+        FROM ErpTSChatterPost p
+        WHERE p.mentionUserId IS NOT NULL
+          AND NOT EXISTS (
+            SELECT 1 FROM ErpTSChatterPostMention pm
+            WHERE pm.postId = p.id AND pm.userId = p.mentionUserId
+          );
+        INSERT INTO ErpTSChatterCommentMention (commentId, userId)
+        SELECT c.id, c.mentionUserId
+        FROM ErpTSChatterComment c
+        WHERE c.mentionUserId IS NOT NULL
+          AND NOT EXISTS (
+            SELECT 1 FROM ErpTSChatterCommentMention cm
+            WHERE cm.commentId = c.id AND cm.userId = c.mentionUserId
+          );
+      `);
     } catch (err) {
       const detail = err instanceof Error ? err.message : String(err);
       this.logger.warn(`Could not ensure chatter schema columns: ${detail}`);
@@ -299,6 +318,20 @@ export class ChatterPostsService implements OnModuleInit {
       .sort((a, b) => a.fullName.localeCompare(b.fullName));
   }
 
+  private async resolveExistingUserIds(ids: string[]): Promise<string[]> {
+    const valid = uniqueUuids(ids);
+    if (!valid.length) return [];
+    const inList = this.sqlInUuidList(valid);
+    if (!inList) return [];
+    const rows = await this.prisma.$queryRawUnsafe<Array<{ id: string }>>(
+      `SELECT CONVERT(varchar(36), id) AS id FROM ErpTSUser WHERE id IN (${inList})`,
+    );
+    const existing = new Set(
+      rows.map((row) => normalizeUserId(String(row.id))).filter(Boolean) as string[],
+    );
+    return valid.filter((id) => existing.has(normalizeUserId(id) as string));
+  }
+
   private async collectPostMentionUserIds(
     dto: CreateChatterPostDto,
     message: string,
@@ -309,11 +342,14 @@ export class ChatterPostsService implements OnModuleInit {
   ): Promise<string[]> {
     const directory = await this.resolveEligibleMentionUsers(authorId, role, taskId, projectId);
     const eligible = new Set(directory.map((user) => user.id));
-    return uniqueUuids([
-      dto.mentionUserId,
-      ...(dto.mentionUserIds ?? []),
-      ...parseMentionUserIdsFromMessage(message, directory),
-    ]).filter((id) => eligible.has(id));
+    const explicitIds = uniqueUuids([dto.mentionUserId, ...(dto.mentionUserIds ?? [])]);
+    const validatedExplicit = await this.resolveExistingUserIds(explicitIds);
+    const parsed = parseMentionUserIdsFromMessage(message, directory);
+    return mergeCollectedMentionUserIds({
+      explicitIds: validatedExplicit,
+      parsedFromMessageIds: parsed,
+      eligibleIds: eligible,
+    });
   }
 
   private async collectCommentMentionUserIds(
@@ -326,11 +362,35 @@ export class ChatterPostsService implements OnModuleInit {
   ): Promise<string[]> {
     const directory = await this.resolveEligibleMentionUsers(authorId, role, taskId, projectId);
     const eligible = new Set(directory.map((user) => user.id));
-    return uniqueUuids([
-      dto.mentionUserId,
-      ...(dto.mentionUserIds ?? []),
-      ...parseMentionUserIdsFromMessage(message, directory),
-    ]).filter((id) => eligible.has(id));
+    const explicitIds = uniqueUuids([dto.mentionUserId, ...(dto.mentionUserIds ?? [])]);
+    const validatedExplicit = await this.resolveExistingUserIds(explicitIds);
+    const parsed = parseMentionUserIdsFromMessage(message, directory);
+    return mergeCollectedMentionUserIds({
+      explicitIds: validatedExplicit,
+      parsedFromMessageIds: parsed,
+      eligibleIds: eligible,
+    });
+  }
+
+  private mergeMentionedUsersList(
+    junctionUsers: ChatterMentionedUserDto[],
+    columnUserId?: string | null,
+    columnUserName?: string | null,
+  ): ChatterMentionedUserDto[] {
+    const map = new Map<string, ChatterMentionedUserDto>();
+    for (const user of junctionUsers) {
+      const id = normalizeUserId(user.id);
+      if (!id) continue;
+      map.set(id, { id, fullName: String(user.fullName ?? '').trim() || 'User' });
+    }
+    const columnId = normalizeUserId(columnUserId);
+    if (columnId && !map.has(columnId)) {
+      map.set(columnId, {
+        id: columnId,
+        fullName: String(columnUserName ?? '').trim() || 'User',
+      });
+    }
+    return [...map.values()].sort((a, b) => a.fullName.localeCompare(b.fullName));
   }
 
   private async insertPostMentions(postId: string, userIds: string[]): Promise<void> {
@@ -382,7 +442,9 @@ export class ChatterPostsService implements OnModuleInit {
     for (const row of rows) {
       const key = String(row.postId);
       const bucket = result.get(key) ?? [];
-      bucket.push({ id: String(row.userId), fullName: String(row.fullName ?? '').trim() });
+      const id = normalizeUserId(String(row.userId));
+      if (!id) continue;
+      bucket.push({ id, fullName: String(row.fullName ?? '').trim() });
       result.set(key, bucket);
     }
     return result;
@@ -411,7 +473,9 @@ export class ChatterPostsService implements OnModuleInit {
     for (const row of rows) {
       const key = String(row.commentId);
       const bucket = result.get(key) ?? [];
-      bucket.push({ id: String(row.userId), fullName: String(row.fullName ?? '').trim() });
+      const id = normalizeUserId(String(row.userId));
+      if (!id) continue;
+      bucket.push({ id, fullName: String(row.fullName ?? '').trim() });
       result.set(key, bucket);
     }
     return result;
@@ -558,7 +622,9 @@ export class ChatterPostsService implements OnModuleInit {
   ): ChatterCommentDto {
     const createdAt =
       row.createdAt instanceof Date ? row.createdAt : new Date(row.createdAt as string | number | Date);
-    const primaryMention = mentionedUsers[0]?.id ?? (row.mentionUserId != null ? String(row.mentionUserId) : null);
+    const primaryMention = normalizeUserId(
+      mentionedUsers[0]?.id ?? (row.mentionUserId != null ? String(row.mentionUserId) : null),
+    );
     return {
       id: String(row.id),
       postId: row.postId != null ? String(row.postId) : null,
@@ -596,11 +662,16 @@ export class ChatterPostsService implements OnModuleInit {
     const mentionMap = await this.loadCommentMentionsMap(commentDtos.map((c) => c.id));
     return commentDtos.map((comment) => {
       const extra = mentionMap.get(comment.id) ?? [];
-      if (!extra.length) return comment;
+      const mentionedUsers = this.mergeMentionedUsersList(
+        extra,
+        comment.mentionUserId,
+        null,
+      );
+      if (!mentionedUsers.length) return comment;
       return {
         ...comment,
-        mentionedUsers: extra,
-        mentionUserId: extra[0]?.id ?? comment.mentionUserId,
+        mentionedUsers,
+        mentionUserId: mentionedUsers[0]?.id ?? comment.mentionUserId,
       };
     });
   }
@@ -846,12 +917,16 @@ export class ChatterPostsService implements OnModuleInit {
     ]);
     const withComments = this.attachComments(posts, comments);
     return withComments.map((post) => {
-      const mentionedUsers = mentionMap.get(post.id) ?? post.mentionedUsers ?? [];
+      const mentionedUsers = this.mergeMentionedUsersList(
+        mentionMap.get(post.id) ?? post.mentionedUsers ?? [],
+        post.mentionUserId,
+        post.mentionUserName,
+      );
       const primaryMention = mentionedUsers[0]?.fullName ?? post.mentionUserName;
       return {
         ...post,
         mentionedUsers,
-        mentionUserId: mentionedUsers[0]?.id ?? post.mentionUserId,
+        mentionUserId: mentionedUsers[0]?.id ?? normalizeUserId(post.mentionUserId),
         mentionUserName: primaryMention ?? post.mentionUserName,
         attachments: attachmentsMap.get(post.id) ?? [],
         linkAttachments: linksMap.get(post.id) ?? [],
@@ -896,7 +971,7 @@ export class ChatterPostsService implements OnModuleInit {
       title: displayTitle,
       message: row.message,
       postType: row.postType ?? null,
-      mentionUserId: row.mentionUserId != null ? String(row.mentionUserId) : null,
+      mentionUserId: normalizeUserId(row.mentionUserId != null ? String(row.mentionUserId) : null),
       mentionedUsers: [],
       priority: row.priority ?? null,
       seenByCount: Number(row.seenByCount ?? 0),

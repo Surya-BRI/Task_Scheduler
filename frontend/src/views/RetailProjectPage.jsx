@@ -14,13 +14,14 @@ import {
   createChatterPost,
   listChatterMentionUsers,
   listChatterPosts,
+  listChatterPostsForTask,
   normalizePriority,
   resolveEmbeddedChatterTitle,
 } from '@/features/chatter/services/chatter-posts.api'
 import { MentionTextarea } from '@/features/chatter/components/MentionTextarea'
 import { EmbeddedChatterCommentComposer } from '@/features/chatter/components/EmbeddedChatterCommentComposer'
 import { ChatterMentionText } from '@/features/chatter/components/ChatterMentionText'
-import { parseMentionUserIdsFromMessage } from '@/features/chatter/utils/mention-utils'
+import { parseMentionUserIdsFromMessage, resolveMentionUsersForDisplay } from '@/features/chatter/utils/mention-utils'
 import {
   resolveChatterMentionScope,
   resolvePageChatterMentionScope,
@@ -651,10 +652,18 @@ export function RetailProjectPage() {
     if (!silent) setChatterLoading(true)
     setChatterError('')
     try {
-      const res = queryTaskId
-        ? await listChatterPosts({ taskId: queryTaskId, limit: 200 })
-        : await listChatterPosts({ projectId, limit: 200 })
-      const posts = Array.isArray(res?.data) ? res.data : (Array.isArray(res) ? res : [])
+      let posts
+      if (queryTaskId) {
+        posts = await listChatterPostsForTask({
+          taskId: queryTaskId,
+          projectId,
+          taskOpNo: m?.opNo ?? null,
+          limit: 200,
+        })
+      } else {
+        const res = await listChatterPosts({ projectId, limit: 200 })
+        posts = Array.isArray(res?.data) ? res.data : (Array.isArray(res) ? res : [])
+      }
       const normalized = [...posts]
       setChatterPosts((prev) =>
         mergeChatterPostLists(normalized, prev, { taskId: queryTaskId, projectId }),
@@ -665,7 +674,7 @@ export function RetailProjectPage() {
     } finally {
       if (!silent) setChatterLoading(false)
     }
-  }, [projectId, taskId])
+  }, [projectId, taskId, m?.opNo])
 
   useEffect(() => {
     if (activeTab !== 'chatter') return
@@ -1187,7 +1196,11 @@ export function RetailProjectPage() {
     </div>
     <p className="shrink-0 text-[10px] text-slate-500">{formatChatterDateTime(entry.createdAt)}</p>
   </div>
-  <ChatterMentionText message={entry.message} users={chatterMentionDirectory} className="mt-1 block" />
+  <ChatterMentionText
+    message={entry.message}
+    users={resolveMentionUsersForDisplay(entry.message, entry.mentionedUsers, chatterMentionDirectory)}
+    className="mt-1 block"
+  />
   <div className="mt-2 space-y-1">
     {(entry.comments ?? []).map((comment) => (
       <div
@@ -1201,7 +1214,11 @@ export function RetailProjectPage() {
           </p>
           <p className="shrink-0 text-[10px] text-slate-500">{formatChatterDateTime(comment.createdAt)}</p>
         </div>
-        <ChatterMentionText message={comment.message} users={chatterMentionDirectory} className="mt-1 block" />
+        <ChatterMentionText
+          message={comment.message}
+          users={resolveMentionUsersForDisplay(comment.message, comment.mentionedUsers, chatterMentionDirectory)}
+          className="mt-1 block"
+        />
       </div>
     ))}
   </div>

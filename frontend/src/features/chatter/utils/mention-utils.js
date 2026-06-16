@@ -42,6 +42,46 @@ export function parseMentionUserIdsFromMessage(message, users) {
 
 /**
  * @param {Array<{ id: string, fullName: string }>} users
+ * @returns {Array<{ id: string, fullName: string }>}
+ */
+export function parseMentionedUsersFromMessage(message, users) {
+  const ids = parseMentionUserIdsFromMessage(message, users);
+  const byId = new Map(
+    (users ?? []).filter((u) => u?.id).map((u) => [u.id, u]),
+  );
+  return ids.map((id) => byId.get(id)).filter(Boolean);
+}
+
+/**
+ * @param {Array<Array<{ id: string, fullName: string }>>} lists
+ * @returns {Array<{ id: string, fullName: string }>}
+ */
+export function mergeMentionUsers(...lists) {
+  const map = new Map();
+  for (const list of lists) {
+    for (const user of list ?? []) {
+      if (!user?.id) continue;
+      const fullName = String(user.fullName ?? '').trim();
+      if (!fullName) continue;
+      map.set(user.id, { id: user.id, fullName });
+    }
+  }
+  return [...map.values()];
+}
+
+/**
+ * Build the user directory needed to render every @mention in a post/comment.
+ * @param {Array<{ id: string, fullName: string }>} mentionedUsers
+ * @param {Array<{ id: string, fullName: string }>} directory
+ */
+export function resolveMentionUsersForDisplay(message, mentionedUsers = [], directory = []) {
+  const merged = mergeMentionUsers(directory, mentionedUsers);
+  const parsed = parseMentionedUsersFromMessage(message, merged);
+  return mergeMentionUsers(merged, mentionedUsers, parsed);
+}
+
+/**
+ * @param {Array<{ id: string, fullName: string }>} users
  */
 export function buildMentionUserMap(users) {
   const map = new Map();

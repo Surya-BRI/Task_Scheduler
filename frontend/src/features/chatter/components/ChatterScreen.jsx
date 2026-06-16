@@ -11,6 +11,7 @@ import {
   deleteChatterComment,
   deleteChatterPost,
   formatChatterTime,
+  formatMentionSummary,
   getMondayOfWeek,
   likeChatterPost,
   listChatterMentionUsers,
@@ -32,7 +33,7 @@ import {
 } from "../utils/chatterLinkAttachments";
 import { MentionTextarea } from "./MentionTextarea";
 import { ChatterMentionText } from "./ChatterMentionText";
-import { parseMentionUserIdsFromMessage } from "../utils/mention-utils";
+import { parseMentionUserIdsFromMessage, mergeMentionUsers, parseMentionedUsersFromMessage, resolveMentionUsersForDisplay } from "../utils/mention-utils";
 import { isSameUserId, normalizeUserId } from "@/lib/user-id";
 
 const PRIORITY_STYLES = {
@@ -40,14 +41,6 @@ const PRIORITY_STYLES = {
   medium: "bg-amber-400",
   high: "bg-red-500",
 };
-
-function getInitials(name) {
-  if (!name) return 'BR';
-  const parts = name.trim().split(/\s+/);
-  return parts.length >= 2
-    ? (parts[0][0] + parts[parts.length - 1][0]).toUpperCase()
-    : name.slice(0, 2).toUpperCase();
-}
 
 function formatTaskCatalogLabel(task) {
   const title = String(task?.title ?? "").trim();
@@ -681,7 +674,11 @@ function ChatterCard({
   onDeleteComment,
 }) {
   const hasComments = (post.comments?.length ?? 0) > 0;
-  const textareaRef = useRef(null)
+  const textareaRef = useRef(null);
+  const postMentionUsers = useMemo(
+    () => resolveMentionUsersForDisplay(post.message, post.mentionedUsers, mentionUsers),
+    [post.message, post.mentionedUsers, mentionUsers],
+  );
 
   function applyFormat(syntax) {
     const el = textareaRef.current
@@ -715,70 +712,63 @@ function ChatterCard({
     <article id={`chatter-post-${post.id}`} className="ui-surface ui-card-pad flex flex-col gap-3">
       <div className="flex gap-4">
         <div className="flex-1 min-w-0">
-          <div className="flex items-start gap-3">
-            <div className="h-10 w-10 rounded-md bg-blue-600 text-white flex items-center justify-center font-bold text-sm shrink-0">
-              {getInitials(post.author)}
-            </div>
-            <div className="flex-1 min-w-0">
-              <div className="flex flex-wrap items-center gap-x-1 gap-y-0.5">
-                <p className="text-[15px] font-semibold uppercase tracking-tight text-blue-600">
-                  {post.title}
-                </p>
-                <span className="text-sm font-medium text-slate-600">- {post.author}</span>
-              </div>
-              <p className="text-xs text-slate-400 mt-0.5">{post.time}</p>
-              
-              <div className="mt-3">
-                {post.mention && post.mention !== '—' ? (
-                  <p className="text-sm font-medium text-blue-600 mb-1">{post.mention}</p>
-                ) : null}
-                <FormattedText text={post.message} mentionUsers={mentionUsers} className="text-sm text-slate-800 leading-relaxed" />
-                
-                <ChatterPostAttachments post={post} />
+          <div className="flex flex-wrap items-center gap-x-1 gap-y-0.5">
+            <p className="text-[15px] font-semibold uppercase tracking-tight text-blue-600">
+              {post.title}
+            </p>
+            <span className="text-sm font-medium text-slate-600">- {post.author}</span>
+          </div>
+          <p className="text-xs text-slate-400 mt-0.5">{post.time}</p>
 
-                <div className="mt-4 flex items-center gap-4 text-xs font-semibold text-slate-500">
-                  <button
-                    type="button"
-                    className="flex items-center gap-1.5 hover:text-blue-600 transition-colors"
-                    onClick={() => onLike?.(post.id)}
-                  >
-                    <ThumbsUp className="w-4 h-4" />
-                    {post.seenBy > 0 ? post.seenBy : "Like"}
-                  </button>
-                  <button
-                    type="button"
-                    className={`flex items-center gap-1.5 transition-colors ${hasComments ? "text-blue-600 hover:text-blue-700" : "hover:text-slate-800"}`}
-                    onClick={onOpenComposer}
-                  >
-                    <MessageCircle className="w-4 h-4" /> {hasComments ? "Commented" : "Comment"}
-                  </button>
-                  {currentUserId && isSameUserId(post.authorId, currentUserId) && (
-                    <div className="relative ml-auto">
-                      <details className="group">
-                        <summary className="list-none cursor-pointer rounded p-1 hover:bg-slate-100">
-                          <MoreHorizontal className="w-4 h-4" />
-                        </summary>
-                        <div className="absolute right-0 top-6 z-10 w-28 rounded-md border border-slate-200 bg-white shadow-md text-xs">
-                          <button
-                            type="button"
-                            className="block w-full px-3 py-2 text-left hover:bg-slate-50"
-                            onClick={() => onEditPost?.(post)}
-                          >
-                            Edit
-                          </button>
-                          <button
-                            type="button"
-                            className="block w-full px-3 py-2 text-left text-red-600 hover:bg-red-50"
-                            onClick={() => onDeletePost?.(post.id)}
-                          >
-                            Delete
-                          </button>
-                        </div>
-                      </details>
+          <div className="mt-3">
+            {post.mention && post.mention !== '—' ? (
+              <p className="text-sm font-medium text-blue-600 mb-1">{post.mention}</p>
+            ) : null}
+            <FormattedText text={post.message} mentionUsers={postMentionUsers} className="text-sm text-slate-800 leading-relaxed" />
+
+            <ChatterPostAttachments post={post} />
+
+            <div className="mt-4 flex items-center gap-4 text-xs font-semibold text-slate-500">
+              <button
+                type="button"
+                className="flex items-center gap-1.5 hover:text-blue-600 transition-colors"
+                onClick={() => onLike?.(post.id)}
+              >
+                <ThumbsUp className="w-4 h-4" />
+                {post.seenBy > 0 ? post.seenBy : "Like"}
+              </button>
+              <button
+                type="button"
+                className={`flex items-center gap-1.5 transition-colors ${hasComments ? "text-blue-600 hover:text-blue-700" : "hover:text-slate-800"}`}
+                onClick={onOpenComposer}
+              >
+                <MessageCircle className="w-4 h-4" /> {hasComments ? "Commented" : "Comment"}
+              </button>
+              {currentUserId && isSameUserId(post.authorId, currentUserId) && (
+                <div className="relative ml-auto">
+                  <details className="group">
+                    <summary className="list-none cursor-pointer rounded p-1 hover:bg-slate-100">
+                      <MoreHorizontal className="w-4 h-4" />
+                    </summary>
+                    <div className="absolute right-0 top-6 z-10 w-28 rounded-md border border-slate-200 bg-white shadow-md text-xs">
+                      <button
+                        type="button"
+                        className="block w-full px-3 py-2 text-left hover:bg-slate-50"
+                        onClick={() => onEditPost?.(post)}
+                      >
+                        Edit
+                      </button>
+                      <button
+                        type="button"
+                        className="block w-full px-3 py-2 text-left text-red-600 hover:bg-red-50"
+                        onClick={() => onDeletePost?.(post.id)}
+                      >
+                        Delete
+                      </button>
                     </div>
-                  )}
+                  </details>
                 </div>
-              </div>
+              )}
             </div>
           </div>
         </div>
@@ -837,7 +827,15 @@ function ChatterCard({
                   </button>
                 ) : null}
               </div>
-              <FormattedText text={comment.message} mentionUsers={mentionUsers} className="mt-0.5 block text-slate-700" />
+              <FormattedText
+                text={comment.message}
+                mentionUsers={resolveMentionUsersForDisplay(
+                  comment.message,
+                  comment.mentionedUsers,
+                  mentionUsers,
+                )}
+                className="mt-0.5 block text-slate-700"
+              />
             </li>
           ))}
         </ul>
@@ -923,6 +921,11 @@ export function ChatterScreen() {
     for (const post of posts) {
       for (const user of post.mentionedUsers ?? []) {
         if (user?.id) map.set(user.id, user);
+      }
+      for (const comment of post.comments ?? []) {
+        for (const user of comment.mentionedUsers ?? []) {
+          if (user?.id) map.set(user.id, user);
+        }
       }
     }
     return [...map.values()];
@@ -1108,19 +1111,20 @@ export function ChatterScreen() {
   const privateMentions = useMemo(() => {
     if (!currentUserId) return [];
     const source = mentionFeedPosts.length > 0 ? mentionFeedPosts : sortedPosts;
+    const isMentionedInComment = (comment) =>
+      isSameUserId(comment.mentionUserId, currentUserId)
+      || (comment.mentionedUsers ?? []).some((u) => isSameUserId(u.id, currentUserId));
+    const isMentionedInPost = (post) =>
+      isSameUserId(post.mentionUserId, currentUserId)
+      || (post.mentionedUsers ?? []).some((u) => isSameUserId(u.id, currentUserId));
     return source
       .filter((post) => {
-        if (post.mentionUserId === currentUserId) return true;
-        if ((post.mentionedUsers ?? []).some((u) => u.id === currentUserId)) return true;
-        return (post.comments ?? []).some(
-          (comment) =>
-            comment.mentionUserId === currentUserId
-            || (comment.mentionedUsers ?? []).some((u) => u.id === currentUserId),
-        );
+        if (isMentionedInPost(post)) return true;
+        return (post.comments ?? []).some(isMentionedInComment);
       })
       .map((post) => {
-        const mentionedComment = (post.comments ?? []).find((c) => c.mentionUserId === currentUserId);
-        const isPostMention = post.mentionUserId === currentUserId;
+        const mentionedComment = (post.comments ?? []).find(isMentionedInComment);
+        const isPostMention = isMentionedInPost(post) && !mentionedComment;
         return {
           id: `${post.id}-${mentionedComment?.id ?? "post"}`,
           postId: post.id,
@@ -1186,6 +1190,7 @@ export function ChatterScreen() {
         message: post.message,
         author: post.author,
         mention: post.mention,
+        mentionedUsers: post.mentionedUsers,
         time: post.time,
         createdAt: post.updatedAt,
         updatedAt: post.updatedAt,
@@ -1373,6 +1378,19 @@ export function ChatterScreen() {
       }
 
       const newFeedPost = mapChatterPostDtoToFeedPost(createdDto, currentUserId);
+      const mergedMentionedUsers = mergeMentionUsers(
+        createdDto.mentionedUsers,
+        postData.mentionedUsers,
+        parseMentionedUsersFromMessage(postData.message, mentionUsersRef.current),
+      );
+      if (mergedMentionedUsers.length > 0) {
+        newFeedPost.mentionedUsers = mergedMentionedUsers;
+        newFeedPost.mention = formatMentionSummary(
+          mergedMentionedUsers,
+          createdDto.mentionUserName,
+          createdDto.message,
+        );
+      }
       // Keep local File objects as fallback for optimistic rendering
       // (in case the server response doesn't include signed URLs yet)
       if (postData.fileAttachments?.length && (!newFeedPost.fileAttachments || newFeedPost.fileAttachments.length === 0)) {
@@ -1664,7 +1682,15 @@ export function ChatterScreen() {
                                 {chat.mention && chat.mention !== "—" ? (
                                   <p className="mt-0.5 text-xs font-medium text-blue-600">{chat.mention}</p>
                                 ) : null}
-                                <p className="mt-1.5 text-sm text-slate-700">{chat.message}</p>
+                                <ChatterMentionText
+                                  message={chat.message}
+                                  users={resolveMentionUsersForDisplay(
+                                    chat.message,
+                                    chat.mentionedUsers,
+                                    mentionUsersDirectory,
+                                  )}
+                                  className="mt-1.5 text-sm text-slate-700"
+                                />
                                 <p className="mt-2 text-xs text-slate-500 font-medium">
                                   {chat.author} · {chat.time}
                                 </p>
