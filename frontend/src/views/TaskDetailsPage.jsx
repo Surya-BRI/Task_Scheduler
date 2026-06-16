@@ -14,6 +14,7 @@ import {
   createChatterPost,
   listChatterMentionUsers,
   listChatterPosts,
+  listChatterPostsForTask,
   normalizePriority,
   resolveEmbeddedChatterTitle,
 } from '@/features/chatter/services/chatter-posts.api'
@@ -1120,21 +1121,22 @@ export function TaskDetailsPage() {
   useEffect(() => {
     let alive = true
     async function resolveTaskId() {
+      const routeTaskId = routeId && isUuid(String(routeId).trim()) ? String(routeId).trim() : null
       if (!record) {
-        if (alive) setTaskId('')
+        if (alive) setTaskId(routeTaskId ?? '')
         return
       }
       setResolvingTaskId(true)
       try {
         const foundId = await resolveTaskIdForChatter({
-          taskId: record.taskId,
+          taskId: record.taskId ?? routeTaskId,
           recordId: record.id,
           opNo: record.opNo,
           projectId,
           fromTaskApi: Boolean(record.fromTaskApi),
         })
         if (!alive) return
-        setTaskId(foundId ?? '')
+        setTaskId(foundId ?? routeTaskId ?? '')
         if (foundId) {
           try {
             const fullTask = await apiClient.get(`/tasks/${encodeURIComponent(foundId)}`)
@@ -1155,7 +1157,7 @@ export function TaskDetailsPage() {
     return () => {
       alive = false
     }
-  }, [record?.taskId, record?.id, record?.opNo, record?.fromTaskApi, projectId])
+  }, [record?.taskId, record?.id, record?.opNo, record?.fromTaskApi, projectId, routeId])
 
   useEffect(() => {
     if (!record || isCreationRoute) return
@@ -1292,10 +1294,18 @@ export function TaskDetailsPage() {
     setChatterError('')
     if (!silent) setChatterLoading(true)
     try {
-      const res = queryTaskId
-        ? await listChatterPosts({ taskId: queryTaskId, limit: 200 })
-        : await listChatterPosts({ projectId, limit: 200 })
-      const posts = Array.isArray(res?.data) ? res.data : (Array.isArray(res) ? res : [])
+      let posts
+      if (queryTaskId) {
+        posts = await listChatterPostsForTask({
+          taskId: queryTaskId,
+          projectId,
+          taskOpNo: record?.opNo ?? null,
+          limit: 200,
+        })
+      } else {
+        const res = await listChatterPosts({ projectId, limit: 200 })
+        posts = Array.isArray(res?.data) ? res.data : (Array.isArray(res) ? res : [])
+      }
       const normalized = [...posts]
       setChatterPosts((prev) =>
         mergeChatterPostLists(normalized, prev, { taskId: queryTaskId, projectId }),
@@ -1306,7 +1316,7 @@ export function TaskDetailsPage() {
     } finally {
       if (!silent) setChatterLoading(false)
     }
-  }, [projectId, taskId])
+  }, [projectId, taskId, record?.opNo])
 
   useEffect(() => {
     if (activeTab !== 'chatter') return

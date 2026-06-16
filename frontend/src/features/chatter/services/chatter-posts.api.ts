@@ -432,6 +432,52 @@ export function listChatterPosts(params?: {
     .then(normalizeChatterPostsPagedResponse);
 }
 
+function postMatchesTaskOpNo(
+  post: ChatterPostDto,
+  taskOpNo?: string | null,
+): boolean {
+  const needle = taskOpNo?.trim().toLowerCase();
+  if (!needle) return false;
+  const hay = [post.listingLabel, post.taskOpNo, post.taskName, post.title]
+    .map((v) => String(v ?? '').trim().toLowerCase())
+    .filter(Boolean)
+    .join(' ');
+  return hay.includes(needle) || needle.includes(hay);
+}
+
+/** Task chatter: task-scoped posts plus legacy project-scoped posts for the same OP. */
+export async function listChatterPostsForTask(params: {
+  taskId: string;
+  projectId?: string | null;
+  taskOpNo?: string | null;
+  limit?: number;
+}): Promise<ChatterPostDto[]> {
+  const limit = params.limit ?? 200;
+  const taskRes = await listChatterPosts({ taskId: params.taskId, limit });
+  const byId = new Map<string, ChatterPostDto>();
+  for (const post of taskRes.data ?? []) {
+    byId.set(post.id, post);
+  }
+
+  if (params.projectId) {
+    const projectRes = await listChatterPosts({ projectId: params.projectId, limit });
+    for (const post of projectRes.data ?? []) {
+      if (byId.has(post.id)) continue;
+      if (post.taskId === params.taskId) {
+        byId.set(post.id, post);
+        continue;
+      }
+      if (!post.taskId && postMatchesTaskOpNo(post, params.taskOpNo)) {
+        byId.set(post.id, post);
+      }
+    }
+  }
+
+  return [...byId.values()].sort(
+    (a, b) => new Date(b.createdAt).getTime() - new Date(a.createdAt).getTime(),
+  );
+}
+
 export function listChatterComments(postId: string) {
   return apiClient.get<ChatterCommentDto[]>(`/chatter-posts/${encodeURIComponent(postId)}/comments`);
 }
