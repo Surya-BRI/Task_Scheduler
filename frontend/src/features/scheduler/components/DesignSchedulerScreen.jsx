@@ -77,7 +77,7 @@ function buildPreparedDropAssignment({
     const parentId = droppedTask.parentId ?? droppedTask.id;
     const baseName = droppedTask.baseName ?? droppedTask.name;
     const visibleWeekdays = [...visibleDays].filter((d) => d < 5).sort((a, b) => a - b);
-    let remainingHours = droppedTask.estimatedHours;
+    let remainingHours = droppedTask.estimatedHours > 0 ? droppedTask.estimatedHours : 1;
     const plannedParts = [];
     let currentDayIndex = targetDayIndex;
     let hasOvertimeFlag = false;
@@ -221,6 +221,31 @@ function formatLocalYyyyMmDd(date) {
     return `${y}-${m}-${d}`;
 }
 
+const SCHEDULER_OVERFLOW_KEY = (weekStart) => `scheduler_overflow_v1_${weekStart}`;
+
+function addDaysToDateStr(dateStr, days) {
+    const d = new Date(dateStr + "T00:00:00");
+    d.setDate(d.getDate() + days);
+    return formatLocalYyyyMmDd(d);
+}
+
+function pruneOldOverflowKeys(currentWeekStartStr) {
+    try {
+        const cutoff = new Date(currentWeekStartStr + "T00:00:00");
+        cutoff.setDate(cutoff.getDate() - 28);
+        const cutoffStr = formatLocalYyyyMmDd(cutoff);
+        const toDelete = [];
+        for (let i = 0; i < localStorage.length; i++) {
+            const key = localStorage.key(i);
+            if (key?.startsWith("scheduler_overflow_v1_")) {
+                const weekPart = key.replace("scheduler_overflow_v1_", "");
+                if (weekPart < cutoffStr) toDelete.push(key);
+            }
+        }
+        toDelete.forEach((k) => localStorage.removeItem(k));
+    } catch { /* localStorage unavailable */ }
+}
+
 function normalizeParentIdFromErp(value) {
     if (value == null)
         return undefined;
@@ -284,7 +309,7 @@ function buildMockSchedulerState(records, designers) {
             projectName: record.projectName || "",
             designType: record.designType || "",
             opNo: record.opNo || "",
-            estimatedHours: Number(record.estimatedHours) > 0 ? Number(record.estimatedHours) : (idx % 3) + 2,
+            estimatedHours: Number(record.estimatedHours) || 0,
             status,
             colorClass: status === "ON_HOLD" || status === "unassigned" && idx % 3 === 0
                 ? "bg-slate-50 border border-slate-200 text-slate-700"
@@ -325,7 +350,7 @@ function buildSchedulerStateFromErpAssignments(records, rows, designers) {
             projectName: record.projectName || "",
             designType: record.designType || "",
             opNo: record.opNo || "",
-            estimatedHours: Number(record.estimatedHours) > 0 ? Number(record.estimatedHours) : (idx % 3) + 2,
+            estimatedHours: Number(record.estimatedHours) || 0,
             status: sourceStatus === "ON_HOLD" ? "ON_HOLD" : "unassigned",
             colorClass: TASK_COLORS[idx % TASK_COLORS.length],
             baseName: record.name,
@@ -437,9 +462,10 @@ export function DesignSchedulerScreen() {
     const [schedules, setSchedules] = useState({});
     const [loadedFromErp, setLoadedFromErp] = useState(false);
     const [, weekVersionRef, setWeekVersion] = useStateRef(0);
-    const persistInFlightRef = useRef(false);
-    const pendingPersistRef  = useRef(null);
-    const flushPersistRef    = useRef(null);
+    const persistInFlightRef      = useRef(false);
+    const pendingPersistRef       = useRef(null);
+    const flushPersistRef         = useRef(null);
+    const persistWeekSnapshotRef  = useRef(null);
 
     const [searchQuery, setSearchQuery] = useState("");
     const splitIdCounterRef = useRef(0);
@@ -450,7 +476,7 @@ export function DesignSchedulerScreen() {
     const [dropIndicator, setDropIndicator] = useState(null);
     
     // Custom Date selection state
-    const [currentDate, setCurrentDate] = useState(DEFAULT_SCHEDULER_REFERENCE_DATE);
+    const [currentDate, setCurrentDate] = useState(() => new Date());
     const [navStateReady, setNavStateReady] = useState(false);
 
     useEffect(() => {
@@ -513,13 +539,16 @@ export function DesignSchedulerScreen() {
                 const rows = Array.isArray(res?.data)
                     ? res.data.map((task) => {
                         const mapped = mapTaskToDesignRow(task);
-                        const retailHours = task?.retailDetails?.hoursRequired;
-                        const projectHours = task?.projectDetails
-                            ? (Number(task.projectDetails.artworkHours) || 0) +
-                              (Number(task.projectDetails.technicalHours) || 0) +
-                              (Number(task.projectDetails.locationHours) || 0) +
-                              (Number(task.projectDetails.asBuiltHours) || 0)
-                            : 0;
+                        const retailHours = task?.retailDetails?.[0]?.hoursRequired;
+                        const projectHours = (task?.projectDetails ?? []).reduce(
+                            (sum, d) =>
+                                sum +
+                                (Number(d.artworkHours) || 0) +
+                                (Number(d.technicalHours) || 0) +
+                                (Number(d.locationHours) || 0) +
+                                (Number(d.asBuiltHours) || 0),
+                            0,
+                        );
                         return {
                             id: mapped.id,
                             name: mapped.name,
@@ -530,7 +559,7 @@ export function DesignSchedulerScreen() {
                             status: task?.status,
                             updatedAt: task?.updatedAt,
                             holdStartedAt: task?.updatedAt,
-                            estimatedHours: Number(retailHours ?? (projectHours || null) ?? task?.hoursRequired ?? task?.estimatedHours ?? 0) || 0,
+                            estimatedHours: Math.max(1, Number(retailHours ?? (projectHours || null) ?? 0) || 0),
                         };
                     })
                     : [];
@@ -569,7 +598,7 @@ export function DesignSchedulerScreen() {
                 });
             });
         });
-        return assignments.filter((a) => a.assignedHours > 0);
+        return assignments.filter((a) => Number.isFinite(a.assignedHours) && a.assignedHours > 0);
     };
 
     const reloadWeek = useCallback(async () => {
@@ -591,6 +620,43 @@ export function DesignSchedulerScreen() {
                 setSchedules(mock.schedulesObj);
                 setLoadedFromErp(false);
             }
+
+            // Restore any overflow hours carried forward from the previous week.
+            // These are placed directly onto Monday (dayIndex 0) for the same designer.
+            try {
+                const stored = localStorage.getItem(SCHEDULER_OVERFLOW_KEY(weekStartStr));
+                if (stored) {
+                    const entries = JSON.parse(stored);
+                    if (Array.isArray(entries) && entries.length > 0) {
+                        const carryTasks = Object.fromEntries(
+                            entries.map(({ task }) => [task.id, { ...task, status: "assigned" }])
+                        );
+                        setTasks((prev) => ({ ...carryTasks, ...prev }));
+                        setSchedules((prev) => {
+                            const next = cloneState(prev);
+                            entries.forEach(({ task, designerId }) => {
+                                if (!next[designerId]) next[designerId] = {};
+                                if (!next[designerId]["0"]) next[designerId]["0"] = [];
+                                if (!next[designerId]["0"].includes(task.id)) {
+                                    next[designerId]["0"].push(task.id);
+                                }
+                            });
+                            return next;
+                        });
+                        localStorage.removeItem(SCHEDULER_OVERFLOW_KEY(weekStartStr));
+                        // Persist the Monday placements to backend immediately.
+                        setTimeout(() => {
+                            setTasks((t) => {
+                                setSchedules((s) => {
+                                    persistWeekSnapshotRef.current?.(s, t);
+                                    return s;
+                                });
+                                return t;
+                            });
+                        }, 0);
+                    }
+                }
+            } catch { /* ignore localStorage parse errors */ }
         } catch {
             const mock = buildMockSchedulerState(queueRecords, designers);
             setTasks(mock.tasksObj);
@@ -640,7 +706,41 @@ export function DesignSchedulerScreen() {
         const weekStartStr = formatLocalYyyyMmDd(getWeekDays(currentDate)[0]);
         pendingPersistRef.current = { schedules: nextSchedules, tasks: nextTasks, weekStartStr };
         flushPersist();
+
+        // Carry split-overflow tasks to Monday of next week for the same designer.
+        try {
+            const nextWeekStart = addDaysToDateStr(weekStartStr, 7);
+            const overflowEntries = [];
+            Object.values(nextTasks).forEach((t) => {
+                if (t.status !== "unassigned" || !isUuid(t.parentId)) return;
+                // Find which designer owns a sibling part of this split in the current schedule.
+                let ownerDesignerId = null;
+                for (const [dId, dayMap] of Object.entries(nextSchedules)) {
+                    for (const taskIds of Object.values(dayMap)) {
+                        if (taskIds.some((tid) => {
+                            const st = nextTasks[tid];
+                            return st && (tid === t.parentId || st.parentId === t.parentId);
+                        })) {
+                            ownerDesignerId = dId;
+                            break;
+                        }
+                    }
+                    if (ownerDesignerId) break;
+                }
+                if (ownerDesignerId) {
+                    overflowEntries.push({ task: t, designerId: ownerDesignerId });
+                }
+            });
+
+            if (overflowEntries.length > 0) {
+                localStorage.setItem(SCHEDULER_OVERFLOW_KEY(nextWeekStart), JSON.stringify(overflowEntries));
+            } else {
+                localStorage.removeItem(SCHEDULER_OVERFLOW_KEY(nextWeekStart));
+            }
+            pruneOldOverflowKeys(weekStartStr);
+        } catch { /* localStorage unavailable */ }
     }, [currentDate, flushPersist]);
+    persistWeekSnapshotRef.current = persistWeekSnapshot;
 
     const [overtimePrompt, setOvertimePrompt] = useState({
         open: false,
@@ -1002,7 +1102,7 @@ export function DesignSchedulerScreen() {
         }
         return { optimized: newSchedules, changed };
     };
-    // Automatically optimize schedule whenever it changes (skip when showing ERP snapshot)
+    // Automatically optimize schedule whenever it changes (skip when showing ERP snapshot).
     useEffect(() => {
         if (loadedFromErp)
             return;
@@ -1059,25 +1159,46 @@ export function DesignSchedulerScreen() {
         dateRangeText={dateRangeText}
       />
 
-      <div className="relative z-10 flex shrink-0 items-center border-b border-slate-200 bg-white px-6 py-2 text-sm font-medium text-slate-700">
-        <div className="w-64 border-r border-slate-200 pr-4">Unassigned &amp; On-HOLD</div>
-        <div className="flex-1 flex px-6 justify-between items-center max-w-4xl">
-          <div><span className="mr-1 font-medium text-slate-500">Designers:</span>{totalDesignersCount}</div>
-          <div className="flex items-center gap-2"><div className="w-2.5 h-2.5 bg-green-400 rounded-sm"></div> Scheduled: {totalScheduledTaskCount}</div>
-          <div className="flex items-center gap-2"><div className="w-2.5 h-2.5 bg-orange-400 rounded-sm"></div> Total Hours: {totalScheduledHours}h</div>
-          <div className="flex items-center gap-2 text-red-500"><AlertTriangle size={14}/> Overloaded: {overloadedCount}</div>
-          <div className="flex items-center gap-2 ml-2">
-            <button type="button" onClick={() => setCurrentDate((d) => { const p = new Date(d); p.setDate(p.getDate() - 7); return p; })} className="ui-chip-button px-2" title="Previous week">‹</button>
-            <span className="text-xs font-medium text-slate-600 bg-slate-100 border border-slate-200 rounded-md px-2.5 py-1 whitespace-nowrap">{dateRangeText}</span>
-            <button type="button" onClick={() => setCurrentDate((d) => { const n = new Date(d); n.setDate(n.getDate() + 7); return n; })} className="ui-chip-button px-2" title="Next week">›</button>
-            <div className="w-px h-4 bg-slate-200 mx-1" />
-            <button type="button" onClick={() => setViewMode("week")} className={`ui-chip-button ${viewMode === "week" ? "ui-chip-button-active" : ""}`}>Week</button>
-            <button type="button" onClick={() => {
-            const weekdayCurrentDay = isWeekdayIndex(currentDay) ? currentDay : WEEKDAY_INDICES[0];
-            setViewMode("custom");
-            setCurrentDay(weekdayCurrentDay);
-            setSelectedDays([weekdayCurrentDay]);
-        }} className={`ui-chip-button ${viewMode === "custom" ? "ui-chip-button-active" : ""}`}>Custom</button>
+      <div className="relative z-10 flex shrink-0 items-center border-b border-slate-200 bg-white px-4 py-2 text-sm font-medium text-slate-700 sm:px-6">
+        <div className="w-64 shrink-0 border-r border-slate-200 pr-4 font-medium text-slate-800">
+          Unassigned &amp; On-HOLD
+        </div>
+        <div className="flex min-w-0 flex-1 items-center justify-between gap-3 px-3 sm:px-6">
+          <div className="flex min-w-0 flex-1 flex-wrap items-center justify-center gap-x-4 gap-y-2 px-2">
+            <div><span className="mr-1 font-medium text-slate-500">Designers:</span>{totalDesignersCount}</div>
+            <div className="flex items-center gap-2"><div className="h-2.5 w-2.5 rounded-sm bg-green-400" /> Scheduled: {totalScheduledTaskCount}</div>
+            <div className="flex items-center gap-2"><div className="h-2.5 w-2.5 rounded-sm bg-orange-400" /> Total Hours: {totalScheduledHours}h</div>
+            <div className="flex items-center gap-2 text-red-500"><AlertTriangle size={14}/> Overloaded: {overloadedCount}</div>
+            <div className="flex items-center gap-2">
+              <button type="button" onClick={() => setCurrentDate((d) => { const p = new Date(d); p.setDate(p.getDate() - 7); return p; })} className="ui-chip-button px-2" title="Previous week">‹</button>
+              <span className="whitespace-nowrap rounded-md border border-slate-200 bg-slate-100 px-2.5 py-1 text-xs font-medium text-slate-600">{dateRangeText}</span>
+              <button type="button" onClick={() => setCurrentDate((d) => { const n = new Date(d); n.setDate(n.getDate() + 7); return n; })} className="ui-chip-button px-2" title="Next week">›</button>
+              <div className="mx-1 h-4 w-px bg-slate-200" />
+              <button type="button" onClick={() => setViewMode("week")} className={`ui-chip-button ${viewMode === "week" ? "ui-chip-button-active" : ""}`}>Week</button>
+              <button type="button" onClick={() => {
+                const weekdayCurrentDay = isWeekdayIndex(currentDay) ? currentDay : WEEKDAY_INDICES[0];
+                setViewMode("custom");
+                setCurrentDay(weekdayCurrentDay);
+                setSelectedDays([weekdayCurrentDay]);
+              }} className={`ui-chip-button ${viewMode === "custom" ? "ui-chip-button-active" : ""}`}>Custom</button>
+            </div>
+          </div>
+
+          <div className="flex shrink-0 items-center gap-2">
+            <button
+              type="button"
+              onClick={() => router.push("/designer/leave-planner")}
+              className="ui-chip-button border border-[#f8d2d2] bg-[#fce8e6] font-semibold text-[#af5b5b] hover:bg-[#fbd8d8] whitespace-nowrap"
+            >
+              Leave Request
+            </button>
+            <button
+              type="button"
+              onClick={() => router.push("/designer/requests#overtime")}
+              className="ui-chip-button border border-[#d2d5f8] bg-[#e6e8fc] font-semibold text-[#5d5baf] hover:bg-[#d8dcfb] whitespace-nowrap"
+            >
+              Overtime Request
+            </button>
           </div>
         </div>
       </div>
@@ -1139,7 +1260,7 @@ export function DesignSchedulerScreen() {
                         </span>
                       )}
                       <div className="flex items-center gap-1 ml-auto shrink-0">
-                        {task.estimatedHours > 0 && <span className="text-[9px] font-bold bg-slate-200 text-slate-700 px-1.5 py-0.5 rounded">{task.estimatedHours}h</span>}
+                        <span className="text-[9px] font-bold bg-slate-200 text-slate-700 px-1.5 py-0.5 rounded">{`${task.estimatedHours}h`}</span>
                       </div>
                     </div>
                     <div className="text-[9px] font-bold mt-1.5 bg-red-100 text-red-600 inline-block px-1.5 py-0.5 rounded uppercase self-start">Hold: {formatHoldDuration(task.holdStartedAt)}</div>
@@ -1167,7 +1288,7 @@ export function DesignSchedulerScreen() {
                         </span>
                       )}
                       <div className="flex items-center gap-1 ml-auto shrink-0">
-                        {task.estimatedHours > 0 && <span className="text-[9px] font-bold bg-slate-200 text-slate-700 px-1.5 py-0.5 rounded">{task.estimatedHours}h</span>}
+                        <span className="text-[9px] font-bold bg-slate-200 text-slate-700 px-1.5 py-0.5 rounded">{`${task.estimatedHours}h`}</span>
                       </div>
                     </div>
                   </div>))}

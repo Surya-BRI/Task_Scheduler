@@ -19,18 +19,10 @@ import {
 import { Navbar } from "@/components/Navbar";
 import { apiClient } from "@/lib/api-client";
 import { taskSummaryPath, taskViewPathForRecord } from "@/lib/design-list-routes";
-import { getStatusLabel, mapTaskToDesignRow, matchDateRange } from "../task-view-model";
+import { getStatusLabel, mapTaskToDesignRow, matchDateRange, toBackendStatus } from "../task-view-model";
 
 const getStatusColor = (status) => {
   switch (status) {
-    // Legacy
-    case "WIP":              return "bg-blue-100 text-blue-700 border-blue-200";
-    case "COMPLETED":        return "bg-green-100 text-green-700 border-green-200";
-    case "PENDING":          return "bg-amber-50 text-amber-700 border-amber-200";
-    case "REVISION":         return "bg-red-100 text-red-700 border-red-200";
-    case "APPROVED":         return "bg-purple-100 text-purple-700 border-purple-200";
-    case "ON_HOLD":          return "bg-slate-100 text-slate-700 border-slate-300";
-    // New lifecycle
     case "DESIGN_NEW":       return "bg-amber-100 text-amber-700 border-amber-200";
     case "DESIGN_PLANNED":   return "bg-sky-100 text-sky-700 border-sky-200";
     case "IN_PROGRESS":      return "bg-blue-100 text-blue-700 border-blue-200";
@@ -40,20 +32,13 @@ const getStatusColor = (status) => {
     case "REWORK":           return "bg-red-100 text-red-700 border-red-200";
     case "REVIEW_COMPLETED": return "bg-green-100 text-green-700 border-green-200";
     case "CLIENT_REJECTED":  return "bg-rose-100 text-rose-700 border-rose-200";
+    case "ON_HOLD":          return "bg-slate-100 text-slate-700 border-slate-300";
     default:                 return "bg-slate-100 text-slate-700 border-slate-200";
   }
 };
 
 const getStatusDot = (status) => {
   switch (status) {
-    // Legacy
-    case "WIP":              return "bg-blue-500";
-    case "COMPLETED":        return "bg-green-500";
-    case "PENDING":          return "bg-yellow-500";
-    case "REVISION":         return "bg-orange-500";
-    case "APPROVED":         return "bg-purple-500";
-    case "ON_HOLD":          return "bg-slate-500";
-    // New lifecycle
     case "DESIGN_NEW":       return "bg-amber-500";
     case "DESIGN_PLANNED":   return "bg-sky-500";
     case "IN_PROGRESS":      return "bg-blue-500";
@@ -63,6 +48,7 @@ const getStatusDot = (status) => {
     case "REWORK":           return "bg-red-500";
     case "REVIEW_COMPLETED": return "bg-green-500";
     case "CLIENT_REJECTED":  return "bg-rose-500";
+    case "ON_HOLD":          return "bg-slate-500";
     default:                 return "bg-slate-500";
   }
 };
@@ -92,11 +78,8 @@ const Toolbar = ({ viewMode, setViewMode, filters, setFilters, salesPersons }) =
     filters.endDate,
   ].filter(Boolean).length;
   const designStatuses = [
-    // New lifecycle
     "DESIGN_NEW", "DESIGN_PLANNED", "IN_PROGRESS", "DESIGN_COMPLETED",
-    "HOD_REVIEW", "SALES_REVIEW", "REWORK", "REVIEW_COMPLETED", "CLIENT_REJECTED",
-    // Legacy
-    "PENDING", "WIP", "ON_HOLD", "REVISION", "APPROVED", "COMPLETED",
+    "HOD_REVIEW", "SALES_REVIEW", "REWORK", "REVIEW_COMPLETED", "CLIENT_REJECTED", "ON_HOLD",
   ];
 
   return (
@@ -146,7 +129,7 @@ const Toolbar = ({ viewMode, setViewMode, filters, setFilters, salesPersons }) =
               <div className="flex flex-wrap gap-2 mt-1">
                 <button onClick={() => setFilters({ ...filters, status: "" })} className={`px-3 py-1 rounded-full text-xs font-medium border transition-colors cursor-pointer ${filters.status === "" ? "bg-slate-800 text-white border-slate-800" : "bg-white text-slate-600 border-slate-200 hover:bg-slate-50"}`}>All</button>
                 {designStatuses.map((status) => (
-                  <button key={status} onClick={() => setFilters({ ...filters, status })} className={`px-3 py-1 rounded-full text-xs font-medium border focus:outline-none transition-all cursor-pointer ${filters.status === status ? `ring-2 ring-blue-500 ring-offset-1 shadow-sm ${getStatusColor(status)}` : `bg-white ${getStatusColor(status).replace("bg-", "hover:bg-").split(" ").filter((c) => !c.startsWith("bg-")).join(" ")}`}`}>{status === "PENDING" ? "Confirmation Pending" : getStatusLabel(status)}</button>
+                  <button key={status} onClick={() => setFilters({ ...filters, status })} className={`px-3 py-1 rounded-full text-xs font-medium border focus:outline-none transition-all cursor-pointer ${filters.status === status ? `ring-2 ring-blue-500 ring-offset-1 shadow-sm ${getStatusColor(status)}` : `bg-white ${getStatusColor(status).replace("bg-", "hover:bg-").split(" ").filter((c) => !c.startsWith("bg-")).join(" ")}`}`}>{getStatusLabel(status)}</button>
                 ))}
               </div>
             </div>
@@ -186,12 +169,16 @@ const Table = ({ data }) => {
 const Board = ({ data }) => {
   const router = useRouter();
   const columns = [
-    { title: "WIP", status: "WIP" },
-    { title: "Confirmation Pending", status: "PENDING" },
-    { title: "On Hold", status: "ON_HOLD" },
-    { title: "Revision", status: "REVISION" },
-    { title: "Approved", status: "APPROVED" },
-    { title: "Completed", status: "COMPLETED" },
+    { title: "Design Task New",  status: "DESIGN_NEW" },
+    { title: "Design Planned",   status: "DESIGN_PLANNED" },
+    { title: "In Progress",      status: "IN_PROGRESS" },
+    { title: "Design Completed", status: "DESIGN_COMPLETED" },
+    { title: "HOD Review",       status: "HOD_REVIEW" },
+    { title: "Sales Review",     status: "SALES_REVIEW" },
+    { title: "Rework / Error",   status: "REWORK" },
+    { title: "Review Completed", status: "REVIEW_COMPLETED" },
+    { title: "Client Rejected",  status: "CLIENT_REJECTED" },
+    { title: "On Hold",          status: "ON_HOLD" },
   ];
 
   return (
@@ -214,7 +201,7 @@ export function DesignListScreen() {
     params.set("page", "1");
     params.set("limit", "500");
     if (filters.searchQuery.trim()) params.set("search", filters.searchQuery.trim());
-    if (filters.status) params.set("status", filters.status.toUpperCase());
+    if (filters.status) params.set("status", toBackendStatus(filters.status).toUpperCase());
     apiClient.get(`/tasks?${params.toString()}`).then((res) => {
       if (!mounted) return;
       const rows = Array.isArray(res?.data) ? res.data.map(mapTaskToDesignRow) : [];

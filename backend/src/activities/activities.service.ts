@@ -7,6 +7,9 @@ const MILESTONE_ACTIONS = new Set([
   ActivityAction.SCHEDULER_WEEK_LOCKED,
   ActivityAction.PROJECT_FILE_UPLOADED,
   ActivityAction.TASK_WORK_SUBMITTED,
+  ActivityAction.TASK_COMPLETED,
+  ActivityAction.CLIENT_APPROVED,
+  ActivityAction.CLIENT_REJECTED_TASK,
 ]);
 
 type FindInput = {
@@ -64,6 +67,18 @@ export class ActivitiesService {
       const taskNo = details?.taskSnapshot?.taskNo ?? '';
       return `${actorName} submitted work on task ${taskNo} (${mins} min)`.replace(/\s+/g, ' ').trim();
     }
+    if (msg === 'task_completed') {
+      const taskNo = details?.taskSnapshot?.taskNo ?? '';
+      return `${actorName} completed task ${taskNo}`.trim();
+    }
+    if (msg === 'client_approved') {
+      const taskNo = details?.taskSnapshot?.taskNo ?? '';
+      return `${actorName} marked ${taskNo} as client approved`.trim();
+    }
+    if (msg === 'client_rejected_task') {
+      const taskNo = details?.taskSnapshot?.taskNo ?? '';
+      return `${actorName} marked ${taskNo} as client rejected`.trim();
+    }
     if (msg === 'scheduler_week_saved') return `${actorName} saved the schedule for week of ${details?.context?.weekStart ?? ''}`;
     if (msg === 'scheduler_week_locked') return `${actorName} locked the schedule for week of ${details?.context?.weekStart ?? ''}`;
     if (msg === 'scheduler_week_unlocked') return `${actorName} unlocked the schedule for week of ${details?.context?.weekStart ?? ''}`;
@@ -119,6 +134,9 @@ export class ActivitiesService {
         return [txt(`${item.actor.name} created task `), taskLink];
       case ActivityAction.STATUS_CHANGED:
       case ActivityAction.ASSIGNED_TASK:
+      case ActivityAction.TASK_COMPLETED:
+      case ActivityAction.CLIENT_APPROVED:
+      case ActivityAction.CLIENT_REJECTED_TASK:
         return [...base, txt(' — '), taskLink];
       case ActivityAction.REGULARIZATION_SUBMITTED:
       case ActivityAction.REGULARIZATION_APPROVED:
@@ -137,6 +155,8 @@ export class ActivitiesService {
 
   private formatSeverity(action: string): 'info' | 'success' | 'warning' {
     if (action === ActivityAction.TASK_CREATED) return 'success';
+    if (action === ActivityAction.TASK_COMPLETED || action === ActivityAction.CLIENT_APPROVED) return 'success';
+    if (action === ActivityAction.CLIENT_REJECTED_TASK) return 'warning';
     if (action === ActivityAction.STATUS_CHANGED || action === ActivityAction.ASSIGNED_TASK) return 'info';
     if (action === ActivityAction.PROJECT_FILE_DELETED) return 'warning';
     return 'info';

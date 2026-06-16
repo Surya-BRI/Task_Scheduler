@@ -1,5 +1,6 @@
 import { Module } from '@nestjs/common';
 import { ConfigModule } from '@nestjs/config';
+import { ScheduleModule } from '@nestjs/schedule';
 import { PrismaModule } from './prisma/prisma.module';
 import { HealthModule } from './health/health.module';
 import { AuthModule } from './auth/auth.module';
@@ -20,6 +21,7 @@ import { RequestsModule } from './requests/requests.module';
 import { DashboardModule } from './dashboard/dashboard.module';
 import { ChatModule } from './chat/chat.module';
 import { NotificationsModule } from './notifications/notifications.module';
+import { DeadlineAlertsModule } from './deadline-alerts/deadline-alerts.module';
 
 @Module({
   imports: [
@@ -29,6 +31,7 @@ import { NotificationsModule } from './notifications/notifications.module';
       load: [configuration],
       validationSchema: envValidationSchema,
     }),
+    ScheduleModule.forRoot(),
     PrismaModule,
     HealthModule,
     AuthModule,
@@ -46,6 +49,7 @@ import { NotificationsModule } from './notifications/notifications.module';
     DashboardModule,
     ChatModule,
     NotificationsModule,
+    DeadlineAlertsModule,
   ],
 })
 export class AppModule {}

@@ -36,6 +36,9 @@ import {
   isChatterUuid,
   resolveTaskIdForChatter,
 } from '@/features/chatter/utils/resolve-chatter-task-id'
+import { normalizeStatusCode, getStatusLabel } from '@/features/design-list/task-view-model'
+import { taskViewPathForRecord } from '@/lib/design-list-routes'
+import { getSession } from '@/lib/mock-auth'
 
 function isValidHttpUrl(value) {
   try {
@@ -92,20 +95,6 @@ const TABS = [
 ]
 const PROJECT_TAB = { id: 'team', label: 'Team' }
 
-const PROJECT_TABLE_ROWS = Array.from({ length: 15 }, (_, idx) => ({
-  tNo: idx === 0 ? '1' : '',
-  no: `${idx + 1}`,
-  signType: 'B315',
-  planCode: 'CP-2-344',
-  estQty: '1',
-  qsQty: '1',
-  areaZone: 'CP',
-  levelParcel: '2',
-  sequence: '2344',
-  status: 'Art Work IP',
-  comment: '',
-  contRef: `QE$294$59${70 + idx}`,
-}))
 
 const HISTORY_FIELD_ACTIONS = new Set(['TASK_CREATED', 'ASSIGNED_TASK', 'STATUS_CHANGED'])
 
@@ -284,6 +273,27 @@ function FormFieldWithPencil({ id, label, value, onChange, placeholder, type = '
   )
 }
 
+function FieldSelect({ id, label, value, onChange, options }) {
+  return (
+    <div>
+      <label className="text-[11px] font-semibold text-slate-600" htmlFor={id}>
+        {label}
+      </label>
+      <select
+        id={id}
+        value={value}
+        onChange={(e) => onChange(e.target.value)}
+        className="mt-1 w-full rounded-md border border-slate-300 bg-white py-1.5 pl-2.5 pr-2.5 text-[13px] text-slate-900 outline-none focus:border-blue-500 focus:ring-2 focus:ring-blue-500/25"
+      >
+        <option value="">— Select —</option>
+        {options.map((u) => (
+          <option key={u.id} value={u.fullName}>{u.fullName}</option>
+        ))}
+      </select>
+    </div>
+  )
+}
+
 function DatePickerField({ id, label, selected, onChange, minDate }) {
   return (
     <div>
@@ -400,46 +410,77 @@ function FilesPanel({ projectId, files, uploading, resolvingProjectId, onPick, o
   )
 }
 
-function ProjectDetailsTable() {
+function ProjectDetailsTable({ opNo }) {
+  const [rows, setRows] = useState([])
+  const [loading, setLoading] = useState(false)
+  const [error, setError] = useState('')
+
+  useEffect(() => {
+    if (!opNo) return
+    let alive = true
+    setLoading(true)
+    setError('')
+    apiClient
+      .get(`/design-list/project-sign-types?salesForceCode=${encodeURIComponent(opNo)}`)
+      .then((groups) => {
+        if (!alive) return
+        const flat = []
+        let idx = 1
+        for (const group of (Array.isArray(groups) ? groups : [])) {
+          for (const st of group.signTypes ?? []) {
+            flat.push({
+              no: idx++,
+              signfamily: group.signfamily,
+              signType: st.signCode,
+              estQty: st.quantity,
+              area: st.area,
+              description: st.description,
+              estimationStatus: st.estimationStatus,
+            })
+          }
+        }
+        setRows(flat)
+        if (flat.length === 0) setError('No approved sign types found in ERP for this project.')
+      })
+      .catch((err) => {
+        if (!alive) return
+        setError(err instanceof Error ? err.message : 'Failed to load sign types.')
+      })
+      .finally(() => { if (alive) setLoading(false) })
+    return () => { alive = false }
+  }, [opNo])
+
   return (
     <div className="mt-3 overflow-hidden rounded-md border border-slate-200">
-      <div className="grid grid-cols-[0.5fr_0.5fr_0.8fr_0.5fr_1fr_0.7fr_0.7fr_0.9fr_0.9fr_0.8fr_0.9fr_0.8fr_0.9fr] bg-slate-100 px-2 py-1 text-[11px] font-semibold text-slate-700">
-        <div>T. No</div>
+      <div className="grid grid-cols-[0.3fr_1fr_1.6fr_0.5fr_0.5fr_1fr_1fr] bg-slate-100 px-2 py-1 text-[11px] font-semibold text-slate-700">
         <div>No</div>
+        <div>Sign Family</div>
         <div>Sign Type</div>
-        <div>Image</div>
-        <div>Plan Code</div>
         <div>Est QTY</div>
-        <div>Qs QTY</div>
-        <div>Area/ Zone</div>
-        <div>Level/ Parcel</div>
-        <div>Sequence</div>
+        <div>Area</div>
+        <div>Description</div>
         <div>Status</div>
-        <div>Comment</div>
-        <div>Cont. Ref</div>
       </div>
       <div className="max-h-[260px] overflow-auto">
-        {PROJECT_TABLE_ROWS.map((row) => (
-          <div key={row.no} className="grid grid-cols-[0.5fr_0.5fr_0.8fr_0.5fr_1fr_0.7fr_0.7fr_0.9fr_0.9fr_0.8fr_0.9fr_0.8fr_0.9fr] items-center border-t border-slate-100 px-2 py-1 text-[11px] text-slate-800">
-            <div>{row.tNo}</div>
+        {loading ? (
+          <div className="px-3 py-6 text-center text-xs text-slate-400">Loading sign types from ERP…</div>
+        ) : error ? (
+          <div className="px-3 py-6 text-center text-xs text-red-500">{error}</div>
+        ) : rows.length === 0 ? (
+          <div className="px-3 py-6 text-center text-xs text-slate-400">No sign types available.</div>
+        ) : rows.map((row) => (
+          <div key={row.no} className="grid grid-cols-[0.3fr_1fr_1.6fr_0.5fr_0.5fr_1fr_1fr] items-center border-t border-slate-100 px-2 py-1 text-[11px] text-slate-800">
             <div>{row.no}</div>
-            <div>{row.signType}</div>
-            <div>🏠</div>
-            <div>
-              <input value={row.planCode} readOnly className="h-5 w-full rounded border border-slate-300 px-2 text-[10px]" />
-            </div>
+            <div className="truncate text-slate-600">{row.signfamily}</div>
+            <div className="truncate font-medium">{row.signType}</div>
             <div>{row.estQty}</div>
-            <div>{row.qsQty}</div>
-            <div>{row.areaZone}</div>
-            <div>{row.levelParcel}</div>
-            <div>{row.sequence}</div>
+            <div>{row.area > 0 ? row.area : '-'}</div>
+            <div className="truncate text-slate-600">{row.description || '-'}</div>
             <div>
-              <span className="inline-flex rounded bg-teal-200 px-2 py-0.5 text-[10px] font-semibold text-slate-700">{row.status}</span>
+              <span className="inline-flex rounded bg-teal-100 px-2 py-0.5 text-[10px] font-semibold text-teal-700">
+                {row.estimationStatus || '-'}
+              </span>
             </div>
-            <div>
-              <input readOnly value={row.comment} className="h-5 w-full rounded border border-slate-300 px-2 text-[10px]" />
-            </div>
-            <div className="truncate">{row.contRef}</div>
           </div>
         ))}
       </div>
@@ -670,7 +711,7 @@ function mapTaskToRecord(task) {
     taskDesignType: task.designType ?? null,
     retailDesignTypes,
     revisionCode: task.revisionCode ?? null,
-    status: task.status ?? 'PENDING',
+    status: normalizeStatusCode(task.status ?? 'PENDING'),
     priority: task.priority ?? '-',
     reviewerHod,
     providedAssets,
@@ -685,6 +726,7 @@ function mapTaskToRecord(task) {
     teamLead: task.teamLead ?? '',
     subTeamLead: task.subTeamLead ?? '',
     designers: task.designers ?? '',
+    projectDetails: task.projectDetails ?? [],
   }
 }
 
@@ -715,6 +757,81 @@ function mapProjectListRowToRecord(row) {
 function isUuid(value) {
   return /^[0-9a-f]{8}-[0-9a-f]{4}-[1-5][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i.test(String(value ?? '').trim())
 }
+
+function getTaskStatusBadgeClass(normalizedStatus) {
+  switch (normalizedStatus) {
+    case 'IN_PROGRESS':      return 'bg-blue-100 text-blue-700'
+    case 'DESIGN_COMPLETED': return 'bg-emerald-100 text-emerald-700'
+    case 'REVIEW_COMPLETED': return 'bg-emerald-100 text-emerald-700'
+    case 'HOD_REVIEW':       return 'bg-violet-100 text-violet-700'
+    case 'SALES_REVIEW':     return 'bg-indigo-100 text-indigo-700'
+    case 'REWORK':           return 'bg-red-100 text-red-700'
+    case 'ON_HOLD':          return 'bg-amber-100 text-amber-700'
+    case 'DESIGN_PLANNED':   return 'bg-sky-100 text-sky-700'
+    default:                 return 'bg-slate-100 text-slate-600'
+  }
+}
+
+function ProjectTaskList({ tasks, loading, onView }) {
+  return (
+    <div className="mt-3">
+      <div className="mb-1.5 flex items-center justify-between">
+        <h3 className="text-xs font-semibold text-slate-700">Task List</h3>
+        <span className="text-[11px] text-slate-400">{tasks.length} task{tasks.length !== 1 ? 's' : ''}</span>
+      </div>
+      <div className="overflow-hidden rounded-md border border-slate-200">
+        <div className="grid grid-cols-[1fr_1fr_1fr_1fr_1fr_80px_44px] bg-slate-100 px-2.5 py-1.5 text-[11px] font-semibold text-slate-600">
+          <div>Task No</div>
+          <div>Revision</div>
+          <div>Type</div>
+          <div>Status</div>
+          <div>Designer</div>
+          <div>Due Date</div>
+          <div />
+        </div>
+        {loading ? (
+          <div className="space-y-1.5 px-3 py-3">
+            <div className="h-7 animate-pulse rounded bg-slate-100" />
+            <div className="h-7 animate-pulse rounded bg-slate-100" />
+          </div>
+        ) : tasks.length === 0 ? (
+          <div className="px-3 py-5 text-center text-xs text-slate-500">No tasks yet.</div>
+        ) : (
+          <ul className="divide-y divide-slate-100">
+            {tasks.map((task) => {
+              const normalized = normalizeStatusCode(task.status)
+              return (
+                <li
+                  key={task.id}
+                  className="grid grid-cols-[1fr_1fr_1fr_1fr_1fr_80px_44px] items-center px-2.5 py-1.5 text-xs text-slate-700 hover:bg-slate-50"
+                >
+                  <span className="truncate font-medium text-slate-900">{task.taskNo || '—'}</span>
+                  <span>{task.revisionCode || '—'}</span>
+                  <span className="capitalize">{task.designType || task.project?.category || '—'}</span>
+                  <span>
+                    <span className={`inline-block rounded-full px-2 py-0.5 text-[10px] font-semibold ${getTaskStatusBadgeClass(normalized)}`}>
+                      {getStatusLabel(task.status)}
+                    </span>
+                  </span>
+                  <span className="truncate">{task.assignee?.fullName || 'Unassigned'}</span>
+                  <span className="text-slate-500">{task.dueDate ? new Date(task.dueDate).toLocaleDateString('en-GB') : '—'}</span>
+                  <button
+                    type="button"
+                    onClick={() => onView(task)}
+                    className="mr-2 w-fit rounded-md bg-[#10a6e3] px-2.5 py-1 text-[11px] font-semibold text-white transition hover:bg-[#0f96cd]"
+                  >
+                    View
+                  </button>
+                </li>
+              )
+            })}
+          </ul>
+        )}
+      </div>
+    </div>
+  )
+}
+
 const TASK_TAB_IDS = ['details', 'activity', 'chatter', 'team']
 export function TaskDetailsPage() {
   const router = useRouter()
@@ -728,6 +845,9 @@ export function TaskDetailsPage() {
   const from = searchParams.get('from')
   const recordId = routeId
   const [record, setRecord] = useState(null)
+  const [reworkDialogOpen, setReworkDialogOpen] = useState(false)
+  const [reworkNote, setReworkNote] = useState('')
+  const [reworkSubmitting, setReworkSubmitting] = useState(false)
   const [createModalOpen, setCreateModalOpen] = useState(false)
   const [projectCreateModalOpen, setProjectCreateModalOpen] = useState(false)
   const [createdTasks, setCreatedTasks] = useState([])
@@ -752,14 +872,16 @@ export function TaskDetailsPage() {
   const [technicalHead, setTechnicalHead] = useState('')
   const [teamLead, setTeamLead] = useState('')
   const [subTeamLead, setSubTeamLead] = useState('')
-  const [designers, setDesigners] = useState('')
   const [teamSaving, setTeamSaving] = useState(false)
+  const [hodUsers, setHodUsers] = useState([])
   const [signRows, setSignRows] = useState([])
   const [signRowsSaving, setSignRowsSaving] = useState(false)
   const [projectId, setProjectId] = useState('')
   const [taskId, setTaskId] = useState('')
   const [projectFiles, setProjectFiles] = useState([])
   const [uploadingProjectFiles, setUploadingProjectFiles] = useState(false)
+  const [projectTasks, setProjectTasks] = useState([])
+  const [tasksLoading, setTasksLoading] = useState(false)
   const [resolvingProjectId, setResolvingProjectId] = useState(false)
   const [resolvingTaskId, setResolvingTaskId] = useState(false)
   const mentionUsersRef = useRef([])
@@ -880,6 +1002,20 @@ export function TaskDetailsPage() {
   const launchPauseModal = searchParams.get('openPause') === '1'
   const launchCompleteModal = searchParams.get('openComplete') === '1'
 
+  const handleStatusChange = useCallback(async (newStatus, reworkNote) => {
+    if (!taskId) return
+    try {
+      await apiClient.patch(`/tasks/${taskId}/status`, {
+        status: newStatus,
+        ...(reworkNote ? { reworkNote } : {}),
+      })
+      setTaskRefreshCounter((c) => c + 1)
+    } catch {
+      // status update failed — refresh anyway to show current state
+      setTaskRefreshCounter((c) => c + 1)
+    }
+  }, [taskId])
+
   const clearTimerLaunchParams = useCallback(() => {
     const next = new URLSearchParams(searchParams.toString())
     next.delete('autostart')
@@ -928,8 +1064,11 @@ export function TaskDetailsPage() {
     chatterMessage.trim().length > 0 && !resolvingProjectId && !resolvingTaskId
   const hasExistingTask = Boolean(taskId || isUuid(record?.taskId ?? record?.id))
   const taskStatus = record?.status ?? null
-  const isTerminalStatus = taskStatus === 'COMPLETED' || taskStatus === 'APPROVED'
+  const isTerminalStatus = taskStatus === 'REVIEW_COMPLETED' || taskStatus === 'CLIENT_REJECTED'
+  const isPostSubmitStatus = ['DESIGN_COMPLETED', 'HOD_REVIEW', 'SALES_REVIEW', 'REWORK', 'REVIEW_COMPLETED', 'CLIENT_REJECTED', 'ON_HOLD'].includes(taskStatus)
   const showTimer = !isCreationRoute && hasExistingTask && Boolean(taskId) && !isTerminalStatus && (from === 'designer-queue' || from === 'designer-design-list')
+  const _session = getSession()
+  const isHod = ['HOD', 'ADMIN', 'PROJECT_MANAGER'].includes(_session?.role ?? '')
   const tabs = isCreationRoute && !isRetail ? [...TABS, PROJECT_TAB] : TABS
   useEffect(() => {
     let alive = true
@@ -949,6 +1088,11 @@ export function TaskDetailsPage() {
         const project = await apiClient.get(`/projects/by-project-no/${encodeURIComponent(projectNo)}`)
         if (!alive) return
         setProjectId(project?.id ?? '')
+        if (isCreationRoute && !isRetail) {
+          setTechnicalHead(project?.technicalHead ?? '')
+          setTeamLead(project?.teamLead ?? '')
+          setSubTeamLead(project?.subTeamLead ?? '')
+        }
       } catch {
         if (!alive) return
         setProjectId('')
@@ -961,6 +1105,17 @@ export function TaskDetailsPage() {
       alive = false
     }
   }, [record?.projectNo, record?.projectId])
+
+  useEffect(() => {
+    if (!isCreationRoute) return
+    apiClient
+      .get('/users?role=HOD&limit=200')
+      .then((res) => {
+        const list = Array.isArray(res) ? res : (res?.data ?? [])
+        setHodUsers(Array.isArray(list) ? list : [])
+      })
+      .catch(() => {})
+  }, [isCreationRoute])
 
   useEffect(() => {
     let alive = true
@@ -1003,12 +1158,11 @@ export function TaskDetailsPage() {
   }, [record?.taskId, record?.id, record?.opNo, record?.fromTaskApi, projectId])
 
   useEffect(() => {
-    if (!record) return
+    if (!record || isCreationRoute) return
     setTechnicalHead(record.technicalHead ?? '')
     setTeamLead(record.teamLead ?? '')
     setSubTeamLead(record.subTeamLead ?? '')
-    setDesigners(record.designers ?? '')
-  }, [record])
+  }, [record, isCreationRoute])
 
   useEffect(() => {
     if (!taskId) { setSignRows([]); return }
@@ -1086,13 +1240,13 @@ export function TaskDetailsPage() {
   }, [taskId])
 
   useEffect(() => {
-    if (!taskId || !isTerminalStatus) { setSubmittedSession(null); return }
+    if (!taskId || !isPostSubmitStatus) { setSubmittedSession(null); return }
     let alive = true
     apiClient.get(`/tasks/${taskId}/submitted-session`)
       .then((data) => { if (alive) setSubmittedSession(data) })
       .catch(() => { if (alive) setSubmittedSession(null) })
     return () => { alive = false }
-  }, [taskId, isTerminalStatus])
+  }, [taskId, isPostSubmitStatus])
 
   useEffect(() => {
     let alive = true
@@ -1176,6 +1330,23 @@ export function TaskDetailsPage() {
       }
     })
   }, [activeTab, fetchChatterPosts, projectId, taskId])
+
+  const fetchProjectTasks = useCallback(async () => {
+    if (!projectId) return
+    setTasksLoading(true)
+    try {
+      const result = await apiClient.get(`/tasks?projectId=${projectId}&limit=100&page=1`)
+      setProjectTasks(result?.data ?? [])
+    } catch {
+      setProjectTasks([])
+    } finally {
+      setTasksLoading(false)
+    }
+  }, [projectId])
+
+  useEffect(() => {
+    fetchProjectTasks()
+  }, [fetchProjectTasks])
 
   const focusPostId = searchParams.get('postId')
   const focusCommentId = searchParams.get('commentId')
@@ -1427,10 +1598,10 @@ export function TaskDetailsPage() {
   }, [])
 
   async function handleSaveTeam() {
-    if (!taskId) return
+    if (!projectId) return
     setTeamSaving(true)
     try {
-      await apiClient.patch(`/tasks/${taskId}`, { technicalHead, teamLead, subTeamLead, designers })
+      await apiClient.patch(`/projects/${projectId}`, { technicalHead, teamLead, subTeamLead })
     } finally {
       setTeamSaving(false)
     }
@@ -1489,7 +1660,7 @@ export function TaskDetailsPage() {
           <div className="flex items-start gap-2 pb-0.5">
             <div className="flex flex-1 gap-2 overflow-x-auto">
               {STAGE_ITEMS.map((item) => (
-                <StagePill key={item.id} item={item} active={record?.status === item.status} />
+                <StagePill key={item.id} item={item} active={!isCreationRoute && record?.status === item.status} />
               ))}
             </div>
             {SPECIAL_STATUS[record?.status] ? (
@@ -1597,7 +1768,7 @@ export function TaskDetailsPage() {
                           onSubmitComplete={() => setTaskRefreshCounter((c) => c + 1)}
                         />
                       ) : null}
-                      {isTerminalStatus && submittedSession ? (
+                      {isPostSubmitStatus && submittedSession ? (
                         <div className="mt-4 border-t border-slate-200 pt-4">
                           <div className="flex items-center gap-2 mb-3">
                             <CheckCircle2 className="h-4 w-4 text-emerald-600 shrink-0" />
@@ -1663,8 +1834,95 @@ export function TaskDetailsPage() {
                               </div>
                             )}
                           </div>
+                          {isHod && !isTerminalStatus && (
+                            <div className="mt-3 pt-3 border-t border-slate-200">
+                              <p className="text-[10px] font-semibold text-slate-400 uppercase tracking-wide mb-2">Move Status</p>
+                              <div className="flex flex-wrap gap-2">
+                                {taskStatus === 'DESIGN_COMPLETED' && (
+                                  <button
+                                    type="button"
+                                    onClick={() => handleStatusChange('HOD_REVIEW')}
+                                    className="rounded-md bg-violet-600 px-3 py-1.5 text-xs font-semibold text-white hover:bg-violet-700 transition-colors"
+                                  >
+                                    Start HOD Review
+                                  </button>
+                                )}
+                                {taskStatus === 'HOD_REVIEW' && (<>
+                                  <button type="button" onClick={() => handleStatusChange('SALES_REVIEW')} className="rounded-md bg-orange-500 px-3 py-1.5 text-xs font-semibold text-white hover:bg-orange-600 transition-colors">Send to Sales</button>
+                                  <button type="button" onClick={() => handleStatusChange('REVIEW_COMPLETED')} className="rounded-md bg-emerald-600 px-3 py-1.5 text-xs font-semibold text-white hover:bg-emerald-700 transition-colors">Complete Review</button>
+                                  <button type="button" onClick={() => { setReworkNote(''); setReworkDialogOpen(true); }} className="rounded-md bg-red-500 px-3 py-1.5 text-xs font-semibold text-white hover:bg-red-600 transition-colors">Request Rework</button>
+                                  <button type="button" onClick={() => handleStatusChange('DESIGN_COMPLETED')} className="rounded-md border border-slate-300 bg-white px-3 py-1.5 text-xs font-semibold text-slate-600 hover:bg-slate-50 transition-colors">← Back to Design Complete</button>
+                                </>)}
+                                {taskStatus === 'SALES_REVIEW' && (<>
+                                  <button type="button" onClick={() => handleStatusChange('REVIEW_COMPLETED')} className="rounded-md bg-emerald-600 px-3 py-1.5 text-xs font-semibold text-white hover:bg-emerald-700 transition-colors">Mark Completed</button>
+                                  <button type="button" onClick={() => handleStatusChange('CLIENT_REJECTED')} className="rounded-md bg-rose-600 px-3 py-1.5 text-xs font-semibold text-white hover:bg-rose-700 transition-colors">Client Rejected</button>
+                                  <button type="button" onClick={() => { setReworkNote(''); setReworkDialogOpen(true); }} className="rounded-md bg-red-500 px-3 py-1.5 text-xs font-semibold text-white hover:bg-red-600 transition-colors">Request Rework</button>
+                                  <button type="button" onClick={() => handleStatusChange('HOD_REVIEW')} className="rounded-md border border-slate-300 bg-white px-3 py-1.5 text-xs font-semibold text-slate-600 hover:bg-slate-50 transition-colors">← Back to HOD Review</button>
+                                </>)}
+                                {taskStatus === 'REWORK' && (<>
+                                  <button type="button" onClick={() => handleStatusChange('HOD_REVIEW')} className="rounded-md bg-violet-600 px-3 py-1.5 text-xs font-semibold text-white hover:bg-violet-700 transition-colors">Back to HOD Review</button>
+                                  <button type="button" onClick={() => handleStatusChange('DESIGN_COMPLETED')} className="rounded-md border border-slate-300 bg-white px-3 py-1.5 text-xs font-semibold text-slate-600 hover:bg-slate-50 transition-colors">← Back to Design Complete</button>
+                                </>)}
+                                {taskStatus === 'ON_HOLD' && (<>
+                                  <button type="button" onClick={() => handleStatusChange('HOD_REVIEW')} className="rounded-md bg-violet-600 px-3 py-1.5 text-xs font-semibold text-white hover:bg-violet-700 transition-colors">Resume — HOD Review</button>
+                                  <button type="button" onClick={() => handleStatusChange('DESIGN_COMPLETED')} className="rounded-md bg-blue-600 px-3 py-1.5 text-xs font-semibold text-white hover:bg-blue-700 transition-colors">Return to Design Complete</button>
+                                  <button type="button" onClick={() => handleStatusChange('REWORK')} className="rounded-md bg-red-500 px-3 py-1.5 text-xs font-semibold text-white hover:bg-red-600 transition-colors">Request Rework</button>
+                                </>)}
+                                {taskStatus !== 'ON_HOLD' && (
+                                  <button type="button" onClick={() => handleStatusChange('ON_HOLD')} className="rounded-md border border-slate-300 bg-white px-3 py-1.5 text-xs font-semibold text-slate-600 hover:bg-slate-50 transition-colors">Put On Hold</button>
+                                )}
+                              </div>
+                            </div>
+                          )}
                         </div>
                       ) : null}
+                      {(record?.projectDetails?.length ?? 0) > 0 && (
+                        <div className="mt-4 border-t border-slate-200 pt-3">
+                          <p className="mb-2 text-xs font-semibold text-slate-700">Work Scope</p>
+                          <div className="space-y-2">
+                            {record.projectDetails.map((detail, idx) => (
+                              <div key={detail.id ?? idx} className="rounded-lg border border-slate-200 bg-white p-3">
+                                {(detail.signType || detail.planCode || detail.deadline) && (
+                                  <div className="mb-3 flex flex-wrap gap-x-5 gap-y-1 text-xs">
+                                    {detail.signType && (
+                                      <span className="text-slate-500">Sign Type: <span className="font-semibold text-slate-800">{detail.signType}</span></span>
+                                    )}
+                                    {detail.planCode && (
+                                      <span className="text-slate-500">Plan Code: <span className="font-semibold text-slate-800">{detail.planCode}</span></span>
+                                    )}
+                                    {detail.deadline && (
+                                      <span className="text-slate-500">Deadline: <span className="font-semibold text-slate-800">{new Date(detail.deadline).toLocaleDateString('en-GB')}</span></span>
+                                    )}
+                                  </div>
+                                )}
+                                <div className="grid grid-cols-2 gap-2 sm:grid-cols-3">
+                                  {[
+                                    { flag: detail.artwork,   hours: detail.artworkHours,   label: 'Artwork' },
+                                    { flag: detail.technical, hours: detail.technicalHours, label: 'Technical' },
+                                    { flag: detail.location,  hours: detail.locationHours,  label: 'Location' },
+                                    { flag: detail.asBuilt,   hours: detail.asBuiltHours,   label: 'As-Built' },
+                                    { flag: detail.bim,       hours: null,                  label: 'BIM' },
+                                  ].map(({ flag, hours, label }) => (
+                                    <div
+                                      key={label}
+                                      className={`flex items-center gap-2 rounded-md px-2.5 py-1.5 text-xs ${flag ? 'bg-emerald-50 text-emerald-800' : 'bg-slate-50 text-slate-400'}`}
+                                    >
+                                      {flag
+                                        ? <CheckCircle2 className="h-3.5 w-3.5 shrink-0 text-emerald-500" />
+                                        : <div className="h-3.5 w-3.5 shrink-0 rounded-full border border-slate-300" />
+                                      }
+                                      <span className="font-medium">{label}</span>
+                                      {flag && hours != null && (
+                                        <span className="ml-auto text-[11px] text-emerald-600">{hours}h</span>
+                                      )}
+                                    </div>
+                                  ))}
+                                </div>
+                              </div>
+                            ))}
+                          </div>
+                        </div>
+                      )}
                       {!isRetail ? (
                         <div className="mt-4 border-t border-slate-200 pt-3">
                           <div className="mb-2 flex items-center justify-between">
@@ -1768,7 +2026,7 @@ export function TaskDetailsPage() {
                           minDate={dateIssued && dateIssued > tomorrow ? dateIssued : tomorrow}
                         />
                       </div>
-                      <ProjectDetailsTable />
+                      <ProjectDetailsTable opNo={record?.opNo} />
                       <div className="mt-2.5 flex justify-end">
                         <button
                           type="button"
@@ -1793,6 +2051,16 @@ export function TaskDetailsPage() {
                       <div className="px-3 py-6 text-center text-xs text-slate-500">No rows yet.</div>
                     </div>
                   ) : null}
+
+                  {isCreationRoute && projectId ? (
+                    <ProjectTaskList
+                      tasks={projectTasks}
+                      loading={tasksLoading}
+                      onView={(task) =>
+                        router.push(taskViewPathForRecord({ id: task.id, designType: task.designType ?? task.project?.category }))
+                      }
+                    />
+                  ) : null}
                 </>
               ) : null}
 
@@ -1810,10 +2078,9 @@ export function TaskDetailsPage() {
               {activeTab === 'team' && isCreationRoute && !isRetail ? (
                 <div className="mt-3 space-y-2.5">
                   <div className="grid gap-2.5 sm:grid-cols-2">
-                    <FormFieldWithPencil id="team-technical-head" label="Technical Head" value={technicalHead} onChange={setTechnicalHead} placeholder="" />
-                    <FormFieldWithPencil id="team-team-lead" label="Team Lead" value={teamLead} onChange={setTeamLead} placeholder="" />
-                    <FormFieldWithPencil id="team-sub-team-lead" label="Sub Team Lead" value={subTeamLead} onChange={setSubTeamLead} placeholder="" />
-                    <FormFieldWithPencil id="team-designers" label="Designers" value={designers} onChange={setDesigners} placeholder="" />
+                    <FieldSelect id="team-technical-head" label="Technical Head" value={technicalHead} onChange={setTechnicalHead} options={hodUsers} />
+                    <FieldSelect id="team-team-lead" label="Team Lead" value={teamLead} onChange={setTeamLead} options={hodUsers} />
+                    <FieldSelect id="team-sub-team-lead" label="Sub Team Lead" value={subTeamLead} onChange={setSubTeamLead} options={hodUsers} />
                   </div>
                   <div className="flex items-center justify-between border-t border-slate-200 pt-2.5">
                     <p className="text-[11px] text-slate-400">Team will be assigned when the task is created.</p>
@@ -2023,6 +2290,7 @@ export function TaskDetailsPage() {
         onCreated={(task) => {
           setCreateModalOpen(false)
           if (task?.taskNo ?? task?.id) setCreatedTasks((prev) => [...prev, task?.taskNo ?? task?.id])
+          fetchProjectTasks()
         }}
         submissionDate={dateSubmission}
         record={record}
@@ -2030,13 +2298,18 @@ export function TaskDetailsPage() {
       <ProjectCreateTaskModal
         open={projectCreateModalOpen}
         onClose={() => setProjectCreateModalOpen(false)}
-        onCreated={async (task) => {
+        onCreated={async (tasks) => {
           setProjectCreateModalOpen(false)
-          if (task?.taskNo ?? task?.id) setCreatedTasks((prev) => [...prev, task?.taskNo ?? task?.id])
-          const newTaskId = task?.id
-          if (newTaskId && (technicalHead || teamLead || subTeamLead || designers)) {
+          const taskList = Array.isArray(tasks) ? tasks : (tasks ? [tasks] : [])
+          for (const t of taskList) {
+            if (t?.taskNo ?? t?.id) setCreatedTasks((prev) => [...prev, t?.taskNo ?? t?.id])
+          }
+          fetchProjectTasks()
+          const count = taskList.length
+          if (count > 0) toast.success(`${count} task${count !== 1 ? 's' : ''} created successfully`)
+          if (projectId && (technicalHead || teamLead || subTeamLead)) {
             try {
-              await apiClient.patch(`/tasks/${newTaskId}`, { technicalHead, teamLead, subTeamLead, designers })
+              await apiClient.patch(`/projects/${projectId}`, { technicalHead, teamLead, subTeamLead })
             } catch {
               toast.error('Task created but team assignment failed — please edit the task to retry.')
             }
@@ -2052,6 +2325,47 @@ export function TaskDetailsPage() {
           type={historyDialog.type}
           onClose={() => setHistoryDialog(null)}
         />
+      )}
+
+      {reworkDialogOpen && (
+        <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/40 p-4">
+          <div className="bg-white rounded-xl shadow-xl w-full max-w-md flex flex-col gap-4 p-6">
+            <div>
+              <h2 className="text-sm font-bold text-slate-900">Request Rework</h2>
+              <p className="mt-1 text-xs text-slate-500">Describe what needs to be corrected. This note will be sent to the designer as a notification and saved in the task chatter.</p>
+            </div>
+            <textarea
+              className="w-full rounded-md border border-slate-300 p-2.5 text-xs text-slate-800 resize-none focus:outline-none focus:ring-2 focus:ring-red-400"
+              rows={5}
+              placeholder="e.g. Please revise the sign dimensions on sheet 3 and update the colour palette to match the revised brief..."
+              value={reworkNote}
+              onChange={(e) => setReworkNote(e.target.value)}
+              autoFocus
+            />
+            <div className="flex justify-end gap-2">
+              <button
+                type="button"
+                onClick={() => setReworkDialogOpen(false)}
+                className="rounded-md border border-slate-300 bg-white px-4 py-1.5 text-xs font-semibold text-slate-600 hover:bg-slate-50 transition-colors"
+              >
+                Cancel
+              </button>
+              <button
+                type="button"
+                disabled={!reworkNote.trim() || reworkSubmitting}
+                onClick={async () => {
+                  setReworkSubmitting(true)
+                  await handleStatusChange('REWORK', reworkNote.trim())
+                  setReworkDialogOpen(false)
+                  setReworkSubmitting(false)
+                }}
+                className="rounded-md bg-red-500 px-4 py-1.5 text-xs font-semibold text-white hover:bg-red-600 disabled:opacity-50 transition-colors"
+              >
+                {reworkSubmitting ? 'Sending…' : 'Send for Rework'}
+              </button>
+            </div>
+          </div>
+        </div>
       )}
     </div>
   )

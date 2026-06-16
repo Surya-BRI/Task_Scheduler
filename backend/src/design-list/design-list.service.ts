@@ -1,6 +1,17 @@
 import { Injectable, Logger, ServiceUnavailableException } from '@nestjs/common';
 import { PrismaService } from '../prisma/prisma.service';
 
+type SignTypeRawRow = {
+  signTypeId: number | bigint;
+  signFmilyId: number | bigint | null;
+  signfamily: string | null;
+  signCode: string | null;
+  quantity: number | { toNumber?: () => number } | null;
+  description: string | null;
+  area: number | { toNumber?: () => number } | null;
+  estimationStatus: string | null;
+};
+
 type DesignListRow = {
   projectId: number;
   taskId: string | null;
@@ -114,7 +125,10 @@ export class DesignListService {
       designType: this.resolveDesignType(row.businessUnitCode),
       businessUnit: row.businessUnitCode ?? 'Project',
       name: preserveNulls ? projectName : projectName ?? projectCode ?? id,
-      status: (row.status as 'WIP' | 'Completed' | 'Pending' | 'Revision' | 'Approved') ?? 'Pending',
+      status: (row.status as
+        | 'DESIGN_NEW' | 'DESIGN_PLANNED' | 'IN_PROGRESS' | 'DESIGN_COMPLETED'
+        | 'HOD_REVIEW' | 'SALES_REVIEW' | 'REWORK' | 'REVIEW_COMPLETED' | 'CLIENT_REJECTED' | 'ON_HOLD'
+        | 'WIP' | 'Completed' | 'Pending' | 'Revision' | 'Approved') ?? 'DESIGN_NEW',
       salesPerson: preserveNulls ? salesPerson : salesPerson ?? 'Unassigned',
       created: toDdMmYyyy(new Date(row.createdOn)),
       deadline: toDdMmYyyy(new Date(row.createdOn)),
@@ -286,6 +300,68 @@ export class DesignListService {
       total: rows.total,
       totalPages: Math.max(1, Math.ceil(rows.total / safeLimit)),
     };
+  }
+
+  async findProjectSignTypes(salesForceCode: string) {
+    const escaped = salesForceCode.replace(/'/g, "''");
+    const rows = await this.queryLive('findProjectSignTypes', () =>
+      this.prisma.live.$queryRawUnsafe<SignTypeRawRow[]>(`
+        SELECT
+          es.signTypeId,
+          es.signFmilyId,
+          mttt.taxnomyName AS signfamily,
+          es.signCode,
+          es.quantity,
+          es.description,
+          es.area,
+          ess.taxnomyName AS estimationStatus
+        FROM ErpMasterOpportunity mo
+        INNER JOIN ErpEstimationOpportunity eo
+          ON LTRIM(RTRIM(eo.sfop)) = LTRIM(RTRIM(mo.salesForceCode))
+        INNER JOIN ErpEstimationProject ee ON eo.estimationopid = ee.estimationOpId
+        INNER JOIN ErpEstimationProjectSignType es ON es.estimationId = ee.estimationId
+        INNER JOIN ErpMasterTaxnomy ess
+          ON ess.taxnomyId = ee.statusId
+          AND ess.taxnomyCode = 'Approved'
+          AND ess.taxnomyType = 'EstimationStatus'
+        LEFT JOIN ErpMasterTaxnomy mttt ON es.signFmilyId = mttt.taxnomyId
+        WHERE LTRIM(RTRIM(mo.salesForceCode)) = '${escaped}'
+      `),
+    );
+
+    const toNum = (v: SignTypeRawRow['quantity']): number => {
+      if (v == null) return 0;
+      if (typeof v === 'object' && typeof (v as { toNumber?: () => number }).toNumber === 'function') {
+        return (v as { toNumber: () => number }).toNumber();
+      }
+      return Number(v);
+    };
+
+    const familyMap = new Map<
+      string,
+      { signFmilyId: number | null; signfamily: string; signTypes: { signTypeId: number; signCode: string; quantity: number; description: string; area: number; estimationStatus: string }[] }
+    >();
+
+    for (const row of rows) {
+      const key = String(row.signFmilyId ?? 'none');
+      if (!familyMap.has(key)) {
+        familyMap.set(key, {
+          signFmilyId: row.signFmilyId != null ? Number(row.signFmilyId) : null,
+          signfamily: row.signfamily ?? 'Other',
+          signTypes: [],
+        });
+      }
+      familyMap.get(key)!.signTypes.push({
+        signTypeId: Number(row.signTypeId),
+        signCode: row.signCode ?? '',
+        quantity: toNum(row.quantity),
+        description: row.description ?? '',
+        area: toNum(row.area),
+        estimationStatus: row.estimationStatus ?? '',
+      });
+    }
+
+    return Array.from(familyMap.values());
   }
 
   async findDesignListPage(

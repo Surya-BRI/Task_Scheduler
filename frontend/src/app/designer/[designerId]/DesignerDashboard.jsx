@@ -75,8 +75,10 @@ function computeLiveData(tasks) {
   const currentYear = now.getFullYear();
 
   const onHold = tasks.filter((t) => t.status === "ON_HOLD");
-  const completed = tasks.filter((t) => t.status === "COMPLETED");
-  const active = tasks.filter((t) => ["PENDING", "WIP"].includes(t.status));
+  const completed = tasks.filter((t) => t.status === "REVIEW_COMPLETED");
+  const active = tasks.filter((t) =>
+    ["DESIGN_NEW", "DESIGN_PLANNED", "IN_PROGRESS", "DESIGN_COMPLETED", "HOD_REVIEW", "SALES_REVIEW", "REWORK"].includes(t.status)
+  );
   const total = tasks.length || 1;
 
   // OnHoldTable rows
@@ -199,8 +201,12 @@ function buildLiveScheduleData(assignments, tasksArr) {
     tasksMap[key] = {
       id: key,
       parentId: a.parentId ?? (a.splitIndex != null ? a.taskId : null),
-      name: apiTask?.revisionCode || apiTask?.title || `Task #${a.taskId.slice(0, 6)}`,
-      baseName: apiTask?.revisionCode || apiTask?.title || `Task #${a.taskId.slice(0, 6)}`,
+      name: apiTask?.revisionCode
+        ? `${apiTask?.opNo ? apiTask.opNo + '-' : ''}${apiTask.revisionCode}`
+        : apiTask?.opNo || `Task #${a.taskId.slice(0, 6)}`,
+      baseName: apiTask?.revisionCode
+        ? `${apiTask?.opNo ? apiTask.opNo + '-' : ''}${apiTask.revisionCode}`
+        : apiTask?.opNo || `Task #${a.taskId.slice(0, 6)}`,
       estimatedHours: Number(a.assignedHours) || 0,
       colorClass: colorMap[a.taskId],
       splitIndex: a.splitIndex,
@@ -480,8 +486,8 @@ export default function DesignerDashboard({ designer: designerProp } = {}) {
   return (
     <div className="app-shell flex flex-col font-sans">
       <Navbar
-        currentDate={currentDate}
-        onCalendarChange={setCurrentDate}
+        currentDate={isHOD ? null : currentDate}
+        onCalendarChange={isHOD ? undefined : setCurrentDate}
         dateRangeText={dateRangeText}
       />
 

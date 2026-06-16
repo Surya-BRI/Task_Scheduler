@@ -1,5 +1,6 @@
 import { apiClient } from '@/lib/api-client';
 import { getAccessToken } from '@/lib/auth-token';
+import { isSameUserId } from '@/lib/user-id';
 
 export type ChatterMentionedUserDto = {
   id: string;
@@ -230,7 +231,7 @@ export function mapCommentDtoToFeedComment(
   const role = dto.authorRole?.trim();
   const pretty = full ? `${full}${role ? ` (${role})` : ''}` : null;
   const authorLabel =
-    dto.authorId && currentUserId && dto.authorId === currentUserId
+    dto.authorId && currentUserId && isSameUserId(dto.authorId, currentUserId)
       ? 'You'
       : pretty ?? 'Unknown';
   return {
@@ -253,7 +254,7 @@ export function mapChatterPostDtoToFeedPost(
   const role = dto.authorRole?.trim();
   const pretty = full ? `${full}${role ? ` (${role})` : ''}` : null;
   const authorLabel =
-    dto.authorId && currentUserId && dto.authorId === currentUserId
+    dto.authorId && currentUserId && isSameUserId(dto.authorId, currentUserId)
       ? 'You'
       : pretty ?? 'Unknown';
   const mentionedUsers = dto.mentionedUsers ?? [];
@@ -332,6 +333,51 @@ export type ChatterPostsPagedResponse = {
   pageInfo: { hasMore: boolean; nextCursor: string | null };
 };
 
+/** Coerce API/query cursor values to an ISO string (dateReviver may return Date). */
+export function normalizePaginationCursor(value: unknown): string | null {
+  if (value == null) return null;
+  if (value instanceof Date) {
+    return Number.isNaN(value.getTime()) ? null : value.toISOString();
+  }
+  if (typeof value === 'string') {
+    const trimmed = value.trim();
+    if (!trimmed) return null;
+    const parsed = new Date(trimmed);
+    return Number.isNaN(parsed.getTime()) ? trimmed : parsed.toISOString();
+  }
+  if (typeof value === 'number' && Number.isFinite(value)) {
+    const parsed = new Date(value);
+    return Number.isNaN(parsed.getTime()) ? null : parsed.toISOString();
+  }
+  return null;
+}
+
+function optionalQueryString(value: unknown): string | null {
+  if (value == null) return null;
+  if (typeof value === 'string') {
+    const trimmed = value.trim();
+    return trimmed || null;
+  }
+  if (value instanceof Date) {
+    return Number.isNaN(value.getTime()) ? null : value.toISOString();
+  }
+  const asString = String(value).trim();
+  return asString || null;
+}
+
+function normalizeChatterPostsPagedResponse(
+  res: ChatterPostsPagedResponse | null | undefined,
+): ChatterPostsPagedResponse {
+  const data = Array.isArray(res?.data) ? res.data : [];
+  return {
+    data,
+    pageInfo: {
+      hasMore: Boolean(res?.pageInfo?.hasMore),
+      nextCursor: normalizePaginationCursor(res?.pageInfo?.nextCursor),
+    },
+  };
+}
+
 export function listChatterPosts(params?: {
   limit?: number;
   taskId?: string;
@@ -340,19 +386,28 @@ export function listChatterPosts(params?: {
   commentedByUserId?: string;
   postType?: string;
   weekStart?: string;
-  cursor?: string;
+  cursor?: unknown;
 }) {
   const qs = new URLSearchParams();
   if (params?.limit != null) qs.set('limit', String(params.limit));
-  if (params?.taskId?.trim()) qs.set('taskId', params.taskId.trim());
-  if (params?.projectId?.trim()) qs.set('projectId', params.projectId.trim());
-  if (params?.mentionUserId?.trim()) qs.set('mentionUserId', params.mentionUserId.trim());
-  if (params?.commentedByUserId?.trim()) qs.set('commentedByUserId', params.commentedByUserId.trim());
-  if (params?.postType?.trim()) qs.set('postType', params.postType.trim());
-  if (params?.weekStart?.trim()) qs.set('weekStart', params.weekStart.trim());
-  if (params?.cursor?.trim()) qs.set('cursor', params.cursor.trim());
+  const taskId = optionalQueryString(params?.taskId);
+  if (taskId) qs.set('taskId', taskId);
+  const projectId = optionalQueryString(params?.projectId);
+  if (projectId) qs.set('projectId', projectId);
+  const mentionUserId = optionalQueryString(params?.mentionUserId);
+  if (mentionUserId) qs.set('mentionUserId', mentionUserId);
+  const commentedByUserId = optionalQueryString(params?.commentedByUserId);
+  if (commentedByUserId) qs.set('commentedByUserId', commentedByUserId);
+  const postType = optionalQueryString(params?.postType);
+  if (postType) qs.set('postType', postType);
+  const weekStart = optionalQueryString(params?.weekStart);
+  if (weekStart) qs.set('weekStart', weekStart);
+  const cursor = normalizePaginationCursor(params?.cursor);
+  if (cursor) qs.set('cursor', cursor);
   const suffix = qs.toString() ? `?${qs.toString()}` : '';
-  return apiClient.get<ChatterPostsPagedResponse>(`/chatter-posts${suffix}`);
+  return apiClient
+    .get<ChatterPostsPagedResponse>(`/chatter-posts${suffix}`)
+    .then(normalizeChatterPostsPagedResponse);
 }
 
 export function listChatterComments(postId: string) {

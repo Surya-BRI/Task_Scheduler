@@ -38,6 +38,12 @@ export class DesignListController {
     });
   }
 
+  @Get('project-sign-types')
+  findProjectSignTypes(@Query('salesForceCode') salesForceCode?: string) {
+    if (!salesForceCode?.trim()) return [];
+    return this.designListService.findProjectSignTypes(salesForceCode.trim());
+  }
+
   @Get('projects-list')
   findProjectsList(
     @Query('page') pageParam?: string,

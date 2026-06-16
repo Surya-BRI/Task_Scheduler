@@ -1,4 +1,4 @@
-import { IsIn, IsString } from 'class-validator';
+import { IsIn, IsOptional, IsString, MaxLength } from 'class-validator';
 
 export class UpdateTaskStatusDto {
   @IsString()
@@ -10,4 +10,9 @@ export class UpdateTaskStatusDto {
     'HOD_REVIEW', 'SALES_REVIEW', 'REWORK', 'REVIEW_COMPLETED', 'CLIENT_REJECTED',
   ])
   status: string;
+
+  @IsOptional()
+  @IsString()
+  @MaxLength(2000)
+  reworkNote?: string;
 }

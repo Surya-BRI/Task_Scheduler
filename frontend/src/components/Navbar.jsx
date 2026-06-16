@@ -376,16 +376,21 @@ export function Navbar({ currentDate, onCalendarChange, dateRangeText }) {
                 </div>
               </div>
             ) : (
-              <button
-                type="button"
-                onClick={handleSchedulerClick}
-                aria-current={onScheduler ? 'page' : undefined}
-                className={`${utilityIconClass}${onScheduler ? ' bg-slate-100 text-slate-900' : ''}`}
-                aria-label={isDesigner ? 'Open my dashboard' : 'Open scheduler'}
-                title={isDesigner ? 'My Scheduler Dashboard' : 'Master Scheduler'}
-              >
-                <Calendar className="h-5 w-5" strokeWidth={1.75} aria-hidden />
-              </button>
+              <div className="flex items-center gap-2">
+                <span className="text-sm font-semibold text-slate-700">
+                  {new Date().toLocaleDateString('en-GB', { day: '2-digit', month: 'short', year: 'numeric' })}
+                </span>
+                <button
+                  type="button"
+                  onClick={handleSchedulerClick}
+                  aria-current={onScheduler ? 'page' : undefined}
+                  className={`${utilityIconClass}${onScheduler ? ' bg-slate-100 text-slate-900' : ''}`}
+                  aria-label={isDesigner ? 'Open my dashboard' : 'Open scheduler'}
+                  title={isDesigner ? 'My Scheduler Dashboard' : 'Master Scheduler'}
+                >
+                  <Calendar className="h-5 w-5" strokeWidth={1.75} aria-hidden />
+                </button>
+              </div>
             )}
 
             {/* Projects overview — HOD / Admin / PM */}

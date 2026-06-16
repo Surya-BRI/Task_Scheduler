@@ -1,4 +1,7 @@
 export enum UserRole {
   HOD = 'HOD',
   DESIGNER = 'DESIGNER',
+  ADMIN = 'ADMIN',
+  PROJECT_MANAGER = 'PROJECT_MANAGER',
+  SALESPERSON = 'SALESPERSON',
 }

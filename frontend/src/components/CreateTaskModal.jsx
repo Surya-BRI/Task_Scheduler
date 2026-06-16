@@ -64,7 +64,7 @@ export function CreateTaskModal({ open, onClose, onCreated, submissionDate, reco
   const [designType, setDesignType] = useState('')
   const [priorityLevel, setPriorityLevel] = useState('Medium')
   const [revisionCode, setRevisionCode] = useState('')
-  const [hoursRequired, setHoursRequired] = useState('')
+  const [hoursRequired, setHoursRequired] = useState('1')
   const [comment, setComment] = useState('')
   const [localDeadline, setLocalDeadline] = useState(null)
   const [submitting, setSubmitting] = useState(false)
@@ -92,7 +92,7 @@ export function CreateTaskModal({ open, onClose, onCreated, submissionDate, reco
     setDesignType('')
     setHod('')
     setPriorityLevel('Medium')
-    setHoursRequired('')
+    setHoursRequired('1')
     setComment('')
     setSelectedFiles([])
     setUploadedFiles([])
@@ -155,6 +155,10 @@ export function CreateTaskModal({ open, onClose, onCreated, submissionDate, reco
     if (!validSubmissionDate) {
       nextFieldErrors.deadline = 'Deadline for Task Submission is required'
     }
+    const parsedHours = Number(hoursRequired)
+    if (!hoursRequired || Number.isNaN(parsedHours) || parsedHours < 1) {
+      nextFieldErrors.hoursRequired = 'Hours Required must be a number (min 1)'
+    }
     if (!String(record?.projectName ?? '').trim()) {
       nextFieldErrors.projectName = 'Project Name is required from source project'
     }
@@ -209,7 +213,7 @@ export function CreateTaskModal({ open, onClose, onCreated, submissionDate, reco
             fileKey: allUploaded[0]?.key,
             hodName: hod || undefined,
             designTypes: designType ? [designType] : undefined,
-            hoursRequired: hoursRequired ? Number(hoursRequired) : undefined,
+            hoursRequired: Number(hoursRequired),
             comment: comment || undefined,
             signFamily: undefined,
             signType: undefined,
@@ -449,17 +453,24 @@ export function CreateTaskModal({ open, onClose, onCreated, submissionDate, reco
             </div>
             <div>
               <label className="text-xs font-semibold text-slate-600" htmlFor="create-hours">
-                Hours Required
+                Hours Required <span className="text-red-500">*</span>
               </label>
               <input
                 id="create-hours"
                 type="number"
-                min={0}
+                min={1}
+                required
                 value={hoursRequired}
-                onChange={(e) => setHoursRequired(e.target.value)}
-                placeholder="0"
-                className="mt-1.5 w-full rounded-md border border-slate-300 bg-white px-3 py-2 text-sm text-slate-900 outline-none transition-colors focus:border-blue-500 focus:ring-2 focus:ring-blue-500/20"
+                onChange={(e) => {
+                  setHoursRequired(e.target.value)
+                  setFieldErrors((prev) => ({ ...prev, hoursRequired: '' }))
+                }}
+                placeholder="1"
+                className={`mt-1.5 w-full rounded-md border bg-white px-3 py-2 text-sm text-slate-900 outline-none transition-colors focus:ring-2 focus:ring-blue-500/20 ${fieldErrors.hoursRequired ? 'border-red-400 focus:border-red-400' : 'border-slate-300 focus:border-blue-500'}`}
               />
+              {fieldErrors.hoursRequired && (
+                <p className="mt-1 text-xs text-red-600">{fieldErrors.hoursRequired}</p>
+              )}
             </div>
           </div>
 

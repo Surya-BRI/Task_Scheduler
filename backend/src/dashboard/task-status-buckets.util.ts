@@ -1,8 +1,5 @@
-/** All task statuses allowed by CK_Task_status (see prisma/sql/add-new-task-statuses.sql). */
+/** All task statuses in the new lifecycle. Legacy values (PENDING/WIP/REVISION/COMPLETED/APPROVED) are kept in the sets below only for backward-compat bucketing of old DB rows. */
 export const ACTIVE_TASK_STATUSES = [
-  'PENDING',
-  'WIP',
-  'REVISION',
   'DESIGN_NEW',
   'DESIGN_PLANNED',
   'IN_PROGRESS',
@@ -10,15 +7,20 @@ export const ACTIVE_TASK_STATUSES = [
   'SALES_REVIEW',
   'REWORK',
   'CLIENT_REJECTED',
+  // Legacy — kept so old DB rows still count as active
+  'PENDING',
+  'WIP',
+  'REVISION',
 ] as const;
 
 export const ON_HOLD_TASK_STATUSES = ['ON_HOLD'] as const;
 
 export const COMPLETED_TASK_STATUSES = [
-  'COMPLETED',
-  'APPROVED',
   'DESIGN_COMPLETED',
   'REVIEW_COMPLETED',
+  // Legacy — kept so old DB rows still count as completed
+  'COMPLETED',
+  'APPROVED',
 ] as const;
 
 export const ALL_KNOWN_TASK_STATUSES = [
