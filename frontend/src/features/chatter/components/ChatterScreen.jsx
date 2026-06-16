@@ -1111,19 +1111,20 @@ export function ChatterScreen() {
   const privateMentions = useMemo(() => {
     if (!currentUserId) return [];
     const source = mentionFeedPosts.length > 0 ? mentionFeedPosts : sortedPosts;
+    const isMentionedInComment = (comment) =>
+      isSameUserId(comment.mentionUserId, currentUserId)
+      || (comment.mentionedUsers ?? []).some((u) => isSameUserId(u.id, currentUserId));
+    const isMentionedInPost = (post) =>
+      isSameUserId(post.mentionUserId, currentUserId)
+      || (post.mentionedUsers ?? []).some((u) => isSameUserId(u.id, currentUserId));
     return source
       .filter((post) => {
-        if (post.mentionUserId === currentUserId) return true;
-        if ((post.mentionedUsers ?? []).some((u) => u.id === currentUserId)) return true;
-        return (post.comments ?? []).some(
-          (comment) =>
-            comment.mentionUserId === currentUserId
-            || (comment.mentionedUsers ?? []).some((u) => u.id === currentUserId),
-        );
+        if (isMentionedInPost(post)) return true;
+        return (post.comments ?? []).some(isMentionedInComment);
       })
       .map((post) => {
-        const mentionedComment = (post.comments ?? []).find((c) => c.mentionUserId === currentUserId);
-        const isPostMention = post.mentionUserId === currentUserId;
+        const mentionedComment = (post.comments ?? []).find(isMentionedInComment);
+        const isPostMention = isMentionedInPost(post) && !mentionedComment;
         return {
           id: `${post.id}-${mentionedComment?.id ?? "post"}`,
           postId: post.id,

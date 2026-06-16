@@ -1,6 +1,6 @@
 import { apiClient } from '@/lib/api-client';
 import { getAccessToken } from '@/lib/auth-token';
-import { isSameUserId } from '@/lib/user-id';
+import { isSameUserId, normalizeUserId } from '@/lib/user-id';
 import { parseMentionUserIdsFromMessage } from '../utils/mention-utils';
 
 export type ChatterMentionedUserDto = {
@@ -260,8 +260,11 @@ export function mapCommentDtoToFeedComment(
     message: dto.message || '',
     author: authorLabel,
     authorId: dto.authorId,
-    mentionUserId: dto.mentionUserId ?? null,
-    mentionedUsers: dto.mentionedUsers ?? [],
+    mentionUserId: normalizeUserId(dto.mentionUserId),
+    mentionedUsers: (dto.mentionedUsers ?? []).map((user) => ({
+      ...user,
+      id: normalizeUserId(user.id) ?? user.id,
+    })),
     createdAt: dto.createdAt,
   };
 }
@@ -310,8 +313,11 @@ export function mapChatterPostDtoToFeedPost(
     authorId: dto.authorId,
     time: formatChatterTime(created),
     mention,
-    mentionUserId: dto.mentionUserId,
-    mentionedUsers,
+    mentionUserId: normalizeUserId(dto.mentionUserId),
+    mentionedUsers: (dto.mentionedUsers ?? []).map((user) => ({
+      ...user,
+      id: normalizeUserId(user.id) ?? user.id,
+    })),
     message: dto.message || '',
     projectName: resolveSidebarProjectName(dto) ?? '—',
     projectNo: dto.projectNo?.trim() || null,

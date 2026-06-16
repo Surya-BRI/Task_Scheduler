@@ -19,6 +19,20 @@ export function uniqueUuids(ids: Array<string | null | undefined>): string[] {
   return out;
 }
 
+/**
+ * Merge explicitly tagged user ids with ids parsed from @mentions in message text.
+ * Explicit ids are always kept; parsed ids are restricted to the eligible directory.
+ */
+export function mergeCollectedMentionUserIds(params: {
+  explicitIds: Array<string | null | undefined>;
+  parsedFromMessageIds: string[];
+  eligibleIds: Set<string>;
+}): string[] {
+  const explicit = uniqueUuids(params.explicitIds);
+  const parsed = params.parsedFromMessageIds.filter((id) => params.eligibleIds.has(id));
+  return uniqueUuids([...explicit, ...parsed]);
+}
+
 export type MentionUserRef = { id: string; fullName: string };
 
 /** Parse @Full Name tokens from message text (longest-match) against a user directory. */
