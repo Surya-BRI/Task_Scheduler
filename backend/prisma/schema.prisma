@@ -92,8 +92,11 @@ model Project {
   businessUnit String?  @db.NVarChar(255)
   description  String?  @db.NVarChar(Max)
   status       String   @default("ACTIVE") @db.NVarChar(50)
-  salesPerson  String?  @db.NVarChar(255)
-  createdById  String?  @db.UniqueIdentifier
+  salesPerson    String?  @db.NVarChar(255)
+  technicalHead  String?  @db.NVarChar(255)
+  teamLead       String?  @db.NVarChar(255)
+  subTeamLead    String?  @db.NVarChar(255)
+  createdById    String?  @db.UniqueIdentifier
   createdBy    User?    @relation("ProjectCreator", fields: [createdById], references: [id], onDelete: NoAction, onUpdate: NoAction)
   tasks        Task[]
   chatterPosts ChatterPost[]
@@ -112,6 +115,7 @@ model Task {
   title       String?   @db.NVarChar(200)
   revisionCode String?  @db.NVarChar(20)
   designType   String?  @db.NVarChar(80)
+  signType     String?  @db.NVarChar(255)
   description String?   @db.NVarChar(Max)
   status      String    @default("DESIGN_NEW") @db.NVarChar(20)
   priority    String    @default("Medium") @db.NVarChar(50)
@@ -143,7 +147,7 @@ model Task {
 
   @@index([projectId])
   @@index([assigneeId])
-  @@index([projectId, opNo, designType, revisionCode])
+  @@index([projectId, opNo, designType, revisionCode, signType])
   @@map("ErpTSTask")
 }
 

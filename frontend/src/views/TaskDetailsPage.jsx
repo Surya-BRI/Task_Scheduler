@@ -273,6 +273,27 @@ function FormFieldWithPencil({ id, label, value, onChange, placeholder, type = '
   )
 }
 
+function FieldSelect({ id, label, value, onChange, options }) {
+  return (
+    <div>
+      <label className="text-[11px] font-semibold text-slate-600" htmlFor={id}>
+        {label}
+      </label>
+      <select
+        id={id}
+        value={value}
+        onChange={(e) => onChange(e.target.value)}
+        className="mt-1 w-full rounded-md border border-slate-300 bg-white py-1.5 pl-2.5 pr-2.5 text-[13px] text-slate-900 outline-none focus:border-blue-500 focus:ring-2 focus:ring-blue-500/25"
+      >
+        <option value="">— Select —</option>
+        {options.map((u) => (
+          <option key={u.id} value={u.fullName}>{u.fullName}</option>
+        ))}
+      </select>
+    </div>
+  )
+}
+
 function DatePickerField({ id, label, selected, onChange, minDate }) {
   return (
     <div>
@@ -705,6 +726,7 @@ function mapTaskToRecord(task) {
     teamLead: task.teamLead ?? '',
     subTeamLead: task.subTeamLead ?? '',
     designers: task.designers ?? '',
+    projectDetails: task.projectDetails ?? [],
   }
 }
 
@@ -823,6 +845,9 @@ export function TaskDetailsPage() {
   const from = searchParams.get('from')
   const recordId = routeId
   const [record, setRecord] = useState(null)
+  const [reworkDialogOpen, setReworkDialogOpen] = useState(false)
+  const [reworkNote, setReworkNote] = useState('')
+  const [reworkSubmitting, setReworkSubmitting] = useState(false)
   const [createModalOpen, setCreateModalOpen] = useState(false)
   const [projectCreateModalOpen, setProjectCreateModalOpen] = useState(false)
   const [createdTasks, setCreatedTasks] = useState([])
@@ -847,8 +872,8 @@ export function TaskDetailsPage() {
   const [technicalHead, setTechnicalHead] = useState('')
   const [teamLead, setTeamLead] = useState('')
   const [subTeamLead, setSubTeamLead] = useState('')
-  const [designers, setDesigners] = useState('')
   const [teamSaving, setTeamSaving] = useState(false)
+  const [hodUsers, setHodUsers] = useState([])
   const [signRows, setSignRows] = useState([])
   const [signRowsSaving, setSignRowsSaving] = useState(false)
   const [projectId, setProjectId] = useState('')
@@ -977,10 +1002,13 @@ export function TaskDetailsPage() {
   const launchPauseModal = searchParams.get('openPause') === '1'
   const launchCompleteModal = searchParams.get('openComplete') === '1'
 
-  const handleStatusChange = useCallback(async (newStatus) => {
+  const handleStatusChange = useCallback(async (newStatus, reworkNote) => {
     if (!taskId) return
     try {
-      await apiClient.patch(`/tasks/${taskId}/status`, { status: newStatus })
+      await apiClient.patch(`/tasks/${taskId}/status`, {
+        status: newStatus,
+        ...(reworkNote ? { reworkNote } : {}),
+      })
       setTaskRefreshCounter((c) => c + 1)
     } catch {
       // status update failed — refresh anyway to show current state
@@ -1037,7 +1065,7 @@ export function TaskDetailsPage() {
   const hasExistingTask = Boolean(taskId || isUuid(record?.taskId ?? record?.id))
   const taskStatus = record?.status ?? null
   const isTerminalStatus = taskStatus === 'REVIEW_COMPLETED' || taskStatus === 'CLIENT_REJECTED'
-  const isPostSubmitStatus = ['DESIGN_COMPLETED', 'HOD_REVIEW', 'SALES_REVIEW', 'REWORK', 'REVIEW_COMPLETED', 'CLIENT_REJECTED'].includes(taskStatus)
+  const isPostSubmitStatus = ['DESIGN_COMPLETED', 'HOD_REVIEW', 'SALES_REVIEW', 'REWORK', 'REVIEW_COMPLETED', 'CLIENT_REJECTED', 'ON_HOLD'].includes(taskStatus)
   const showTimer = !isCreationRoute && hasExistingTask && Boolean(taskId) && !isTerminalStatus && (from === 'designer-queue' || from === 'designer-design-list')
   const _session = getSession()
   const isHod = ['HOD', 'ADMIN', 'PROJECT_MANAGER'].includes(_session?.role ?? '')
@@ -1060,6 +1088,11 @@ export function TaskDetailsPage() {
         const project = await apiClient.get(`/projects/by-project-no/${encodeURIComponent(projectNo)}`)
         if (!alive) return
         setProjectId(project?.id ?? '')
+        if (isCreationRoute && !isRetail) {
+          setTechnicalHead(project?.technicalHead ?? '')
+          setTeamLead(project?.teamLead ?? '')
+          setSubTeamLead(project?.subTeamLead ?? '')
+        }
       } catch {
         if (!alive) return
         setProjectId('')
@@ -1072,6 +1105,17 @@ export function TaskDetailsPage() {
       alive = false
     }
   }, [record?.projectNo, record?.projectId])
+
+  useEffect(() => {
+    if (!isCreationRoute) return
+    apiClient
+      .get('/users?role=HOD&limit=200')
+      .then((res) => {
+        const list = Array.isArray(res) ? res : (res?.data ?? [])
+        setHodUsers(Array.isArray(list) ? list : [])
+      })
+      .catch(() => {})
+  }, [isCreationRoute])
 
   useEffect(() => {
     let alive = true
@@ -1114,12 +1158,11 @@ export function TaskDetailsPage() {
   }, [record?.taskId, record?.id, record?.opNo, record?.fromTaskApi, projectId])
 
   useEffect(() => {
-    if (!record) return
+    if (!record || isCreationRoute) return
     setTechnicalHead(record.technicalHead ?? '')
     setTeamLead(record.teamLead ?? '')
     setSubTeamLead(record.subTeamLead ?? '')
-    setDesigners(record.designers ?? '')
-  }, [record])
+  }, [record, isCreationRoute])
 
   useEffect(() => {
     if (!taskId) { setSignRows([]); return }
@@ -1555,10 +1598,10 @@ export function TaskDetailsPage() {
   }, [])
 
   async function handleSaveTeam() {
-    if (!taskId) return
+    if (!projectId) return
     setTeamSaving(true)
     try {
-      await apiClient.patch(`/tasks/${taskId}`, { technicalHead, teamLead, subTeamLead, designers })
+      await apiClient.patch(`/projects/${projectId}`, { technicalHead, teamLead, subTeamLead })
     } finally {
       setTeamSaving(false)
     }
@@ -1807,16 +1850,24 @@ export function TaskDetailsPage() {
                                 {taskStatus === 'HOD_REVIEW' && (<>
                                   <button type="button" onClick={() => handleStatusChange('SALES_REVIEW')} className="rounded-md bg-orange-500 px-3 py-1.5 text-xs font-semibold text-white hover:bg-orange-600 transition-colors">Send to Sales</button>
                                   <button type="button" onClick={() => handleStatusChange('REVIEW_COMPLETED')} className="rounded-md bg-emerald-600 px-3 py-1.5 text-xs font-semibold text-white hover:bg-emerald-700 transition-colors">Complete Review</button>
-                                  <button type="button" onClick={() => handleStatusChange('REWORK')} className="rounded-md bg-red-500 px-3 py-1.5 text-xs font-semibold text-white hover:bg-red-600 transition-colors">Request Rework</button>
+                                  <button type="button" onClick={() => { setReworkNote(''); setReworkDialogOpen(true); }} className="rounded-md bg-red-500 px-3 py-1.5 text-xs font-semibold text-white hover:bg-red-600 transition-colors">Request Rework</button>
+                                  <button type="button" onClick={() => handleStatusChange('DESIGN_COMPLETED')} className="rounded-md border border-slate-300 bg-white px-3 py-1.5 text-xs font-semibold text-slate-600 hover:bg-slate-50 transition-colors">← Back to Design Complete</button>
                                 </>)}
                                 {taskStatus === 'SALES_REVIEW' && (<>
                                   <button type="button" onClick={() => handleStatusChange('REVIEW_COMPLETED')} className="rounded-md bg-emerald-600 px-3 py-1.5 text-xs font-semibold text-white hover:bg-emerald-700 transition-colors">Mark Completed</button>
                                   <button type="button" onClick={() => handleStatusChange('CLIENT_REJECTED')} className="rounded-md bg-rose-600 px-3 py-1.5 text-xs font-semibold text-white hover:bg-rose-700 transition-colors">Client Rejected</button>
+                                  <button type="button" onClick={() => { setReworkNote(''); setReworkDialogOpen(true); }} className="rounded-md bg-red-500 px-3 py-1.5 text-xs font-semibold text-white hover:bg-red-600 transition-colors">Request Rework</button>
+                                  <button type="button" onClick={() => handleStatusChange('HOD_REVIEW')} className="rounded-md border border-slate-300 bg-white px-3 py-1.5 text-xs font-semibold text-slate-600 hover:bg-slate-50 transition-colors">← Back to HOD Review</button>
+                                </>)}
+                                {taskStatus === 'REWORK' && (<>
+                                  <button type="button" onClick={() => handleStatusChange('HOD_REVIEW')} className="rounded-md bg-violet-600 px-3 py-1.5 text-xs font-semibold text-white hover:bg-violet-700 transition-colors">Back to HOD Review</button>
+                                  <button type="button" onClick={() => handleStatusChange('DESIGN_COMPLETED')} className="rounded-md border border-slate-300 bg-white px-3 py-1.5 text-xs font-semibold text-slate-600 hover:bg-slate-50 transition-colors">← Back to Design Complete</button>
+                                </>)}
+                                {taskStatus === 'ON_HOLD' && (<>
+                                  <button type="button" onClick={() => handleStatusChange('HOD_REVIEW')} className="rounded-md bg-violet-600 px-3 py-1.5 text-xs font-semibold text-white hover:bg-violet-700 transition-colors">Resume — HOD Review</button>
+                                  <button type="button" onClick={() => handleStatusChange('DESIGN_COMPLETED')} className="rounded-md bg-blue-600 px-3 py-1.5 text-xs font-semibold text-white hover:bg-blue-700 transition-colors">Return to Design Complete</button>
                                   <button type="button" onClick={() => handleStatusChange('REWORK')} className="rounded-md bg-red-500 px-3 py-1.5 text-xs font-semibold text-white hover:bg-red-600 transition-colors">Request Rework</button>
                                 </>)}
-                                {taskStatus === 'REWORK' && (
-                                  <button type="button" onClick={() => handleStatusChange('HOD_REVIEW')} className="rounded-md bg-violet-600 px-3 py-1.5 text-xs font-semibold text-white hover:bg-violet-700 transition-colors">Back to HOD Review</button>
-                                )}
                                 {taskStatus !== 'ON_HOLD' && (
                                   <button type="button" onClick={() => handleStatusChange('ON_HOLD')} className="rounded-md border border-slate-300 bg-white px-3 py-1.5 text-xs font-semibold text-slate-600 hover:bg-slate-50 transition-colors">Put On Hold</button>
                                 )}
@@ -1825,6 +1876,53 @@ export function TaskDetailsPage() {
                           )}
                         </div>
                       ) : null}
+                      {(record?.projectDetails?.length ?? 0) > 0 && (
+                        <div className="mt-4 border-t border-slate-200 pt-3">
+                          <p className="mb-2 text-xs font-semibold text-slate-700">Work Scope</p>
+                          <div className="space-y-2">
+                            {record.projectDetails.map((detail, idx) => (
+                              <div key={detail.id ?? idx} className="rounded-lg border border-slate-200 bg-white p-3">
+                                {(detail.signType || detail.planCode || detail.deadline) && (
+                                  <div className="mb-3 flex flex-wrap gap-x-5 gap-y-1 text-xs">
+                                    {detail.signType && (
+                                      <span className="text-slate-500">Sign Type: <span className="font-semibold text-slate-800">{detail.signType}</span></span>
+                                    )}
+                                    {detail.planCode && (
+                                      <span className="text-slate-500">Plan Code: <span className="font-semibold text-slate-800">{detail.planCode}</span></span>
+                                    )}
+                                    {detail.deadline && (
+                                      <span className="text-slate-500">Deadline: <span className="font-semibold text-slate-800">{new Date(detail.deadline).toLocaleDateString('en-GB')}</span></span>
+                                    )}
+                                  </div>
+                                )}
+                                <div className="grid grid-cols-2 gap-2 sm:grid-cols-3">
+                                  {[
+                                    { flag: detail.artwork,   hours: detail.artworkHours,   label: 'Artwork' },
+                                    { flag: detail.technical, hours: detail.technicalHours, label: 'Technical' },
+                                    { flag: detail.location,  hours: detail.locationHours,  label: 'Location' },
+                                    { flag: detail.asBuilt,   hours: detail.asBuiltHours,   label: 'As-Built' },
+                                    { flag: detail.bim,       hours: null,                  label: 'BIM' },
+                                  ].map(({ flag, hours, label }) => (
+                                    <div
+                                      key={label}
+                                      className={`flex items-center gap-2 rounded-md px-2.5 py-1.5 text-xs ${flag ? 'bg-emerald-50 text-emerald-800' : 'bg-slate-50 text-slate-400'}`}
+                                    >
+                                      {flag
+                                        ? <CheckCircle2 className="h-3.5 w-3.5 shrink-0 text-emerald-500" />
+                                        : <div className="h-3.5 w-3.5 shrink-0 rounded-full border border-slate-300" />
+                                      }
+                                      <span className="font-medium">{label}</span>
+                                      {flag && hours != null && (
+                                        <span className="ml-auto text-[11px] text-emerald-600">{hours}h</span>
+                                      )}
+                                    </div>
+                                  ))}
+                                </div>
+                              </div>
+                            ))}
+                          </div>
+                        </div>
+                      )}
                       {!isRetail ? (
                         <div className="mt-4 border-t border-slate-200 pt-3">
                           <div className="mb-2 flex items-center justify-between">
@@ -1980,10 +2078,9 @@ export function TaskDetailsPage() {
               {activeTab === 'team' && isCreationRoute && !isRetail ? (
                 <div className="mt-3 space-y-2.5">
                   <div className="grid gap-2.5 sm:grid-cols-2">
-                    <FormFieldWithPencil id="team-technical-head" label="Technical Head" value={technicalHead} onChange={setTechnicalHead} placeholder="" />
-                    <FormFieldWithPencil id="team-team-lead" label="Team Lead" value={teamLead} onChange={setTeamLead} placeholder="" />
-                    <FormFieldWithPencil id="team-sub-team-lead" label="Sub Team Lead" value={subTeamLead} onChange={setSubTeamLead} placeholder="" />
-                    <FormFieldWithPencil id="team-designers" label="Designers" value={designers} onChange={setDesigners} placeholder="" />
+                    <FieldSelect id="team-technical-head" label="Technical Head" value={technicalHead} onChange={setTechnicalHead} options={hodUsers} />
+                    <FieldSelect id="team-team-lead" label="Team Lead" value={teamLead} onChange={setTeamLead} options={hodUsers} />
+                    <FieldSelect id="team-sub-team-lead" label="Sub Team Lead" value={subTeamLead} onChange={setSubTeamLead} options={hodUsers} />
                   </div>
                   <div className="flex items-center justify-between border-t border-slate-200 pt-2.5">
                     <p className="text-[11px] text-slate-400">Team will be assigned when the task is created.</p>
@@ -2201,14 +2298,18 @@ export function TaskDetailsPage() {
       <ProjectCreateTaskModal
         open={projectCreateModalOpen}
         onClose={() => setProjectCreateModalOpen(false)}
-        onCreated={async (task) => {
+        onCreated={async (tasks) => {
           setProjectCreateModalOpen(false)
-          if (task?.taskNo ?? task?.id) setCreatedTasks((prev) => [...prev, task?.taskNo ?? task?.id])
+          const taskList = Array.isArray(tasks) ? tasks : (tasks ? [tasks] : [])
+          for (const t of taskList) {
+            if (t?.taskNo ?? t?.id) setCreatedTasks((prev) => [...prev, t?.taskNo ?? t?.id])
+          }
           fetchProjectTasks()
-          const newTaskId = task?.id
-          if (newTaskId && (technicalHead || teamLead || subTeamLead || designers)) {
+          const count = taskList.length
+          if (count > 0) toast.success(`${count} task${count !== 1 ? 's' : ''} created successfully`)
+          if (projectId && (technicalHead || teamLead || subTeamLead)) {
             try {
-              await apiClient.patch(`/tasks/${newTaskId}`, { technicalHead, teamLead, subTeamLead, designers })
+              await apiClient.patch(`/projects/${projectId}`, { technicalHead, teamLead, subTeamLead })
             } catch {
               toast.error('Task created but team assignment failed — please edit the task to retry.')
             }
@@ -2224,6 +2325,47 @@ export function TaskDetailsPage() {
           type={historyDialog.type}
           onClose={() => setHistoryDialog(null)}
         />
+      )}
+
+      {reworkDialogOpen && (
+        <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/40 p-4">
+          <div className="bg-white rounded-xl shadow-xl w-full max-w-md flex flex-col gap-4 p-6">
+            <div>
+              <h2 className="text-sm font-bold text-slate-900">Request Rework</h2>
+              <p className="mt-1 text-xs text-slate-500">Describe what needs to be corrected. This note will be sent to the designer as a notification and saved in the task chatter.</p>
+            </div>
+            <textarea
+              className="w-full rounded-md border border-slate-300 p-2.5 text-xs text-slate-800 resize-none focus:outline-none focus:ring-2 focus:ring-red-400"
+              rows={5}
+              placeholder="e.g. Please revise the sign dimensions on sheet 3 and update the colour palette to match the revised brief..."
+              value={reworkNote}
+              onChange={(e) => setReworkNote(e.target.value)}
+              autoFocus
+            />
+            <div className="flex justify-end gap-2">
+              <button
+                type="button"
+                onClick={() => setReworkDialogOpen(false)}
+                className="rounded-md border border-slate-300 bg-white px-4 py-1.5 text-xs font-semibold text-slate-600 hover:bg-slate-50 transition-colors"
+              >
+                Cancel
+              </button>
+              <button
+                type="button"
+                disabled={!reworkNote.trim() || reworkSubmitting}
+                onClick={async () => {
+                  setReworkSubmitting(true)
+                  await handleStatusChange('REWORK', reworkNote.trim())
+                  setReworkDialogOpen(false)
+                  setReworkSubmitting(false)
+                }}
+                className="rounded-md bg-red-500 px-4 py-1.5 text-xs font-semibold text-white hover:bg-red-600 disabled:opacity-50 transition-colors"
+              >
+                {reworkSubmitting ? 'Sending…' : 'Send for Rework'}
+              </button>
+            </div>
+          </div>
+        </div>
       )}
     </div>
   )

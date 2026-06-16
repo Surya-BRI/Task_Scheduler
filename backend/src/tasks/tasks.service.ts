@@ -258,13 +258,14 @@ export class TasksService {
 
   private async resolveNextRevisionCode(
     tx: Prisma.TransactionClient,
-    params: { projectId: string; opNo: string; designType: string },
+    params: { projectId: string; opNo: string; designType: string; signType?: string | null },
   ): Promise<string> {
     const rows = await tx.task.findMany({
       where: {
         projectId: params.projectId,
         opNo: params.opNo,
         designType: params.designType,
+        ...(params.signType ? { signType: params.signType } : {}),
         revisionCode: { not: null },
       },
       select: { revisionCode: true },
@@ -511,65 +512,66 @@ export class TasksService {
       await this.taskFilesService.assertKeysExist(fileKeysToCheck);
     }
 
-    const created = await this.prisma.$transaction(async (tx) => {
-      let taskId: string | null = null;
-      for (let attempt = 0; attempt < 5; attempt++) {
-        try {
-          const requestedRevision = this.normalizeRevisionCode(dto.task.revisionCode);
-          const revisionCode =
-            requestedRevision ??
-            (await this.resolveNextRevisionCode(tx, {
-              projectId: project.id,
-              opNo: normalizedOpNo,
-              designType: normalizedDesignType,
-            }));
+    // ── RETAIL PATH: unchanged — 1 task + N retail detail rows ─────────────
+    if (dto.designType === 'Retail') {
+      const created = await this.prisma.$transaction(async (tx) => {
+        let taskId: string | null = null;
+        for (let attempt = 0; attempt < 5; attempt++) {
+          try {
+            const requestedRevision = this.normalizeRevisionCode(dto.task.revisionCode);
+            const revisionCode =
+              requestedRevision ??
+              (await this.resolveNextRevisionCode(tx, {
+                projectId: project.id,
+                opNo: normalizedOpNo,
+                designType: normalizedDesignType,
+              }));
 
-          const duplicate = await tx.task.findFirst({
-            where: {
-              projectId: project.id,
-              opNo: normalizedOpNo,
-              designType: normalizedDesignType,
-              revisionCode,
-            },
-            select: { id: true },
-          });
-          if (duplicate) {
-            throw new BadRequestException(
-              `Revision ${revisionCode} already exists for ${normalizedDesignType} in this project/opNo.`,
-            );
-          }
+            const duplicate = await tx.task.findFirst({
+              where: {
+                projectId: project.id,
+                opNo: normalizedOpNo,
+                designType: normalizedDesignType,
+                revisionCode,
+              },
+              select: { id: true },
+            });
+            if (duplicate) {
+              throw new BadRequestException(
+                `Revision ${revisionCode} already exists for ${normalizedDesignType} in this project/opNo.`,
+              );
+            }
 
-          const createdTask = await tx.task.create({
-            data: {
-              taskNo: this.buildTaskNo(dto.task.opNo),
-              title: dto.task.title?.trim() || null,
-              revisionCode,
-              designType: normalizedDesignType,
-              opNo: normalizedOpNo,
-              description: dto.task.description,
-              priority: dto.task.priority ?? 'Medium',
-              dueDate: dto.task.dueDate ? new Date(dto.task.dueDate) : undefined,
-              projectId: project.id,
-              assigneeId: dto.task.assigneeId ?? null,
-            },
-            select: { id: true },
-          });
-          taskId = createdTask.id;
-          break;
-        } catch (error) {
-          if (
-            error instanceof Prisma.PrismaClientKnownRequestError &&
-            error.code === 'P2002' &&
-            attempt < 4
-          ) {
-            continue;
+            const createdTask = await tx.task.create({
+              data: {
+                taskNo: this.buildTaskNo(dto.task.opNo),
+                title: dto.task.title?.trim() || null,
+                revisionCode,
+                designType: normalizedDesignType,
+                opNo: normalizedOpNo,
+                description: dto.task.description,
+                priority: dto.task.priority ?? 'Medium',
+                dueDate: dto.task.dueDate ? new Date(dto.task.dueDate) : undefined,
+                projectId: project.id,
+                assigneeId: dto.task.assigneeId ?? null,
+              },
+              select: { id: true },
+            });
+            taskId = createdTask.id;
+            break;
+          } catch (error) {
+            if (
+              error instanceof Prisma.PrismaClientKnownRequestError &&
+              error.code === 'P2002' &&
+              attempt < 4
+            ) {
+              continue;
+            }
+            throw error;
           }
-          throw error;
         }
-      }
-      if (!taskId) throw new BadRequestException('Failed to generate unique task number');
+        if (!taskId) throw new BadRequestException('Failed to generate unique task number');
 
-      if (dto.designType === 'Retail' && hasRetail) {
         for (const line of dto.retailDetails ?? []) {
           const createdLine = await tx.retailTaskDetail.create({
             data: {
@@ -617,78 +619,213 @@ export class TasksService {
             });
           }
         }
-      }
 
-      if (dto.designType === 'Project' && hasProject) {
-        for (const line of dto.projectDetails ?? []) {
-          const createdLine = await tx.projectTaskDetail.create({
-            data: {
-              taskId,
-              signType: line.signType,
-              planCode: line.planCode,
-              area: line.area,
-              level: line.level,
-              artwork: line.artwork ?? false,
-              artworkHours: line.artworkHours ?? null,
-              technical: line.technical ?? false,
-              technicalHours: line.technicalHours ?? null,
-              location: line.location ?? false,
-              locationHours: line.locationHours ?? null,
-              asBuilt: line.asBuilt ?? false,
-              asBuiltHours: line.asBuiltHours ?? null,
-              bim: line.bim ?? false,
-              deadline: line.deadline ? new Date(line.deadline) : null,
-              comment: line.comment,
-            },
-            select: { id: true },
-          });
+        return tx.task.findUnique({ where: { id: taskId }, select: TASK_SELECT });
+      });
 
-          if ((line.attachments?.length ?? 0) > 0) {
-            await tx.projectTaskDetailAttachment.createMany({
-              data: (line.attachments ?? []).map((attachment) => ({
-                projectTaskDetailId: createdLine.id,
-                fileKey: attachment.fileKey,
-                fileName: attachment.fileName,
-                mimeType: attachment.mimeType ?? null,
-                sizeBytes:
-                  typeof attachment.size === 'number' ? Math.round(attachment.size) : null,
-              })),
-            });
+      if (!created) throw new NotFoundException('Task not found after create');
+      await this.activityLogger.log({
+        action: ActivityAction.TASK_CREATED,
+        userId,
+        taskId: created.id,
+        details: {
+          event: ActivityAction.TASK_CREATED,
+          messageKey: 'task_created',
+          taskSnapshot: { id: created.id, taskNo: created.taskNo, opNo: created.opNo, title: created.title ?? undefined, status: created.status },
+          projectSnapshot: { id: created.project?.id, projectNo: created.project?.projectNo, name: created.project?.name },
+          context: { source: 'tasks.createExtended', designType: dto.designType },
+        },
+      });
+
+      if (created.assigneeId) {
+        const taskLink = `/retail-task-view/${created.id}`;
+        const createMsg = `${created.taskNo} — ${created.project?.name ?? 'Unknown Project'} has been assigned to you.`;
+        this.notificationsService
+          .create({ userId: created.assigneeId, title: 'Task Assigned to You', message: createMsg, linkUrl: taskLink })
+          .then(() => this.logger.debug(`[NOTIFY] task created — designer notified`))
+          .catch((err) => this.logger.error('Failed to notify designer on task create', err));
+        this.dashboardRealtime?.notifyUserNotificationRefresh(created.assigneeId);
+
+        const hodUsers = await this.prisma.user.findMany({
+          where: { role: { name: { in: ['HOD', 'ADMIN'] } } },
+          select: { id: true },
+        });
+        const hodMsg = `${created.taskNo} — ${created.project?.name ?? 'Unknown Project'} created and assigned to ${created.assignee?.fullName ?? 'a designer'}.`;
+        for (const hod of hodUsers) {
+          if (hod.id !== created.assigneeId) {
+            this.notificationsService
+              .create({ userId: hod.id, title: 'New Task Assigned', message: hodMsg, linkUrl: taskLink })
+              .catch((err) => this.logger.error('Failed to notify HOD on task create', err));
+            this.dashboardRealtime?.notifyUserNotificationRefresh(hod.id);
           }
         }
       }
 
-      return tx.task.findUnique({
-        where: { id: taskId },
-        select: TASK_SELECT,
-      });
+      const withUrls = await this.withSignedAttachmentUrls(created);
+      return { tasks: [this.normalizeTaskForApi(withUrls)], count: 1 };
+    }
+
+    // ── PROJECT PATH: one ErpTSTask per sign-type detail line ───────────────
+    const createdTasks = await this.prisma.$transaction(async (tx) => {
+      const results: any[] = [];
+
+      for (const line of dto.projectDetails ?? []) {
+        const lineSignType = line.signType ?? null;
+        let taskId: string | null = null;
+
+        for (let attempt = 0; attempt < 5; attempt++) {
+          try {
+            const requestedRevision = this.normalizeRevisionCode(dto.task.revisionCode);
+            const revisionCode =
+              requestedRevision ??
+              (await this.resolveNextRevisionCode(tx, {
+                projectId: project.id,
+                opNo: normalizedOpNo,
+                designType: normalizedDesignType,
+                signType: lineSignType,
+              }));
+
+            const duplicate = await tx.task.findFirst({
+              where: {
+                projectId: project.id,
+                opNo: normalizedOpNo,
+                designType: normalizedDesignType,
+                revisionCode,
+                signType: lineSignType,
+              },
+              select: { id: true },
+            });
+            if (duplicate) {
+              throw new BadRequestException(
+                `Revision ${revisionCode} already exists for sign type "${lineSignType ?? normalizedDesignType}" in this project/opNo.`,
+              );
+            }
+
+            const createdTask = await tx.task.create({
+              data: {
+                taskNo: this.buildTaskNo(dto.task.opNo),
+                title: lineSignType?.trim() || dto.task.title?.trim() || null,
+                revisionCode,
+                designType: normalizedDesignType,
+                signType: lineSignType,
+                opNo: normalizedOpNo,
+                description: dto.task.description,
+                priority: dto.task.priority ?? 'Medium',
+                dueDate: dto.task.dueDate ? new Date(dto.task.dueDate) : undefined,
+                projectId: project.id,
+                assigneeId: dto.task.assigneeId ?? null,
+              },
+              select: { id: true },
+            });
+            taskId = createdTask.id;
+            break;
+          } catch (error) {
+            if (
+              error instanceof Prisma.PrismaClientKnownRequestError &&
+              error.code === 'P2002' &&
+              attempt < 4
+            ) {
+              continue;
+            }
+            throw error;
+          }
+        }
+        if (!taskId) throw new BadRequestException('Failed to generate unique task number');
+
+        const createdLine = await tx.projectTaskDetail.create({
+          data: {
+            taskId,
+            signType: line.signType,
+            planCode: line.planCode,
+            area: line.area,
+            level: line.level,
+            artwork: line.artwork ?? false,
+            artworkHours: line.artworkHours ?? null,
+            technical: line.technical ?? false,
+            technicalHours: line.technicalHours ?? null,
+            location: line.location ?? false,
+            locationHours: line.locationHours ?? null,
+            asBuilt: line.asBuilt ?? false,
+            asBuiltHours: line.asBuiltHours ?? null,
+            bim: line.bim ?? false,
+            deadline: line.deadline ? new Date(line.deadline) : null,
+            comment: line.comment,
+          },
+          select: { id: true },
+        });
+
+        if ((line.attachments?.length ?? 0) > 0) {
+          await tx.projectTaskDetailAttachment.createMany({
+            data: (line.attachments ?? []).map((attachment) => ({
+              projectTaskDetailId: createdLine.id,
+              fileKey: attachment.fileKey,
+              fileName: attachment.fileName,
+              mimeType: attachment.mimeType ?? null,
+              sizeBytes:
+                typeof attachment.size === 'number' ? Math.round(attachment.size) : null,
+            })),
+          });
+        }
+
+        const full = await tx.task.findUnique({ where: { id: taskId }, select: TASK_SELECT });
+        results.push(full);
+      }
+
+      return results;
     });
 
-    if (!created) throw new NotFoundException('Task not found after create');
-    await this.activityLogger.log({
-      action: ActivityAction.TASK_CREATED,
-      userId,
-      taskId: created.id,
-      details: {
-        event: ActivityAction.TASK_CREATED,
-        messageKey: 'task_created',
-        taskSnapshot: {
-          id: created.id,
-          taskNo: created.taskNo,
-          opNo: created.opNo,
-          title: created.title ?? undefined,
-          status: created.status,
+    // Log activity + notify for each created task
+    const hodUsers = createdTasks.some((t) => t?.assigneeId)
+      ? await this.prisma.user.findMany({
+          where: { role: { name: { in: ['HOD', 'ADMIN'] } } },
+          select: { id: true },
+        })
+      : [];
+
+    for (const task of createdTasks) {
+      if (!task) continue;
+      await this.activityLogger.log({
+        action: ActivityAction.TASK_CREATED,
+        userId,
+        taskId: task.id,
+        details: {
+          event: ActivityAction.TASK_CREATED,
+          messageKey: 'task_created',
+          taskSnapshot: { id: task.id, taskNo: task.taskNo, opNo: task.opNo, title: task.title ?? undefined, status: task.status },
+          projectSnapshot: { id: task.project?.id, projectNo: task.project?.projectNo, name: task.project?.name },
+          context: { source: 'tasks.createExtended', designType: dto.designType },
         },
-        projectSnapshot: {
-          id: created.project?.id,
-          projectNo: created.project?.projectNo,
-          name: created.project?.name,
-        },
-        context: { source: 'tasks.createExtended', designType: dto.designType },
-      },
-    });
-    const withUrls = await this.withSignedAttachmentUrls(created);
-    return this.normalizeTaskForApi(withUrls);
+      });
+
+      if (task.assigneeId) {
+        const taskLink = `/project-task-view/${task.id}`;
+        const createMsg = `${task.taskNo} — ${task.project?.name ?? 'Unknown Project'} has been assigned to you.`;
+        this.notificationsService
+          .create({ userId: task.assigneeId, title: 'Task Assigned to You', message: createMsg, linkUrl: taskLink })
+          .catch((err) => this.logger.error('Failed to notify designer on task create', err));
+        this.dashboardRealtime?.notifyUserNotificationRefresh(task.assigneeId);
+
+        const hodMsg = `${task.taskNo} — ${task.project?.name ?? 'Unknown Project'} created and assigned to ${task.assignee?.fullName ?? 'a designer'}.`;
+        for (const hod of hodUsers) {
+          if (hod.id !== task.assigneeId) {
+            this.notificationsService
+              .create({ userId: hod.id, title: 'New Task Assigned', message: hodMsg, linkUrl: taskLink })
+              .catch((err) => this.logger.error('Failed to notify HOD on task create', err));
+            this.dashboardRealtime?.notifyUserNotificationRefresh(hod.id);
+          }
+        }
+      }
+    }
+
+    const normalized = await Promise.all(
+      createdTasks
+        .filter((t): t is NonNullable<typeof t> => t !== null)
+        .map(async (t) => {
+          const withUrls = await this.withSignedAttachmentUrls(t);
+          return this.normalizeTaskForApi(withUrls);
+        }),
+    );
+    return { tasks: normalized, count: normalized.length };
   }
 
   async uploadTaskFile(file: Express.Multer.File, userId: string) {
@@ -851,11 +988,13 @@ export class TasksService {
     this.notificationsService
       .create({ userId: dto.assigneeId, title: 'Task Assigned to You', message: assignMessage, linkUrl: linkUrlAssign })
       .catch((err) => this.logger.error('Failed to send assign notification to designer', err));
+    this.dashboardRealtime?.notifyUserNotificationRefresh(dto.assigneeId);
     for (const hod of hodUsersAssign) {
       if (hod.id !== dto.assigneeId) {
         this.notificationsService
           .create({ userId: hod.id, title: 'Task Assigned', message: assignMessage, linkUrl: linkUrlAssign })
           .catch((err) => this.logger.error('Failed to send assign notification to HOD', err));
+        this.dashboardRealtime?.notifyUserNotificationRefresh(hod.id);
       }
     }
 
@@ -887,13 +1026,21 @@ export class TasksService {
       select: TASK_SELECT,
     });
 
+    const milestoneAction =
+      newStatusApi === 'DESIGN_COMPLETED' ? ActivityAction.TASK_COMPLETED :
+      newStatusApi === 'REVIEW_COMPLETED' ? ActivityAction.CLIENT_APPROVED :
+      newStatusApi === 'CLIENT_REJECTED'  ? ActivityAction.CLIENT_REJECTED_TASK :
+      null;
+    const logAction = milestoneAction ?? ActivityAction.STATUS_CHANGED;
+    const messageKey = milestoneAction ? logAction.toLowerCase() : 'status_changed';
+
     await this.activityLogger.log({
-      action: ActivityAction.STATUS_CHANGED,
+      action: logAction,
       userId,
       taskId: id,
       details: {
-        event: ActivityAction.STATUS_CHANGED,
-        messageKey: 'status_changed',
+        event: logAction,
+        messageKey,
         taskSnapshot: {
           id: updatedTask.id,
           taskNo: updatedTask.taskNo,
@@ -934,13 +1081,51 @@ export class TasksService {
         this.notificationsService
           .create({ userId: updatedTask.assigneeId, title: 'Task Marked Complete', message: statusMessage, linkUrl: linkUrlStatus })
           .catch((err) => this.logger.error('Failed to send complete notification to designer', err));
+        this.dashboardRealtime?.notifyUserNotificationRefresh(updatedTask.assigneeId);
       }
       for (const hod of hodUsersStatus) {
         if (hod.id !== updatedTask.assigneeId) {
           this.notificationsService
             .create({ userId: hod.id, title: 'Task Completed', message: statusMessage, linkUrl: linkUrlStatus })
             .catch((err) => this.logger.error('Failed to send complete notification to HOD', err));
+          this.dashboardRealtime?.notifyUserNotificationRefresh(hod.id);
         }
+      }
+    }
+
+    // When HOD sends task back for REWORK with a note — create chatter post + notify designer
+    if (newStatusApi === 'REWORK' && dto.reworkNote?.trim()) {
+      const note = dto.reworkNote.trim();
+      const taskLink =
+        updatedTask.designType?.toLowerCase() === 'retail'
+          ? `/retail-task-view/${id}`
+          : `/project-task-view/${id}`;
+
+      try {
+        await this.prisma.chatterPost.create({
+          data: {
+            taskId: id,
+            title: 'Rework Instructions',
+            message: `Rework Required:\n\n${note}`,
+            postType: 'REWORK',
+            authorId: userId,
+            ...(updatedTask.assigneeId ? { mentionUserId: updatedTask.assigneeId } : {}),
+          },
+        });
+      } catch (err) {
+        this.logger.error('Failed to create rework chatter post', err);
+      }
+
+      if (updatedTask.assigneeId) {
+        this.notificationsService
+          .create({
+            userId: updatedTask.assigneeId,
+            title: `Rework Required — ${updatedTask.taskNo}`,
+            message: note,
+            linkUrl: taskLink,
+          })
+          .catch((err) => this.logger.error('Failed to send rework notification', err));
+        this.dashboardRealtime?.notifyUserNotificationRefresh(updatedTask.assigneeId);
       }
     }
 
@@ -1078,6 +1263,39 @@ export class TasksService {
         context: { sessionId: session.id, source: 'tasks.submitWork' },
       },
     });
+
+    // Notify all HODs that work has been submitted and is ready for review
+    try {
+      const submittedTask = await this.prisma.task.findUnique({
+        where: { id: taskId },
+        select: {
+          taskNo: true,
+          designType: true,
+          project: { select: { name: true } },
+          assignee: { select: { fullName: true } },
+        },
+      });
+      if (submittedTask) {
+        const taskLink =
+          submittedTask.designType?.toLowerCase() === 'retail'
+            ? `/retail-task-view/${taskId}`
+            : `/project-task-view/${taskId}`;
+        const submitterName = submittedTask.assignee?.fullName ?? 'Designer';
+        const submitMsg = `${submittedTask.taskNo} — ${submittedTask.project?.name ?? 'Unknown Project'} work submitted by ${submitterName}. Ready for review.`;
+        const hodUsers = await this.prisma.user.findMany({
+          where: { role: { name: { in: ['HOD', 'ADMIN'] } } },
+          select: { id: true },
+        });
+        for (const hod of hodUsers) {
+          this.notificationsService
+            .create({ userId: hod.id, title: `Work Submitted — ${submittedTask.taskNo}`, message: submitMsg, linkUrl: taskLink })
+            .catch((err) => this.logger.error('Failed to send work-submitted notification', err));
+          this.dashboardRealtime?.notifyUserNotificationRefresh(hod.id);
+        }
+      }
+    } catch (err) {
+      this.logger.error('Failed to send work-submitted notifications to HOD', err);
+    }
 
     return { sessionId: session.id, fileCount: uploadedFiles.length };
   }

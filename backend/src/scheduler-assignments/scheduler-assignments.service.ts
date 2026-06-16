@@ -6,6 +6,7 @@ import {
   HttpStatus,
   Injectable,
   Logger,
+  Optional,
 } from '@nestjs/common';
 import { ConfigService } from '@nestjs/config';
 import { Prisma } from '@prisma/client';
@@ -15,6 +16,8 @@ import { ActivityLoggerService } from '../activities/activity-logger.service';
 import { ActivityAction } from '../activities/activity-events';
 import { SaveSchedulerWeekDto } from './dto/save-scheduler-week.dto';
 import { UserRole } from '../common/constants/roles.enum';
+import { NotificationsService } from '../notifications/notifications.service';
+import { DashboardRealtimeService } from '../dashboard/dashboard-realtime.service';
 
 type RawAssignmentRow = {
   id: string;
@@ -70,6 +73,8 @@ export class SchedulerAssignmentsService {
     private readonly prisma: PrismaService,
     _config: ConfigService,
     private readonly activityLogger: ActivityLoggerService,
+    private readonly notificationsService: NotificationsService,
+    @Optional() private readonly dashboardRealtime?: DashboardRealtimeService,
   ) {}
 
   private fail(context: string, err: unknown): never {
@@ -431,6 +436,7 @@ export class SchedulerAssignmentsService {
       };
     });
 
+    this.logger.debug(`[SCHED-NOTIFY] changed=${result.changed} reassignedCount=${result.reassignedTasks?.length ?? 0}`);
     if (result.changed && result.reassignedTasks?.length) {
       const allDesignerIds = Array.from(new Set([
         ...result.reassignedTasks.map((r) => r.newAssigneeId),
@@ -474,6 +480,32 @@ export class SchedulerAssignmentsService {
           }),
         ),
       );
+
+      // Notify each newly assigned designer + all HODs
+      const hodUsers = await this.prisma.user.findMany({
+        where: { role: { name: { in: ['HOD', 'ADMIN'] } } },
+        select: { id: true },
+      });
+      for (const r of result.reassignedTasks) {
+        const task = taskById.get(r.taskId);
+        if (!task) continue;
+        const taskLink = `/project-task-view/${r.taskId}`;
+        const designerName = nameById.get(r.newAssigneeId) ?? 'Designer';
+        const designerMsg = `${task.taskNo} has been scheduled for you.`;
+        const hodMsg = `${task.taskNo} scheduled and assigned to ${designerName}.`;
+        this.notificationsService
+          .create({ userId: r.newAssigneeId, title: 'Task Scheduled for You', message: designerMsg, linkUrl: taskLink })
+          .catch((err) => this.logger.error('Failed to notify designer on scheduler assign', err));
+        this.dashboardRealtime?.notifyUserNotificationRefresh(r.newAssigneeId);
+        for (const hod of hodUsers) {
+          if (hod.id !== r.newAssigneeId) {
+            this.notificationsService
+              .create({ userId: hod.id, title: 'Task Scheduled', message: hodMsg, linkUrl: taskLink })
+              .catch((err) => this.logger.error('Failed to notify HOD on scheduler assign', err));
+            this.dashboardRealtime?.notifyUserNotificationRefresh(hod.id);
+          }
+        }
+      }
     }
 
     if (result.changed) {

@@ -235,7 +235,7 @@ export function DesignListRecordPage() {
                       <RowField label="Project Location" value={`${record.businessUnit} — Retail Level 1, Kiosk DM1`} />
                       <RowField label="Sales Person" value={record.salesPerson} />
                       <RowField label="Technical Head" value="Vikram" />
-                      <RowField label="Hours Required" value={record.hoursRequired != null ? String(record.hoursRequired) : undefined} />
+                      <RowField label="Hours Required" value={String(Math.max(1, Number(record.hoursRequired) || 0))} />
                       <RowField label="Date of Submission" value={record.deadline} />
                     </div>
                   </div>

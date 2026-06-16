@@ -16,6 +16,9 @@ const PROJECT_SELECT = {
   description: true,
   status: true,
   salesPerson: true,
+  technicalHead: true,
+  teamLead: true,
+  subTeamLead: true,
   createdById: true,
   createdBy: { select: { id: true, fullName: true } },
   _count: { select: { tasks: true } },
@@ -378,7 +381,12 @@ export class ProjectsService {
 
     return this.prisma.project.update({
       where: { id },
-      data: dto,
+      data: {
+        ...dto,
+        technicalHead: dto.technicalHead !== undefined ? (dto.technicalHead?.trim() || null) : undefined,
+        teamLead: dto.teamLead !== undefined ? (dto.teamLead?.trim() || null) : undefined,
+        subTeamLead: dto.subTeamLead !== undefined ? (dto.subTeamLead?.trim() || null) : undefined,
+      },
       select: PROJECT_SELECT,
     });
   }

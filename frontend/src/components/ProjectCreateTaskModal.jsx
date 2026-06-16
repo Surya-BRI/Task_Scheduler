@@ -28,26 +28,20 @@ function emptyWorkFields(base) {
 }
 
 function buildRowsFromApi(groups) {
-  return groups.map((group) =>
-    emptyWorkFields({
-      id: `family-${group.signFmilyId ?? group.signfamily}`,
-      signType: group.signfamily,
-      quantity: null,
-      area: null,
-      description: '',
-      estimationStatus: '',
-      children: group.signTypes.map((st) =>
-        emptyWorkFields({
-          id: `sign-${st.signTypeId}`,
-          signType: st.signCode,
-          quantity: st.quantity,
-          area: st.area,
-          description: st.description,
-          estimationStatus: st.estimationStatus,
-        }),
-      ),
-    }),
-  )
+  return groups.map((group) => ({
+    id: `family-${group.signFmilyId ?? group.signfamily}`,
+    signType: group.signfamily,
+    children: group.signTypes.map((st) =>
+      emptyWorkFields({
+        id: `sign-${st.signTypeId}`,
+        signType: st.signCode,
+        quantity: st.quantity,
+        area: st.area,
+        description: st.description,
+        estimationStatus: st.estimationStatus,
+      }),
+    ),
+  }))
 }
 
 function TableInput({ value, onChange, type = 'text', placeholder = '' }) {
@@ -83,7 +77,6 @@ export function ProjectCreateTaskModal({ open, onClose, onCreated, submissionDat
   const [selectedSignType, setSelectedSignType] = useState('')
   const [planCode, setPlanCode] = useState('')
   const [priorityLevel, setPriorityLevel] = useState('Medium')
-  const [hoursRequired, setHoursRequired] = useState('')
   const [localDeadline, setLocalDeadline] = useState(null)
   const [revisionCode, setRevisionCode] = useState('')
   const [submitting, setSubmitting] = useState(false)
@@ -121,7 +114,6 @@ export function ProjectCreateTaskModal({ open, onClose, onCreated, submissionDat
     revisionFetched.current = false
     setRevisionCode('')
     setPriorityLevel('Medium')
-    setHoursRequired('')
     setLocalDeadline(submissionDate instanceof Date && !Number.isNaN(submissionDate.getTime()) ? submissionDate : null)
     setSelectedSignType('')
     setPlanCode('')
@@ -151,6 +143,8 @@ export function ProjectCreateTaskModal({ open, onClose, onCreated, submissionDat
         const list = Array.isArray(groups) ? groups : []
         const built = buildRowsFromApi(list)
         setRows(built)
+        // Auto-expand all families that have children
+        setExpanded(new Set(built.filter((r) => (r.children?.length ?? 0) > 0).map((r) => r.id)))
         if (built.length === 0) setRowsError('No approved sign types found for this project in the ERP.')
       })
       .catch((err) => {
@@ -188,12 +182,22 @@ export function ProjectCreateTaskModal({ open, onClose, onCreated, submissionDat
     )
   }
 
+  // Count only child (sign type) rows — each selected child = one task
   const selectedCount = rows.reduce((count, row) => {
-    let c = rowHasSelection(row) ? 1 : 0
     for (const child of row.children ?? []) {
-      if (rowHasSelection(child)) c += 1
+      if (rowHasSelection(child)) count += 1
     }
-    return count + c
+    return count
+  }, 0)
+
+  const totalHoursRequired = rows.reduce((sum, row) => {
+    for (const child of row.children ?? []) {
+      if (child.artwork) sum += Number(child.artHours) || 0
+      if (child.technical) sum += Number(child.techHours) || 0
+      if (child.location) sum += Number(child.locationHours) || 0
+      if (child.asBuilt) sum += Number(child.asBuiltHours) || 0
+    }
+    return sum
   }, 0)
 
   function handleSearch() {
@@ -215,25 +219,22 @@ export function ProjectCreateTaskModal({ open, onClose, onCreated, submissionDat
     })
   }
 
-  function updateRowField(rowId, field, value) {
-    setRows((prev) =>
-      prev.map((row) => {
-        if (row.id !== rowId) return row
-        const updates = { [field]: value }
-        if (field === 'artwork' && value && !row.artHours) updates.artHours = '1'
-        if (field === 'technical' && value && !row.techHours) updates.techHours = '1'
-        if (field === 'location' && value && !row.locationHours) updates.locationHours = '1'
-        if (field === 'asBuilt' && value && !row.asBuiltHours) updates.asBuiltHours = '1'
-        return { ...row, ...updates }
-      }),
-    )
-  }
-
   function updateChildField(rowId, childId, field, value) {
     setRows((prev) =>
       prev.map((row) =>
         row.id === rowId
-          ? { ...row, children: row.children.map((child) => child.id === childId ? { ...child, [field]: value } : child) }
+          ? {
+              ...row,
+              children: row.children.map((child) => {
+                if (child.id !== childId) return child
+                const updates = { [field]: value }
+                if (field === 'artwork' && value && !child.artHours) updates.artHours = '1'
+                if (field === 'technical' && value && !child.techHours) updates.techHours = '1'
+                if (field === 'location' && value && !child.locationHours) updates.locationHours = '1'
+                if (field === 'asBuilt' && value && !child.asBuiltHours) updates.asBuiltHours = '1'
+                return { ...child, ...updates }
+              }),
+            }
           : row,
       ),
     )
@@ -242,10 +243,9 @@ export function ProjectCreateTaskModal({ open, onClose, onCreated, submissionDat
   function clearNeeds() {
     setSelectedSignType('')
     setPlanCode('')
-    setHoursRequired('')
     setRows((prev) =>
       prev.map((row) => ({
-        ...emptyWorkFields(row),
+        ...row,
         children: (row.children ?? []).map((child) => emptyWorkFields(child)),
       })),
     )
@@ -270,6 +270,27 @@ export function ProjectCreateTaskModal({ open, onClose, onCreated, submissionDat
       setError(nextFieldErrors.projectName || 'Please fill required fields')
       return
     }
+    const disciplineMap = [
+      { flag: 'artwork', hours: 'artHours', label: 'Artwork' },
+      { flag: 'technical', hours: 'techHours', label: 'Technical' },
+      { flag: 'location', hours: 'locationHours', label: 'Location' },
+      { flag: 'asBuilt', hours: 'asBuiltHours', label: 'As-Built' },
+    ]
+    // Validate only child rows
+    for (const row of rows) {
+      for (const child of row.children ?? []) {
+        for (const { flag, hours, label } of disciplineMap) {
+          if (child[flag]) {
+            const h = Number(child[hours])
+            if (!child[hours] || Number.isNaN(h) || h < 1) {
+              setRowsError(`${label} hours must be a number (min 1) for all checked disciplines`)
+              return
+            }
+          }
+        }
+      }
+    }
+    setRowsError('')
     setFieldErrors({})
     setError('')
     setSubmitting(true)
@@ -296,26 +317,9 @@ export function ProjectCreateTaskModal({ open, onClose, onCreated, submissionDat
         return fallbackDeadline
       }
 
+      // Only collect child (sign type) rows — each becomes its own task
       const details = []
       for (const row of rows) {
-        if (rowHasSelection(row)) {
-          details.push({
-            signType: row.signType || undefined,
-            planCode: planCode || undefined,
-            area: undefined,
-            level: undefined,
-            artwork: !!row.artwork,
-            artworkHours: row.artHours ? Number(row.artHours) : undefined,
-            technical: !!row.technical,
-            technicalHours: row.techHours ? Number(row.techHours) : undefined,
-            location: !!row.location,
-            locationHours: row.locationHours ? Number(row.locationHours) : undefined,
-            asBuilt: !!row.asBuilt,
-            asBuiltHours: row.asBuiltHours ? Number(row.asBuiltHours) : undefined,
-            bim: !!row.bim,
-            deadline: resolveDeadline(row.deadline),
-          })
-        }
         for (const child of row.children ?? []) {
           if (rowHasSelection(child)) {
             details.push({
@@ -324,13 +328,13 @@ export function ProjectCreateTaskModal({ open, onClose, onCreated, submissionDat
               area: undefined,
               level: undefined,
               artwork: !!child.artwork,
-              artworkHours: child.artHours ? Number(child.artHours) : undefined,
+              artworkHours: child.artwork ? Number(child.artHours) : undefined,
               technical: !!child.technical,
-              technicalHours: child.techHours ? Number(child.techHours) : undefined,
+              technicalHours: child.technical ? Number(child.techHours) : undefined,
               location: !!child.location,
-              locationHours: child.locationHours ? Number(child.locationHours) : undefined,
+              locationHours: child.location ? Number(child.locationHours) : undefined,
               asBuilt: !!child.asBuilt,
-              asBuiltHours: child.asBuiltHours ? Number(child.asBuiltHours) : undefined,
+              asBuiltHours: child.asBuilt ? Number(child.asBuiltHours) : undefined,
               bim: !!child.bim,
               deadline: resolveDeadline(child.deadline),
             })
@@ -354,8 +358,9 @@ export function ProjectCreateTaskModal({ open, onClose, onCreated, submissionDat
         projectDetails: details,
       }
 
-      const created = await apiClient.post('/tasks/extended', payload)
-      if (onCreated) onCreated(created)
+      const result = await apiClient.post('/tasks/extended', payload)
+      const tasks = result?.tasks ?? []
+      if (onCreated) onCreated(tasks)
       else onClose()
     } catch (err) {
       setError(err instanceof Error ? err.message : 'Failed to create project task')
@@ -442,14 +447,12 @@ export function ProjectCreateTaskModal({ open, onClose, onCreated, submissionDat
               </select>
             </div>
             <div>
-              <label className="mb-1 block text-xs font-semibold text-slate-600">Hours Required</label>
+              <label className="mb-1 block text-xs font-semibold text-slate-600">Total Hours Required</label>
               <input
                 type="number"
-                min="0"
-                value={hoursRequired}
-                onChange={(e) => setHoursRequired(e.target.value)}
-                placeholder="0"
-                className="h-10 w-full rounded-md border border-slate-300 px-3 text-sm outline-none transition-colors focus:border-blue-500 focus:ring-2 focus:ring-blue-500/20"
+                readOnly
+                value={totalHoursRequired}
+                className="h-10 w-full rounded-md border border-slate-200 bg-slate-50 px-3 text-sm text-slate-700 outline-none cursor-default"
               />
             </div>
           </div>
@@ -460,7 +463,7 @@ export function ProjectCreateTaskModal({ open, onClose, onCreated, submissionDat
               onChange={(e) => setSelectedSignType(e.target.value)}
               className="h-10 flex-1 rounded-md border border-slate-300 px-3 text-sm outline-none transition-colors focus:border-blue-500 focus:ring-2 focus:ring-blue-500/20"
             >
-              <option>Select sign type</option>
+              <option value="">Select sign family</option>
               {rows.map((row) => (
                 <option key={row.id} value={row.signType}>{row.signType}</option>
               ))}
@@ -485,6 +488,7 @@ export function ProjectCreateTaskModal({ open, onClose, onCreated, submissionDat
             </div>
           ) : (
             <div className="overflow-hidden rounded-lg border border-slate-200">
+              {/* Table header */}
               <div className="grid grid-cols-[1.6fr_0.7fr_0.6fr_0.8fr_0.6fr_0.8fr_0.6fr_0.8fr_0.6fr_0.5fr_1fr] bg-slate-700 text-xs font-semibold text-white">
                 <div className="bg-emerald-600 px-3 py-2">Sign Type</div>
                 <div className="px-2 py-2">Artwork</div>
@@ -501,53 +505,55 @@ export function ProjectCreateTaskModal({ open, onClose, onCreated, submissionDat
               <div className="max-h-[360px] overflow-auto">
                 {rows.length === 0 ? (
                   <div className="px-4 py-10 text-center text-sm text-slate-500">No sign types available.</div>
-                ) : rows.map((row) => (
-                  <div key={row.id} id={`sign-row-${row.id}`} className="border-b border-slate-200">
-                    {/* parent row = sign family */}
-                    <div className="grid grid-cols-[1.6fr_0.7fr_0.6fr_0.8fr_0.6fr_0.8fr_0.6fr_0.8fr_0.6fr_0.5fr_1fr] items-center bg-white text-sm">
-                      <button type="button" onClick={() => toggleExpand(row.id)} className="flex items-center gap-1 px-3 py-1.5 text-left font-semibold text-slate-800">
-                        {(row.children ?? []).length > 0
-                          ? (expanded.has(row.id) ? <ChevronDown className="h-3.5 w-3.5" /> : <ChevronRight className="h-3.5 w-3.5" />)
-                          : <span className="h-3.5 w-3.5" />}
+                ) : rows.map((row) => {
+                  const hasChildren = (row.children?.length ?? 0) > 0
+                  return (
+                    <div key={row.id} id={`sign-row-${row.id}`} className="border-b border-slate-200">
+                      {/* Sign family header — expand/collapse only, no checkboxes */}
+                      <button
+                        type="button"
+                        onClick={() => hasChildren && toggleExpand(row.id)}
+                        className={`flex w-full items-center gap-2 px-3 py-2 text-left text-sm font-semibold ${hasChildren ? 'bg-slate-100 text-slate-800 hover:bg-slate-150 cursor-pointer' : 'bg-slate-50 text-slate-400 cursor-default'}`}
+                      >
+                        {hasChildren
+                          ? (expanded.has(row.id) ? <ChevronDown className="h-3.5 w-3.5 shrink-0" /> : <ChevronRight className="h-3.5 w-3.5 shrink-0" />)
+                          : <span className="h-3.5 w-3.5 shrink-0" />}
                         {row.signType}
+                        <span className="ml-auto text-xs font-normal text-slate-400">
+                          {hasChildren ? `${row.children.length} sign type${row.children.length !== 1 ? 's' : ''}` : '(no sign types)'}
+                        </span>
                       </button>
-                      <div className="px-2 py-1.5 text-center"><TickBox checked={row.artwork} onChange={(v) => updateRowField(row.id, 'artwork', v)} /></div>
-                      <div className="px-1 py-1.5"><TableInput type="number" value={row.artHours} onChange={(v) => updateRowField(row.id, 'artHours', v)} /></div>
-                      <div className="px-2 py-1.5 text-center"><TickBox checked={row.technical} onChange={(v) => updateRowField(row.id, 'technical', v)} /></div>
-                      <div className="px-1 py-1.5"><TableInput type="number" value={row.techHours} onChange={(v) => updateRowField(row.id, 'techHours', v)} /></div>
-                      <div className="px-2 py-1.5 text-center"><TickBox checked={row.location} onChange={(v) => updateRowField(row.id, 'location', v)} /></div>
-                      <div className="px-1 py-1.5"><TableInput type="number" value={row.locationHours} onChange={(v) => updateRowField(row.id, 'locationHours', v)} /></div>
-                      <div className="px-2 py-1.5 text-center"><TickBox checked={row.asBuilt} onChange={(v) => updateRowField(row.id, 'asBuilt', v)} /></div>
-                      <div className="px-1 py-1.5"><TableInput type="number" value={row.asBuiltHours} onChange={(v) => updateRowField(row.id, 'asBuiltHours', v)} /></div>
-                      <div className="px-2 py-1.5 text-center"><TickBox checked={row.bim} onChange={(v) => updateRowField(row.id, 'bim', v)} /></div>
-                      <div className="px-2 py-1.5"><TableInput type="date" value={row.deadline} onChange={(v) => updateRowField(row.id, 'deadline', v)} /></div>
-                    </div>
 
-                    {/* child rows = individual sign codes with real ERP data */}
-                    {expanded.has(row.id) && (row.children ?? []).map((child) => (
-                      <div key={child.id} className="grid grid-cols-[1.6fr_0.7fr_0.6fr_0.8fr_0.6fr_0.8fr_0.6fr_0.8fr_0.6fr_0.5fr_1fr] items-center border-t border-slate-100 bg-slate-50/80 text-xs">
-                        <div className="px-8 py-1.5 font-medium text-slate-700" title={child.description || ''}>{child.signType}</div>
-                        <div className="px-2 py-1.5 text-center"><TickBox checked={child.artwork} onChange={(v) => updateChildField(row.id, child.id, 'artwork', v)} /></div>
-                        <div className="px-1 py-1.5"><TableInput type="number" value={child.artHours} onChange={(v) => updateChildField(row.id, child.id, 'artHours', v)} /></div>
-                        <div className="px-2 py-1.5 text-center"><TickBox checked={child.technical} onChange={(v) => updateChildField(row.id, child.id, 'technical', v)} /></div>
-                        <div className="px-1 py-1.5"><TableInput type="number" value={child.techHours} onChange={(v) => updateChildField(row.id, child.id, 'techHours', v)} /></div>
-                        <div className="px-2 py-1.5 text-center"><TickBox checked={child.location} onChange={(v) => updateChildField(row.id, child.id, 'location', v)} /></div>
-                        <div className="px-1 py-1.5"><TableInput type="number" value={child.locationHours} onChange={(v) => updateChildField(row.id, child.id, 'locationHours', v)} /></div>
-                        <div className="px-2 py-1.5 text-center"><TickBox checked={child.asBuilt} onChange={(v) => updateChildField(row.id, child.id, 'asBuilt', v)} /></div>
-                        <div className="px-1 py-1.5"><TableInput type="number" value={child.asBuiltHours} onChange={(v) => updateChildField(row.id, child.id, 'asBuiltHours', v)} /></div>
-                        <div className="px-2 py-1.5 text-center"><TickBox checked={child.bim} onChange={(v) => updateChildField(row.id, child.id, 'bim', v)} /></div>
-                        <div className="px-2 py-1.5"><TableInput type="date" value={child.deadline} onChange={(v) => updateChildField(row.id, child.id, 'deadline', v)} /></div>
-                      </div>
-                    ))}
-                  </div>
-                ))}
+                      {/* Child rows — individual sign types, each gets its own task */}
+                      {expanded.has(row.id) && (row.children ?? []).map((child) => (
+                        <div
+                          key={child.id}
+                          id={`sign-row-child-${child.id}`}
+                          className="grid grid-cols-[1.6fr_0.7fr_0.6fr_0.8fr_0.6fr_0.8fr_0.6fr_0.8fr_0.6fr_0.5fr_1fr] items-center border-t border-slate-100 bg-white text-xs"
+                        >
+                          <div className="px-6 py-1.5 font-medium text-slate-700" title={child.description || ''}>{child.signType}</div>
+                          <div className="px-2 py-1.5 text-center"><TickBox checked={child.artwork} onChange={(v) => updateChildField(row.id, child.id, 'artwork', v)} /></div>
+                          <div className="px-1 py-1.5"><TableInput type="number" value={child.artHours} onChange={(v) => updateChildField(row.id, child.id, 'artHours', v)} /></div>
+                          <div className="px-2 py-1.5 text-center"><TickBox checked={child.technical} onChange={(v) => updateChildField(row.id, child.id, 'technical', v)} /></div>
+                          <div className="px-1 py-1.5"><TableInput type="number" value={child.techHours} onChange={(v) => updateChildField(row.id, child.id, 'techHours', v)} /></div>
+                          <div className="px-2 py-1.5 text-center"><TickBox checked={child.location} onChange={(v) => updateChildField(row.id, child.id, 'location', v)} /></div>
+                          <div className="px-1 py-1.5"><TableInput type="number" value={child.locationHours} onChange={(v) => updateChildField(row.id, child.id, 'locationHours', v)} /></div>
+                          <div className="px-2 py-1.5 text-center"><TickBox checked={child.asBuilt} onChange={(v) => updateChildField(row.id, child.id, 'asBuilt', v)} /></div>
+                          <div className="px-1 py-1.5"><TableInput type="number" value={child.asBuiltHours} onChange={(v) => updateChildField(row.id, child.id, 'asBuiltHours', v)} /></div>
+                          <div className="px-2 py-1.5 text-center"><TickBox checked={child.bim} onChange={(v) => updateChildField(row.id, child.id, 'bim', v)} /></div>
+                          <div className="px-2 py-1.5"><TableInput type="date" value={child.deadline} onChange={(v) => updateChildField(row.id, child.id, 'deadline', v)} /></div>
+                        </div>
+                      ))}
+                    </div>
+                  )
+                })}
               </div>
             </div>
           )}
 
           <div className="flex items-center justify-between pt-2">
             <div className="rounded bg-blue-50 px-3 py-2 text-sm text-blue-700">
-              {selectedCount} tasks selected
+              {selectedCount} {selectedCount === 1 ? 'task' : 'tasks'} selected
             </div>
             {error ? <p className="text-xs text-red-600">{error}</p> : null}
             <button
@@ -562,9 +568,9 @@ export function ProjectCreateTaskModal({ open, onClose, onCreated, submissionDat
                 !(localDeadline instanceof Date) ||
                 Number.isNaN(localDeadline.getTime())
               }
-              title={selectedCount === 0 ? 'Select at least one work type or enter hours on a row' : undefined}
+              title={selectedCount === 0 ? 'Select at least one sign type row with a discipline checked' : undefined}
             >
-              {submitting ? 'Creating...' : 'Create Tasks'}
+              {submitting ? 'Creating...' : `Create ${selectedCount > 1 ? `${selectedCount} Tasks` : 'Task'}`}
             </button>
           </div>
         </div>

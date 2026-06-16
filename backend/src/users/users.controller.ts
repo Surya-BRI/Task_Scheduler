@@ -29,9 +29,9 @@ export class UsersController {
     return this.usersService.create(dto);
   }
 
-  /** GET /users?role=DESIGNER&departmentId=x&search=john — HOD/Admin only */
+  /** GET /users?role=DESIGNER&departmentId=x&search=john — HOD/Admin/PM */
   @Get()
-  @Roles(UserRole.HOD)
+  @Roles(UserRole.HOD, UserRole.ADMIN, UserRole.PROJECT_MANAGER)
   findAll(
     @Query('role') role?: string,
     @Query('departmentId') departmentId?: string,

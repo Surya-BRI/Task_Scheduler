@@ -27,4 +27,16 @@ export class UpdateProjectDto {
   @IsOptional()
   @IsString()
   salesPerson?: string;
+
+  @IsOptional()
+  @IsString()
+  technicalHead?: string;
+
+  @IsOptional()
+  @IsString()
+  teamLead?: string;
+
+  @IsOptional()
+  @IsString()
+  subTeamLead?: string;
 }

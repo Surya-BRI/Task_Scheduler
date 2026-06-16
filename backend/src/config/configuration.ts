@@ -56,7 +56,7 @@ export default () => {
 
   return ({
   app: {
-    port: Number(process.env.PORT ?? 4000),
+    port: Number(process.env.PORT ?? 7000),
     corsOrigin: process.env.CORS_ORIGIN ?? 'http://localhost:5000',
   },
   api: {
