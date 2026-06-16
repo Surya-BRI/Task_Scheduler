@@ -42,14 +42,6 @@ const PRIORITY_STYLES = {
   high: "bg-red-500",
 };
 
-function getInitials(name) {
-  if (!name) return 'BR';
-  const parts = name.trim().split(/\s+/);
-  return parts.length >= 2
-    ? (parts[0][0] + parts[parts.length - 1][0]).toUpperCase()
-    : name.slice(0, 2).toUpperCase();
-}
-
 function formatTaskCatalogLabel(task) {
   const title = String(task?.title ?? "").trim();
   const taskNo = String(task?.taskNo ?? "").trim();
@@ -720,70 +712,63 @@ function ChatterCard({
     <article id={`chatter-post-${post.id}`} className="ui-surface ui-card-pad flex flex-col gap-3">
       <div className="flex gap-4">
         <div className="flex-1 min-w-0">
-          <div className="flex items-start gap-3">
-            <div className="h-10 w-10 rounded-md bg-blue-600 text-white flex items-center justify-center font-bold text-sm shrink-0">
-              {getInitials(post.author)}
-            </div>
-            <div className="flex-1 min-w-0">
-              <div className="flex flex-wrap items-center gap-x-1 gap-y-0.5">
-                <p className="text-[15px] font-semibold uppercase tracking-tight text-blue-600">
-                  {post.title}
-                </p>
-                <span className="text-sm font-medium text-slate-600">- {post.author}</span>
-              </div>
-              <p className="text-xs text-slate-400 mt-0.5">{post.time}</p>
-              
-              <div className="mt-3">
-                {post.mention && post.mention !== '—' ? (
-                  <p className="text-sm font-medium text-blue-600 mb-1">{post.mention}</p>
-                ) : null}
-                <FormattedText text={post.message} mentionUsers={postMentionUsers} className="text-sm text-slate-800 leading-relaxed" />
-                
-                <ChatterPostAttachments post={post} />
+          <div className="flex flex-wrap items-center gap-x-1 gap-y-0.5">
+            <p className="text-[15px] font-semibold uppercase tracking-tight text-blue-600">
+              {post.title}
+            </p>
+            <span className="text-sm font-medium text-slate-600">- {post.author}</span>
+          </div>
+          <p className="text-xs text-slate-400 mt-0.5">{post.time}</p>
 
-                <div className="mt-4 flex items-center gap-4 text-xs font-semibold text-slate-500">
-                  <button
-                    type="button"
-                    className="flex items-center gap-1.5 hover:text-blue-600 transition-colors"
-                    onClick={() => onLike?.(post.id)}
-                  >
-                    <ThumbsUp className="w-4 h-4" />
-                    {post.seenBy > 0 ? post.seenBy : "Like"}
-                  </button>
-                  <button
-                    type="button"
-                    className={`flex items-center gap-1.5 transition-colors ${hasComments ? "text-blue-600 hover:text-blue-700" : "hover:text-slate-800"}`}
-                    onClick={onOpenComposer}
-                  >
-                    <MessageCircle className="w-4 h-4" /> {hasComments ? "Commented" : "Comment"}
-                  </button>
-                  {currentUserId && isSameUserId(post.authorId, currentUserId) && (
-                    <div className="relative ml-auto">
-                      <details className="group">
-                        <summary className="list-none cursor-pointer rounded p-1 hover:bg-slate-100">
-                          <MoreHorizontal className="w-4 h-4" />
-                        </summary>
-                        <div className="absolute right-0 top-6 z-10 w-28 rounded-md border border-slate-200 bg-white shadow-md text-xs">
-                          <button
-                            type="button"
-                            className="block w-full px-3 py-2 text-left hover:bg-slate-50"
-                            onClick={() => onEditPost?.(post)}
-                          >
-                            Edit
-                          </button>
-                          <button
-                            type="button"
-                            className="block w-full px-3 py-2 text-left text-red-600 hover:bg-red-50"
-                            onClick={() => onDeletePost?.(post.id)}
-                          >
-                            Delete
-                          </button>
-                        </div>
-                      </details>
+          <div className="mt-3">
+            {post.mention && post.mention !== '—' ? (
+              <p className="text-sm font-medium text-blue-600 mb-1">{post.mention}</p>
+            ) : null}
+            <FormattedText text={post.message} mentionUsers={postMentionUsers} className="text-sm text-slate-800 leading-relaxed" />
+
+            <ChatterPostAttachments post={post} />
+
+            <div className="mt-4 flex items-center gap-4 text-xs font-semibold text-slate-500">
+              <button
+                type="button"
+                className="flex items-center gap-1.5 hover:text-blue-600 transition-colors"
+                onClick={() => onLike?.(post.id)}
+              >
+                <ThumbsUp className="w-4 h-4" />
+                {post.seenBy > 0 ? post.seenBy : "Like"}
+              </button>
+              <button
+                type="button"
+                className={`flex items-center gap-1.5 transition-colors ${hasComments ? "text-blue-600 hover:text-blue-700" : "hover:text-slate-800"}`}
+                onClick={onOpenComposer}
+              >
+                <MessageCircle className="w-4 h-4" /> {hasComments ? "Commented" : "Comment"}
+              </button>
+              {currentUserId && isSameUserId(post.authorId, currentUserId) && (
+                <div className="relative ml-auto">
+                  <details className="group">
+                    <summary className="list-none cursor-pointer rounded p-1 hover:bg-slate-100">
+                      <MoreHorizontal className="w-4 h-4" />
+                    </summary>
+                    <div className="absolute right-0 top-6 z-10 w-28 rounded-md border border-slate-200 bg-white shadow-md text-xs">
+                      <button
+                        type="button"
+                        className="block w-full px-3 py-2 text-left hover:bg-slate-50"
+                        onClick={() => onEditPost?.(post)}
+                      >
+                        Edit
+                      </button>
+                      <button
+                        type="button"
+                        className="block w-full px-3 py-2 text-left text-red-600 hover:bg-red-50"
+                        onClick={() => onDeletePost?.(post.id)}
+                      >
+                        Delete
+                      </button>
                     </div>
-                  )}
+                  </details>
                 </div>
-              </div>
+              )}
             </div>
           </div>
         </div>
