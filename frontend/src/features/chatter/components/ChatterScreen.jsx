@@ -44,6 +44,12 @@ const PRIORITY_STYLES = {
   high: "bg-red-500",
 };
 
+const PRIVATE_CHATTER_ITEM_CLASS =
+  "w-full min-w-0 whitespace-normal rounded-lg border border-blue-200 border-l-4 border-l-blue-500 bg-blue-50 p-3 text-left shadow-sm transition-colors hover:border-blue-300 hover:bg-blue-100/70 hover:shadow-md focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-blue-400 focus-visible:ring-offset-1";
+
+const PRIVATE_CHATTER_MESSAGE_CLASS =
+  "mt-2 block break-words rounded-md border border-blue-100 bg-white/80 px-2.5 py-2 text-sm text-slate-700";
+
 function formatTaskCatalogLabel(task) {
   const title = String(task?.title ?? "").trim();
   const taskNo = String(task?.taskNo ?? "").trim();
@@ -750,6 +756,37 @@ function SeenByLine({ post, className = "" }) {
         </span>
       ) : null}
     </p>
+  );
+}
+
+function PrivateChatterEntry({ item, mentionUsersDirectory, onOpen }) {
+  const projectName = String(item.projectName ?? "").trim() || "—";
+
+  return (
+    <button
+      type="button"
+      onClick={() => onOpen(item.postId)}
+      className={PRIVATE_CHATTER_ITEM_CLASS}
+    >
+      <p className="break-words text-sm font-semibold text-slate-900">{item.title}</p>
+      {item.taskName ? (
+        <p className="mt-0.5 break-words text-xs font-medium text-blue-700">{item.taskName}</p>
+      ) : null}
+      <ChatterMentionText
+        message={item.message}
+        users={mentionUsersDirectory}
+        className={PRIVATE_CHATTER_MESSAGE_CLASS}
+      />
+      <div className="mt-2 flex flex-wrap items-baseline gap-x-1.5 gap-y-0.5 text-xs text-slate-500">
+        <span className="min-w-0 break-words font-medium text-slate-600" title={projectName}>
+          {projectName}
+        </span>
+        <span className="shrink-0 text-slate-400" aria-hidden="true">
+          ·
+        </span>
+        <span className="shrink-0">{item.time}</span>
+      </div>
+    </button>
   );
 }
 
@@ -1804,60 +1841,38 @@ export function ChatterScreen() {
         ) : null}
 
         {activeTab === "private" ? (
-          <section className="mt-3 grid gap-3 md:grid-cols-2">
-            <div className="ui-surface p-3">
+          <section className="mt-3 grid min-w-0 gap-3 md:grid-cols-2">
+            <div className="ui-surface min-w-0 p-3">
               <h2 className="mb-2 text-sm font-semibold text-slate-900">Mentioned to You</h2>
               <div className="space-y-2">
                 {privateMentions.length === 0 ? (
                   <p className="text-sm text-slate-500">No mentions for you yet.</p>
                 ) : (
                   privateMentions.map((item) => (
-                    <button
-                      type="button"
+                    <PrivateChatterEntry
                       key={`mention-${item.id}`}
-                      onClick={() => openDiscussion(item.postId)}
-                      className="w-full rounded-lg border border-slate-200 bg-slate-50 p-3 text-left shadow-sm transition-colors hover:border-blue-200 hover:bg-blue-50/40"
-                    >
-                      <p className="text-sm font-semibold text-slate-900">{item.title}</p>
-                      {item.taskName ? (
-                        <p className="mt-0.5 text-xs font-medium text-blue-600">{item.taskName}</p>
-                      ) : null}
-                      <ChatterMentionText
-                        message={item.message}
-                        users={mentionUsersDirectory}
-                        className="mt-1 text-sm text-slate-700"
-                      />
-                      <p className="mt-2 text-xs text-slate-500">{item.projectName} · {item.time}</p>
-                    </button>
+                      item={item}
+                      mentionUsersDirectory={mentionUsersDirectory}
+                      onOpen={openDiscussion}
+                    />
                   ))
                 )}
               </div>
             </div>
 
-            <div className="ui-surface p-3">
+            <div className="ui-surface min-w-0 p-3">
               <h2 className="mb-2 text-sm font-semibold text-slate-900">Your Posted Comments</h2>
               <div className="space-y-2">
                 {privateComments.length === 0 ? (
                   <p className="text-sm text-slate-500">No comments posted yet.</p>
                 ) : (
                   privateComments.map((item) => (
-                    <button
-                      type="button"
+                    <PrivateChatterEntry
                       key={`my-comment-${item.id}`}
-                      onClick={() => openDiscussion(item.postId)}
-                      className="w-full rounded-lg border border-slate-200 bg-slate-50 p-3 text-left shadow-sm transition-colors hover:border-blue-200 hover:bg-blue-50/40"
-                    >
-                      <p className="text-sm font-semibold text-slate-900">{item.title}</p>
-                      {item.taskName ? (
-                        <p className="mt-0.5 text-xs font-medium text-blue-600">{item.taskName}</p>
-                      ) : null}
-                      <ChatterMentionText
-                        message={item.message}
-                        users={mentionUsersDirectory}
-                        className="mt-1 text-sm text-slate-700"
-                      />
-                      <p className="mt-2 text-xs font-medium text-blue-600">{item.projectName} · {item.time}</p>
-                    </button>
+                      item={item}
+                      mentionUsersDirectory={mentionUsersDirectory}
+                      onOpen={openDiscussion}
+                    />
                   ))
                 )}
               </div>
