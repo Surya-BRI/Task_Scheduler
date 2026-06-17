@@ -301,6 +301,10 @@ export class ChatterPostsService implements OnModuleInit {
       });
       for (const user of allUsers) {
         if (user.role?.name === UserRole.HOD) {
+          eligibleIds.add(user.id);
+          continue;
+        }
+        if (user.role?.name === UserRole.DESIGNER) {
           const userDeptId = user.department?.id ?? null;
           if (!viewer?.departmentId || userDeptId === viewer.departmentId) {
             eligibleIds.add(user.id);
@@ -718,8 +722,8 @@ export class ChatterPostsService implements OnModuleInit {
       mentionedUsers[0]?.id ?? (row.mentionUserId != null ? String(row.mentionUserId) : null),
     );
     return {
-      id: String(row.id),
-      postId: row.postId != null ? String(row.postId) : null,
+      id: normalizeUserId(String(row.id)) ?? String(row.id),
+      postId: normalizeUserId(row.postId != null ? String(row.postId) : null),
       authorId: normalizeUserId(row.authorId != null ? String(row.authorId) : null),
       authorName: row.authorName != null ? String(row.authorName) : null,
       authorRole: row.authorRole != null ? String(row.authorRole) : null,
@@ -771,16 +775,26 @@ export class ChatterPostsService implements OnModuleInit {
   private attachComments(posts: ChatterPostDto[], comments: ChatterCommentDto[]): ChatterPostDto[] {
     const byPostId = new Map<string, ChatterCommentDto[]>();
     for (const comment of comments) {
-      const key = comment.postId ?? '';
+      const key = this.entityIdKey(comment.postId) ?? comment.postId ?? '';
       if (!key) continue;
       const bucket = byPostId.get(key) ?? [];
       bucket.push(comment);
       byPostId.set(key, bucket);
     }
-    return posts.map((post) => ({
-      ...post,
-      comments: byPostId.get(post.id) ?? [],
-    }));
+    return posts.map((post) => {
+      const postKey = this.entityIdKey(post.id) ?? post.id;
+      const rawComments = byPostId.get(postKey) ?? [];
+      const commentsById = new Map<string, ChatterCommentDto>();
+      for (const comment of rawComments) {
+        const commentKey = this.entityIdKey(comment.id) ?? comment.id;
+        if (!commentKey) continue;
+        commentsById.set(commentKey, comment);
+      }
+      return {
+        ...post,
+        comments: [...commentsById.values()],
+      };
+    });
   }
 
   /** Fetch attachments from ErpTSChatterPostAttachment for a set of post IDs and generate signed URLs */

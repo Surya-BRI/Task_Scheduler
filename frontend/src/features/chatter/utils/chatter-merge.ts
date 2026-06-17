@@ -20,3 +20,18 @@ export function mergeChatterPostLists<
     (a, b) => new Date(b.createdAt ?? 0).getTime() - new Date(a.createdAt ?? 0).getTime(),
   );
 }
+
+/** Keep one row per comment id (case-insensitive UUID). */
+export function dedupeCommentsById<T extends { id?: string | null }>(
+  comments: T[] | null | undefined,
+): T[] {
+  const byId = new Map<string, T>();
+  for (const comment of comments ?? []) {
+    const raw = comment?.id;
+    if (raw == null) continue;
+    const key = String(raw).trim().toLowerCase();
+    if (!key) continue;
+    byId.set(key, comment);
+  }
+  return [...byId.values()];
+}

@@ -35,6 +35,7 @@ import {
 import { MentionTextarea } from "./MentionTextarea";
 import { ChatterMentionText } from "./ChatterMentionText";
 import { parseMentionUserIdsFromMessage, mergeMentionUsers, parseMentionedUsersFromMessage, resolveMentionUsersForDisplay } from "../utils/mention-utils";
+import { dedupeCommentsById } from "../utils/chatter-merge";
 import { isSameUserId, normalizeUserId } from "@/lib/user-id";
 
 const PRIORITY_STYLES = {
@@ -667,6 +668,77 @@ function formatSeenBySummary(post) {
   return { count, title: undefined };
 }
 
+function isMentionedInComment(comment, currentUserId) {
+  return (
+    isSameUserId(comment.mentionUserId, currentUserId)
+    || (comment.mentionedUsers ?? []).some((user) => isSameUserId(user.id, currentUserId))
+  );
+}
+
+function isMentionedInPost(post, currentUserId) {
+  return (
+    isSameUserId(post.mentionUserId, currentUserId)
+    || (post.mentionedUsers ?? []).some((user) => isSameUserId(user.id, currentUserId))
+  );
+}
+
+function buildPrivateMentionEntries(posts, currentUserId, { trustApiFilter = false } = {}) {
+  const entries = [];
+  for (const post of posts) {
+    const postMentioned = isMentionedInPost(post, currentUserId);
+    const commentMentions = (post.comments ?? []).filter((comment) =>
+      isMentionedInComment(comment, currentUserId),
+    );
+
+    if (!trustApiFilter && !postMentioned && commentMentions.length === 0) {
+      continue;
+    }
+
+    if (postMentioned) {
+      entries.push({
+        id: `${post.id}-post`,
+        postId: post.id,
+        title: post.title,
+        taskName: post.taskName,
+        projectName: post.projectName,
+        message: post.message,
+        time: post.time,
+        updatedAt: post.updatedAt,
+      });
+    }
+
+    for (const comment of commentMentions) {
+      entries.push({
+        id: `${post.id}-${comment.id}`,
+        postId: post.id,
+        title: post.title,
+        taskName: post.taskName,
+        projectName: post.projectName,
+        message: comment.message,
+        time: formatChatterTime(comment.createdAt),
+        updatedAt: comment.createdAt ?? post.updatedAt,
+      });
+    }
+
+    if (trustApiFilter && !postMentioned && commentMentions.length === 0) {
+      entries.push({
+        id: `${post.id}-mention`,
+        postId: post.id,
+        title: post.title,
+        taskName: post.taskName,
+        projectName: post.projectName,
+        message: post.message,
+        time: post.time,
+        updatedAt: post.updatedAt,
+      });
+    }
+  }
+
+  return entries.sort(
+    (a, b) => new Date(b.updatedAt ?? 0).getTime() - new Date(a.updatedAt ?? 0).getTime(),
+  );
+}
+
 function SeenByLine({ post, className = "" }) {
   const summary = useMemo(() => formatSeenBySummary(post), [post]);
   return (
@@ -699,7 +771,11 @@ function ChatterCard({
   onDeleteComment,
   onBecomeVisible,
 }) {
-  const hasComments = (post.comments?.length ?? 0) > 0;
+  const displayComments = useMemo(
+    () => dedupeCommentsById(post.comments),
+    [post.comments],
+  );
+  const hasComments = displayComments.length > 0;
   const textareaRef = useRef(null);
   const cardRef = useRef(null);
   const postMentionUsers = useMemo(
@@ -873,7 +949,7 @@ function ChatterCard({
       </div>
       {hasComments ? (
         <ul className="mt-1 space-y-2 border-t border-slate-100 pt-3">
-          {(post.comments ?? []).map((comment) => (
+          {displayComments.map((comment) => (
             <li
               key={comment.id}
               id={`chatter-comment-${comment.id}`}
@@ -968,7 +1044,6 @@ export function ChatterScreen() {
   const [isSavingEdit, setIsSavingEdit] = useState(false);
   const mentionUsersRef = useRef([]);
   const commentMentionIdsRef = useRef({});
-  const privateTabLoadedRef = useRef(false);
   const loadMoreSentinelRef = useRef(null);
   const loadingMoreRef = useRef(false);
   const hasMorePostsRef = useRef(false);
@@ -1194,6 +1269,7 @@ export function ChatterScreen() {
 
   useEffect(() => {
     void reloadPosts();
+    void reloadPrivateFeeds();
     listChatterMentionUsers()
       .then((users) => {
         mentionUsersRef.current = Array.isArray(users) ? users : [];
@@ -1201,7 +1277,13 @@ export function ChatterScreen() {
       .catch(() => {
         mentionUsersRef.current = [];
       });
-  }, [currentUserId]);
+  }, [currentUserId, reloadPosts, reloadPrivateFeeds]);
+
+  useEffect(() => {
+    if (activeTab === "private") {
+      void reloadPrivateFeeds();
+    }
+  }, [activeTab, reloadPrivateFeeds]);
 
   useEffect(() => {
     if (!urlPostId || postsLoading) return;
@@ -1268,36 +1350,10 @@ export function ChatterScreen() {
 
   const privateMentions = useMemo(() => {
     if (!currentUserId) return [];
-    const source = mentionFeedPosts.length > 0 ? mentionFeedPosts : sortedPosts;
-    const isMentionedInComment = (comment) =>
-      isSameUserId(comment.mentionUserId, currentUserId)
-      || (comment.mentionedUsers ?? []).some((u) => isSameUserId(u.id, currentUserId));
-    const isMentionedInPost = (post) =>
-      isSameUserId(post.mentionUserId, currentUserId)
-      || (post.mentionedUsers ?? []).some((u) => isSameUserId(u.id, currentUserId));
-    return source
-      .filter((post) => {
-        if (isMentionedInPost(post)) return true;
-        return (post.comments ?? []).some(isMentionedInComment);
-      })
-      .map((post) => {
-        const mentionedComment = (post.comments ?? []).find(isMentionedInComment);
-        const isPostMention = isMentionedInPost(post) && !mentionedComment;
-        return {
-          id: `${post.id}-${mentionedComment?.id ?? "post"}`,
-          postId: post.id,
-          title: post.title,
-          taskName: post.taskName,
-          projectName: post.projectName,
-          message: mentionedComment?.message ?? post.message,
-          time: isPostMention ? post.time : formatChatterTime(mentionedComment?.createdAt),
-          updatedAt: post.updatedAt,
-        };
-      })
-      .sort(
-        (a, b) =>
-          new Date(b.updatedAt ?? 0).getTime() - new Date(a.updatedAt ?? 0).getTime(),
-      );
+    if (mentionFeedPosts.length > 0) {
+      return buildPrivateMentionEntries(mentionFeedPosts, currentUserId, { trustApiFilter: true });
+    }
+    return buildPrivateMentionEntries(sortedPosts, currentUserId);
   }, [mentionFeedPosts, sortedPosts, currentUserId]);
 
   const privateComments = useMemo(() => {
@@ -1417,11 +1473,11 @@ export function ChatterScreen() {
       const now = new Date().toISOString();
       setPosts((prev) =>
         prev.map((post) =>
-          post.id === postId
+          isSameUserId(post.id, postId)
             ? {
                 ...post,
                 updatedAt: now,
-                comments: [feedComment, ...(post.comments ?? [])],
+                comments: dedupeCommentsById([feedComment, ...(post.comments ?? [])]),
               }
             : post,
         ),
@@ -1430,7 +1486,7 @@ export function ChatterScreen() {
       setOpenComposerPostId(null);
       const targetPost = posts.find((p) => p.id === postId);
       emitChatterRefresh({ postId, taskId: targetPost?.taskId, projectId: targetPost?.projectId });
-      if (privateTabLoadedRef.current) void reloadPrivateFeeds();
+      void reloadPrivateFeeds();
     } catch (err) {
       console.error("Failed to save comment:", err);
       toast.error(err instanceof Error ? err.message : "Could not save comment. Please try again.");
@@ -1489,8 +1545,13 @@ export function ChatterScreen() {
       await deleteChatterComment(postId, commentId);
       setPosts((prev) =>
         prev.map((p) =>
-          p.id === postId
-            ? { ...p, comments: (p.comments ?? []).filter((c) => c.id !== commentId) }
+          isSameUserId(p.id, postId)
+            ? {
+                ...p,
+                comments: dedupeCommentsById(
+                  (p.comments ?? []).filter((c) => !isSameUserId(c.id, commentId)),
+                ),
+              }
             : p,
         ),
       );
@@ -1568,7 +1629,6 @@ export function ChatterScreen() {
         projectId: createdDto.projectId,
         postId: createdDto.id,
       });
-      privateTabLoadedRef.current = false;
       toast.success("Post created successfully");
     } catch (err) {
       console.error("Failed to create post:", err);
@@ -1596,13 +1656,7 @@ export function ChatterScreen() {
             <SegmentButton
               label="Private"
               isActive={activeTab === "private"}
-              onClick={() => {
-                setActiveTab("private");
-                if (!privateTabLoadedRef.current) {
-                  privateTabLoadedRef.current = true;
-                  void reloadPrivateFeeds();
-                }
-              }}
+              onClick={() => setActiveTab("private")}
             />
             <SegmentButton
               label="Task Updates"

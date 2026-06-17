@@ -260,7 +260,7 @@ export function mapCommentDtoToFeedComment(
       ? 'You'
       : pretty ?? 'Unknown';
   return {
-    id: dto.id,
+    id: normalizeUserId(dto.id) ?? dto.id,
     message: dto.message || '',
     author: authorLabel,
     authorId: dto.authorId,
