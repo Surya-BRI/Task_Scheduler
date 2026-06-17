@@ -20,6 +20,7 @@ import { ActivityLoggerService } from '../activities/activity-logger.service';
 import { TaskFilesService } from '../tasks/task-files.service';
 import {
   MentionUserRef,
+  isDesignerDepartmentMentionable,
   messageSnippet,
   mergeCollectedMentionUserIds,
   parseMentionUserIdsFromMessage,
@@ -268,8 +269,19 @@ export class ChatterPostsService implements OnModuleInit {
     projectId?: string | null,
   ): Promise<MentionUserRef[]> {
     const allUsers = await this.usersService.findAll();
-    const byId = new Map(allUsers.map((user) => [user.id, user]));
+    const byId = new Map(
+      allUsers.map((user) => {
+        const key = normalizeUserId(user.id) ?? user.id;
+        return [key, user];
+      }),
+    );
     const eligibleIds = new Set<string>();
+    const addEligibleId = (id?: string | null) => {
+      const key = normalizeUserId(id);
+      if (key) eligibleIds.add(key);
+    };
+    const resolveUserDepartmentId = (user: (typeof allUsers)[number]) =>
+      user.department?.id ?? user.departmentId ?? null;
 
     if (role === UserRole.HOD) {
       const hod = await this.prisma.user.findUnique({
@@ -277,37 +289,35 @@ export class ChatterPostsService implements OnModuleInit {
         select: { departmentId: true },
       });
       for (const user of allUsers) {
-        if (user.id === viewerId) {
-          eligibleIds.add(user.id);
+        if (isSameUserId(user.id, viewerId)) {
+          addEligibleId(user.id);
           continue;
         }
         const userRole = user.role?.name;
         if (userRole === UserRole.HOD) {
-          eligibleIds.add(user.id);
+          addEligibleId(user.id);
           continue;
         }
         if (userRole === UserRole.DESIGNER) {
-          const userDeptId = user.department?.id ?? null;
-          if (!hod?.departmentId || userDeptId === hod.departmentId) {
-            eligibleIds.add(user.id);
+          if (isDesignerDepartmentMentionable(hod?.departmentId, resolveUserDepartmentId(user))) {
+            addEligibleId(user.id);
           }
         }
       }
     } else {
-      eligibleIds.add(viewerId);
+      addEligibleId(viewerId);
       const viewer = await this.prisma.user.findUnique({
         where: { id: viewerId },
         select: { departmentId: true },
       });
       for (const user of allUsers) {
         if (user.role?.name === UserRole.HOD) {
-          eligibleIds.add(user.id);
+          addEligibleId(user.id);
           continue;
         }
         if (user.role?.name === UserRole.DESIGNER) {
-          const userDeptId = user.department?.id ?? null;
-          if (!viewer?.departmentId || userDeptId === viewer.departmentId) {
-            eligibleIds.add(user.id);
+          if (isDesignerDepartmentMentionable(viewer?.departmentId, resolveUserDepartmentId(user))) {
+            addEligibleId(user.id);
           }
         }
       }
@@ -319,7 +329,7 @@ export class ChatterPostsService implements OnModuleInit {
           where: { id: resolvedTaskId },
           select: { assigneeId: true, projectId: true },
         });
-        if (task?.assigneeId) eligibleIds.add(task.assigneeId);
+        addEligibleId(task?.assigneeId);
         if (task?.projectId) resolvedProjectId = task.projectId;
       }
       if (resolvedProjectId) {
@@ -328,12 +338,12 @@ export class ChatterPostsService implements OnModuleInit {
           select: { assigneeId: true },
         });
         for (const row of projectTasks) {
-          if (row.assigneeId) eligibleIds.add(row.assigneeId);
+          addEligibleId(row.assigneeId);
         }
       }
 
       const participants = await this.loadChatterParticipantUserIds(resolvedTaskId, resolvedProjectId);
-      for (const id of participants) eligibleIds.add(id);
+      for (const id of participants) addEligibleId(id);
     }
 
     return [...eligibleIds]

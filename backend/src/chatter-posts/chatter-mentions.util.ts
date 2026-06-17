@@ -35,6 +35,27 @@ export function mergeCollectedMentionUserIds(params: {
 
 export type MentionUserRef = { id: string; fullName: string };
 
+/** Normalize department ids for stable comparisons (case-insensitive). */
+export function normalizeDepartmentId(value?: string | null): string | null {
+  const trimmed = value?.trim();
+  return trimmed ? trimmed.toLowerCase() : null;
+}
+
+/**
+ * Whether a designer is mentionable by department rules for the viewing designer/HOD.
+ * Colleagues without a synced department remain eligible (common ERP data gap).
+ */
+export function isDesignerDepartmentMentionable(
+  viewerDeptId?: string | null,
+  userDeptId?: string | null,
+): boolean {
+  const viewer = normalizeDepartmentId(viewerDeptId);
+  const user = normalizeDepartmentId(userDeptId);
+  if (!viewer) return true;
+  if (!user) return true;
+  return viewer === user;
+}
+
 /** Parse @Full Name tokens from message text (longest-match) against a user directory. */
 export function parseMentionUserIdsFromMessage(
   message: string,
