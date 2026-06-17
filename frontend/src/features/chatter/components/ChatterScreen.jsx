@@ -820,9 +820,13 @@ function ChatterCard({
     onDraftChange(newText)
     setTimeout(() => {
       el.focus()
-      const cursor = selected ? end + open.length : start + open.length
+      const cursor = selected ? end + open.length + close.length : start + open.length
       el.setSelectionRange(cursor, cursor)
     }, 0)
+  }
+
+  function keepCommentComposerFocus(event) {
+    event.preventDefault()
   }
 
   function insertAtCursor(text) {
@@ -987,20 +991,21 @@ function ChatterCard({
             value={draftComment}
             onChange={onDraftChange}
             onMentionIdsChange={onMentionIdsChange}
+            richPreview
             placeholder="Write a comment... Use @ to mention someone"
             minRows={3}
             taskId={post.taskId}
             projectId={post.projectId}
-            className="min-h-[80px] w-full resize-none rounded-md border border-slate-300 bg-white px-3 py-2 text-sm text-slate-900 outline-none focus:border-blue-500 focus:ring-1 focus:ring-blue-500"
+            className="min-h-[80px]"
           />
           <div className="mt-3 flex items-center justify-between">
             <div className="flex items-center gap-1 text-sm font-medium text-slate-500">
-              <button type="button" title="Bold (**text**)" onClick={() => applyFormat(['**', '**'])} className="rounded px-1.5 py-0.5 font-bold hover:bg-slate-200 hover:text-slate-800 transition-colors">B</button>
-              <button type="button" title="Italic (*text*)" onClick={() => applyFormat(['*', '*'])} className="rounded px-1.5 py-0.5 italic hover:bg-slate-200 hover:text-slate-800 transition-colors">I</button>
-              <button type="button" title="Underline (__text__)" onClick={() => applyFormat(['__', '__'])} className="rounded px-1.5 py-0.5 underline hover:bg-slate-200 hover:text-slate-800 transition-colors">U</button>
-              <button type="button" title="Strikethrough (~~text~~)" onClick={() => applyFormat(['~~', '~~'])} className="rounded px-1.5 py-0.5 line-through hover:bg-slate-200 hover:text-slate-800 transition-colors">S</button>
+              <button type="button" title="Bold (**text**)" onMouseDown={keepCommentComposerFocus} onClick={() => applyFormat(['**', '**'])} className="rounded px-1.5 py-0.5 font-bold hover:bg-slate-200 hover:text-slate-800 transition-colors">B</button>
+              <button type="button" title="Italic (*text*)" onMouseDown={keepCommentComposerFocus} onClick={() => applyFormat(['*', '*'])} className="rounded px-1.5 py-0.5 italic hover:bg-slate-200 hover:text-slate-800 transition-colors">I</button>
+              <button type="button" title="Underline (__text__)" onMouseDown={keepCommentComposerFocus} onClick={() => applyFormat(['__', '__'])} className="rounded px-1.5 py-0.5 underline hover:bg-slate-200 hover:text-slate-800 transition-colors">U</button>
+              <button type="button" title="Strikethrough (~~text~~)" onMouseDown={keepCommentComposerFocus} onClick={() => applyFormat(['~~', '~~'])} className="rounded px-1.5 py-0.5 line-through hover:bg-slate-200 hover:text-slate-800 transition-colors">S</button>
               <span className="mx-1 text-slate-300">|</span>
-              <button type="button" title="Mention someone" onClick={() => insertAtCursor('@')} className="rounded px-1.5 py-0.5 hover:bg-slate-200 hover:text-slate-800 transition-colors">@</button>
+              <button type="button" title="Mention someone" onMouseDown={keepCommentComposerFocus} onClick={() => insertAtCursor('@')} className="rounded px-1.5 py-0.5 hover:bg-slate-200 hover:text-slate-800 transition-colors">@</button>
             </div>
             <button
               type="button"
@@ -1817,7 +1822,11 @@ export function ChatterScreen() {
                       {item.taskName ? (
                         <p className="mt-0.5 text-xs font-medium text-blue-600">{item.taskName}</p>
                       ) : null}
-                      <p className="mt-1 text-sm text-slate-700">{item.message}</p>
+                      <ChatterMentionText
+                        message={item.message}
+                        users={mentionUsersDirectory}
+                        className="mt-1 text-sm text-slate-700"
+                      />
                       <p className="mt-2 text-xs text-slate-500">{item.projectName} · {item.time}</p>
                     </button>
                   ))
@@ -1842,7 +1851,11 @@ export function ChatterScreen() {
                       {item.taskName ? (
                         <p className="mt-0.5 text-xs font-medium text-blue-600">{item.taskName}</p>
                       ) : null}
-                      <p className="mt-1 text-sm text-slate-700">{item.message}</p>
+                      <ChatterMentionText
+                        message={item.message}
+                        users={mentionUsersDirectory}
+                        className="mt-1 text-sm text-slate-700"
+                      />
                       <p className="mt-2 text-xs font-medium text-blue-600">{item.projectName} · {item.time}</p>
                     </button>
                   ))
@@ -1913,7 +1926,15 @@ export function ChatterScreen() {
                                   {chat.comments.map((comment) => (
                                     <li key={comment.id} className="rounded border border-slate-200 bg-white px-2.5 py-2">
                                       <p className="text-xs font-semibold text-slate-800">{comment.author}</p>
-                                      <p className="mt-1 text-sm text-slate-700">{comment.message}</p>
+                                      <ChatterMentionText
+                                        message={comment.message}
+                                        users={resolveMentionUsersForDisplay(
+                                          comment.message,
+                                          comment.mentionedUsers,
+                                          mentionUsersDirectory,
+                                        )}
+                                        className="mt-1 text-sm text-slate-700"
+                                      />
                                       <p className="mt-1 text-[10px] text-slate-500">
                                         {formatChatterTime(comment.createdAt)}
                                       </p>
