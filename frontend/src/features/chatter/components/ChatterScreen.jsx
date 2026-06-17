@@ -14,6 +14,7 @@ import {
   formatMentionSummary,
   getMondayOfWeek,
   likeChatterPost,
+  markChatterPostsSeen,
   listChatterMentionUsers,
   listChatterPosts,
   normalizePaginationCursor,
@@ -656,6 +657,30 @@ function CreatePostModal({ isOpen, onClose, onSubmit, isSubmitting }) {
   );
 }
 
+function formatSeenBySummary(post) {
+  const users = post.seenByUsers ?? [];
+  const count = post.seenBy ?? users.length ?? 0;
+  if (count === 0) return { count: 0, title: undefined };
+  if (users.length > 0) {
+    return { count, title: users.map((user) => user.fullName).join(", ") };
+  }
+  return { count, title: undefined };
+}
+
+function SeenByLine({ post, className = "" }) {
+  const summary = useMemo(() => formatSeenBySummary(post), [post]);
+  return (
+    <p className={className} title={summary.title}>
+      Seen by {summary.count}
+      {summary.title ? (
+        <span className="mt-0.5 block truncate text-[11px] font-normal text-slate-400">
+          {summary.title}
+        </span>
+      ) : null}
+    </p>
+  );
+}
+
 function ChatterCard({
   post,
   mentionUsers = [],
@@ -672,13 +697,41 @@ function ChatterCard({
   onEditPost,
   onDeletePost,
   onDeleteComment,
+  onBecomeVisible,
 }) {
   const hasComments = (post.comments?.length ?? 0) > 0;
   const textareaRef = useRef(null);
+  const cardRef = useRef(null);
   const postMentionUsers = useMemo(
     () => resolveMentionUsersForDisplay(post.message, post.mentionedUsers, mentionUsers),
     [post.message, post.mentionedUsers, mentionUsers],
   );
+
+  useEffect(() => {
+    const element = cardRef.current;
+    if (!element || !onBecomeVisible) return undefined;
+
+    const markIfVisible = () => {
+      const rect = element.getBoundingClientRect();
+      const viewportHeight = window.innerHeight || document.documentElement.clientHeight;
+      if (rect.top < viewportHeight && rect.bottom > 0) {
+        onBecomeVisible(post.id);
+      }
+    };
+
+    markIfVisible();
+
+    const observer = new IntersectionObserver(
+      ([entry]) => {
+        if (entry?.isIntersecting) {
+          onBecomeVisible(post.id);
+        }
+      },
+      { threshold: [0, 0.2, 0.5] },
+    );
+    observer.observe(element);
+    return () => observer.disconnect();
+  }, [post.id, onBecomeVisible]);
 
   function applyFormat(syntax) {
     const el = textareaRef.current
@@ -709,7 +762,7 @@ function ChatterCard({
   }
 
   return (
-    <article id={`chatter-post-${post.id}`} className="ui-surface ui-card-pad flex flex-col gap-3">
+    <article ref={cardRef} id={`chatter-post-${post.id}`} className="ui-surface ui-card-pad flex flex-col gap-3">
       <div className="flex gap-4">
         <div className="flex-1 min-w-0">
           <div className="flex flex-wrap items-center gap-x-1 gap-y-0.5">
@@ -735,7 +788,7 @@ function ChatterCard({
                 onClick={() => onLike?.(post.id)}
               >
                 <ThumbsUp className="w-4 h-4" />
-                {post.seenBy > 0 ? post.seenBy : "Like"}
+                {(post.likeCount ?? 0) > 0 ? post.likeCount : "Like"}
               </button>
               <button
                 type="button"
@@ -770,6 +823,10 @@ function ChatterCard({
                 </div>
               )}
             </div>
+            <SeenByLine
+              post={post}
+              className="mt-3 text-xs text-slate-500 sm:hidden"
+            />
           </div>
         </div>
         
@@ -803,9 +860,16 @@ function ChatterCard({
                 </div>
               ) : null}
             </div>
-            <p className="text-right text-slate-500 mt-4 pr-2">Seen by {post.seenBy}</p>
+            <SeenByLine
+              post={post}
+              className="text-right text-slate-500 mt-4 pr-2 hidden sm:block"
+            />
           </aside>
-        ) : null}
+        ) : (
+          <aside className="hidden sm:flex w-[220px] shrink-0 border-l-[3px] border-transparent pl-4 py-1 text-xs">
+            <SeenByLine post={post} className="mt-auto text-right text-slate-500 pr-2 w-full" />
+          </aside>
+        )}
       </div>
       {hasComments ? (
         <ul className="mt-1 space-y-2 border-t border-slate-100 pt-3">
@@ -909,6 +973,9 @@ export function ChatterScreen() {
   const loadingMoreRef = useRef(false);
   const hasMorePostsRef = useRef(false);
   const nextCursorRef = useRef(null);
+  const seenPendingRef = useRef(new Set());
+  const seenRecordedRef = useRef(new Set());
+  const seenFlushTimerRef = useRef(null);
   const urlPostId = searchParams.get("postId");
   const urlCommentId = searchParams.get("commentId");
 
@@ -931,6 +998,87 @@ export function ChatterScreen() {
     return [...map.values()];
   }, [posts]);
   const currentUserName = useMemo(() => getSession()?.fullName ?? '', []);
+
+  const applySeenUpdates = useCallback((updates) => {
+    if (!Array.isArray(updates) || updates.length === 0) return;
+    const byId = new Map(
+      updates.map((update) => [normalizeUserId(update.postId) ?? update.postId, update]),
+    );
+    setPosts((prev) =>
+      prev.map((post) => {
+        const update = byId.get(normalizeUserId(post.id) ?? post.id);
+        if (!update) return post;
+        return {
+          ...post,
+          seenBy: update.seenByCount,
+          seenByUsers: update.seenByUsers ?? post.seenByUsers,
+        };
+      }),
+    );
+  }, []);
+
+  const flushSeenPosts = useCallback(async () => {
+    const ids = [...seenPendingRef.current];
+    seenPendingRef.current.clear();
+    if (!ids.length) return;
+    const keys = ids.map((id) => normalizeUserId(id)).filter(Boolean);
+    try {
+      const result = await markChatterPostsSeen(ids);
+      const updates = Array.isArray(result?.updates) ? result.updates : [];
+      for (const key of keys) seenRecordedRef.current.add(key);
+      applySeenUpdates(updates);
+    } catch (err) {
+      for (const key of keys) seenRecordedRef.current.delete(key);
+      console.warn("[Chatter] Failed to record seen posts:", err);
+    }
+  }, [applySeenUpdates]);
+
+  const queueMarkPostSeen = useCallback((postId) => {
+    if (!currentUserId || !postId) return;
+    const key = normalizeUserId(postId);
+    if (!key || seenRecordedRef.current.has(key)) return;
+    seenPendingRef.current.add(postId);
+
+    setPosts((prev) =>
+      prev.map((post) => {
+        if (!isSameUserId(post.id, postId)) return post;
+        const alreadyListed = (post.seenByUsers ?? []).some((user) =>
+          isSameUserId(user.id, currentUserId),
+        );
+        if (alreadyListed) return post;
+        const seenByUsers = [
+          ...(post.seenByUsers ?? []),
+          { id: currentUserId, fullName: currentUserName || "You" },
+        ];
+        return { ...post, seenBy: seenByUsers.length, seenByUsers };
+      }),
+    );
+
+    clearTimeout(seenFlushTimerRef.current);
+    seenFlushTimerRef.current = setTimeout(() => {
+      void flushSeenPosts();
+    }, 400);
+  }, [currentUserId, currentUserName, flushSeenPosts]);
+
+  useEffect(() => {
+    if (!currentUserId) return;
+    for (const post of posts) {
+      const alreadySeen = (post.seenByUsers ?? []).some((user) =>
+        isSameUserId(user.id, currentUserId),
+      );
+      if (alreadySeen) {
+        const key = normalizeUserId(post.id);
+        if (key) seenRecordedRef.current.add(key);
+      }
+    }
+  }, [posts, currentUserId]);
+
+  useEffect(() => () => {
+    clearTimeout(seenFlushTimerRef.current);
+    if (seenPendingRef.current.size > 0) {
+      void flushSeenPosts();
+    }
+  }, [flushSeenPosts]);
 
   const reloadPrivateFeeds = useCallback(async () => {
     if (!currentUserId) {
@@ -1060,16 +1208,26 @@ export function ChatterScreen() {
     setFocusedPostId(urlPostId);
     setActiveTab("posts");
     setOpenComposerPostId(urlCommentId ? urlPostId : null);
+    queueMarkPostSeen(urlPostId);
     requestAnimationFrame(() => {
       const targetId = urlCommentId ? `chatter-comment-${urlCommentId}` : `chatter-post-${urlPostId}`;
       document.getElementById(targetId)?.scrollIntoView({ behavior: "smooth", block: "center" });
     });
-  }, [urlPostId, urlCommentId, postsLoading, posts.length]);
+  }, [urlPostId, urlCommentId, postsLoading, posts.length, queueMarkPostSeen]);
 
   useEffect(() => {
     return onChatterRefresh(() => {
       void reloadPosts();
       void reloadPrivateFeeds();
+    });
+  }, [reloadPosts, reloadPrivateFeeds]);
+
+  useEffect(() => {
+    return connectDashboardRealtime({
+      onChatterRefresh: () => {
+        void reloadPosts();
+        void reloadPrivateFeeds();
+      },
     });
   }, [reloadPosts, reloadPrivateFeeds]);
 
@@ -1285,7 +1443,7 @@ export function ChatterScreen() {
     try {
       const result = await likeChatterPost(postId);
       setPosts((prev) =>
-        prev.map((p) => p.id === postId ? { ...p, seenBy: result.seenByCount } : p),
+        prev.map((p) => p.id === postId ? { ...p, likeCount: result.likeCount } : p),
       );
     } catch (err) {
       toast.error(err instanceof Error ? err.message : "Could not like post.");
@@ -1566,6 +1724,7 @@ export function ChatterScreen() {
                 onEditPost={handleEditPost}
                 onDeletePost={handleDeletePost}
                 onDeleteComment={handleDeleteComment}
+                onBecomeVisible={queueMarkPostSeen}
               />
               </div>
             ))}

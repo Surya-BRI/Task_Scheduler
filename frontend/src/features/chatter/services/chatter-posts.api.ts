@@ -57,6 +57,8 @@ export type ChatterPostDto = {
   mentionedUsers?: ChatterMentionedUserDto[];
   priority: string | number | null;
   seenByCount: number;
+  seenByUsers?: ChatterMentionedUserDto[];
+  likeCount?: number;
   attachmentCount: number;
   isPinned: boolean;
   editedAt: string | null;
@@ -89,6 +91,8 @@ export type ChatterFeedPost = {
   responsibleUser: string;
   priority: 'low' | 'medium' | 'high' | null;
   seenBy: number;
+  seenByUsers?: ChatterMentionedUserDto[];
+  likeCount?: number;
   designerName?: string | null;
   comments: Array<{
     id: string;
@@ -307,7 +311,7 @@ export function mapChatterPostDtoToFeedPost(
   }));
 
   const base: ChatterFeedPost = {
-    id: dto.id,
+    id: normalizeUserId(dto.id) ?? dto.id,
     title: resolveDisplayTitle(dto),
     author: authorLabel,
     authorId: dto.authorId,
@@ -328,7 +332,12 @@ export function mapChatterPostDtoToFeedPost(
     designerName: safeDisplayValue(dto.assigneeName),
     responsibleUser: authorLabel,
     priority: normalizePriority(dto.priority),
-    seenBy: dto.seenByCount,
+    seenBy: (dto.seenByUsers?.length ?? 0) > 0 ? dto.seenByUsers!.length : (dto.seenByCount ?? 0),
+    seenByUsers: (dto.seenByUsers ?? []).map((user) => ({
+      ...user,
+      id: normalizeUserId(user.id) ?? user.id,
+    })),
+    likeCount: dto.likeCount ?? 0,
     comments: (dto.comments ?? []).map((c) => mapCommentDtoToFeedComment(c, currentUserId)),
     updatedAt: dto.updatedAt || dto.createdAt || new Date(0).toISOString(),
     taskId: dto.taskId,
@@ -588,8 +597,22 @@ export function deleteChatterComment(postId: string, commentId: string) {
 }
 
 export function likeChatterPost(id: string) {
-  return apiClient.post<{ seenByCount: number; liked: boolean }>(
+  return apiClient.post<{ likeCount: number; liked: boolean }>(
     `/chatter-posts/${encodeURIComponent(id)}/like`,
     {},
   );
+}
+
+export type ChatterPostSeenUpdate = {
+  postId: string;
+  seenByCount: number;
+  seenByUsers: ChatterMentionedUserDto[];
+};
+
+export function markChatterPostsSeen(postIds: string[]) {
+  const ids = [...new Set(postIds.filter(Boolean))];
+  if (!ids.length) {
+    return Promise.resolve({ updates: [] as ChatterPostSeenUpdate[] });
+  }
+  return apiClient.post<{ updates: ChatterPostSeenUpdate[] }>('/chatter-posts/seen', { postIds: ids });
 }
