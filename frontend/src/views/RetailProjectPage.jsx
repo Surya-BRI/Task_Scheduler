@@ -331,7 +331,7 @@ function getTaskStatusBadgeClass(normalizedStatus) {
   switch (normalizedStatus) {
     case 'IN_PROGRESS':      return 'bg-blue-100 text-blue-700'
     case 'DESIGN_COMPLETED': return 'bg-emerald-100 text-emerald-700'
-    case 'REVIEW_COMPLETED': return 'bg-emerald-100 text-emerald-700'
+    case 'CLIENT_ACCEPTED':  return 'bg-emerald-100 text-emerald-700'
     case 'HOD_REVIEW':       return 'bg-violet-100 text-violet-700'
     case 'SALES_REVIEW':     return 'bg-indigo-100 text-indigo-700'
     case 'REWORK':           return 'bg-red-100 text-red-700'

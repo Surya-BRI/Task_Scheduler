@@ -4,7 +4,7 @@ import * as bcrypt from 'bcrypt';
 const prisma = new PrismaClient();
 
 async function main(): Promise<void> {
-  for (const role of ['HOD', 'DESIGNER']) {
+  for (const role of ['HOD', 'DESIGNER', 'SALESPERSON']) {
     await prisma.role.upsert({
       where: { name: role },
       update: {},
@@ -14,8 +14,9 @@ async function main(): Promise<void> {
 
   const hodRole = await prisma.role.findUnique({ where: { name: 'HOD' } });
   const designerRole = await prisma.role.findUnique({ where: { name: 'DESIGNER' } });
+  const salespersonRole = await prisma.role.findUnique({ where: { name: 'SALESPERSON' } });
 
-  if (!hodRole || !designerRole) {
+  if (!hodRole || !designerRole || !salespersonRole) {
     throw new Error('Required roles were not found after seeding roles');
   }
 
@@ -24,6 +25,7 @@ async function main(): Promise<void> {
     { fullName: 'Alex Johnson', email: 'alex.johnson@bluerhine.com', password: 'alex123', role: designerRole },
     { fullName: 'Alexander Allen', email: 'alexander.allen@bluerhine.com', password: 'alex123', role: designerRole },
     { fullName: 'Benjamin Harris', email: 'benjamin.harris@bluerhine.com', password: 'ben123', role: designerRole },
+    { fullName: 'Rehman', email: 'rehman@bluerhine.com', password: 'rehman123', role: salespersonRole },
   ];
 
   for (const acc of demoAccounts) {

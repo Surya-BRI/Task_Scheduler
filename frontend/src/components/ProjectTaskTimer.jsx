@@ -91,6 +91,7 @@ export function ProjectTaskTimer({
   launchCompleteModal,
   onConsumedLaunchFlags,
   onSubmitComplete,
+  onStatusChange,
   inline = false,
 }) {
   const [accumulatedSeconds, setAccumulatedSeconds] = useState(0)
@@ -116,7 +117,7 @@ export function ProjectTaskTimer({
     'System issue',
   ]
 
-  const isLocked = taskStatus === 'REVIEW_COMPLETED' || taskStatus === 'CLIENT_REJECTED'
+  const isLocked = taskStatus === 'CLIENT_ACCEPTED' || taskStatus === 'CLIENT_REJECTED'
   const isRunning = runStartAt !== null && !isLocked
 
   useEffect(() => {
@@ -272,7 +273,9 @@ export function ProjectTaskTimer({
     writePersisted(taskId, accumulatedSeconds, startedAt)
     saveTimerStateToDb(taskId, accumulatedSeconds)
     // Move task to IN_PROGRESS so it reflects active work
-    apiClient.patch(`/tasks/${taskId}/status`, { status: 'IN_PROGRESS' }).catch(() => {})
+    apiClient.patch(`/tasks/${taskId}/status`, { status: 'IN_PROGRESS' })
+      .catch(() => {})
+      .finally(() => { onStatusChange?.() })
   }
 
   const handlePauseClick = () => {

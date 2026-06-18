@@ -127,7 +127,7 @@ export class DesignListService {
       name: preserveNulls ? projectName : projectName ?? projectCode ?? id,
       status: (row.status as
         | 'DESIGN_NEW' | 'DESIGN_PLANNED' | 'IN_PROGRESS' | 'DESIGN_COMPLETED'
-        | 'HOD_REVIEW' | 'SALES_REVIEW' | 'REWORK' | 'REVIEW_COMPLETED' | 'CLIENT_REJECTED' | 'ON_HOLD'
+        | 'HOD_REVIEW' | 'SALES_REVIEW' | 'REWORK' | 'CLIENT_ACCEPTED' | 'CLIENT_REJECTED' | 'ON_HOLD'
         | 'WIP' | 'Completed' | 'Pending' | 'Revision' | 'Approved') ?? 'DESIGN_NEW',
       salesPerson: preserveNulls ? salesPerson : salesPerson ?? 'Unassigned',
       created: toDdMmYyyy(new Date(row.createdOn)),

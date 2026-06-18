@@ -162,6 +162,14 @@ export class ProjectDetailInputDto {
 
   @IsString()
   @IsOptional()
+  signFamily?: string;
+
+  @IsString()
+  @IsOptional()
+  disciplineType?: string;
+
+  @IsString()
+  @IsOptional()
   planCode?: string;
 
   @IsString()

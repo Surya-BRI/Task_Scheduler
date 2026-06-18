@@ -1,78 +1,61 @@
-# Project Sign Type Task Issue
+# Project Sign Type Task Issue — RESOLVED
 
-## Summary
-
-When creating a project task via the **Create Task modal** (`ProjectCreateTaskModal`), selecting multiple sign type rows shows "X tasks selected" in the UI — but the backend only ever creates **one task**, regardless of how many sign types are selected.
+**Resolution:** Option A was implemented. One task is created per discipline per sign type.
 
 ---
 
-## How It Currently Works
+## What Was the Problem
+
+When creating a project task via the **Create Task modal** (`ProjectCreateTaskModal`), selecting multiple sign type rows and ticking discipline checkboxes (Artwork, Technical, etc.) implied that multiple tasks would be created — but the backend previously created **one task** for each sign type row regardless of how many disciplines were checked.
+
+---
+
+## What Changed
 
 ### Frontend (`frontend/src/components/ProjectCreateTaskModal.jsx`)
 
-1. Modal opens → fetches sign types from ERP via `GET /design-list/project-sign-types?salesForceCode={opNo}`
-2. Sign types are rendered in a 2-level table: **Sign Family (parent)** → **Sign Codes (children)**
-3. User checks disciplines (Artwork, Technical, Location, As-Built, BIM) on any number of rows
-4. `selectedCount` counts every row where any discipline is checked or hours are entered
-5. UI shows **"X tasks selected"** at the bottom
-6. On submit, all selected rows are collected into a `projectDetails[]` array and sent to `POST /tasks/extended`
+- The payload builder now emits **one `projectDetails` entry per ticked discipline per sign type** (not one per sign type row).
+- Each entry carries `signFamily` (the parent sign family label), `signType` (the child sign code), and `disciplineType` (e.g. `"Artwork"`, `"Technical"`, etc.).
+- `selectedCount` now counts individual discipline checkbox ticks — each tick = one task that will be created.
+- Deadline is now required if any discipline is checked on a row (red border + `toast.error()`).
 
-### Backend (`backend/src/tasks/tasks.service.ts` — `createExtended`, line 475)
+### Backend (`backend/src/tasks/tasks.service.ts` — `createExtended`)
 
-```
-tx.task.create(...)                          ← ONE task created
-  for (line of dto.projectDetails) {
-    tx.projectTaskDetail.create({ taskId })  ← N detail rows, all linked to the same taskId
-  }
-```
+- Loops `projectDetails` and creates **one `ErpTSTask` per entry**, each with its own `taskNo`, `signFamily`, `disciplineType`, and `revisionCode`.
+- Task title is built as `[opNo, signType, disciplineType, revisionCode].join(' - ')`.
+- Duplicate check now includes `disciplineType` — you can have Artwork + Technical tasks for the same sign type + revision.
+- `dueDate` is set from `line.deadline` first, then falls back to `dto.task.dueDate`.
 
-The entire `projectDetails` array is stored as multiple `ErpTSProjectTaskDetail` rows under a **single** `ErpTSTask` record.
+### Schema (`backend/prisma/schema.prisma`)
 
----
+- Added `signFamily String?` and `disciplineType String?` fields to `Task`.
+- Composite index updated to include `disciplineType`.
 
-## The Problem
+### SQL Migration (`backend/prisma/sql/add-discipline-type-to-task.sql`)
 
-| What the UI implies | What actually happens |
-|---------------------|-----------------------|
-| "3 tasks selected" → 3 tasks created | "3 tasks selected" → 1 task with 3 detail rows |
+- Adds `disciplineType NVARCHAR(50)` and `signFamily NVARCHAR(255)` columns to `ErpTSTask`.
+- Drops old unique index `UX_ErpTSTask_Project_RevisionScopeHash`.
+- Recreates as `UX_ErpTSTask_Project_RevisionDisciplineHash` (includes `disciplineType`) so multiple discipline tasks can coexist for the same project/opNo/signType/revision.
 
-Selecting 5 sign types creates **1 task** with **5 `ProjectTaskDetail` rows**, not 5 separate tasks.
+### Task Display
 
----
-
-## Decision Required
-
-Two valid approaches:
-
-### Option A — One task per sign type (fix backend)
-Inside `createExtended`, loop `projectDetails` and call `tx.task.create` + `tx.projectTaskDetail.create` for each entry within the same transaction.
-
-- Creates N tasks, each with its own `taskNo`, status, assignee, timer, work session
-- Matches what the UI currently implies ("X tasks selected")
-- Bigger change — affects task list counts, scheduler, activity log, notifications
-
-### Option B — One task, N detail lines (fix frontend label only)
-Keep the backend as-is. Change the frontend label from **"X tasks selected"** to **"X sign types selected"** (or similar) to accurately reflect the 1-task model.
-
-- No backend change needed
-- Simpler fix
-- Loses granularity — one task covers all sign types, can't track/assign them individually
+- `task-view-model.js` — `mapTaskToDesignRow` builds `name` as `[opNo, signType, disciplineType, revisionCode].join(' - ')`.
+- `DesignSchedulerScreen.jsx` — scheduler task cards now show a color-coded discipline chip alongside the design-type chip.
+- `TaskDetailsPage.jsx` — project task list has a **Sign Family** column; task row shows sign type as subtitle under task no; discipline shown as color-coded pill. Work scope section shows the active discipline pill + hours instead of all five checkboxes.
+- `ProjectTaskTimer.jsx` — added `onStatusChange` prop; task detail page refreshes after timer moves task to `IN_PROGRESS`.
 
 ---
 
 ## Affected Files
 
-| File | Role |
-|------|------|
-| `frontend/src/components/ProjectCreateTaskModal.jsx` | Modal UI — sign type table, selectedCount label, payload builder |
-| `backend/src/tasks/tasks.service.ts` (line 475) | `createExtended` — creates 1 task + N detail rows |
-| `backend/src/tasks/dto/create-extended-task.dto.ts` | DTO for `POST /tasks/extended` |
-| `backend/prisma/schema.prisma` | `ErpTSTask` + `ErpTSProjectTaskDetail` models |
-
----
-
-## Notes
-
-- `selectedCount` in the modal is computed from `rowHasSelection()` which checks if any discipline checkbox is ticked or any hours are filled — it does not correspond to the number of tasks that will be created
-- Each `ProjectTaskDetail` row stores: `signType`, `planCode`, `artwork/artworkHours`, `technical/technicalHours`, `location/locationHours`, `asBuilt/asBuiltHours`, `bim`, `deadline`
-- The `planCode` field is shared across all selected rows (single input above the table) — under Option A, each created task would get the same planCode
+| File | Change |
+|------|--------|
+| `frontend/src/components/ProjectCreateTaskModal.jsx` | One entry per discipline per sign type; deadline required; toast validation |
+| `backend/src/tasks/tasks.service.ts` | One task per detail entry; title includes discipline; duplicate check includes discipline |
+| `backend/src/tasks/dto/create-extended-task.dto.ts` | Added `signFamily?` and `disciplineType?` to `ProjectDetailInputDto` |
+| `backend/prisma/schema.prisma` | Added `signFamily`, `disciplineType` to Task; updated composite index |
+| `backend/prisma/sql/add-discipline-type-to-task.sql` | SQL migration for new columns and index |
+| `frontend/src/features/design-list/task-view-model.js` | Name built from opNo + signType + disciplineType + revisionCode |
+| `frontend/src/features/scheduler/components/DesignSchedulerScreen.jsx` | Discipline chip on scheduler cards |
+| `frontend/src/views/TaskDetailsPage.jsx` | Sign Family column, discipline pill, work scope redesign |
+| `frontend/src/components/ProjectTaskTimer.jsx` | `onStatusChange` prop triggers task refresh |

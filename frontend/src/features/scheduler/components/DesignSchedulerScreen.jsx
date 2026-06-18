@@ -266,6 +266,18 @@ function toInitials(fullName) {
     return `${parts[0][0] ?? ""}${parts[1][0] ?? ""}`.toUpperCase();
 }
 
+const DISCIPLINE_CHIP_CLASSES = {
+  'Artwork':   'bg-blue-100 text-blue-700 border border-blue-200',
+  'Technical': 'bg-orange-100 text-orange-700 border border-orange-200',
+  'Location':  'bg-green-100 text-green-700 border border-green-200',
+  'As-Built':  'bg-purple-100 text-purple-700 border border-purple-200',
+  'BIM':       'bg-teal-100 text-teal-700 border border-teal-200',
+}
+
+function getDisciplineChipClass(discipline) {
+  return DISCIPLINE_CHIP_CLASSES[discipline] ?? 'bg-slate-100 text-slate-600 border border-slate-200'
+}
+
 function getDesignTypeChipClass(designType) {
     const t = String(designType ?? "").toLowerCase();
     if (t.includes("retail"))   return "bg-amber-100 text-amber-700 border border-amber-200";
@@ -308,6 +320,7 @@ function buildMockSchedulerState(records, designers) {
             tag: record.projectName || "",
             projectName: record.projectName || "",
             designType: record.designType || "",
+            disciplineType: record.disciplineType || "",
             opNo: record.opNo || "",
             estimatedHours: Number(record.estimatedHours) || 0,
             status,
@@ -318,6 +331,7 @@ function buildMockSchedulerState(records, designers) {
             holdStartedAt: status === "ON_HOLD"
                 ? (record.holdStartedAt instanceof Date ? record.holdStartedAt : record.updatedAt)
                 : undefined,
+            holdPreviousStatus: record.holdPreviousStatus || null,
         };
     });
     let assignedIdx = 0;
@@ -349,6 +363,7 @@ function buildSchedulerStateFromErpAssignments(records, rows, designers) {
             tag: record.projectName || "",
             projectName: record.projectName || "",
             designType: record.designType || "",
+            disciplineType: record.disciplineType || "",
             opNo: record.opNo || "",
             estimatedHours: Number(record.estimatedHours) || 0,
             status: sourceStatus === "ON_HOLD" ? "ON_HOLD" : "unassigned",
@@ -357,6 +372,7 @@ function buildSchedulerStateFromErpAssignments(records, rows, designers) {
             holdStartedAt: sourceStatus === "ON_HOLD"
                 ? (record.holdStartedAt instanceof Date ? record.holdStartedAt : record.updatedAt)
                 : undefined,
+            holdPreviousStatus: record.holdPreviousStatus || null,
         };
     });
     const assignedIds = new Set();
@@ -402,6 +418,7 @@ function buildSchedulerStateFromErpAssignments(records, rows, designers) {
                 tag: baseRecord.designType,
                 projectName: baseRecord.projectName || "",
                 designType: baseRecord.designType || "",
+                disciplineType: baseRecord.disciplineType || "",
                 priority: baseRecord.priority || "",
                 baseName: baseRecord.name,
                 colorClass: prev?.colorClass ?? TASK_COLORS[colorIdx % TASK_COLORS.length],
@@ -553,6 +570,7 @@ export function DesignSchedulerScreen() {
                             id: mapped.id,
                             name: mapped.name,
                             designType: task?.designType || mapped.designType || "",
+                            disciplineType: task?.disciplineType || "",
                             projectName: task?.project?.name || task?.project?.projectNo || "",
                             opNo: task?.opNo || "",
                             priority: task?.priority || "",
@@ -991,7 +1009,9 @@ export function DesignSchedulerScreen() {
             nextTasks[taskId] = nextTask;
         }
 
-        const backendStatus = newStatus === "ON_HOLD" ? "ON_HOLD" : "PENDING";
+        const backendStatus = newStatus === "ON_HOLD"
+            ? "ON_HOLD"
+            : (droppedTask.holdPreviousStatus ?? "PENDING");
         setTasks(nextTasks);
         if (!isUuid(taskId)) {
             persistWeekSnapshot(newSchedules, nextTasks);
@@ -1043,7 +1063,9 @@ export function DesignSchedulerScreen() {
                 holdStartedAt: shouldHold ? new Date() : undefined,
             },
         }));
-        const backendStatus = shouldHold ? "ON_HOLD" : "PENDING";
+        const backendStatus = shouldHold
+            ? "ON_HOLD"
+            : (tasks[taskId]?.holdPreviousStatus ?? "PENDING");
         if (!isUuid(taskId)) return;
         apiClient.patch(`/tasks/${taskId}/status`, { status: backendStatus }).catch((error) => {
             console.warn("Unable to persist hold toggle", { taskId, backendStatus, error });
@@ -1254,11 +1276,18 @@ export function DesignSchedulerScreen() {
                     </div>
                     {task.projectName && <div className="text-[11px] font-semibold leading-snug mt-1">{task.projectName}</div>}
                     <div className="flex items-center justify-between mt-1.5 gap-1">
-                      {(task.designType || task.opNo) && (
-                        <span className={`text-[9px] font-semibold px-1.5 py-0.5 rounded truncate max-w-[70%] ${getDesignTypeChipClass(task.designType || task.opNo)}`}>
-                          {task.designType || task.opNo}
-                        </span>
-                      )}
+                      <div className="flex items-center gap-1 min-w-0">
+                        {(task.designType || task.opNo) && (
+                          <span className={`text-[9px] font-semibold px-1.5 py-0.5 rounded truncate ${getDesignTypeChipClass(task.designType || task.opNo)}`}>
+                            {task.designType || task.opNo}
+                          </span>
+                        )}
+                        {task.disciplineType && (
+                          <span className={`text-[9px] font-semibold px-1.5 py-0.5 rounded truncate ${getDisciplineChipClass(task.disciplineType)}`}>
+                            {task.disciplineType}
+                          </span>
+                        )}
+                      </div>
                       <div className="flex items-center gap-1 ml-auto shrink-0">
                         <span className="text-[9px] font-bold bg-slate-200 text-slate-700 px-1.5 py-0.5 rounded">{`${task.estimatedHours}h`}</span>
                       </div>
@@ -1282,11 +1311,18 @@ export function DesignSchedulerScreen() {
                     </div>
                     {task.projectName && <div className="text-[11px] font-semibold leading-snug mt-1">{task.projectName}</div>}
                     <div className="flex items-center justify-between mt-1.5 gap-1">
-                      {(task.designType || task.opNo) && (
-                        <span className={`text-[9px] font-semibold px-1.5 py-0.5 rounded truncate max-w-[70%] ${getDesignTypeChipClass(task.designType || task.opNo)}`}>
-                          {task.designType || task.opNo}
-                        </span>
-                      )}
+                      <div className="flex items-center gap-1 min-w-0">
+                        {(task.designType || task.opNo) && (
+                          <span className={`text-[9px] font-semibold px-1.5 py-0.5 rounded truncate ${getDesignTypeChipClass(task.designType || task.opNo)}`}>
+                            {task.designType || task.opNo}
+                          </span>
+                        )}
+                        {task.disciplineType && (
+                          <span className={`text-[9px] font-semibold px-1.5 py-0.5 rounded truncate ${getDisciplineChipClass(task.disciplineType)}`}>
+                            {task.disciplineType}
+                          </span>
+                        )}
+                      </div>
                       <div className="flex items-center gap-1 ml-auto shrink-0">
                         <span className="text-[9px] font-bold bg-slate-200 text-slate-700 px-1.5 py-0.5 rounded">{`${task.estimatedHours}h`}</span>
                       </div>
