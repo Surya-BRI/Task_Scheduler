@@ -169,11 +169,16 @@ function findOverlappingLeaveClient(leaves, fromDate, toDate) {
   return null;
 }
 
-
 const ALL_HISTORY_DESIGNERS = "ALL";
 
 function getLeaveRequesterId(row) {
   return String(row?.designerId ?? row?.userId ?? row?.createdBy ?? "").trim();
+}
+
+function filterLeavesForRequester(leaves, requesterId) {
+  const id = String(requesterId ?? "").trim();
+  if (!id) return [];
+  return (Array.isArray(leaves) ? leaves : []).filter((leave) => getLeaveRequesterId(leave) === id);
 }
 
 function filterHistoryRows(rows, { statusFilter, searchQuery, designerId = ALL_HISTORY_DESIGNERS }) {
@@ -533,6 +538,13 @@ export default function LeavePlannerClient() {
     const dateStr = `${YEAR}-${String(monthIndex + 1).padStart(2, '0')}-${String(day).padStart(2, '0')}`;
     const activeDayLeaves = findActiveLeavesOnDate(activeCalendarLeaves, dateStr);
 
+    if (canReview && activeDayLeaves.length > 0) {
+      setDayLeavesList(activeDayLeaves);
+      setDayLeavesDate(dateStr);
+      setIsDayLeavesModalOpen(true);
+      return;
+    }
+
     if (activeDayLeaves.length === 1) {
       openReviewModal(activeDayLeaves[0]);
       return;
@@ -713,12 +725,10 @@ export default function LeavePlannerClient() {
       return;
     }
 
-    const overlapPool =
-      canReview && leaveApplyMode === "others"
-        ? teamLeaves
-        : canReview
-          ? mergeLeaveLists(leaves, teamLeaves)
-          : leaves;
+    const overlapPool = filterLeavesForRequester(
+      canReview ? mergeLeaveLists(leaves, teamLeaves) : leaves,
+      targetUserId,
+    );
     const overlap = findOverlappingLeaveClient(overlapPool, formData.fromDate, formData.toDate);
     if (overlap) {
       closeLeaveApplyModal();
@@ -748,7 +758,7 @@ export default function LeavePlannerClient() {
     } catch (error) {
       const message = error instanceof Error ? error.message : "Failed to submit leave request. Please try again.";
       if (message.toLowerCase().includes("overlap") || message.includes(DUPLICATE_LEAVE_MSG)) {
-        const conflict = findOverlappingLeaveClient(leaves, formData.fromDate, formData.toDate);
+        const conflict = findOverlappingLeaveClient(overlapPool, formData.fromDate, formData.toDate);
         closeLeaveApplyModal();
         toast.error(DUPLICATE_LEAVE_MSG);
         if (conflict) openReviewModal(conflict);
@@ -1207,13 +1217,28 @@ export default function LeavePlannerClient() {
                 <h2 className="text-lg font-semibold text-slate-900">Leave requests</h2>
                 <p className="text-sm text-slate-500 mt-0.5">{formatDate(dayLeavesDate)} · {dayLeavesList.length} designer{dayLeavesList.length === 1 ? "" : "s"}</p>
               </div>
-              <button
-                type="button"
-                onClick={() => setIsDayLeavesModalOpen(false)}
-                className="p-2 text-slate-400 hover:text-slate-600 hover:bg-slate-100 rounded-full transition-colors"
-              >
-                <X className="w-5 h-5" />
-              </button>
+              <div className="flex items-center gap-2">
+                {canReview ? (
+                  <button
+                    type="button"
+                    onClick={() => {
+                      const dateStr = dayLeavesDate;
+                      setIsDayLeavesModalOpen(false);
+                      openLeaveApplyModal(dateStr);
+                    }}
+                    className="rounded-lg bg-[#5d5baf] px-3 py-1.5 text-xs font-semibold text-white hover:bg-[#4b4991]"
+                  >
+                    Submit another leave
+                  </button>
+                ) : null}
+                <button
+                  type="button"
+                  onClick={() => setIsDayLeavesModalOpen(false)}
+                  className="p-2 text-slate-400 hover:text-slate-600 hover:bg-slate-100 rounded-full transition-colors"
+                >
+                  <X className="w-5 h-5" />
+                </button>
+              </div>
             </div>
             <ul className="max-h-[60vh] overflow-y-auto divide-y divide-slate-100">
               {dayLeavesList.map((leave) => {
