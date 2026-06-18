@@ -448,6 +448,7 @@ model LeaveRequest {
   status          String    @default("Pending") @db.NVarChar(255)
   startDate       DateTime
   endDate         DateTime?
+  halfDaySession  String?   @db.NVarChar(50)
   reason          String?   @db.NVarChar(Max)
   approverId      String?   @db.UniqueIdentifier
   approver        User?     @relation("LeaveApprover", fields: [approverId], references: [id], onDelete: NoAction, onUpdate: NoAction)

@@ -121,6 +121,7 @@ async function main() {
       body: JSON.stringify({
         userId: designerId,
         type: 'Half Day',
+        halfDaySession: 'Second Half',
         reason: 'E2E half day',
         startDate: d,
         endDate: d,
@@ -131,10 +132,10 @@ async function main() {
       'Creation',
       'Submit Half Day leave type',
       'Accepted and stored with type "Half Day"',
-      r.ok ? `type=${r.data?.type}` : `HTTP ${r.status}`,
-      r.ok && r.data?.type === 'Half Day' ? 'Pass' : 'Fail',
+      r.ok ? `type=${r.data?.type}, session=${r.data?.halfDaySession}` : `HTTP ${r.status}`,
+      r.ok && r.data?.type === 'Half Day' && r.data?.halfDaySession === 'Second Half' ? 'Pass' : 'Fail',
       'Medium',
-      r.ok ? JSON.stringify({ id: r.data.id, type: r.data.type }) : r.text,
+      r.ok ? JSON.stringify({ id: r.data.id, type: r.data.type, halfDaySession: r.data.halfDaySession }) : r.text,
       r.ok ? '' : 'Ensure Half Day type is supported end-to-end',
     );
   }

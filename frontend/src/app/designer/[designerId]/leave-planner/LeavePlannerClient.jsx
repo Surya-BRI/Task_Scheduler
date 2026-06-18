@@ -28,6 +28,9 @@ const MONTHS = [
 const DUPLICATE_LEAVE_MSG =
   "You already have a leave request for the selected date(s). Please modify or cancel the existing request instead of creating a duplicate.";
 
+const LEAVE_TYPE_OPTIONS = ["Full Day", "Half Day"];
+const HALF_DAY_SESSION_OPTIONS = ["First Half", "Second Half"];
+
 function isLeapYear(y) {
   return (y % 4 === 0 && y % 100 !== 0) || y % 400 === 0;
 }
@@ -102,15 +105,47 @@ function formatLeaveDuration(fromDate, toDate) {
   return from === to ? formatDate(from) : `${formatDate(from)} to ${formatDate(to)}`;
 }
 
-function leaveDurationLabel(fromDate, toDate) {
-  const from = normalizeDateOnly(fromDate);
-  const to = normalizeDateOnly(toDate);
+function normalizeLeaveType(type) {
+  const normalized = String(type ?? "").trim().toLowerCase().replace(/[_-]+/g, " ").replace(/\s+/g, " ");
+  if (normalized === "half day" || normalized === "half") return "Half Day";
+  return "Full Day";
+}
+
+function normalizeHalfDaySession(session) {
+  const normalized = String(session ?? "").trim().toLowerCase().replace(/[_-]+/g, " ").replace(/\s+/g, " ");
+  if (normalized === "first half" || normalized === "first" || normalized === "am" || normalized === "morning") {
+    return "First Half";
+  }
+  if (normalized === "second half" || normalized === "second" || normalized === "pm" || normalized === "afternoon") {
+    return "Second Half";
+  }
+  return "";
+}
+
+function leaveTypeDisplay(leave) {
+  const type = normalizeLeaveType(leave?.type);
+  const session = normalizeHalfDaySession(leave?.halfDaySession);
+  return type === "Half Day" && session ? `${type} (${session})` : type;
+}
+
+function calculateLeaveDurationDays(leave) {
+  if (Number.isFinite(Number(leave?.leaveDurationDays))) return Number(leave.leaveDurationDays);
+  if (normalizeLeaveType(leave?.type) === "Half Day") return 0.5;
+  const from = normalizeDateOnly(leave?.fromDate);
+  const to = normalizeDateOnly(leave?.toDate);
   if (!from || !to) return "—";
   const start = new Date(`${from}T12:00:00`);
   const end = new Date(`${to}T12:00:00`);
   const days = Math.round((end.getTime() - start.getTime()) / 86400000) + 1;
   if (days <= 0) return "—";
-  return days === 1 ? "1 day" : `${days} days`;
+  return days;
+}
+
+function leaveDurationLabel(leave) {
+  if (leave?.leaveDurationLabel) return leave.leaveDurationLabel;
+  const days = calculateLeaveDurationDays(leave);
+  if (days === "—") return "—";
+  return days <= 1 ? `${days} day` : `${days} days`;
 }
 
 function formatAppliedDate(value) {
@@ -157,14 +192,29 @@ function mergeLeaveLists(...lists) {
   return [...byId.values()];
 }
 
-function findOverlappingLeaveClient(leaves, fromDate, toDate) {
+function findOverlappingLeaveClient(leaves, fromDate, toDate, type = "Full Day", halfDaySession = "") {
   if (!Array.isArray(leaves)) return null;
+  const requestedType = normalizeLeaveType(type);
+  const requestedSession = normalizeHalfDaySession(halfDaySession);
   for (const leave of leaves) {
     const status = normalizeLeaveStatus(leave.status);
     if (status !== "PENDING" && status !== "APPROVED") continue;
     const from = normalizeDateOnly(leave.fromDate);
     const to = normalizeDateOnly(leave.toDate);
-    if (from && to && fromDate <= to && from <= toDate) return leave;
+    if (from && to && fromDate <= to && from <= toDate) {
+      const leaveType = normalizeLeaveType(leave.type);
+      const leaveSession = normalizeHalfDaySession(leave.halfDaySession);
+      const bothHalfDaySameDate =
+        requestedType === "Half Day" &&
+        leaveType === "Half Day" &&
+        fromDate === toDate &&
+        from === to &&
+        fromDate === from;
+      if (bothHalfDaySameDate && requestedSession && leaveSession && requestedSession !== leaveSession) {
+        continue;
+      }
+      return leave;
+    }
   }
   return null;
 }
@@ -195,6 +245,8 @@ function filterHistoryRows(rows, { statusFilter, searchQuery, designerId = ALL_H
       const haystack = [
         row.reason,
         row.type,
+        row.halfDaySession,
+        row.leaveDurationLabel,
         row.requesterName,
         row.approverName,
         row.revokedByName,
@@ -249,12 +301,12 @@ function LeaveHistoryTable({ rows, variant, onOpen }) {
                     {req.requesterName ?? "—"}
                   </td>
                 ) : null}
-                <td className="px-3 py-3 text-slate-700 whitespace-nowrap">{req.type ?? "Leave"}</td>
+                <td className="px-3 py-3 text-slate-700 whitespace-nowrap">{leaveTypeDisplay(req)}</td>
                 <td className="px-3 py-3 text-slate-700 whitespace-nowrap">
                   {formatLeaveDuration(req.fromDate, req.toDate)}
                 </td>
                 <td className="px-3 py-3 text-slate-600 whitespace-nowrap">
-                  {leaveDurationLabel(req.fromDate, req.toDate)}
+                  {leaveDurationLabel(req)}
                 </td>
                 <td className="px-3 py-3 text-slate-600 whitespace-nowrap">
                   {formatAppliedDate(req.createdAt ?? req.fromDate)}
@@ -332,7 +384,13 @@ export default function LeavePlannerClient() {
   const [revokeRemarks, setRevokeRemarks] = useState("");
   const [reviewSubmitting, setReviewSubmitting] = useState(false);
   const [isEditingLeave, setIsEditingLeave] = useState(false);
-  const [editFormData, setEditFormData] = useState({ reason: "", fromDate: "", toDate: "", type: "Leave" });
+  const [editFormData, setEditFormData] = useState({
+    reason: "",
+    fromDate: "",
+    toDate: "",
+    type: "Full Day",
+    halfDaySession: "",
+  });
   const [modifySubmitting, setModifySubmitting] = useState(false);
   const [isHOD, setIsHOD] = useState(false);
   const [sessionName, setSessionName] = useState(null);
@@ -347,24 +405,42 @@ export default function LeavePlannerClient() {
 
   const canReview = isHOD;
 
+  const [formData, setFormData] = useState({
+    leaveType: "Full Day",
+    halfDaySession: "",
+    reasonCategory: "",
+    reasonOther: "",
+    fromDate: "",
+    toDate: "",
+  });
+
   const closeLeaveApplyModal = useCallback(() => {
     setIsModalOpen(false);
     setLeaveApplyMode("self");
     setSelectedDesignerId("");
-    setFormData({ reasonCategory: "", reasonOther: "", fromDate: "", toDate: "" });
-  }, []);
+    setFormData({
+      leaveType: "Full Day",
+      halfDaySession: "",
+      reasonCategory: "",
+      reasonOther: "",
+      fromDate: "",
+      toDate: "",
+    });
+  }, [setFormData, setIsModalOpen, setLeaveApplyMode, setSelectedDesignerId]);
 
   const openLeaveApplyModal = useCallback((dateStr) => {
     setLeaveApplyMode("self");
     setSelectedDesignerId("");
     setFormData({
+      leaveType: "Full Day",
+      halfDaySession: "",
       reasonCategory: "",
       reasonOther: "",
       fromDate: dateStr,
       toDate: dateStr,
     });
     setIsModalOpen(true);
-  }, []);
+  }, [setFormData, setIsModalOpen, setLeaveApplyMode, setSelectedDesignerId]);
 
   useEffect(() => {
     import("@/lib/mock-auth").then(({ getSession }) => {
@@ -448,9 +524,8 @@ export default function LeavePlannerClient() {
 
   const reloadLeaves = useCallback(async () => {
     if (!designer.id) return;
-    const targetId = canReview ? designer.id : designer.id;
     try {
-      const res = await fetchLeaveRequests(targetId);
+      const res = await fetchLeaveRequests(designer.id);
       setLeaves(Array.isArray(res) ? res : []);
     } catch {
       setLeaves([]);
@@ -475,13 +550,6 @@ export default function LeavePlannerClient() {
       setPendingApprovals([]);
     }
   }, [canReview]);
-
-  const [formData, setFormData] = useState({
-    reasonCategory: "",
-    reasonOther: "",
-    fromDate: "",
-    toDate: "",
-  });
 
   useEffect(() => {
     void reloadLeaves();
@@ -508,10 +576,18 @@ export default function LeavePlannerClient() {
       reason: leave.reason ?? "",
       fromDate: leave.fromDate,
       toDate: leave.toDate,
-      type: leave.type ?? "Leave",
+      type: normalizeLeaveType(leave.type),
+      halfDaySession: normalizeHalfDaySession(leave.halfDaySession),
     });
     setIsHODModalOpen(true);
-  }, []);
+  }, [
+    setEditFormData,
+    setIsEditingLeave,
+    setIsHODModalOpen,
+    setReviewRemarks,
+    setRevokeRemarks,
+    setSelectedLeave,
+  ]);
 
   useEffect(() => {
     const leaveId = searchParams.get("leaveId");
@@ -602,10 +678,20 @@ export default function LeavePlannerClient() {
       toast.error("End date cannot be earlier than start date.");
       return;
     }
+    if (normalizeLeaveType(editFormData.type) === "Half Day" && editFormData.toDate !== editFormData.fromDate) {
+      toast.error("Half Day leave must start and end on the same date.");
+      return;
+    }
+    if (normalizeLeaveType(editFormData.type) === "Half Day" && !normalizeHalfDaySession(editFormData.halfDaySession)) {
+      toast.error("Select First Half or Second Half for Half Day leave.");
+      return;
+    }
     const overlap = findOverlappingLeaveClient(
       leaves.filter((l) => l.id !== id),
       editFormData.fromDate,
       editFormData.toDate,
+      editFormData.type,
+      editFormData.halfDaySession,
     );
     if (overlap) {
       toast.error(DUPLICATE_LEAVE_MSG);
@@ -614,7 +700,10 @@ export default function LeavePlannerClient() {
     setModifySubmitting(true);
     try {
       const updated = await updateLeaveRequest(id, {
-        type: editFormData.type,
+        type: normalizeLeaveType(editFormData.type),
+        halfDaySession: normalizeLeaveType(editFormData.type) === "Half Day"
+          ? normalizeHalfDaySession(editFormData.halfDaySession)
+          : undefined,
         reason: editFormData.reason.trim(),
         startDate: editFormData.fromDate,
         endDate: editFormData.toDate,
@@ -724,12 +813,26 @@ export default function LeavePlannerClient() {
       toast.error("End date cannot be earlier than start date.");
       return;
     }
+    if (normalizeLeaveType(formData.leaveType) === "Half Day" && formData.toDate !== formData.fromDate) {
+      toast.error("Half Day leave must start and end on the same date.");
+      return;
+    }
+    if (normalizeLeaveType(formData.leaveType) === "Half Day" && !normalizeHalfDaySession(formData.halfDaySession)) {
+      toast.error("Select First Half or Second Half for Half Day leave.");
+      return;
+    }
 
     const overlapPool = filterLeavesForRequester(
       canReview ? mergeLeaveLists(leaves, teamLeaves) : leaves,
       targetUserId,
     );
-    const overlap = findOverlappingLeaveClient(overlapPool, formData.fromDate, formData.toDate);
+    const overlap = findOverlappingLeaveClient(
+      overlapPool,
+      formData.fromDate,
+      formData.toDate,
+      formData.leaveType,
+      formData.halfDaySession,
+    );
     if (overlap) {
       closeLeaveApplyModal();
       toast.error(DUPLICATE_LEAVE_MSG);
@@ -740,7 +843,10 @@ export default function LeavePlannerClient() {
     try {
       const res = await createLeaveRequest({
         userId: targetUserId,
-        type: "Leave",
+        type: normalizeLeaveType(formData.leaveType),
+        halfDaySession: normalizeLeaveType(formData.leaveType) === "Half Day"
+          ? normalizeHalfDaySession(formData.halfDaySession)
+          : undefined,
         reasonCategory: formData.reasonCategory,
         reasonOther: formData.reasonCategory === "Other" ? formData.reasonOther.trim() : undefined,
         startDate: formData.fromDate,
@@ -758,7 +864,13 @@ export default function LeavePlannerClient() {
     } catch (error) {
       const message = error instanceof Error ? error.message : "Failed to submit leave request. Please try again.";
       if (message.toLowerCase().includes("overlap") || message.includes(DUPLICATE_LEAVE_MSG)) {
-        const conflict = findOverlappingLeaveClient(overlapPool, formData.fromDate, formData.toDate);
+        const conflict = findOverlappingLeaveClient(
+          overlapPool,
+          formData.fromDate,
+          formData.toDate,
+          formData.leaveType,
+          formData.halfDaySession,
+        );
         closeLeaveApplyModal();
         toast.error(DUPLICATE_LEAVE_MSG);
         if (conflict) openReviewModal(conflict);
@@ -820,7 +932,7 @@ export default function LeavePlannerClient() {
           <div
             key={leave.id}
             className={`flex flex-1 min-h-[4px] items-center justify-center ${statusStripClass(leave.status)}`}
-            title={`${leave.requesterName ?? "Team"} — ${leave.type ?? "Leave"}`}
+            title={`${leave.requesterName ?? "Team"} — ${leaveTypeDisplay(leave)} (${leaveDurationLabel(leave)})`}
           >
             <span className="text-[6px] font-bold text-white/95 leading-none px-0.5 truncate max-w-full">
               {calendarScope === "team" ? designerInitials(leave.requesterName) : normalizeLeaveStatus(leave.status).slice(0, 1)}
@@ -839,7 +951,7 @@ export default function LeavePlannerClient() {
     return dayLeaves
       .map(
         (leave) =>
-          `${leave.requesterName ?? "Team"} · ${leave.type ?? "Leave"} · ${formatLeaveDuration(leave.fromDate, leave.toDate)} · ${normalizeLeaveStatus(leave.status)}`,
+          `${leave.requesterName ?? "Team"} · ${leaveTypeDisplay(leave)} · ${leaveDurationLabel(leave)} · ${formatLeaveDuration(leave.fromDate, leave.toDate)} · ${normalizeLeaveStatus(leave.status)}`,
       )
       .join("\n");
   };
@@ -1138,6 +1250,43 @@ export default function LeavePlannerClient() {
                 </div>
               ) : null}
               <div>
+                <label className="block text-sm font-medium text-slate-700 mb-2">Leave Type</label>
+                <select
+                  value={formData.leaveType}
+                  onChange={(e) => {
+                    const nextType = normalizeLeaveType(e.target.value);
+                    setFormData({
+                      ...formData,
+                      leaveType: nextType,
+                      halfDaySession: nextType === "Half Day" ? formData.halfDaySession : "",
+                      toDate: nextType === "Half Day" ? formData.fromDate : formData.toDate,
+                    });
+                  }}
+                  className="w-full rounded-xl border border-slate-200 px-4 py-2.5 text-sm text-slate-800 focus:outline-none focus:ring-2 focus:ring-[#5d5baf]/20 focus:border-[#5d5baf] shadow-sm bg-slate-50 focus:bg-white"
+                  required
+                >
+                  {LEAVE_TYPE_OPTIONS.map((option) => (
+                    <option key={option} value={option}>{option}</option>
+                  ))}
+                </select>
+              </div>
+              {normalizeLeaveType(formData.leaveType) === "Half Day" ? (
+                <div>
+                  <label className="block text-sm font-medium text-slate-700 mb-2">Half-Day Session</label>
+                  <select
+                    value={formData.halfDaySession}
+                    onChange={(e) => setFormData({ ...formData, halfDaySession: normalizeHalfDaySession(e.target.value) })}
+                    className="w-full rounded-xl border border-slate-200 px-4 py-2.5 text-sm text-slate-800 focus:outline-none focus:ring-2 focus:ring-[#5d5baf]/20 focus:border-[#5d5baf] shadow-sm bg-slate-50 focus:bg-white"
+                    required
+                  >
+                    <option value="" disabled>Select half-day session</option>
+                    {HALF_DAY_SESSION_OPTIONS.map((option) => (
+                      <option key={option} value={option}>{option}</option>
+                    ))}
+                  </select>
+                </div>
+              ) : null}
+              <div>
                 <label className="block text-sm font-medium text-slate-700 mb-2">Reason for Leave</label>
                 <select
                   value={formData.reasonCategory}
@@ -1171,7 +1320,14 @@ export default function LeavePlannerClient() {
                     type="date" 
                     value={formData.fromDate}
                     min={todayStr}
-                    onChange={e => setFormData({...formData, fromDate: e.target.value})}
+                    onChange={(e) => {
+                      const fromDate = e.target.value;
+                      setFormData({
+                        ...formData,
+                        fromDate,
+                        toDate: normalizeLeaveType(formData.leaveType) === "Half Day" ? fromDate : formData.toDate,
+                      });
+                    }}
                     className="w-full rounded-xl border border-slate-200 px-4 py-2.5 text-sm text-slate-800 focus:outline-none focus:ring-2 focus:ring-[#5d5baf]/20 focus:border-[#5d5baf] shadow-sm bg-slate-50 focus:bg-white transition-all cursor-pointer"
                     required
                   />
@@ -1182,11 +1338,20 @@ export default function LeavePlannerClient() {
                     type="date" 
                     value={formData.toDate}
                     min={formData.fromDate || todayStr}
+                    disabled={normalizeLeaveType(formData.leaveType) === "Half Day"}
                     onChange={e => setFormData({...formData, toDate: e.target.value})}
-                    className="w-full rounded-xl border border-slate-200 px-4 py-2.5 text-sm text-slate-800 focus:outline-none focus:ring-2 focus:ring-[#5d5baf]/20 focus:border-[#5d5baf] shadow-sm bg-slate-50 focus:bg-white transition-all cursor-pointer"
+                    className="w-full rounded-xl border border-slate-200 px-4 py-2.5 text-sm text-slate-800 focus:outline-none focus:ring-2 focus:ring-[#5d5baf]/20 focus:border-[#5d5baf] shadow-sm bg-slate-50 focus:bg-white transition-all cursor-pointer disabled:cursor-not-allowed disabled:bg-slate-100 disabled:text-slate-500"
                     required
                   />
                 </div>
+              </div>
+              <div className="rounded-xl border border-slate-100 bg-slate-50 px-4 py-3 text-sm text-slate-700">
+                <span className="font-medium">Leave Duration:</span>{" "}
+                {leaveDurationLabel({
+                  type: formData.leaveType,
+                  fromDate: formData.fromDate,
+                  toDate: normalizeLeaveType(formData.leaveType) === "Half Day" ? formData.fromDate : formData.toDate,
+                })}
               </div>
               
               <div className="pt-6 flex justify-end gap-3 border-t border-slate-100 mt-6">
@@ -1250,10 +1415,13 @@ export default function LeavePlannerClient() {
                       <div className="min-w-0 space-y-1">
                         <p className="text-sm font-semibold text-slate-900">{leave.requesterName ?? "Team member"}</p>
                         <p className="text-xs text-slate-600">
-                          <span className="font-medium">Type:</span> {leave.type ?? "Leave"}
+                          <span className="font-medium">Leave Type:</span> {leaveTypeDisplay(leave)}
                         </p>
                         <p className="text-xs text-slate-600">
-                          <span className="font-medium">Duration:</span> {formatLeaveDuration(leave.fromDate, leave.toDate)}
+                          <span className="font-medium">Date Range:</span> {formatLeaveDuration(leave.fromDate, leave.toDate)}
+                        </p>
+                        <p className="text-xs text-slate-600">
+                          <span className="font-medium">Leave Duration:</span> {leaveDurationLabel(leave)}
                         </p>
                         <p className="text-xs text-slate-500 line-clamp-2">
                           <span className="font-medium text-slate-600">Reason:</span> {leave.reason ?? "—"}
@@ -1319,30 +1487,64 @@ export default function LeavePlannerClient() {
               {selectedLeave.type ? (
                 <div>
                   <p className="text-sm text-slate-500 font-medium mb-1">Leave Type</p>
-                  <p className="text-slate-900 font-semibold">{selectedLeave.type}</p>
+                  <p className="text-slate-900 font-semibold">{leaveTypeDisplay(selectedLeave)}</p>
                 </div>
               ) : null}
               {!isEditingLeave ? (
-                <div>
-                  <p className="text-sm text-slate-500 font-medium mb-1">Duration</p>
-                  <p className="text-slate-900 font-semibold">
-                    {formatLeaveDuration(selectedLeave.fromDate, selectedLeave.toDate)}
-                  </p>
-                </div>
+                <>
+                  <div>
+                    <p className="text-sm text-slate-500 font-medium mb-1">Date Range</p>
+                    <p className="text-slate-900 font-semibold">
+                      {formatLeaveDuration(selectedLeave.fromDate, selectedLeave.toDate)}
+                    </p>
+                  </div>
+                  <div>
+                    <p className="text-sm text-slate-500 font-medium mb-1">Leave Duration</p>
+                    <p className="text-slate-900 font-semibold">{leaveDurationLabel(selectedLeave)}</p>
+                  </div>
+                </>
               ) : null}
               {isOwnRequest && isPendingReview && isEditingLeave ? (
                 <div className="space-y-4">
                   <div>
-                    <label className="block text-sm font-medium text-slate-700 mb-2">Type</label>
+                    <label className="block text-sm font-medium text-slate-700 mb-2">Leave Type</label>
                     <select
                       value={editFormData.type}
-                      onChange={(e) => setEditFormData({ ...editFormData, type: e.target.value })}
+                      onChange={(e) => {
+                        const nextType = normalizeLeaveType(e.target.value);
+                        setEditFormData({
+                          ...editFormData,
+                          type: nextType,
+                          halfDaySession: nextType === "Half Day" ? editFormData.halfDaySession : "",
+                          toDate: nextType === "Half Day" ? editFormData.fromDate : editFormData.toDate,
+                        });
+                      }}
                       className="w-full rounded-xl border border-slate-200 px-3 py-2 text-sm"
                     >
-                      <option value="Leave">Leave</option>
-                      <option value="Half Day">Half Day</option>
+                      {LEAVE_TYPE_OPTIONS.map((option) => (
+                        <option key={option} value={option}>{option}</option>
+                      ))}
                     </select>
                   </div>
+                  {normalizeLeaveType(editFormData.type) === "Half Day" ? (
+                    <div>
+                      <label className="block text-sm font-medium text-slate-700 mb-2">Half-Day Session</label>
+                      <select
+                        value={editFormData.halfDaySession}
+                        onChange={(e) => setEditFormData({
+                          ...editFormData,
+                          halfDaySession: normalizeHalfDaySession(e.target.value),
+                        })}
+                        className="w-full rounded-xl border border-slate-200 px-3 py-2 text-sm"
+                        required
+                      >
+                        <option value="" disabled>Select half-day session</option>
+                        {HALF_DAY_SESSION_OPTIONS.map((option) => (
+                          <option key={option} value={option}>{option}</option>
+                        ))}
+                      </select>
+                    </div>
+                  ) : null}
                   <div>
                     <label className="block text-sm font-medium text-slate-700 mb-2">Reason</label>
                     <textarea
@@ -1360,7 +1562,14 @@ export default function LeavePlannerClient() {
                         type="date"
                         value={editFormData.fromDate}
                         min={todayStr}
-                        onChange={(e) => setEditFormData({ ...editFormData, fromDate: e.target.value })}
+                        onChange={(e) => {
+                          const fromDate = e.target.value;
+                          setEditFormData({
+                            ...editFormData,
+                            fromDate,
+                            toDate: normalizeLeaveType(editFormData.type) === "Half Day" ? fromDate : editFormData.toDate,
+                          });
+                        }}
                         className="w-full rounded-xl border border-slate-200 px-3 py-2 text-sm"
                         required
                       />
@@ -1371,11 +1580,20 @@ export default function LeavePlannerClient() {
                         type="date"
                         value={editFormData.toDate}
                         min={editFormData.fromDate || todayStr}
+                        disabled={normalizeLeaveType(editFormData.type) === "Half Day"}
                         onChange={(e) => setEditFormData({ ...editFormData, toDate: e.target.value })}
-                        className="w-full rounded-xl border border-slate-200 px-3 py-2 text-sm"
+                        className="w-full rounded-xl border border-slate-200 px-3 py-2 text-sm disabled:cursor-not-allowed disabled:bg-slate-100 disabled:text-slate-500"
                         required
                       />
                     </div>
+                  </div>
+                  <div className="rounded-xl border border-slate-100 bg-slate-50 px-3 py-2 text-sm text-slate-700">
+                    <span className="font-medium">Leave Duration:</span>{" "}
+                    {leaveDurationLabel({
+                      type: editFormData.type,
+                      fromDate: editFormData.fromDate,
+                      toDate: normalizeLeaveType(editFormData.type) === "Half Day" ? editFormData.fromDate : editFormData.toDate,
+                    })}
                   </div>
                 </div>
               ) : (

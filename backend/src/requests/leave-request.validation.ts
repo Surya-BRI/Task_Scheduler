@@ -3,11 +3,25 @@ export type LeaveDateRange = {
   endDate: Date;
 };
 
+export const LEAVE_TYPE_FULL_DAY = 'Full Day';
+export const LEAVE_TYPE_HALF_DAY = 'Half Day';
+export const LEAVE_TYPE_OPTIONS = [LEAVE_TYPE_FULL_DAY, LEAVE_TYPE_HALF_DAY] as const;
+
+export type LeaveType = (typeof LEAVE_TYPE_OPTIONS)[number];
+
+export const HALF_DAY_SESSION_FIRST = 'First Half';
+export const HALF_DAY_SESSION_SECOND = 'Second Half';
+export const HALF_DAY_SESSION_OPTIONS = [HALF_DAY_SESSION_FIRST, HALF_DAY_SESSION_SECOND] as const;
+
+export type HalfDaySession = (typeof HALF_DAY_SESSION_OPTIONS)[number];
+
 export type LeaveOverlapCandidate = {
   id: string;
   startDate: Date;
   endDate: Date | null;
   status: string;
+  type?: string | null;
+  halfDaySession?: string | null;
 };
 
 const OVERLAP_BLOCKING_STATUSES = new Set(['PENDING', 'APPROVED']);
@@ -57,6 +71,26 @@ export function normalizeLeaveStatus(status: string): string {
   return status.trim().toUpperCase();
 }
 
+export function normalizeLeaveType(type: string): LeaveType | null {
+  const normalized = type.trim().toLowerCase().replace(/[_-]+/g, ' ').replace(/\s+/g, ' ');
+  if (normalized === 'half day' || normalized === 'half') return LEAVE_TYPE_HALF_DAY;
+  if (normalized === 'full day' || normalized === 'full' || normalized === 'leave') {
+    return LEAVE_TYPE_FULL_DAY;
+  }
+  return null;
+}
+
+export function normalizeHalfDaySession(session: string | null | undefined): HalfDaySession | null {
+  const normalized = String(session ?? '').trim().toLowerCase().replace(/[_-]+/g, ' ').replace(/\s+/g, ' ');
+  if (normalized === 'first half' || normalized === 'first' || normalized === 'am' || normalized === 'morning') {
+    return HALF_DAY_SESSION_FIRST;
+  }
+  if (normalized === 'second half' || normalized === 'second' || normalized === 'pm' || normalized === 'afternoon') {
+    return HALF_DAY_SESSION_SECOND;
+  }
+  return null;
+}
+
 export function resolveLeaveEndDate(startDate: Date, endDate?: Date | null): Date {
   return endDate ?? startDate;
 }
@@ -93,6 +127,27 @@ export function buildLeaveDateRange(startDateIso: string, endDateIso?: string): 
   const startDate = parseDateOnly(startDateIso);
   const endDate = endDateIso?.trim() ? parseDateOnly(endDateIso) : startDate;
   return { startDate, endDate };
+}
+
+export function calculateLeaveDurationDays(type: string, range: LeaveDateRange): number {
+  const leaveType = normalizeLeaveType(type);
+  if (leaveType === LEAVE_TYPE_HALF_DAY) return 0.5;
+
+  const start = Date.UTC(
+    range.startDate.getUTCFullYear(),
+    range.startDate.getUTCMonth(),
+    range.startDate.getUTCDate(),
+  );
+  const end = Date.UTC(
+    range.endDate.getUTCFullYear(),
+    range.endDate.getUTCMonth(),
+    range.endDate.getUTCDate(),
+  );
+  return Math.max(1, Math.round((end - start) / 86400000) + 1);
+}
+
+export function formatLeaveDurationLabel(days: number): string {
+  return days <= 1 ? `${days} day` : `${days} days`;
 }
 
 export type LeaveDateValidationResult =
@@ -133,16 +188,33 @@ export function findOverlappingLeave(
   existing: LeaveOverlapCandidate[],
   range: LeaveDateRange,
   excludeId?: string,
+  requestedType?: string,
+  requestedHalfDaySession?: string | null,
 ): LeaveOverlapCandidate | null {
+  const rangeStart = dateToDateOnlyIso(range.startDate);
+  const rangeEnd = dateToDateOnlyIso(range.endDate);
+  const requestedLeaveType = normalizeLeaveType(requestedType ?? LEAVE_TYPE_FULL_DAY);
+  const requestedSession = normalizeHalfDaySession(requestedHalfDaySession);
+
   for (const row of existing) {
     if (excludeId && row.id === excludeId) continue;
     if (!OVERLAP_BLOCKING_STATUSES.has(normalizeLeaveStatus(row.status))) continue;
 
     const rowStart = dateToDateOnlyIso(row.startDate);
     const rowEnd = dateToDateOnlyIso(resolveLeaveEndDate(row.startDate, row.endDate));
-    const rangeStart = dateToDateOnlyIso(range.startDate);
-    const rangeEnd = dateToDateOnlyIso(range.endDate);
     if (dateRangesOverlapIso(rangeStart, rangeEnd, rowStart, rowEnd)) {
+      const rowType = normalizeLeaveType(row.type ?? LEAVE_TYPE_FULL_DAY);
+      const rowSession = normalizeHalfDaySession(row.halfDaySession);
+      const bothHalfDaySameDate =
+        requestedLeaveType === LEAVE_TYPE_HALF_DAY &&
+        rowType === LEAVE_TYPE_HALF_DAY &&
+        rangeStart === rangeEnd &&
+        rowStart === rowEnd &&
+        rangeStart === rowStart;
+
+      if (bothHalfDaySameDate && requestedSession && rowSession && requestedSession !== rowSession) {
+        continue;
+      }
       return row;
     }
   }
