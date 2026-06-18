@@ -23,6 +23,8 @@ import {
 } from "../utils/schedulerWeek";
 import { FROM_DESIGN_SCHEDULER, taskViewPathForRecord } from "@/lib/design-list-routes";
 import { apiClient } from "@/lib/api-client";
+import { connectDashboardRealtime } from "@/lib/realtime";
+import { getSession } from "@/lib/mock-auth";
 import { mapTaskToDesignRow } from "@/features/design-list/task-view-model";
 import {
     resolveSchedulerNavState,
@@ -436,6 +438,8 @@ function buildSchedulerStateFromErpAssignments(records, rows, designers) {
         tasksObj[taskId] = {
             ...baseFromRecord,
             estimatedHours: Number(row.assignedHours) || 0,
+            scheduledHours: Number(row.scheduledHours ?? row.assignedHours) || 0,
+            approvedOvertimeHours: Number(row.approvedOvertimeHours) || 0,
             status: "assigned",
             parentId: parentIdNorm,
             splitIndex: splitTotal && row.splitIndex != null ? Number(row.splitIndex) : undefined,
@@ -528,16 +532,27 @@ export function DesignSchedulerScreen() {
 
     useEffect(() => {
         let cancelled = false;
+        const session = getSession();
         apiClient.get("/users?role=DESIGNER")
             .then((res) => {
                 if (cancelled) return;
-                const rows = Array.isArray(res)
+                const designerRows = Array.isArray(res)
                     ? res.map((user) => ({
                         id: String(user?.id ?? "").trim(),
                         name: String(user?.fullName ?? "Designer"),
                         initials: toInitials(user?.fullName),
                     })).filter((d) => d.id)
                     : [];
+                const hodOption = session?.role === "HOD" && isUuid(session.id)
+                    ? {
+                        id: String(session.id).trim(),
+                        name: String(session.name ?? "HOD").trim() || "HOD",
+                        initials: toInitials(session.name ?? "HOD"),
+                    }
+                    : null;
+                const rows = hodOption
+                    ? [hodOption, ...designerRows.filter((designer) => designer.id !== hodOption.id)]
+                    : designerRows;
                 setDesigners(rows);
             })
             .catch(() => {
@@ -607,7 +622,7 @@ export function DesignSchedulerScreen() {
                         designerId,
                         taskId: canonicalTaskId,
                         dayIndex,
-                        assignedHours: Number(task.estimatedHours) || 0,
+                        assignedHours: Number(task.scheduledHours ?? task.estimatedHours) || 0,
                         parentId: isUuid(task.parentId) ? task.parentId : null,
                         splitIndex: Number.isFinite(task.splitIndex) ? Number(task.splitIndex) : null,
                         totalParts: Number.isFinite(task.totalParts) ? Number(task.totalParts) : null,
@@ -718,7 +733,9 @@ export function DesignSchedulerScreen() {
             flushPersistRef.current?.();
         }
     }, [currentDate, reloadWeek]);
-    flushPersistRef.current = flushPersist;
+    useEffect(() => {
+        flushPersistRef.current = flushPersist;
+    }, [flushPersist]);
 
     const persistWeekSnapshot = useCallback((nextSchedules, nextTasks) => {
         const weekStartStr = formatLocalYyyyMmDd(getWeekDays(currentDate)[0]);
@@ -758,7 +775,9 @@ export function DesignSchedulerScreen() {
             pruneOldOverflowKeys(weekStartStr);
         } catch { /* localStorage unavailable */ }
     }, [currentDate, flushPersist]);
-    persistWeekSnapshotRef.current = persistWeekSnapshot;
+    useEffect(() => {
+        persistWeekSnapshotRef.current = persistWeekSnapshot;
+    }, [persistWeekSnapshot]);
 
     const [overtimePrompt, setOvertimePrompt] = useState({
         open: false,
@@ -803,6 +822,12 @@ export function DesignSchedulerScreen() {
             document.removeEventListener('visibilitychange', onVisible);
         };
     }, [currentDate, reloadWeek]);
+
+    useEffect(() => {
+        return connectDashboardRealtime({
+            onDashboardRefresh: () => reloadWeek(),
+        });
+    }, [reloadWeek]);
 
     const weekDates = useMemo(() => getWeekDays(currentDate), [currentDate]);
     const dateRangeText = useMemo(() => formatSchedulerDateRangeText(weekDates), [weekDates]);
@@ -1546,7 +1571,7 @@ export function DesignSchedulerScreen() {
                 <div className="w-6 h-6 rounded-full bg-slate-800 text-white flex items-center justify-center text-[10px] font-bold shrink-0">
                   {unassignPrompt.designerName.split(' ').map((p) => p[0]).join('').slice(0, 2).toUpperCase()}
                 </div>
-                <span>Removing from <span className="font-semibold text-slate-900">{unassignPrompt.designerName}</span>'s schedule</span>
+                <span>Removing from <span className="font-semibold text-slate-900">{unassignPrompt.designerName}</span>&apos;s schedule</span>
               </div>
             )}
             <div className="mt-4 rounded-lg border border-slate-200 bg-slate-50 px-4 py-3 text-sm text-slate-700">

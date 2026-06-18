@@ -25,6 +25,8 @@ type RawAssignmentRow = {
   taskId: string;
   dayIndex: number;
   assignedHours: string | number | null;
+  scheduledHours?: string | number | null;
+  approvedOvertimeHours?: string | number | null;
   parentId: string | null;
   splitIndex: number | null;
   totalParts: number | null;
@@ -43,6 +45,8 @@ export type SchedulerAssignmentDto = {
   taskId: string;
   dayIndex: number;
   assignedHours: number;
+  scheduledHours: number;
+  approvedOvertimeHours: number;
   parentId: string | null;
   splitIndex: number | null;
   totalParts: number | null;
@@ -88,7 +92,7 @@ export class SchedulerAssignmentsService {
     return new Date(d).toISOString();
   }
 
-  private toHours(value: string | number | null | undefined): number {
+  private toHours(value: unknown): number {
     if (value == null) return 0;
     const n = typeof value === 'number' ? value : Number.parseFloat(String(value));
     return Number.isFinite(n) ? n : 0;
@@ -97,6 +101,16 @@ export class SchedulerAssignmentsService {
   private toBool(value: boolean | number | null | undefined): boolean {
     if (value === true || value === 1) return true;
     return false;
+  }
+
+  private dayIndexForDate(date: Date, weekStartDate: Date): number {
+    const dateUtc = Date.UTC(date.getUTCFullYear(), date.getUTCMonth(), date.getUTCDate());
+    const weekUtc = Date.UTC(
+      weekStartDate.getUTCFullYear(),
+      weekStartDate.getUTCMonth(),
+      weekStartDate.getUTCDate(),
+    );
+    return Math.floor((dateUtc - weekUtc) / 86_400_000);
   }
 
   private isUuid(value: string): boolean {
@@ -122,12 +136,17 @@ export class SchedulerAssignmentsService {
   private mapRow(row: RawAssignmentRow): SchedulerAssignmentDto {
     const parentId = row.parentId?.trim() ? row.parentId.trim() : null;
     const assignedBy = row.assignedBy?.trim() ? row.assignedBy.trim() : null;
+    const assignedHours = this.toHours(row.assignedHours);
+    const scheduledHours = row.scheduledHours == null ? assignedHours : this.toHours(row.scheduledHours);
+    const approvedOvertimeHours = this.toHours(row.approvedOvertimeHours);
     return {
       id: row.id,
       designerId: String(row.designerId ?? '').trim(),
       taskId: String(row.taskId ?? '').trim(),
       dayIndex: Number(row.dayIndex),
-      assignedHours: this.toHours(row.assignedHours),
+      assignedHours,
+      scheduledHours,
+      approvedOvertimeHours,
       parentId,
       splitIndex: row.splitIndex == null ? null : Number(row.splitIndex),
       totalParts: row.totalParts == null ? null : Number(row.totalParts),
@@ -202,14 +221,87 @@ export class SchedulerAssignmentsService {
         where: { weekStartDate, ...(designerId ? { designerId } : {}) },
         orderBy: [{ designerId: 'asc' }, { dayIndex: 'asc' }, { id: 'asc' }],
       });
-      return rows.map((r) =>
-        this.mapRow({
+
+      const weekEndDate = new Date(weekStartDate);
+      weekEndDate.setUTCDate(weekEndDate.getUTCDate() + 6);
+      const approvedRequests = await this.prisma.overtimeRequest.findMany({
+        where: {
+          status: 'APPROVED',
+          date: { gte: weekStartDate, lte: weekEndDate },
+          ...(designerId ? { designerId } : {}),
+        },
+        select: {
+          id: true,
+          designerId: true,
+          taskId: true,
+          date: true,
+          approvedHours: true,
+        },
+        orderBy: { approvedAt: 'asc' },
+      });
+
+      const approvedByAssignmentKey = new Map<string, number>();
+      for (const request of approvedRequests) {
+        if (!request.designerId || !request.taskId || !request.date) continue;
+        const dayIndex = this.dayIndexForDate(new Date(request.date), weekStartDate);
+        if (dayIndex < 0 || dayIndex > 6) continue;
+        const hours = this.toHours(request.approvedHours);
+        if (!hours) continue;
+        const key = `${request.designerId}|${request.taskId}|${dayIndex}`;
+        approvedByAssignmentKey.set(key, (approvedByAssignmentKey.get(key) ?? 0) + hours);
+      }
+
+      const mappedRows = rows.map((r) => {
+        const designerKey = r.designerId ?? '';
+        const taskKey = r.taskId ?? '';
+        const dayKey = r.dayIndex ?? 0;
+        const overtimeKey = `${designerKey}|${taskKey}|${dayKey}`;
+        const approvedOvertimeHours = approvedByAssignmentKey.get(overtimeKey) ?? 0;
+        approvedByAssignmentKey.delete(overtimeKey);
+        const scheduledHours = this.toHours(r.assignedHours);
+        return this.mapRow({
           ...(r as unknown as RawAssignmentRow),
-          designerId: r.designerId ?? '',
-          taskId: r.taskId ?? '',
-          dayIndex: r.dayIndex ?? 0,
-        }),
-      );
+          designerId: designerKey,
+          taskId: taskKey,
+          dayIndex: dayKey,
+          scheduledHours,
+          approvedOvertimeHours,
+          assignedHours: scheduledHours + approvedOvertimeHours,
+        });
+      });
+
+      const virtualRows = approvedRequests
+        .map((request) => {
+          if (!request.designerId || !request.taskId || !request.date) return null;
+          const dayIndex = this.dayIndexForDate(new Date(request.date), weekStartDate);
+          if (dayIndex < 0 || dayIndex > 6) return null;
+          const key = `${request.designerId}|${request.taskId}|${dayIndex}`;
+          const approvedOvertimeHours = approvedByAssignmentKey.get(key) ?? 0;
+          if (!approvedOvertimeHours) return null;
+          approvedByAssignmentKey.delete(key);
+          return this.mapRow({
+            id: `overtime-${request.id}`,
+            designerId: request.designerId,
+            taskId: request.taskId,
+            dayIndex,
+            assignedHours: approvedOvertimeHours,
+            scheduledHours: 0,
+            approvedOvertimeHours,
+            parentId: null,
+            splitIndex: null,
+            totalParts: null,
+            weekStartDate,
+            weekEndDate,
+            notes: 'Approved overtime',
+            isLocked: true,
+            assignedBy: null,
+            createdAt: new Date(),
+            updatedAt: new Date(),
+          });
+        })
+        .filter((row): row is SchedulerAssignmentDto => row != null);
+
+      return [...mappedRows, ...virtualRows];
     } catch (err) {
       this.fail('Scheduler assignments query failed', err);
     }
@@ -242,7 +334,7 @@ export class SchedulerAssignmentsService {
           });
 
       return row;
-    });
+    }, { timeout: 15_000 });
 
     await this.activityLogger.log({
       action: locked ? ActivityAction.SCHEDULER_WEEK_LOCKED : ActivityAction.SCHEDULER_WEEK_UNLOCKED,
@@ -272,9 +364,9 @@ export class SchedulerAssignmentsService {
       const designerIds = Array.from(new Set(dto.assignments.map((a) => a.designerId)));
       const taskIds = Array.from(new Set(dto.assignments.map((a) => a.taskId)));
 
-      const [designers, tasks, previousRows, weekRows] = await Promise.all([
+      const [schedulableUsers, tasks, previousRows, weekRows] = await Promise.all([
         tx.user.findMany({
-          where: { id: { in: designerIds }, role: { name: UserRole.DESIGNER } },
+          where: { id: { in: designerIds }, role: { name: { in: [UserRole.DESIGNER, UserRole.HOD] } } },
           select: { id: true },
         }),
         tx.task.findMany({ where: { id: { in: taskIds } }, select: { id: true, status: true, assigneeId: true } }),
@@ -294,8 +386,8 @@ export class SchedulerAssignmentsService {
       ]);
       const week = weekRows[0] ?? null;
 
-      if (designers.length !== designerIds.length) {
-        throw new BadRequestException('One or more designerId values are invalid or not DESIGNER role.');
+      if (schedulableUsers.length !== designerIds.length) {
+        throw new BadRequestException('One or more designerId values are invalid or not schedulable employee role.');
       }
       if (tasks.length !== taskIds.length) {
         throw new BadRequestException('One or more taskId values are invalid.');
@@ -367,6 +459,16 @@ export class SchedulerAssignmentsService {
           select: { id: true, status: true, assigneeId: true },
         });
 
+        const assignOnlyByDesigner = new Map<string, string[]>();
+        const assignPlannedByDesigner = new Map<string, string[]>();
+        const unassignOnlyIds: string[] = [];
+        const unassignNewIds: string[] = [];
+        const pushGroupedTask = (map: Map<string, string[]>, key: string, taskId: string) => {
+          const ids = map.get(key) ?? [];
+          ids.push(taskId);
+          map.set(key, ids);
+        };
+
         for (const task of affectedTasks) {
           const designerSet = assigneesByTask.get(task.id) ?? new Set<string>();
           const assignedDesigner = designerSet.size === 1 ? [...designerSet][0] : null;
@@ -374,28 +476,51 @@ export class SchedulerAssignmentsService {
           const currentStatus = String(task.status ?? '').toUpperCase();
           const isTerminal = ['COMPLETED', 'APPROVED', 'CLIENT_ACCEPTED', 'CLIENT_REJECTED'].includes(currentStatus);
 
-          const updateData: Prisma.TaskUncheckedUpdateInput = {};
           if (assignedDesigner) {
-            updateData.assigneeId = assignedDesigner;
             // Promote DESIGN_NEW → DESIGN_PLANNED when given a scheduler slot; leave all other active statuses untouched.
-            if (!isTerminal && currentStatus === 'DESIGN_NEW') {
-              updateData.status = 'DESIGN_PLANNED';
+            const shouldPlan = !isTerminal && currentStatus === 'DESIGN_NEW';
+            if (shouldPlan) {
+              pushGroupedTask(assignPlannedByDesigner, assignedDesigner, task.id);
+            } else if (task.assigneeId !== assignedDesigner) {
+              pushGroupedTask(assignOnlyByDesigner, assignedDesigner, task.id);
             }
           } else if (designerSet.size === 0) {
-            updateData.assigneeId = null;
             // When unassigned, revert to DESIGN_NEW unless terminal or on hold.
             if (!isTerminal && currentStatus !== 'ON_HOLD') {
-              updateData.status = 'DESIGN_NEW';
+              unassignNewIds.push(task.id);
+            } else if (task.assigneeId !== null) {
+              unassignOnlyIds.push(task.id);
             }
-          }
-
-          if (Object.keys(updateData).length > 0) {
-            await tx.task.update({ where: { id: task.id }, data: updateData });
           }
 
           if (assignedDesigner && assignedDesigner !== task.assigneeId) {
             reassignedTasks.push({ taskId: task.id, oldAssigneeId: task.assigneeId ?? null, newAssigneeId: assignedDesigner });
           }
+        }
+
+        for (const [assigneeId, ids] of assignPlannedByDesigner.entries()) {
+          await tx.task.updateMany({
+            where: { id: { in: ids } },
+            data: { assigneeId, status: 'DESIGN_PLANNED' },
+          });
+        }
+        for (const [assigneeId, ids] of assignOnlyByDesigner.entries()) {
+          await tx.task.updateMany({
+            where: { id: { in: ids } },
+            data: { assigneeId },
+          });
+        }
+        if (unassignNewIds.length > 0) {
+          await tx.task.updateMany({
+            where: { id: { in: unassignNewIds } },
+            data: { assigneeId: null, status: 'DESIGN_NEW' },
+          });
+        }
+        if (unassignOnlyIds.length > 0) {
+          await tx.task.updateMany({
+            where: { id: { in: unassignOnlyIds } },
+            data: { assigneeId: null },
+          });
         }
       }
 
