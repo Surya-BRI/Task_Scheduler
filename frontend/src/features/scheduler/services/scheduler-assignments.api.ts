@@ -6,6 +6,8 @@ export type SchedulerAssignmentRow = {
   taskId: string;
   dayIndex: number;
   assignedHours: number;
+  scheduledHours?: number;
+  approvedOvertimeHours?: number;
   parentId: string | null;
   splitIndex: number | null;
   totalParts: number | null;

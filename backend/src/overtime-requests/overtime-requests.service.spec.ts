@@ -41,6 +41,9 @@ describe('OvertimeRequestsService', () => {
     task: {
       findUnique: jest.fn(),
     },
+    schedulerWeek: {
+      upsert: jest.fn(),
+    },
     $transaction: jest.fn((cb: (tx: any) => any) => cb(mockPrismaService)),
   };
 
@@ -809,6 +812,15 @@ describe('OvertimeRequestsService', () => {
       expect(mockPrismaService.overtimeRequest.update).toHaveBeenCalled();
       expect(mockPrismaService.overtimeApprovalHistory.create).toHaveBeenCalled();
       expect(mockPrismaService.notification.create).toHaveBeenCalled();
+      expect(mockPrismaService.schedulerWeek.upsert).toHaveBeenCalledWith(
+        expect.objectContaining({
+          update: expect.objectContaining({
+            version: { increment: 1 },
+            updatedBy: 'h1',
+            lastPayloadHash: null,
+          }),
+        }),
+      );
     });
 
     it('should allow HOD to reject submitted request', async () => {

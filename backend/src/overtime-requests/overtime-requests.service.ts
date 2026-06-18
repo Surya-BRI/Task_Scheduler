@@ -54,6 +54,35 @@ export class OvertimeRequestsService {
     return end;
   }
 
+  private async touchSchedulerWeekForOvertime(
+    request: { date?: Date | null },
+    userId: string,
+  ): Promise<void> {
+    if (!request.date) return;
+    const weekStartDate = this.getStartOfWeek(new Date(request.date));
+    try {
+      await this.prisma.schedulerWeek.upsert({
+        where: { weekStartDate },
+        create: {
+          weekStartDate,
+          version: 1,
+          isLocked: false,
+          updatedBy: userId,
+          lastPayloadHash: null,
+        },
+        update: {
+          version: { increment: 1 },
+          updatedBy: userId,
+          lastPayloadHash: null,
+        },
+      });
+    } catch (err) {
+      this.logger.warn(
+        `Scheduler week refresh failed for overtime approval: ${err instanceof Error ? err.message : err}`,
+      );
+    }
+  }
+
   /**
    * Core policy validations for Overtime request creation or updates.
    */
@@ -518,6 +547,7 @@ export class OvertimeRequestsService {
       ).catch((err) => {
         this.logger.warn(`Designer OT notification failed: ${err instanceof Error ? err.message : err}`);
       });
+      await this.touchSchedulerWeekForOvertime(request, creatorId);
       this.dashboardRealtime?.notifyOverviewRefresh('overtime_approved');
       if (designerId) {
         this.dashboardRealtime?.notifyUserNotificationRefresh(designerId);
@@ -889,6 +919,9 @@ export class OvertimeRequestsService {
       });
 
       await this.notifyDesignerOfReview(updated, updateData.status, dto.comments);
+      if (approved) {
+        await this.touchSchedulerWeekForOvertime(updated, reviewerId);
+      }
 
       this.dashboardRealtime?.notifyOverviewRefresh(
         approved ? 'overtime_approved' : 'overtime_rejected',
