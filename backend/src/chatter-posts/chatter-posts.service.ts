@@ -281,7 +281,7 @@ export class ChatterPostsService implements OnModuleInit {
       if (key) eligibleIds.add(key);
     };
     const resolveUserDepartmentId = (user: (typeof allUsers)[number]) =>
-      user.department?.id ?? user.departmentId ?? null;
+      user.department?.id ?? null;
 
     if (role === UserRole.HOD) {
       const hod = await this.prisma.user.findUnique({
