@@ -248,6 +248,23 @@ describe('RequestsService', () => {
   });
 
   describe('review', () => {
+    it('blocks HOD self-approval and self-rejection', async () => {
+      mockPrisma.leaveRequest.findUnique.mockResolvedValue({
+        ...pendingLeave,
+        userId: hodId,
+        user: {
+          id: hodId,
+          fullName: 'HOD User',
+          role: { name: UserRole.HOD },
+          departmentId: 'dept-1',
+        },
+      });
+
+      await expect(
+        service.review(leaveId, hodId, UserRole.HOD, { status: 'APPROVED' }),
+      ).rejects.toThrow('You cannot approve or reject your own leave request');
+    });
+
     it('blocks review of cancelled leave', async () => {
       mockPrisma.leaveRequest.findUnique.mockResolvedValue({ ...pendingLeave, status: 'CANCELLED' });
 
@@ -307,6 +324,37 @@ describe('RequestsService', () => {
       expect(mockActivityLogger.log).toHaveBeenCalledWith(
         expect.objectContaining({ action: 'LEAVE_REQUEST_REVOKED' }),
       );
+    });
+
+    it('allows HOD to revoke their own approved future leave', async () => {
+      const hodOwnLeave = {
+        ...approvedLeave,
+        userId: hodId,
+        user: {
+          id: hodId,
+          fullName: 'HOD User',
+          role: { name: UserRole.HOD },
+          departmentId: 'dept-1',
+        },
+      };
+      mockPrisma.leaveRequest.findUnique.mockResolvedValue(hodOwnLeave);
+      setupHodAccess();
+      mockPrisma.leaveRequest.update.mockResolvedValue({
+        ...hodOwnLeave,
+        status: 'REVOKED',
+        revokedById: hodId,
+        revokedAt: new Date(),
+        revocationReason: 'Personal plan changed',
+        revokedBy: { fullName: 'HOD User' },
+      });
+
+      const result = await service.revoke(leaveId, hodId, UserRole.HOD, {
+        reason: 'Personal plan changed',
+      });
+
+      expect(result.status).toBe('REVOKED');
+      expect(result.revokedById).toBe(hodId);
+      expect(result.revocationReason).toBe('Personal plan changed');
     });
 
     it('rejects revoke without reason', async () => {

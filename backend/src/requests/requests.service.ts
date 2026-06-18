@@ -437,6 +437,20 @@ export class RequestsService implements OnModuleInit {
     }
   }
 
+  private async assertRevokerAccess(
+    revokerId: string,
+    role: UserRole,
+    request: { userId: string; user: { role: { name: string }; departmentId: string | null } },
+  ) {
+    if (role !== UserRole.HOD) {
+      throw new ForbiddenException('Only HOD can revoke leave requests');
+    }
+    if (revokerId === request.userId) {
+      return;
+    }
+    await this.assertReviewerAccess(revokerId, role, request);
+  }
+
   async findAll(userId: string | undefined, requesterId: string, role: UserRole) {
     let resolvedId = userId;
     if (userId) {
@@ -888,7 +902,7 @@ export class RequestsService implements OnModuleInit {
       throw new BadRequestException('Past or completed leave requests cannot be revoked');
     }
 
-    await this.assertReviewerAccess(reviewerId, role, existing);
+    await this.assertRevokerAccess(reviewerId, role, existing);
 
     const revoker = await this.prisma.user.findUnique({
       where: { id: reviewerId },
