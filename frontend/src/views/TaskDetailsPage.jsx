@@ -14,13 +14,14 @@ import {
   createChatterPost,
   listChatterMentionUsers,
   listChatterPosts,
+  listChatterPostsForTask,
   normalizePriority,
   resolveEmbeddedChatterTitle,
 } from '@/features/chatter/services/chatter-posts.api'
 import { MentionTextarea } from '@/features/chatter/components/MentionTextarea'
 import { EmbeddedChatterCommentComposer } from '@/features/chatter/components/EmbeddedChatterCommentComposer'
 import { ChatterMentionText } from '@/features/chatter/components/ChatterMentionText'
-import { parseMentionUserIdsFromMessage } from '@/features/chatter/utils/mention-utils'
+import { parseMentionUserIdsFromMessage, resolveMentionUsersForDisplay } from '@/features/chatter/utils/mention-utils'
 import {
   resolveChatterMentionScope,
   resolvePageChatterMentionScope,
@@ -1148,21 +1149,22 @@ export function TaskDetailsPage() {
   useEffect(() => {
     let alive = true
     async function resolveTaskId() {
+      const routeTaskId = routeId && isUuid(String(routeId).trim()) ? String(routeId).trim() : null
       if (!record) {
-        if (alive) setTaskId('')
+        if (alive) setTaskId(routeTaskId ?? '')
         return
       }
       setResolvingTaskId(true)
       try {
         const foundId = await resolveTaskIdForChatter({
-          taskId: record.taskId,
+          taskId: record.taskId ?? routeTaskId,
           recordId: record.id,
           opNo: record.opNo,
           projectId,
           fromTaskApi: Boolean(record.fromTaskApi),
         })
         if (!alive) return
-        setTaskId(foundId ?? '')
+        setTaskId(foundId ?? routeTaskId ?? '')
         if (foundId) {
           try {
             const fullTask = await apiClient.get(`/tasks/${encodeURIComponent(foundId)}`)
@@ -1183,7 +1185,7 @@ export function TaskDetailsPage() {
     return () => {
       alive = false
     }
-  }, [record?.taskId, record?.id, record?.opNo, record?.fromTaskApi, projectId])
+  }, [record?.taskId, record?.id, record?.opNo, record?.fromTaskApi, projectId, routeId])
 
   useEffect(() => {
     if (!record || isCreationRoute) return
@@ -1320,10 +1322,18 @@ export function TaskDetailsPage() {
     setChatterError('')
     if (!silent) setChatterLoading(true)
     try {
-      const res = queryTaskId
-        ? await listChatterPosts({ taskId: queryTaskId, limit: 200 })
-        : await listChatterPosts({ projectId, limit: 200 })
-      const posts = Array.isArray(res?.data) ? res.data : (Array.isArray(res) ? res : [])
+      let posts
+      if (queryTaskId) {
+        posts = await listChatterPostsForTask({
+          taskId: queryTaskId,
+          projectId,
+          taskOpNo: record?.opNo ?? null,
+          limit: 200,
+        })
+      } else {
+        const res = await listChatterPosts({ projectId, limit: 200 })
+        posts = Array.isArray(res?.data) ? res.data : (Array.isArray(res) ? res : [])
+      }
       const normalized = [...posts]
       setChatterPosts((prev) =>
         mergeChatterPostLists(normalized, prev, { taskId: queryTaskId, projectId }),
@@ -1334,7 +1344,7 @@ export function TaskDetailsPage() {
     } finally {
       if (!silent) setChatterLoading(false)
     }
-  }, [projectId, taskId])
+  }, [projectId, taskId, record?.opNo])
 
   useEffect(() => {
     if (activeTab !== 'chatter') return
@@ -2240,7 +2250,11 @@ export function TaskDetailsPage() {
     </div>
     <p className="shrink-0 text-[10px] text-slate-500">{formatChatterDateTime(entry.createdAt)}</p>
   </div>
-  <ChatterMentionText message={entry.message} users={chatterMentionDirectory} className="mt-1 block" />
+  <ChatterMentionText
+    message={entry.message}
+    users={resolveMentionUsersForDisplay(entry.message, entry.mentionedUsers, chatterMentionDirectory)}
+    className="mt-1 block"
+  />
   <div className="mt-2 space-y-1">
     {(entry.comments ?? []).map((comment) => (
       <div
@@ -2254,7 +2268,11 @@ export function TaskDetailsPage() {
           </p>
           <p className="shrink-0 text-[10px] text-slate-500">{formatChatterDateTime(comment.createdAt)}</p>
         </div>
-        <ChatterMentionText message={comment.message} users={chatterMentionDirectory} className="mt-1 block" />
+        <ChatterMentionText
+          message={comment.message}
+          users={resolveMentionUsersForDisplay(comment.message, comment.mentionedUsers, chatterMentionDirectory)}
+          className="mt-1 block"
+        />
       </div>
     ))}
   </div>

@@ -145,6 +145,30 @@ body {
   @apply p-4 sm:p-5;
 }
 
+.chatter-rich-text strong {
+  font-weight: 700;
+}
+
+.chatter-rich-text em {
+  font-style: italic;
+}
+
+.chatter-rich-text u {
+  text-decoration: underline;
+}
+
+.chatter-rich-text del {
+  text-decoration: line-through;
+}
+
+.chatter-rich-editor textarea {
+  -webkit-text-fill-color: transparent;
+}
+
+.chatter-rich-editor textarea::selection {
+  background: rgb(59 130 246 / 0.25);
+}
+
 /* Filters / popovers — shared with dashboard-style screens */
 .ui-filter-label {
   @apply mb-1.5 block text-xs font-semibold uppercase tracking-wide text-slate-500;

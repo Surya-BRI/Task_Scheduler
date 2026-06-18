@@ -19,7 +19,42 @@ export function uniqueUuids(ids: Array<string | null | undefined>): string[] {
   return out;
 }
 
+/**
+ * Merge explicitly tagged user ids with ids parsed from @mentions in message text.
+ * Explicit ids are always kept; parsed ids are restricted to the eligible directory.
+ */
+export function mergeCollectedMentionUserIds(params: {
+  explicitIds: Array<string | null | undefined>;
+  parsedFromMessageIds: string[];
+  eligibleIds: Set<string>;
+}): string[] {
+  const explicit = uniqueUuids(params.explicitIds);
+  const parsed = params.parsedFromMessageIds.filter((id) => params.eligibleIds.has(id));
+  return uniqueUuids([...explicit, ...parsed]);
+}
+
 export type MentionUserRef = { id: string; fullName: string };
+
+/** Normalize department ids for stable comparisons (case-insensitive). */
+export function normalizeDepartmentId(value?: string | null): string | null {
+  const trimmed = value?.trim();
+  return trimmed ? trimmed.toLowerCase() : null;
+}
+
+/**
+ * Whether a designer is mentionable by department rules for the viewing designer/HOD.
+ * Colleagues without a synced department remain eligible (common ERP data gap).
+ */
+export function isDesignerDepartmentMentionable(
+  viewerDeptId?: string | null,
+  userDeptId?: string | null,
+): boolean {
+  const viewer = normalizeDepartmentId(viewerDeptId);
+  const user = normalizeDepartmentId(userDeptId);
+  if (!viewer) return true;
+  if (!user) return true;
+  return viewer === user;
+}
 
 /** Parse @Full Name tokens from message text (longest-match) against a user directory. */
 export function parseMentionUserIdsFromMessage(
@@ -31,6 +66,7 @@ export function parseMentionUserIdsFromMessage(
     (a, b) => b.fullName.trim().length - a.fullName.trim().length,
   );
   const found: string[] = [];
+  const seen = new Set<string>();
   let i = 0;
   while (i < text.length) {
     if (text[i] !== '@') {
@@ -51,14 +87,15 @@ export function parseMentionUserIdsFromMessage(
         break;
       }
     }
-    if (matched) {
+    if (matched && !seen.has(matched.id)) {
+      seen.add(matched.id);
       found.push(matched.id);
       i += 1 + matched.fullName.trim().length;
     } else {
       i += 1;
     }
   }
-  return uniqueUuids(found);
+  return found;
 }
 
 export function messageSnippet(message: string, maxLen = 120): string {

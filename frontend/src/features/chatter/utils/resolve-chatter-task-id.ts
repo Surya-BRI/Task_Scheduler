@@ -74,8 +74,10 @@ export async function resolveTaskIdForChatter(
       );
       const rows = taskRowsFromListResponse(result);
       const match = opNo
-        ? rows.find((task) => opNoMatches(task?.opNo, opNo)) ?? rows[0]
-        : rows[0];
+        ? rows.find((task) => opNoMatches(task?.opNo, opNo)) ?? null
+        : rows.length === 1
+          ? rows[0]
+          : null;
       if (match?.id && isChatterUuid(match.id)) return match.id;
     } catch {
       // no task linked yet

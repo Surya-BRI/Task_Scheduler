@@ -169,9 +169,23 @@ function findOverlappingLeaveClient(leaves, fromDate, toDate) {
   return null;
 }
 
+const ALL_HISTORY_DESIGNERS = "ALL";
 
-function filterHistoryRows(rows, { statusFilter, searchQuery }) {
+function getLeaveRequesterId(row) {
+  return String(row?.designerId ?? row?.userId ?? row?.createdBy ?? "").trim();
+}
+
+function filterLeavesForRequester(leaves, requesterId) {
+  const id = String(requesterId ?? "").trim();
+  if (!id) return [];
+  return (Array.isArray(leaves) ? leaves : []).filter((leave) => getLeaveRequesterId(leave) === id);
+}
+
+function filterHistoryRows(rows, { statusFilter, searchQuery, designerId = ALL_HISTORY_DESIGNERS }) {
   let list = Array.isArray(rows) ? [...rows] : [];
+  if (designerId && designerId !== ALL_HISTORY_DESIGNERS) {
+    list = list.filter((row) => getLeaveRequesterId(row) === designerId);
+  }
   if (statusFilter && statusFilter !== "ALL") {
     list = list.filter((row) => normalizeLeaveStatus(row.status) === statusFilter);
   }
@@ -329,6 +343,7 @@ export default function LeavePlannerClient() {
   const [historyTab, setHistoryTab] = useState("hod");
   const [historyStatusFilter, setHistoryStatusFilter] = useState("ALL");
   const [historySearch, setHistorySearch] = useState("");
+  const [historyDesignerFilter, setHistoryDesignerFilter] = useState(ALL_HISTORY_DESIGNERS);
 
   const canReview = isHOD;
 
@@ -389,14 +404,46 @@ export default function LeavePlannerClient() {
 
   const calendarScope = canReview ? "team" : "mine";
 
+  const historyDesignerOptions = useMemo(() => {
+    const byId = new Map();
+
+    for (const user of designerList) {
+      const id = String(user?.id ?? "").trim();
+      if (!id || id === designer.id) continue;
+      byId.set(id, user.name || "Unnamed designer");
+    }
+
+    for (const leave of designerTeamLeaves) {
+      const id = getLeaveRequesterId(leave);
+      if (!id || id === designer.id) continue;
+      if (!byId.has(id)) {
+        byId.set(id, leave.requesterName || "Unnamed designer");
+      }
+    }
+
+    return Array.from(byId, ([id, name]) => ({ id, name }))
+      .sort((a, b) => a.name.localeCompare(b.name));
+  }, [designerList, designerTeamLeaves, designer.id]);
+
+  useEffect(() => {
+    if (historyDesignerFilter === ALL_HISTORY_DESIGNERS) return;
+    if (!historyDesignerOptions.some((option) => option.id === historyDesignerFilter)) {
+      setHistoryDesignerFilter(ALL_HISTORY_DESIGNERS);
+    }
+  }, [historyDesignerFilter, historyDesignerOptions]);
+
   const filteredHodHistory = useMemo(
     () => filterHistoryRows(leaves, { statusFilter: historyStatusFilter, searchQuery: historySearch }),
     [leaves, historyStatusFilter, historySearch],
   );
 
   const filteredTeamHistory = useMemo(
-    () => filterHistoryRows(designerTeamLeaves, { statusFilter: historyStatusFilter, searchQuery: historySearch }),
-    [designerTeamLeaves, historyStatusFilter, historySearch],
+    () => filterHistoryRows(designerTeamLeaves, {
+      statusFilter: historyStatusFilter,
+      searchQuery: historySearch,
+      designerId: historyDesignerFilter,
+    }),
+    [designerTeamLeaves, historyStatusFilter, historySearch, historyDesignerFilter],
   );
 
   const reloadLeaves = useCallback(async () => {
@@ -490,6 +537,13 @@ export default function LeavePlannerClient() {
 
     const dateStr = `${YEAR}-${String(monthIndex + 1).padStart(2, '0')}-${String(day).padStart(2, '0')}`;
     const activeDayLeaves = findActiveLeavesOnDate(activeCalendarLeaves, dateStr);
+
+    if (canReview && activeDayLeaves.length > 0) {
+      setDayLeavesList(activeDayLeaves);
+      setDayLeavesDate(dateStr);
+      setIsDayLeavesModalOpen(true);
+      return;
+    }
 
     if (activeDayLeaves.length === 1) {
       openReviewModal(activeDayLeaves[0]);
@@ -671,12 +725,10 @@ export default function LeavePlannerClient() {
       return;
     }
 
-    const overlapPool =
-      canReview && leaveApplyMode === "others"
-        ? teamLeaves
-        : canReview
-          ? mergeLeaveLists(leaves, teamLeaves)
-          : leaves;
+    const overlapPool = filterLeavesForRequester(
+      canReview ? mergeLeaveLists(leaves, teamLeaves) : leaves,
+      targetUserId,
+    );
     const overlap = findOverlappingLeaveClient(overlapPool, formData.fromDate, formData.toDate);
     if (overlap) {
       closeLeaveApplyModal();
@@ -706,7 +758,7 @@ export default function LeavePlannerClient() {
     } catch (error) {
       const message = error instanceof Error ? error.message : "Failed to submit leave request. Please try again.";
       if (message.toLowerCase().includes("overlap") || message.includes(DUPLICATE_LEAVE_MSG)) {
-        const conflict = findOverlappingLeaveClient(leaves, formData.fromDate, formData.toDate);
+        const conflict = findOverlappingLeaveClient(overlapPool, formData.fromDate, formData.toDate);
         closeLeaveApplyModal();
         toast.error(DUPLICATE_LEAVE_MSG);
         if (conflict) openReviewModal(conflict);
@@ -947,6 +999,21 @@ export default function LeavePlannerClient() {
                         </option>
                       ))}
                     </select>
+                    {canReview && historyTab === "team" ? (
+                      <select
+                        aria-label="Filter team leave history by designer"
+                        value={historyDesignerFilter}
+                        onChange={(e) => setHistoryDesignerFilter(e.target.value)}
+                        className="w-full rounded-lg border border-slate-200 px-3 py-2 text-sm text-slate-800 shadow-sm focus:border-[#5d5baf] focus:outline-none focus:ring-2 focus:ring-[#5d5baf]/20 sm:min-w-[190px]"
+                      >
+                        <option value={ALL_HISTORY_DESIGNERS}>All designers</option>
+                        {historyDesignerOptions.map((option) => (
+                          <option key={option.id} value={option.id}>
+                            {option.name}
+                          </option>
+                        ))}
+                      </select>
+                    ) : null}
                   </div>
                 </div>
                 {canReview ? (
@@ -1150,13 +1217,28 @@ export default function LeavePlannerClient() {
                 <h2 className="text-lg font-semibold text-slate-900">Leave requests</h2>
                 <p className="text-sm text-slate-500 mt-0.5">{formatDate(dayLeavesDate)} · {dayLeavesList.length} designer{dayLeavesList.length === 1 ? "" : "s"}</p>
               </div>
-              <button
-                type="button"
-                onClick={() => setIsDayLeavesModalOpen(false)}
-                className="p-2 text-slate-400 hover:text-slate-600 hover:bg-slate-100 rounded-full transition-colors"
-              >
-                <X className="w-5 h-5" />
-              </button>
+              <div className="flex items-center gap-2">
+                {canReview ? (
+                  <button
+                    type="button"
+                    onClick={() => {
+                      const dateStr = dayLeavesDate;
+                      setIsDayLeavesModalOpen(false);
+                      openLeaveApplyModal(dateStr);
+                    }}
+                    className="rounded-lg bg-[#5d5baf] px-3 py-1.5 text-xs font-semibold text-white hover:bg-[#4b4991]"
+                  >
+                    Submit another leave
+                  </button>
+                ) : null}
+                <button
+                  type="button"
+                  onClick={() => setIsDayLeavesModalOpen(false)}
+                  className="p-2 text-slate-400 hover:text-slate-600 hover:bg-slate-100 rounded-full transition-colors"
+                >
+                  <X className="w-5 h-5" />
+                </button>
+              </div>
             </div>
             <ul className="max-h-[60vh] overflow-y-auto divide-y divide-slate-100">
               {dayLeavesList.map((leave) => {

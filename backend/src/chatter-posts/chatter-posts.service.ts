@@ -20,7 +20,9 @@ import { ActivityLoggerService } from '../activities/activity-logger.service';
 import { TaskFilesService } from '../tasks/task-files.service';
 import {
   MentionUserRef,
+  isDesignerDepartmentMentionable,
   messageSnippet,
+  mergeCollectedMentionUserIds,
   parseMentionUserIdsFromMessage,
   resolveProjectNo,
   resolveTaskOpNo,
@@ -68,6 +70,8 @@ export type ChatterMentionedUserDto = {
   fullName: string;
 };
 
+export type ChatterSeenByUserDto = ChatterMentionedUserDto;
+
 export type ChatterCommentDto = {
   id: string;
   postId: string | null;
@@ -108,6 +112,8 @@ export type ChatterPostDto = {
   mentionedUsers: ChatterMentionedUserDto[];
   priority: string | null;
   seenByCount: number;
+  seenByUsers?: ChatterSeenByUserDto[];
+  likeCount?: number;
   attachmentCount: number;
   isPinned: boolean;
   editedAt: string | null;
@@ -176,6 +182,36 @@ export class ChatterPostsService implements OnModuleInit {
             CONSTRAINT UQ_ErpTSChatterPostLike_post_user UNIQUE (postId, userId)
           );
         END
+        IF NOT EXISTS (SELECT 1 FROM sys.tables WHERE name = 'ErpTSChatterPostSeen')
+        BEGIN
+          CREATE TABLE dbo.ErpTSChatterPostSeen (
+            id UNIQUEIDENTIFIER NOT NULL DEFAULT NEWID() PRIMARY KEY,
+            postId UNIQUEIDENTIFIER NOT NULL,
+            userId UNIQUEIDENTIFIER NOT NULL,
+            seenAt DATETIME NOT NULL DEFAULT SYSUTCDATETIME(),
+            CONSTRAINT UQ_ErpTSChatterPostSeen_post_user UNIQUE (postId, userId)
+          );
+          CREATE NONCLUSTERED INDEX IX_ErpTSChatterPostSeen_userId ON dbo.ErpTSChatterPostSeen (userId);
+          CREATE NONCLUSTERED INDEX IX_ErpTSChatterPostSeen_postId ON dbo.ErpTSChatterPostSeen (postId);
+        END
+      `);
+      await this.prisma.$executeRawUnsafe(`
+        INSERT INTO ErpTSChatterPostMention (postId, userId)
+        SELECT p.id, p.mentionUserId
+        FROM ErpTSChatterPost p
+        WHERE p.mentionUserId IS NOT NULL
+          AND NOT EXISTS (
+            SELECT 1 FROM ErpTSChatterPostMention pm
+            WHERE pm.postId = p.id AND pm.userId = p.mentionUserId
+          );
+        INSERT INTO ErpTSChatterCommentMention (commentId, userId)
+        SELECT c.id, c.mentionUserId
+        FROM ErpTSChatterComment c
+        WHERE c.mentionUserId IS NOT NULL
+          AND NOT EXISTS (
+            SELECT 1 FROM ErpTSChatterCommentMention cm
+            WHERE cm.commentId = c.id AND cm.userId = c.mentionUserId
+          );
       `);
     } catch (err) {
       const detail = err instanceof Error ? err.message : String(err);
@@ -190,6 +226,11 @@ export class ChatterPostsService implements OnModuleInit {
 
   private commentIdsMatch(a: string, b: string): boolean {
     return String(a).trim().toLowerCase() === String(b).trim().toLowerCase();
+  }
+
+  /** Stable lowercase UUID key for maps keyed by post/comment ids. */
+  private entityIdKey(value?: string | null): string | null {
+    return normalizeUserId(value);
   }
 
   private async loadChatterParticipantUserIds(
@@ -228,8 +269,19 @@ export class ChatterPostsService implements OnModuleInit {
     projectId?: string | null,
   ): Promise<MentionUserRef[]> {
     const allUsers = await this.usersService.findAll();
-    const byId = new Map(allUsers.map((user) => [user.id, user]));
+    const byId = new Map(
+      allUsers.map((user) => {
+        const key = normalizeUserId(user.id) ?? user.id;
+        return [key, user];
+      }),
+    );
     const eligibleIds = new Set<string>();
+    const addEligibleId = (id?: string | null) => {
+      const key = normalizeUserId(id);
+      if (key) eligibleIds.add(key);
+    };
+    const resolveUserDepartmentId = (user: (typeof allUsers)[number]) =>
+      user.department?.id ?? user.departmentId ?? null;
 
     if (role === UserRole.HOD) {
       const hod = await this.prisma.user.findUnique({
@@ -237,33 +289,35 @@ export class ChatterPostsService implements OnModuleInit {
         select: { departmentId: true },
       });
       for (const user of allUsers) {
-        if (user.id === viewerId) {
-          eligibleIds.add(user.id);
+        if (isSameUserId(user.id, viewerId)) {
+          addEligibleId(user.id);
           continue;
         }
         const userRole = user.role?.name;
         if (userRole === UserRole.HOD) {
-          eligibleIds.add(user.id);
+          addEligibleId(user.id);
           continue;
         }
         if (userRole === UserRole.DESIGNER) {
-          const userDeptId = user.department?.id ?? null;
-          if (!hod?.departmentId || userDeptId === hod.departmentId) {
-            eligibleIds.add(user.id);
+          if (isDesignerDepartmentMentionable(hod?.departmentId, resolveUserDepartmentId(user))) {
+            addEligibleId(user.id);
           }
         }
       }
     } else {
-      eligibleIds.add(viewerId);
+      addEligibleId(viewerId);
       const viewer = await this.prisma.user.findUnique({
         where: { id: viewerId },
         select: { departmentId: true },
       });
       for (const user of allUsers) {
         if (user.role?.name === UserRole.HOD) {
-          const userDeptId = user.department?.id ?? null;
-          if (!viewer?.departmentId || userDeptId === viewer.departmentId) {
-            eligibleIds.add(user.id);
+          addEligibleId(user.id);
+          continue;
+        }
+        if (user.role?.name === UserRole.DESIGNER) {
+          if (isDesignerDepartmentMentionable(viewer?.departmentId, resolveUserDepartmentId(user))) {
+            addEligibleId(user.id);
           }
         }
       }
@@ -275,7 +329,7 @@ export class ChatterPostsService implements OnModuleInit {
           where: { id: resolvedTaskId },
           select: { assigneeId: true, projectId: true },
         });
-        if (task?.assigneeId) eligibleIds.add(task.assigneeId);
+        addEligibleId(task?.assigneeId);
         if (task?.projectId) resolvedProjectId = task.projectId;
       }
       if (resolvedProjectId) {
@@ -284,12 +338,12 @@ export class ChatterPostsService implements OnModuleInit {
           select: { assigneeId: true },
         });
         for (const row of projectTasks) {
-          if (row.assigneeId) eligibleIds.add(row.assigneeId);
+          addEligibleId(row.assigneeId);
         }
       }
 
       const participants = await this.loadChatterParticipantUserIds(resolvedTaskId, resolvedProjectId);
-      for (const id of participants) eligibleIds.add(id);
+      for (const id of participants) addEligibleId(id);
     }
 
     return [...eligibleIds]
@@ -297,6 +351,20 @@ export class ChatterPostsService implements OnModuleInit {
       .filter((user): user is NonNullable<typeof user> => Boolean(user))
       .map((user) => ({ id: user.id, fullName: user.fullName }))
       .sort((a, b) => a.fullName.localeCompare(b.fullName));
+  }
+
+  private async resolveExistingUserIds(ids: string[]): Promise<string[]> {
+    const valid = uniqueUuids(ids);
+    if (!valid.length) return [];
+    const inList = this.sqlInUuidList(valid);
+    if (!inList) return [];
+    const rows = await this.prisma.$queryRawUnsafe<Array<{ id: string }>>(
+      `SELECT CONVERT(varchar(36), id) AS id FROM ErpTSUser WHERE id IN (${inList})`,
+    );
+    const existing = new Set(
+      rows.map((row) => normalizeUserId(String(row.id))).filter(Boolean) as string[],
+    );
+    return valid.filter((id) => existing.has(normalizeUserId(id) as string));
   }
 
   private async collectPostMentionUserIds(
@@ -309,11 +377,14 @@ export class ChatterPostsService implements OnModuleInit {
   ): Promise<string[]> {
     const directory = await this.resolveEligibleMentionUsers(authorId, role, taskId, projectId);
     const eligible = new Set(directory.map((user) => user.id));
-    return uniqueUuids([
-      dto.mentionUserId,
-      ...(dto.mentionUserIds ?? []),
-      ...parseMentionUserIdsFromMessage(message, directory),
-    ]).filter((id) => eligible.has(id));
+    const explicitIds = uniqueUuids([dto.mentionUserId, ...(dto.mentionUserIds ?? [])]);
+    const validatedExplicit = await this.resolveExistingUserIds(explicitIds);
+    const parsed = parseMentionUserIdsFromMessage(message, directory);
+    return mergeCollectedMentionUserIds({
+      explicitIds: validatedExplicit,
+      parsedFromMessageIds: parsed,
+      eligibleIds: eligible,
+    });
   }
 
   private async collectCommentMentionUserIds(
@@ -326,11 +397,35 @@ export class ChatterPostsService implements OnModuleInit {
   ): Promise<string[]> {
     const directory = await this.resolveEligibleMentionUsers(authorId, role, taskId, projectId);
     const eligible = new Set(directory.map((user) => user.id));
-    return uniqueUuids([
-      dto.mentionUserId,
-      ...(dto.mentionUserIds ?? []),
-      ...parseMentionUserIdsFromMessage(message, directory),
-    ]).filter((id) => eligible.has(id));
+    const explicitIds = uniqueUuids([dto.mentionUserId, ...(dto.mentionUserIds ?? [])]);
+    const validatedExplicit = await this.resolveExistingUserIds(explicitIds);
+    const parsed = parseMentionUserIdsFromMessage(message, directory);
+    return mergeCollectedMentionUserIds({
+      explicitIds: validatedExplicit,
+      parsedFromMessageIds: parsed,
+      eligibleIds: eligible,
+    });
+  }
+
+  private mergeMentionedUsersList(
+    junctionUsers: ChatterMentionedUserDto[],
+    columnUserId?: string | null,
+    columnUserName?: string | null,
+  ): ChatterMentionedUserDto[] {
+    const map = new Map<string, ChatterMentionedUserDto>();
+    for (const user of junctionUsers) {
+      const id = normalizeUserId(user.id);
+      if (!id) continue;
+      map.set(id, { id, fullName: String(user.fullName ?? '').trim() || 'User' });
+    }
+    const columnId = normalizeUserId(columnUserId);
+    if (columnId && !map.has(columnId)) {
+      map.set(columnId, {
+        id: columnId,
+        fullName: String(columnUserName ?? '').trim() || 'User',
+      });
+    }
+    return [...map.values()].sort((a, b) => a.fullName.localeCompare(b.fullName));
   }
 
   private async insertPostMentions(postId: string, userIds: string[]): Promise<void> {
@@ -380,9 +475,12 @@ export class ChatterPostsService implements OnModuleInit {
     `);
 
     for (const row of rows) {
-      const key = String(row.postId);
+      const key = this.entityIdKey(String(row.postId));
+      if (!key) continue;
       const bucket = result.get(key) ?? [];
-      bucket.push({ id: String(row.userId), fullName: String(row.fullName ?? '').trim() });
+      const id = normalizeUserId(String(row.userId));
+      if (!id) continue;
+      bucket.push({ id, fullName: String(row.fullName ?? '').trim() });
       result.set(key, bucket);
     }
     return result;
@@ -409,12 +507,84 @@ export class ChatterPostsService implements OnModuleInit {
     `);
 
     for (const row of rows) {
-      const key = String(row.commentId);
+      const key = this.entityIdKey(String(row.commentId));
+      if (!key) continue;
       const bucket = result.get(key) ?? [];
-      bucket.push({ id: String(row.userId), fullName: String(row.fullName ?? '').trim() });
+      const id = normalizeUserId(String(row.userId));
+      if (!id) continue;
+      bucket.push({ id, fullName: String(row.fullName ?? '').trim() });
       result.set(key, bucket);
     }
     return result;
+  }
+
+  private async loadPostSeenMap(
+    postIds: string[],
+  ): Promise<Map<string, ChatterSeenByUserDto[]>> {
+    const inList = this.sqlInUuidList(postIds);
+    const result = new Map<string, ChatterSeenByUserDto[]>();
+    if (!inList) return result;
+
+    const rows = await this.prisma.$queryRawUnsafe<
+      Array<{ postId: string; userId: string; fullName: string }>
+    >(`
+      SELECT
+        CONVERT(varchar(36), ps.postId) AS postId,
+        CONVERT(varchar(36), ps.userId) AS userId,
+        u.fullName
+      FROM ErpTSChatterPostSeen ps
+      INNER JOIN ErpTSUser u ON u.id = ps.userId
+      WHERE ps.postId IN (${inList})
+      ORDER BY ps.seenAt ASC, u.fullName ASC
+    `);
+
+    for (const row of rows) {
+      const key = this.entityIdKey(String(row.postId));
+      if (!key) continue;
+      const bucket = result.get(key) ?? [];
+      const id = normalizeUserId(String(row.userId));
+      if (!id) continue;
+      bucket.push({ id, fullName: String(row.fullName ?? '').trim() || 'User' });
+      result.set(key, bucket);
+    }
+    return result;
+  }
+
+  private async loadPostLikeCountMap(postIds: string[]): Promise<Map<string, number>> {
+    const inList = this.sqlInUuidList(postIds);
+    const result = new Map<string, number>();
+    if (!inList) return result;
+
+    const rows = await this.prisma.$queryRawUnsafe<Array<{ postId: string; cnt: number }>>(`
+      SELECT CONVERT(varchar(36), postId) AS postId, COUNT(*) AS cnt
+      FROM ErpTSChatterPostLike
+      WHERE postId IN (${inList})
+      GROUP BY postId
+    `);
+
+    for (const row of rows) {
+      const key = this.entityIdKey(String(row.postId));
+      if (!key) continue;
+      result.set(key, Number(row.cnt ?? 0));
+    }
+    return result;
+  }
+
+  private async syncSeenByCounts(postIds: string[]): Promise<void> {
+    const inList = this.sqlInUuidList(postIds);
+    if (!inList) return;
+    await this.prisma.$executeRawUnsafe(`
+      UPDATE p
+      SET seenByCount = COALESCE(c.cnt, 0)
+      FROM ErpTSChatterPost p
+      LEFT JOIN (
+        SELECT postId, COUNT(*) AS cnt
+        FROM ErpTSChatterPostSeen
+        WHERE postId IN (${inList})
+        GROUP BY postId
+      ) c ON c.postId = p.id
+      WHERE p.id IN (${inList});
+    `);
   }
 
   private resolveListingLabel(
@@ -534,7 +704,7 @@ export class ChatterPostsService implements OnModuleInit {
     if (!row) return null;
     const dto = this.mapCommentRow(row);
     const mentionMap = await this.loadCommentMentionsMap([id]);
-    const mentionedUsers = mentionMap.get(id) ?? [];
+    const mentionedUsers = mentionMap.get(this.entityIdKey(id) ?? id) ?? [];
     if (!mentionedUsers.length) return dto;
     return {
       ...dto,
@@ -558,10 +728,12 @@ export class ChatterPostsService implements OnModuleInit {
   ): ChatterCommentDto {
     const createdAt =
       row.createdAt instanceof Date ? row.createdAt : new Date(row.createdAt as string | number | Date);
-    const primaryMention = mentionedUsers[0]?.id ?? (row.mentionUserId != null ? String(row.mentionUserId) : null);
+    const primaryMention = normalizeUserId(
+      mentionedUsers[0]?.id ?? (row.mentionUserId != null ? String(row.mentionUserId) : null),
+    );
     return {
-      id: String(row.id),
-      postId: row.postId != null ? String(row.postId) : null,
+      id: normalizeUserId(String(row.id)) ?? String(row.id),
+      postId: normalizeUserId(row.postId != null ? String(row.postId) : null),
       authorId: normalizeUserId(row.authorId != null ? String(row.authorId) : null),
       authorName: row.authorName != null ? String(row.authorName) : null,
       authorRole: row.authorRole != null ? String(row.authorRole) : null,
@@ -595,12 +767,17 @@ export class ChatterPostsService implements OnModuleInit {
     const commentDtos = rows.map((row) => this.mapCommentRow(row));
     const mentionMap = await this.loadCommentMentionsMap(commentDtos.map((c) => c.id));
     return commentDtos.map((comment) => {
-      const extra = mentionMap.get(comment.id) ?? [];
-      if (!extra.length) return comment;
+      const extra = mentionMap.get(this.entityIdKey(comment.id) ?? comment.id) ?? [];
+      const mentionedUsers = this.mergeMentionedUsersList(
+        extra,
+        comment.mentionUserId,
+        null,
+      );
+      if (!mentionedUsers.length) return comment;
       return {
         ...comment,
-        mentionedUsers: extra,
-        mentionUserId: extra[0]?.id ?? comment.mentionUserId,
+        mentionedUsers,
+        mentionUserId: mentionedUsers[0]?.id ?? comment.mentionUserId,
       };
     });
   }
@@ -608,16 +785,26 @@ export class ChatterPostsService implements OnModuleInit {
   private attachComments(posts: ChatterPostDto[], comments: ChatterCommentDto[]): ChatterPostDto[] {
     const byPostId = new Map<string, ChatterCommentDto[]>();
     for (const comment of comments) {
-      const key = comment.postId ?? '';
+      const key = this.entityIdKey(comment.postId) ?? comment.postId ?? '';
       if (!key) continue;
       const bucket = byPostId.get(key) ?? [];
       bucket.push(comment);
       byPostId.set(key, bucket);
     }
-    return posts.map((post) => ({
-      ...post,
-      comments: byPostId.get(post.id) ?? [],
-    }));
+    return posts.map((post) => {
+      const postKey = this.entityIdKey(post.id) ?? post.id;
+      const rawComments = byPostId.get(postKey) ?? [];
+      const commentsById = new Map<string, ChatterCommentDto>();
+      for (const comment of rawComments) {
+        const commentKey = this.entityIdKey(comment.id) ?? comment.id;
+        if (!commentKey) continue;
+        commentsById.set(commentKey, comment);
+      }
+      return {
+        ...post,
+        comments: [...commentsById.values()],
+      };
+    });
   }
 
   /** Fetch attachments from ErpTSChatterPostAttachment for a set of post IDs and generate signed URLs */
@@ -838,23 +1025,35 @@ export class ChatterPostsService implements OnModuleInit {
 
   private async enrichPosts(posts: ChatterPostDto[]): Promise<ChatterPostDto[]> {
     const postIds = posts.map((p) => p.id);
-    const [comments, attachmentsMap, linksMap, mentionMap] = await Promise.all([
+    const [comments, attachmentsMap, linksMap, mentionMap, seenMap, likeCountMap] = await Promise.all([
       this.findCommentsByPostIds(postIds),
       this.findAttachmentsByPostIds(postIds),
       this.findLinksByPostIds(postIds),
       this.loadPostMentionsMap(postIds),
+      this.loadPostSeenMap(postIds),
+      this.loadPostLikeCountMap(postIds),
     ]);
     const withComments = this.attachComments(posts, comments);
     return withComments.map((post) => {
-      const mentionedUsers = mentionMap.get(post.id) ?? post.mentionedUsers ?? [];
+      const postKey = this.entityIdKey(post.id) ?? post.id;
+      const mentionedUsers = this.mergeMentionedUsersList(
+        mentionMap.get(postKey) ?? post.mentionedUsers ?? [],
+        post.mentionUserId,
+        post.mentionUserName,
+      );
+      const seenByUsers = seenMap.get(postKey) ?? [];
+      const seenByCount = seenByUsers.length;
       const primaryMention = mentionedUsers[0]?.fullName ?? post.mentionUserName;
       return {
         ...post,
         mentionedUsers,
-        mentionUserId: mentionedUsers[0]?.id ?? post.mentionUserId,
+        mentionUserId: mentionedUsers[0]?.id ?? normalizeUserId(post.mentionUserId),
         mentionUserName: primaryMention ?? post.mentionUserName,
-        attachments: attachmentsMap.get(post.id) ?? [],
-        linkAttachments: linksMap.get(post.id) ?? [],
+        seenByUsers,
+        seenByCount,
+        likeCount: likeCountMap.get(postKey) ?? 0,
+        attachments: attachmentsMap.get(postKey) ?? [],
+        linkAttachments: linksMap.get(postKey) ?? [],
       };
     });
   }
@@ -880,7 +1079,7 @@ export class ChatterPostsService implements OnModuleInit {
     const displayTitle = listingLabel ?? this.resolveDisplayTitle(row.title, taskOpNo);
 
     return {
-      id: String(row.id),
+      id: normalizeUserId(String(row.id)) ?? String(row.id),
       taskId,
       taskName: taskOpNo,
       taskOpNo,
@@ -896,7 +1095,7 @@ export class ChatterPostsService implements OnModuleInit {
       title: displayTitle,
       message: row.message,
       postType: row.postType ?? null,
-      mentionUserId: row.mentionUserId != null ? String(row.mentionUserId) : null,
+      mentionUserId: normalizeUserId(row.mentionUserId != null ? String(row.mentionUserId) : null),
       mentionedUsers: [],
       priority: row.priority ?? null,
       seenByCount: Number(row.seenByCount ?? 0),
@@ -1486,7 +1685,68 @@ export class ChatterPostsService implements OnModuleInit {
     });
   }
 
-  async likePost(postId: string, userId: string): Promise<{ seenByCount: number; liked: boolean }> {
+  async markPostsSeen(
+    postIds: string[],
+    userId: string,
+  ): Promise<{
+    updates: Array<{ postId: string; seenByCount: number; seenByUsers: ChatterSeenByUserDto[] }>;
+  }> {
+    const uid = optionalUuid(userId);
+    if (!uid) throw new BadRequestException('Invalid userId');
+
+    const ids = uniqueUuids(postIds);
+    if (!ids.length) return { updates: [] };
+
+    const inList = this.sqlInUuidList(ids);
+    if (!inList) return { updates: [] };
+
+    const existingRows = await this.prisma.$queryRawUnsafe<
+      Array<{ id: string; taskId: string | null; projectId: string | null }>
+    >(`
+      SELECT
+        CONVERT(varchar(36), id) AS id,
+        CONVERT(varchar(36), taskId) AS taskId,
+        CONVERT(varchar(36), projectId) AS projectId
+      FROM ErpTSChatterPost
+      WHERE id IN (${inList})
+    `);
+    const existingIds = existingRows.map((row) => String(row.id));
+    if (!existingIds.length) return { updates: [] };
+
+    const uidSql = sqlQuotedUuid(uid);
+    const valueRows = existingIds.map((postId) => `(${sqlQuotedUuid(postId)}, ${uidSql})`).join(', ');
+    await this.prisma.$executeRawUnsafe(`
+      MERGE INTO ErpTSChatterPostSeen AS target
+      USING (VALUES ${valueRows}) AS src(postId, userId)
+      ON target.postId = src.postId AND target.userId = src.userId
+      WHEN NOT MATCHED THEN INSERT (postId, userId, seenAt) VALUES (src.postId, src.userId, SYSUTCDATETIME());
+    `);
+
+    await this.syncSeenByCounts(existingIds);
+    const seenMap = await this.loadPostSeenMap(existingIds);
+    const updates = existingIds.map((postId) => {
+      const postKey = this.entityIdKey(postId) ?? postId;
+      const seenByUsers = seenMap.get(postKey) ?? [];
+      return {
+        postId: postKey,
+        seenByCount: seenByUsers.length,
+        seenByUsers,
+      };
+    });
+
+    const firstRow = existingRows[0];
+    this.dashboardRealtime?.notifyChatterRefresh({
+      event: 'chatter_post_updated',
+      postId: firstRow?.id ?? null,
+      taskId: firstRow?.taskId ?? null,
+      projectId: firstRow?.projectId ?? null,
+      at: new Date().toISOString(),
+    });
+
+    return { updates };
+  }
+
+  async likePost(postId: string, userId: string): Promise<{ likeCount: number; liked: boolean }> {
     const id = optionalUuid(postId);
     const uid = optionalUuid(userId);
     if (!id || !uid) throw new BadRequestException('Invalid postId or userId');
@@ -1511,13 +1771,9 @@ export class ChatterPostsService implements OnModuleInit {
     const countRows = await this.prisma.$queryRawUnsafe<Array<{ cnt: number }>>(
       `SELECT COUNT(*) AS cnt FROM ErpTSChatterPostLike WHERE postId = ${sqlQuotedUuid(id)}`,
     );
-    const seenByCount = Number(countRows[0]?.cnt ?? 0);
+    const likeCount = Number(countRows[0]?.cnt ?? 0);
 
-    await this.prisma.$executeRawUnsafe(
-      `UPDATE ErpTSChatterPost SET seenByCount = ${seenByCount} WHERE id = ${sqlQuotedUuid(id)}`,
-    );
-
-    return { seenByCount, liked };
+    return { likeCount, liked };
   }
 
   async togglePin(postId: string, isPinned: boolean, requesterId: string): Promise<{ isPinned: boolean }> {

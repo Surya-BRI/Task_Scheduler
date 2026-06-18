@@ -42,6 +42,46 @@ export function parseMentionUserIdsFromMessage(message, users) {
 
 /**
  * @param {Array<{ id: string, fullName: string }>} users
+ * @returns {Array<{ id: string, fullName: string }>}
+ */
+export function parseMentionedUsersFromMessage(message, users) {
+  const ids = parseMentionUserIdsFromMessage(message, users);
+  const byId = new Map(
+    (users ?? []).filter((u) => u?.id).map((u) => [u.id, u]),
+  );
+  return ids.map((id) => byId.get(id)).filter(Boolean);
+}
+
+/**
+ * @param {Array<Array<{ id: string, fullName: string }>>} lists
+ * @returns {Array<{ id: string, fullName: string }>}
+ */
+export function mergeMentionUsers(...lists) {
+  const map = new Map();
+  for (const list of lists) {
+    for (const user of list ?? []) {
+      if (!user?.id) continue;
+      const fullName = String(user.fullName ?? '').trim();
+      if (!fullName) continue;
+      map.set(user.id, { id: user.id, fullName });
+    }
+  }
+  return [...map.values()];
+}
+
+/**
+ * Build the user directory needed to render every @mention in a post/comment.
+ * @param {Array<{ id: string, fullName: string }>} mentionedUsers
+ * @param {Array<{ id: string, fullName: string }>} directory
+ */
+export function resolveMentionUsersForDisplay(message, mentionedUsers = [], directory = []) {
+  const merged = mergeMentionUsers(directory, mentionedUsers);
+  const parsed = parseMentionedUsersFromMessage(message, merged);
+  return mergeMentionUsers(merged, mentionedUsers, parsed);
+}
+
+/**
+ * @param {Array<{ id: string, fullName: string }>} users
  */
 export function buildMentionUserMap(users) {
   const map = new Map();
@@ -54,10 +94,24 @@ export function buildMentionUserMap(users) {
 }
 
 /**
+ * Apply lightweight markdown-style formatting to already HTML-escaped text.
+ */
+export function applyChatterRichTextFormatting(text) {
+  return String(text ?? '')
+    .replace(/\*\*(.+?)\*\*/gs, '<strong>$1</strong>')
+    .replace(/~~(.+?)~~/gs, '<del>$1</del>')
+    .replace(/__(.+?)__/gs, '<u>$1</u>')
+    .replace(/\*(.+?)\*/gs, '<em>$1</em>')
+    .replace(/\n/g, '<br />');
+}
+
+/**
  * Highlight @mentions; link to designer profile when user id is known.
  * @param {Array<{ id: string, fullName: string }>} users
+ * @param {{ linkMentions?: boolean }} [options]
  */
-export function formatMessageHtml(message, users = []) {
+export function formatMessageHtml(message, users = [], options = {}) {
+  const { linkMentions = true } = options;
   const sorted = [...users].sort(
     (a, b) => (b.fullName?.length ?? 0) - (a.fullName?.length ?? 0),
   );
@@ -90,11 +144,13 @@ export function formatMessageHtml(message, users = []) {
       }
     }
     if (matched) {
-      const href = `/designer/${matched.user.id}/requests`;
+      const mentionHtml = linkMentions
+        ? `<a href="/designer/${matched.user.id}/requests" class="font-semibold text-blue-600 hover:underline" data-mention-user="${matched.user.id}">@${matched.name}</a>`
+        : `<span class="font-semibold text-blue-600">@${matched.name}</span>`;
       replacements.push({
         start: i,
         end: i + matched.len,
-        html: `<a href="${href}" class="font-semibold text-blue-600 hover:underline" data-mention-user="${matched.user.id}">@${matched.name}</a>`,
+        html: mentionHtml,
       });
       i += matched.len;
     } else {
@@ -103,12 +159,7 @@ export function formatMessageHtml(message, users = []) {
   }
 
   if (replacements.length === 0) {
-    return html
-      .replace(/\*\*(.+?)\*\*/gs, '<strong>$1</strong>')
-      .replace(/~~(.+?)~~/gs, '<del>$1</del>')
-      .replace(/__(.+?)__/gs, '<u>$1</u>')
-      .replace(/\*(.+?)\*/gs, '<em>$1</em>')
-      .replace(/\n/g, '<br />');
+    return applyChatterRichTextFormatting(html);
   }
 
   let out = '';
@@ -120,10 +171,5 @@ export function formatMessageHtml(message, users = []) {
   }
   out += html.slice(cursor);
 
-  return out
-    .replace(/\*\*(.+?)\*\*/gs, '<strong>$1</strong>')
-    .replace(/~~(.+?)~~/gs, '<del>$1</del>')
-    .replace(/__(.+?)__/gs, '<u>$1</u>')
-    .replace(/\*(.+?)\*/gs, '<em>$1</em>')
-    .replace(/\n/g, '<br />');
+  return applyChatterRichTextFormatting(out);
 }
