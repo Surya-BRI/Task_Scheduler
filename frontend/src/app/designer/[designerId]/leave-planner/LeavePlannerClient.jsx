@@ -170,8 +170,17 @@ function findOverlappingLeaveClient(leaves, fromDate, toDate) {
 }
 
 
-function filterHistoryRows(rows, { statusFilter, searchQuery }) {
+const ALL_HISTORY_DESIGNERS = "ALL";
+
+function getLeaveRequesterId(row) {
+  return String(row?.designerId ?? row?.userId ?? row?.createdBy ?? "").trim();
+}
+
+function filterHistoryRows(rows, { statusFilter, searchQuery, designerId = ALL_HISTORY_DESIGNERS }) {
   let list = Array.isArray(rows) ? [...rows] : [];
+  if (designerId && designerId !== ALL_HISTORY_DESIGNERS) {
+    list = list.filter((row) => getLeaveRequesterId(row) === designerId);
+  }
   if (statusFilter && statusFilter !== "ALL") {
     list = list.filter((row) => normalizeLeaveStatus(row.status) === statusFilter);
   }
@@ -329,6 +338,7 @@ export default function LeavePlannerClient() {
   const [historyTab, setHistoryTab] = useState("hod");
   const [historyStatusFilter, setHistoryStatusFilter] = useState("ALL");
   const [historySearch, setHistorySearch] = useState("");
+  const [historyDesignerFilter, setHistoryDesignerFilter] = useState(ALL_HISTORY_DESIGNERS);
 
   const canReview = isHOD;
 
@@ -389,14 +399,46 @@ export default function LeavePlannerClient() {
 
   const calendarScope = canReview ? "team" : "mine";
 
+  const historyDesignerOptions = useMemo(() => {
+    const byId = new Map();
+
+    for (const user of designerList) {
+      const id = String(user?.id ?? "").trim();
+      if (!id || id === designer.id) continue;
+      byId.set(id, user.name || "Unnamed designer");
+    }
+
+    for (const leave of designerTeamLeaves) {
+      const id = getLeaveRequesterId(leave);
+      if (!id || id === designer.id) continue;
+      if (!byId.has(id)) {
+        byId.set(id, leave.requesterName || "Unnamed designer");
+      }
+    }
+
+    return Array.from(byId, ([id, name]) => ({ id, name }))
+      .sort((a, b) => a.name.localeCompare(b.name));
+  }, [designerList, designerTeamLeaves, designer.id]);
+
+  useEffect(() => {
+    if (historyDesignerFilter === ALL_HISTORY_DESIGNERS) return;
+    if (!historyDesignerOptions.some((option) => option.id === historyDesignerFilter)) {
+      setHistoryDesignerFilter(ALL_HISTORY_DESIGNERS);
+    }
+  }, [historyDesignerFilter, historyDesignerOptions]);
+
   const filteredHodHistory = useMemo(
     () => filterHistoryRows(leaves, { statusFilter: historyStatusFilter, searchQuery: historySearch }),
     [leaves, historyStatusFilter, historySearch],
   );
 
   const filteredTeamHistory = useMemo(
-    () => filterHistoryRows(designerTeamLeaves, { statusFilter: historyStatusFilter, searchQuery: historySearch }),
-    [designerTeamLeaves, historyStatusFilter, historySearch],
+    () => filterHistoryRows(designerTeamLeaves, {
+      statusFilter: historyStatusFilter,
+      searchQuery: historySearch,
+      designerId: historyDesignerFilter,
+    }),
+    [designerTeamLeaves, historyStatusFilter, historySearch, historyDesignerFilter],
   );
 
   const reloadLeaves = useCallback(async () => {
@@ -947,6 +989,21 @@ export default function LeavePlannerClient() {
                         </option>
                       ))}
                     </select>
+                    {canReview && historyTab === "team" ? (
+                      <select
+                        aria-label="Filter team leave history by designer"
+                        value={historyDesignerFilter}
+                        onChange={(e) => setHistoryDesignerFilter(e.target.value)}
+                        className="w-full rounded-lg border border-slate-200 px-3 py-2 text-sm text-slate-800 shadow-sm focus:border-[#5d5baf] focus:outline-none focus:ring-2 focus:ring-[#5d5baf]/20 sm:min-w-[190px]"
+                      >
+                        <option value={ALL_HISTORY_DESIGNERS}>All designers</option>
+                        {historyDesignerOptions.map((option) => (
+                          <option key={option.id} value={option.id}>
+                            {option.name}
+                          </option>
+                        ))}
+                      </select>
+                    ) : null}
                   </div>
                 </div>
                 {canReview ? (
