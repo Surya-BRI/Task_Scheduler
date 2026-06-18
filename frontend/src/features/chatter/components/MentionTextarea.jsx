@@ -2,10 +2,11 @@
 
 import { forwardRef, useCallback, useEffect, useImperativeHandle, useMemo, useRef, useState } from 'react';
 import { listChatterMentionUsers } from '../services/chatter-posts.api';
-import { parseMentionUserIdsFromMessage } from '../utils/mention-utils';
+import { formatMessageHtml, parseMentionUserIdsFromMessage } from '../utils/mention-utils';
 
 /**
  * Textarea with @mention autocomplete. Works for posts and comments.
+ * When `richPreview` is enabled, formatted markdown is rendered live beneath a transparent textarea.
  */
 export const MentionTextarea = forwardRef(function MentionTextarea(
   {
@@ -18,10 +19,12 @@ export const MentionTextarea = forwardRef(function MentionTextarea(
     taskId = null,
     projectId = null,
     onMentionIdsChange,
+    richPreview = false,
   },
   ref,
 ) {
   const textareaRef = useRef(null);
+  const previewRef = useRef(null);
   const onChangeRef = useRef(onChange);
   const onMentionIdsChangeRef = useRef(onMentionIdsChange);
   const mentionUsersRef = useRef([]);
@@ -45,12 +48,25 @@ export const MentionTextarea = forwardRef(function MentionTextarea(
     [mentionUsers],
   );
 
+  const previewHtml = useMemo(() => {
+    if (!richPreview || !String(value ?? '').trim()) return '';
+    return formatMessageHtml(value, mentionUsers, { linkMentions: false });
+  }, [richPreview, value, mentionUsersKey, mentionUsers]);
+
   const reportMentionIds = useCallback((text) => {
     const ids = parseMentionUserIdsFromMessage(text, mentionUsersRef.current);
     const key = ids.join(',');
     if (key === lastReportedIdsRef.current) return;
     lastReportedIdsRef.current = key;
     onMentionIdsChangeRef.current?.(ids);
+  }, []);
+
+  const syncPreviewScroll = useCallback(() => {
+    const textarea = textareaRef.current;
+    const preview = previewRef.current;
+    if (!textarea || !preview) return;
+    preview.scrollTop = textarea.scrollTop;
+    preview.scrollLeft = textarea.scrollLeft;
   }, []);
 
   const updateDropdownPosition = useCallback(() => {
@@ -84,6 +100,11 @@ export const MentionTextarea = forwardRef(function MentionTextarea(
   useEffect(() => {
     reportMentionIds(value);
   }, [value, mentionUsersKey, reportMentionIds]);
+
+  useEffect(() => {
+    if (!richPreview) return;
+    syncPreviewScroll();
+  }, [richPreview, value, previewHtml, syncPreviewScroll]);
 
   const filteredUsers = useMemo(() => {
     const q = mentionQuery.trim().toLowerCase();
@@ -175,19 +196,48 @@ export const MentionTextarea = forwardRef(function MentionTextarea(
     }
   };
 
+  const textareaClassName = richPreview
+    ? 'relative z-[1] block min-h-[inherit] w-full resize-none overflow-auto border-0 bg-transparent px-3 py-2 text-sm leading-relaxed text-transparent caret-slate-900 outline-none'
+    : className;
+
+  const editor = (
+    <textarea
+      ref={textareaRef}
+      value={value}
+      onChange={handleChange}
+      onKeyDown={handleKeyDown}
+      onScroll={richPreview ? syncPreviewScroll : undefined}
+      onBlur={() => setTimeout(() => setShowDropdown(false), 150)}
+      placeholder={richPreview ? '' : placeholder}
+      disabled={disabled}
+      rows={minRows}
+      className={textareaClassName}
+      spellCheck={richPreview ? false : undefined}
+    />
+  );
+
   return (
     <div className="relative">
-      <textarea
-        ref={textareaRef}
-        value={value}
-        onChange={handleChange}
-        onKeyDown={handleKeyDown}
-        onBlur={() => setTimeout(() => setShowDropdown(false), 150)}
-        placeholder={placeholder}
-        disabled={disabled}
-        rows={minRows}
-        className={className}
-      />
+      {richPreview ? (
+        <div
+          className={`chatter-rich-editor relative min-h-[80px] w-full overflow-hidden rounded-md border border-slate-300 bg-white focus-within:border-blue-500 focus-within:ring-1 focus-within:ring-blue-500 ${className}`}
+        >
+          <div
+            ref={previewRef}
+            aria-hidden
+            className="chatter-rich-text pointer-events-none absolute inset-0 z-0 overflow-hidden whitespace-pre-wrap break-words px-3 py-2 text-sm leading-relaxed text-slate-900"
+            dangerouslySetInnerHTML={{ __html: previewHtml }}
+          />
+          {!String(value ?? '').trim() && placeholder ? (
+            <div className="pointer-events-none absolute inset-0 z-0 px-3 py-2 text-sm leading-relaxed text-slate-400">
+              {placeholder}
+            </div>
+          ) : null}
+          {editor}
+        </div>
+      ) : (
+        editor
+      )}
       {showDropdown && filteredUsers.length > 0 && dropdownStyle ? (
         <ul
           style={dropdownStyle}
