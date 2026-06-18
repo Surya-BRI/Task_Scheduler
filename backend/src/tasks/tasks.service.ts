@@ -1045,7 +1045,7 @@ export class TasksService {
     // Coming OUT of ON_HOLD — restore the previously stored status regardless of what was sent
     const currentStatusApi = this.toApiTaskStatus(existing.status);
     if (currentStatusApi === 'ON_HOLD' && newStatusApi !== 'ON_HOLD') {
-      newStatusDb = (existing as any).holdPreviousStatus ?? newStatusDb;
+      newStatusDb = existing.holdPreviousStatus ?? newStatusDb;
       extraData.holdPreviousStatus = null;
     }
 
