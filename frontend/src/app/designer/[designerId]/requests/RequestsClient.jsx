@@ -60,6 +60,20 @@ function displayTaskName(req) {
   return "—";
 }
 
+function userToEmployeeOption(user, fallbackDesignation = "Designer") {
+  const id = String(user?.id ?? "").trim();
+  const name = String(user?.fullName ?? user?.name ?? "").trim();
+  if (!isUuidString(id) || !name) return null;
+  return {
+    id,
+    name,
+    email: String(user?.email ?? "").trim(),
+    designation:
+      String(user?.designation ?? user?.department?.name ?? user?.role?.name ?? user?.role ?? "").trim() ||
+      fallbackDesignation,
+  };
+}
+
 const DEFAULT_STATS = {
   workLoad: { tasks: 0, hours: 0 },
   workTill: { label: "-", hours: 0 },
@@ -266,12 +280,29 @@ export default function RequestsClient() {
   const activeDesignerId = isHOD
     ? (isUuidString(forDesignerParam) ? forDesignerParam : null)
     : erpDesignerId;
-  const activeDesignerProfile = designerList.find((d) => d.id === activeDesignerId) ?? null;
+  const employeeSelectionList = useMemo(() => {
+    const options = new Map();
+    if (isHOD) {
+      const hodOption = userToEmployeeOption(sessionUser, "HOD");
+      if (hodOption) {
+        options.set(hodOption.id, { ...hodOption, isSelf: true });
+      }
+    }
+
+    for (const designer of designerList) {
+      if (!options.has(designer.id)) {
+        options.set(designer.id, designer);
+      }
+    }
+
+    return [...options.values()];
+  }, [designerList, isHOD, sessionUser]);
+  const activeDesignerProfile = employeeSelectionList.find((d) => d.id === activeDesignerId) ?? null;
   const activeDesignerName =
     activeDesignerProfile?.name ??
     (activeDesignerId === erpDesignerId ? sessionName : null) ??
-    "Designer";
-  const activeDesignerDesignation = activeDesignerProfile?.designation ?? "Designer";
+    "Employee";
+  const activeDesignerDesignation = activeDesignerProfile?.designation ?? "Employee";
   const activeDesignerInitials = toInitials(activeDesignerName);
 
   const handleBackToDashboard = () => {
@@ -315,6 +346,9 @@ export default function RequestsClient() {
   const [otReviewSubmitting, setOtReviewSubmitting] = useState(false);
   const [overtimeError, setOvertimeError] = useState(null);
   const [overtimeLoading, setOvertimeLoading] = useState(false);
+  const [projects, setProjects] = useState([]);
+  const [projectTasks, setProjectTasks] = useState([]);
+  const [otForm, setOtForm] = useState(EMPTY_OT_FORM);
 
   const setActiveDesigner = (designerId, { preserveInboxParams = false } = {}) => {
     if (!preserveInboxParams) {
@@ -462,12 +496,12 @@ export default function RequestsClient() {
 
       if (normalized.length >= 1) {
         const first = normalized[0];
-        setOtForm((f) => ({
+        setOtForm({
           ...EMPTY_OT_FORM,
           projectId: first.projectId,
           taskId: first.id,
           date: utcDateOnlyString(),
-        }));
+        });
       } else {
         setOtForm({ ...EMPTY_OT_FORM, date: utcDateOnlyString() });
       }
@@ -617,13 +651,13 @@ export default function RequestsClient() {
   }, [isHOD]);
 
   useEffect(() => {
-    if (!isHOD || isUuidString(forDesignerParam) || designerList.length === 0) return;
+    if (!isHOD || isUuidString(forDesignerParam) || employeeSelectionList.length === 0) return;
     const overtimeId = searchParams.get("overtimeId")?.trim() ?? "";
     const regularizationId = searchParams.get("regularizationId")?.trim() ?? "";
     if (isUuidString(overtimeId) || isUuidString(regularizationId)) return;
-    handleDesignerChange(designerList[0].id);
+    handleDesignerChange(employeeSelectionList[0].id);
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [isHOD, designerList.length, forDesignerParam]);
+  }, [isHOD, employeeSelectionList.length, forDesignerParam]);
 
   useEffect(() => {
     const targetId = searchParams.get("regularizationId")?.trim();
@@ -778,12 +812,7 @@ export default function RequestsClient() {
     openReviewModal(request, "Rejected");
   };
 
-  const [projects, setProjects] = useState([]);
-  const [projectTasks, setProjectTasks] = useState([]);
-
   // --- Overtime Request State ---
-  const [otForm, setOtForm] = useState(EMPTY_OT_FORM);
-
   useEffect(() => {
     const projectId = String(otForm.projectId ?? "").trim();
     if (!projectId) {
@@ -862,7 +891,7 @@ export default function RequestsClient() {
     e.preventDefault();
     if (otSubmitting) return;
     if (isHOD && !activeDesignerId) {
-      toast.warning("Select a designer profile before submitting overtime.");
+      toast.warning("Select an employee profile before submitting overtime.");
       return;
     }
     if (!isUuidString(String(otForm.taskId ?? "").trim())) {
@@ -1053,13 +1082,15 @@ export default function RequestsClient() {
                 value={activeDesignerId ?? ""}
                 onChange={(e) => handleDesignerChange(e.target.value)}
               >
-                {designerList.length === 0 ? (
+                {employeeSelectionList.length === 0 ? (
                   <option value="">{activeDesignerName}</option>
                 ) : (
                   <>
-                    <option value="" disabled>Select designer</option>
-                    {designerList.map((d) => (
-                      <option key={d.id} value={d.id}>{d.name}</option>
+                    <option value="" disabled>Select employee</option>
+                    {employeeSelectionList.map((d) => (
+                      <option key={d.id} value={d.id}>
+                        {d.name}{d.isSelf ? " (You)" : ""}
+                      </option>
                     ))}
                   </>
                 )}
@@ -1409,7 +1440,7 @@ export default function RequestsClient() {
             <form onSubmit={(e) => void handleOtSubmit(e)} className="space-y-5 p-4 sm:p-5">
                 {isHOD && !activeDesignerId ? (
                   <div className="rounded-lg border border-dashed border-slate-300 bg-slate-50 px-4 py-3 text-sm text-slate-600">
-                    Select a designer profile above to submit overtime on their behalf.
+                    Select an employee profile above to submit overtime.
                   </div>
                 ) : null}
                 {!isHOD && assignedTasks.length === 0 && !assignedTasksLoading ? (
