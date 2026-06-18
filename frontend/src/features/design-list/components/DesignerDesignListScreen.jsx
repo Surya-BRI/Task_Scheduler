@@ -19,7 +19,7 @@ const getStatusColor = (status) => {
     case "HOD_REVIEW":       return "bg-violet-100 text-violet-700 border-violet-200";
     case "SALES_REVIEW":     return "bg-orange-100 text-orange-700 border-orange-200";
     case "REWORK":           return "bg-red-100 text-red-700 border-red-200";
-    case "REVIEW_COMPLETED": return "bg-green-100 text-green-700 border-green-200";
+    case "CLIENT_ACCEPTED":  return "bg-green-100 text-green-700 border-green-200";
     case "CLIENT_REJECTED":  return "bg-rose-100 text-rose-700 border-rose-200";
     case "ON_HOLD":          return "bg-slate-100 text-slate-700 border-slate-300";
     default:                 return "bg-slate-100 text-slate-700 border-slate-200";
@@ -28,7 +28,7 @@ const getStatusColor = (status) => {
 const getStatusDot = (status) => ({
   DESIGN_NEW: "bg-amber-500", DESIGN_PLANNED: "bg-sky-500", IN_PROGRESS: "bg-blue-500",
   DESIGN_COMPLETED: "bg-teal-500", HOD_REVIEW: "bg-violet-500", SALES_REVIEW: "bg-orange-500",
-  REWORK: "bg-red-500", REVIEW_COMPLETED: "bg-green-500", CLIENT_REJECTED: "bg-rose-500",
+  REWORK: "bg-red-500", CLIENT_ACCEPTED: "bg-green-500", CLIENT_REJECTED: "bg-rose-500",
   ON_HOLD: "bg-slate-500",
 }[status] || "bg-slate-500");
 function taskDetailPath(row, extra = {}) { return taskViewPathForRecord(row, { from: FROM_DESIGNER_QUEUE, ...extra }); }
@@ -44,7 +44,7 @@ const Toolbar = ({ viewMode, setViewMode, filters, setFilters, salesPersons, des
   const activeCount = [filters.type, filters.status, filters.salesPerson, filters.startDate, filters.endDate].filter(Boolean).length;
   const designStatuses = [
     "DESIGN_NEW", "DESIGN_PLANNED", "IN_PROGRESS", "DESIGN_COMPLETED",
-    "HOD_REVIEW", "SALES_REVIEW", "REWORK", "REVIEW_COMPLETED", "CLIENT_REJECTED", "ON_HOLD",
+    "HOD_REVIEW", "SALES_REVIEW", "REWORK", "CLIENT_ACCEPTED", "CLIENT_REJECTED", "ON_HOLD",
   ];
   return (
     <div className="mb-4 mt-4 flex flex-col gap-4 px-4 sm:px-6 md:flex-row md:items-center md:justify-between">
@@ -74,7 +74,7 @@ const Board = ({ data }) => {
     { title: "HOD Review",       status: "HOD_REVIEW" },
     { title: "Sales Review",     status: "SALES_REVIEW" },
     { title: "Rework / Error",   status: "REWORK" },
-    { title: "Review Completed", status: "REVIEW_COMPLETED" },
+    { title: "Client Accepted",  status: "CLIENT_ACCEPTED" },
     { title: "Client Rejected",  status: "CLIENT_REJECTED" },
     { title: "On Hold",          status: "ON_HOLD" },
   ];

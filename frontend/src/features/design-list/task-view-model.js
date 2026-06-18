@@ -17,15 +17,15 @@ export function normalizeStatusCode(rawStatus) {
   if (value === "HOD_REVIEW")       return "HOD_REVIEW";
   if (value === "SALES_REVIEW")     return "SALES_REVIEW";
   if (value === "REWORK")           return "REWORK";
-  if (value === "REVIEW_COMPLETED") return "REVIEW_COMPLETED";
+  if (value === "CLIENT_ACCEPTED")  return "CLIENT_ACCEPTED";
   if (value === "CLIENT_REJECTED")  return "CLIENT_REJECTED";
   if (value === "ON_HOLD")          return "ON_HOLD";
   // Legacy → new lifecycle mapping
   if (value === "PENDING")   return "DESIGN_NEW";
   if (value === "WIP")       return "IN_PROGRESS";
   if (value === "REVISION")  return "REWORK";
-  if (value === "COMPLETED") return "REVIEW_COMPLETED";
-  if (value === "APPROVED")  return "REVIEW_COMPLETED";
+  if (value === "COMPLETED") return "CLIENT_ACCEPTED";
+  if (value === "APPROVED")  return "CLIENT_ACCEPTED";
   return "DESIGN_NEW";
 }
 
@@ -35,7 +35,7 @@ export function toBackendStatus(frontendStatus) {
     case "DESIGN_NEW":       return "PENDING";
     case "IN_PROGRESS":      return "WIP";
     case "REWORK":           return "REVISION";
-    case "REVIEW_COMPLETED": return "COMPLETED";
+    case "CLIENT_ACCEPTED":  return "CLIENT_ACCEPTED";
     default:                 return frontendStatus;
   }
 }
@@ -49,7 +49,7 @@ export function getStatusLabel(statusCode) {
     case "HOD_REVIEW":       return "HOD Review";
     case "SALES_REVIEW":     return "Sales Review";
     case "REWORK":           return "Rework / Error";
-    case "REVIEW_COMPLETED": return "Review Completed";
+    case "CLIENT_ACCEPTED":  return "Client Accepted";
     case "CLIENT_REJECTED":  return "Client Rejected";
     case "ON_HOLD":          return "On Hold";
     default:                 return "Design Task New";
@@ -86,9 +86,12 @@ export function mapTaskToDesignRow(task) {
     projectName: task?.project?.name || task?.project?.projectNo || "—",
     designType: task?.project?.category || "Project",
     businessUnit: task?.project?.category || "Project",
-    name: task?.revisionCode
-      ? `${task?.opNo || task?.project?.projectNo || ''}${task?.opNo || task?.project?.projectNo ? '-' : ''}${task.revisionCode}`
-      : task?.opNo || task?.project?.projectNo || "No ID",
+    name: [
+      task?.opNo || task?.project?.projectNo || null,
+      task?.signType || null,
+      task?.disciplineType || null,
+      task?.revisionCode || null,
+    ].filter(Boolean).join(' - ') || "No ID",
     status: normalizeStatusCode(task?.status),
     salesPerson: task?.project?.salesPerson || "Unassigned",
     created: formatDisplayDate(createdDate) || "—",
@@ -96,6 +99,7 @@ export function mapTaskToDesignRow(task) {
     submissionDate: deadlineDate,
     agingDays: computeAgingDays(createdDate),
     assigneeId: task?.assigneeId || null,
+    revisionCode: task?.revisionCode || "—",
   };
 }
 

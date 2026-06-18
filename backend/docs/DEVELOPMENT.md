@@ -126,10 +126,14 @@ Authorization: Bearer <accessToken>
 ## Task Create Rules (Important)
 
 For `POST /api/v1/tasks/extended`:
-- `task.projectName` is required.
-- Backend rejects missing/blank project name with `400`.
+- `task.projectName` is required. Backend rejects missing/blank project name with `400`.
 - No fallback to task title/default generated project name.
 - Existing resolved project names are synced to incoming `task.projectName` when different.
+- For project tasks, **one `ErpTSTask` is created per `projectDetails[]` entry**. The frontend sends one entry per ticked discipline per sign type, so selecting Artwork + Technical on a sign type creates 2 tasks.
+- Task title is auto-built as `[opNo, signType, disciplineType, revisionCode].join(' - ')`.
+- Duplicate detection includes `disciplineType` — same project/opNo/signType/revision is allowed if `disciplineType` differs.
+- `dueDate` per task uses `line.deadline` if present, falling back to `dto.task.dueDate`.
+- `ProjectDetailInputDto` accepts `signFamily` and `disciplineType` (both optional strings).
 
 ## Activity Endpoints
 

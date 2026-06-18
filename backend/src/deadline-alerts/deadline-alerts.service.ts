@@ -38,7 +38,7 @@ export class DeadlineAlertsService {
       const tasks = await this.prisma.task.findMany({
         where: {
           ...alert.where,
-          status: { notIn: ['REVIEW_COMPLETED', 'CLIENT_REJECTED', 'COMPLETED', 'APPROVED'] },
+          status: { notIn: ['CLIENT_ACCEPTED', 'CLIENT_REJECTED', 'COMPLETED', 'APPROVED'] },
           dueDate: { not: null },
         },
         select: {

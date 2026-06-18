@@ -90,7 +90,7 @@ export function DesignListRecordPage() {
   const record = records.find((item) => item.id === recordKey)
   const [providedFile, setProvidedFile] = useState('Design.ZIP')
   const [submittedSession, setSubmittedSession] = useState(null)
-  const isTerminalStatus = record?.status === 'REVIEW_COMPLETED' || record?.status === 'CLIENT_REJECTED'
+  const isTerminalStatus = record?.status === 'CLIENT_ACCEPTED' || record?.status === 'CLIENT_REJECTED'
   const rawTab = searchParams.get('tab')
   const activeTab = RECORD_TAB_IDS.includes(rawTab) ? rawTab : 'details'
   const from = searchParams.get('from')

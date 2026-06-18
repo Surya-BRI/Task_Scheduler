@@ -98,8 +98,11 @@ Prisma schema models (and mapped SQL tables) in `backend/prisma/schema.prisma`: 
 - Controller: `backend/src/tasks/tasks.controller.ts`
 - Service: `backend/src/tasks/tasks.service.ts`
 - Connected tables: `ErpTSTask`, `ErpTSUser`, `ErpTSProject`, `ErpTSActivityLog`, `ErpTSRetailTaskDetail`, `ErpTSProjectTaskDetail`, `ErpTSRetailTaskDetailAttachment`, `ErpTSProjectTaskDetailAttachment`, `ErpTSTaskWorkSession`, `ErpTSTaskWorkSessionFile`
-- Extended create endpoint: `POST /tasks/extended` creates parent `ErpTSTask` and type-specific details in a single transaction.
-- Extended create contract now requires `task.projectName` (no fallback naming); missing value returns `400`.
+- Extended create endpoint: `POST /tasks/extended` creates **one `ErpTSTask` per `projectDetails[]` entry** for project tasks — each entry maps to one discipline for one sign type. `task.projectName` required; missing value returns `400`.
+- Task title for project tasks is built as `[opNo, signType, disciplineType, revisionCode].join(' - ')`.
+- Duplicate check includes `disciplineType` — multiple discipline tasks can share the same project/opNo/signType/revision.
+- `dueDate` on each task resolves from `line.deadline` first, then `dto.task.dueDate`.
+- `ErpTSTask` now carries `signType`, `signFamily`, and `disciplineType` fields; all three are returned in list and detail selects.
 - File endpoint: `POST /tasks/upload-file` uploads to S3 and logs activity.
 - Timer state endpoints: `GET /tasks/:id/timer-state` and `POST /tasks/:id/save-timer` upsert a Draft `ErpTSTaskWorkSession` for cold-start restore.
 - Work submission endpoint: `POST /tasks/:id/submit-work` promotes session to Submitted status, uploads files to S3 into `ErpTSTaskWorkSessionFile`, and logs `TASK_WORK_SUBMITTED` activity.

@@ -280,6 +280,7 @@ export function Navbar({ currentDate, onCalendarChange, dateRangeText }) {
 
   const isHOD = session?.role === 'HOD'
   const isDesigner = session?.role === 'DESIGNER'
+  const isSalesperson = session?.role === 'SALESPERSON'
   const canViewOverview = session?.role === 'HOD'
 
   const utilityIconClass = 'ui-icon-button'
@@ -290,10 +291,12 @@ export function Navbar({ currentDate, onCalendarChange, dateRangeText }) {
   const onProjects = pathname === '/projects-overview' || pathname.startsWith('/projects-overview')
   const onScheduler = pathname === '/design-scheduler' || pathname.startsWith('/designer')
 
-  // Logo click: HOD → design-list, Designer → their design list
+  // Logo click: role-based home route
   const handleLogoClick = () => {
     if (isDesigner) {
-      router.push(`/design-list/tasks`)
+      router.push('/design-list/tasks')
+    } else if (isSalesperson) {
+      router.push('/sales/tasks')
     } else {
       router.push('/design-list')
     }

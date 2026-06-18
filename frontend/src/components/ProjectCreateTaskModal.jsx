@@ -1,9 +1,18 @@
 import { useEffect, useId, useRef, useState } from 'react'
 import { ChevronDown, ChevronRight, Pencil, X } from 'lucide-react'
 import { apiClient } from '@/lib/api-client'
+import { toast } from 'sonner'
 
 const PRIORITY_OPTIONS = ['Low', 'Medium', 'High']
 const REVISION_PATTERN = /^R\d+$/
+
+const DISCIPLINES = [
+  { key: 'artwork',   label: 'Artwork',   hoursKey: 'artHours' },
+  { key: 'technical', label: 'Technical', hoursKey: 'techHours' },
+  { key: 'location',  label: 'Location',  hoursKey: 'locationHours' },
+  { key: 'asBuilt',   label: 'As-Built',  hoursKey: 'asBuiltHours' },
+  { key: 'bim',       label: 'BIM',       hoursKey: null },
+]
 
 function getPriorityClasses(level) {
   if (level === 'High') return 'text-red-700 font-semibold'
@@ -182,10 +191,12 @@ export function ProjectCreateTaskModal({ open, onClose, onCreated, submissionDat
     )
   }
 
-  // Count only child (sign type) rows — each selected child = one task
+  // Count ticked discipline checkboxes — each tick = one task
   const selectedCount = rows.reduce((count, row) => {
     for (const child of row.children ?? []) {
-      if (rowHasSelection(child)) count += 1
+      for (const disc of DISCIPLINES) {
+        if (child[disc.key]) count += 1
+      }
     }
     return count
   }, 0)
@@ -283,14 +294,18 @@ export function ProjectCreateTaskModal({ open, onClose, onCreated, submissionDat
           if (child[flag]) {
             const h = Number(child[hours])
             if (!child[hours] || Number.isNaN(h) || h < 1) {
-              setRowsError(`${label} hours must be a number (min 1) for all checked disciplines`)
+              toast.error(`${label} hours must be a number (min 1) for all checked disciplines`)
               return
             }
           }
         }
+        const hasAnyDiscipline = DISCIPLINES.some((d) => child[d.key])
+        if (hasAnyDiscipline && !child.deadline) {
+          toast.error(`Deadline is required for "${child.signType || 'sign type'}"`)
+          return
+        }
       }
     }
-    setRowsError('')
     setFieldErrors({})
     setError('')
     setSubmitting(true)
@@ -317,26 +332,27 @@ export function ProjectCreateTaskModal({ open, onClose, onCreated, submissionDat
         return fallbackDeadline
       }
 
-      // Only collect child (sign type) rows — each becomes its own task
+      // One entry per ticked discipline per sign type — each entry becomes its own task
       const details = []
       for (const row of rows) {
         for (const child of row.children ?? []) {
-          if (rowHasSelection(child)) {
+          for (const disc of DISCIPLINES) {
+            if (!child[disc.key]) continue
             details.push({
               signType: child.signType || undefined,
+              signFamily: row.signType || undefined,
               planCode: planCode || undefined,
-              area: undefined,
-              level: undefined,
-              artwork: !!child.artwork,
-              artworkHours: child.artwork ? Number(child.artHours) : undefined,
-              technical: !!child.technical,
-              technicalHours: child.technical ? Number(child.techHours) : undefined,
-              location: !!child.location,
-              locationHours: child.location ? Number(child.locationHours) : undefined,
-              asBuilt: !!child.asBuilt,
-              asBuiltHours: child.asBuilt ? Number(child.asBuiltHours) : undefined,
-              bim: !!child.bim,
-              deadline: resolveDeadline(child.deadline),
+              disciplineType: disc.label,
+              artwork:        disc.key === 'artwork',
+              artworkHours:   disc.key === 'artwork' && disc.hoursKey ? Number(child[disc.hoursKey]) : undefined,
+              technical:      disc.key === 'technical',
+              technicalHours: disc.key === 'technical' && disc.hoursKey ? Number(child[disc.hoursKey]) : undefined,
+              location:       disc.key === 'location',
+              locationHours:  disc.key === 'location' && disc.hoursKey ? Number(child[disc.hoursKey]) : undefined,
+              asBuilt:        disc.key === 'asBuilt',
+              asBuiltHours:   disc.key === 'asBuilt' && disc.hoursKey ? Number(child[disc.hoursKey]) : undefined,
+              bim:            disc.key === 'bim',
+              deadline:       resolveDeadline(child.deadline),
             })
           }
         }
@@ -541,7 +557,18 @@ export function ProjectCreateTaskModal({ open, onClose, onCreated, submissionDat
                           <div className="px-2 py-1.5 text-center"><TickBox checked={child.asBuilt} onChange={(v) => updateChildField(row.id, child.id, 'asBuilt', v)} /></div>
                           <div className="px-1 py-1.5"><TableInput type="number" value={child.asBuiltHours} onChange={(v) => updateChildField(row.id, child.id, 'asBuiltHours', v)} /></div>
                           <div className="px-2 py-1.5 text-center"><TickBox checked={child.bim} onChange={(v) => updateChildField(row.id, child.id, 'bim', v)} /></div>
-                          <div className="px-2 py-1.5"><TableInput type="date" value={child.deadline} onChange={(v) => updateChildField(row.id, child.id, 'deadline', v)} /></div>
+                          <div className="px-2 py-1.5">
+                            <input
+                              type="date"
+                              value={child.deadline}
+                              onChange={(e) => updateChildField(row.id, child.id, 'deadline', e.target.value)}
+                              className={`w-full rounded-full border px-2 text-xs text-slate-700 outline-none focus:border-blue-400 h-7 ${
+                                DISCIPLINES.some((d) => child[d.key]) && !child.deadline
+                                  ? 'border-red-400 bg-red-50'
+                                  : 'border-slate-200 bg-slate-50'
+                              }`}
+                            />
+                          </div>
                         </div>
                       ))}
                     </div>

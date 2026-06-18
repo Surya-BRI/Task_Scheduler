@@ -372,7 +372,7 @@ export class SchedulerAssignmentsService {
           const assignedDesigner = designerSet.size === 1 ? [...designerSet][0] : null;
 
           const currentStatus = String(task.status ?? '').toUpperCase();
-          const isTerminal = ['COMPLETED', 'APPROVED', 'REVIEW_COMPLETED', 'CLIENT_REJECTED'].includes(currentStatus);
+          const isTerminal = ['COMPLETED', 'APPROVED', 'CLIENT_ACCEPTED', 'CLIENT_REJECTED'].includes(currentStatus);
 
           const updateData: Prisma.TaskUncheckedUpdateInput = {};
           if (assignedDesigner) {

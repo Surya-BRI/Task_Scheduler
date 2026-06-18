@@ -115,15 +115,18 @@ model Task {
   title       String?   @db.NVarChar(200)
   revisionCode String?  @db.NVarChar(20)
   designType   String?  @db.NVarChar(80)
-  signType     String?  @db.NVarChar(255)
+  signType       String?  @db.NVarChar(255)
+  signFamily     String?  @db.NVarChar(255)
+  disciplineType String?  @db.NVarChar(50)
   description String?   @db.NVarChar(Max)
   status      String    @default("DESIGN_NEW") @db.NVarChar(20)
   priority    String    @default("Medium") @db.NVarChar(50)
   projectId   String    @db.UniqueIdentifier
   assigneeId  String?   @db.UniqueIdentifier
   dueDate     DateTime?
-  startedAt   DateTime?
-  completedAt DateTime?
+  startedAt          DateTime?
+  completedAt        DateTime?
+  holdPreviousStatus String?   @db.NVarChar(50)
 
   technicalHead  String?  @db.NVarChar(255)
   teamLead       String?  @db.NVarChar(255)
@@ -147,7 +150,7 @@ model Task {
 
   @@index([projectId])
   @@index([assigneeId])
-  @@index([projectId, opNo, designType, revisionCode, signType])
+  @@index([projectId, opNo, designType, revisionCode, signType, disciplineType])
   @@map("ErpTSTask")
 }
 

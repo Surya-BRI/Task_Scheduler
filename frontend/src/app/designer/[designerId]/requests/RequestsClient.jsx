@@ -116,7 +116,7 @@ function computeStatsFromTasks(tasks) {
   const currentMonth = now.getMonth();
   const currentYear = now.getFullYear();
   const onHold = tasks.filter((t) => t.status === "ON_HOLD");
-  const completed = tasks.filter((t) => t.status === "REVIEW_COMPLETED");
+  const completed = tasks.filter((t) => t.status === "CLIENT_ACCEPTED");
   const active = tasks.filter((t) =>
     ["DESIGN_NEW", "DESIGN_PLANNED", "IN_PROGRESS", "DESIGN_COMPLETED", "HOD_REVIEW", "SALES_REVIEW", "REWORK"].includes(String(t.status ?? ""))
   );

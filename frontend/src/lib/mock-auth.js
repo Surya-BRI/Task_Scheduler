@@ -37,5 +37,6 @@ export function getHomeRoute(session) {
   if (!session) return '/login';
   if (session.role === 'HOD') return '/design-list';
   if (session.role === 'DESIGNER') return '/design-list/tasks';
+  if (session.role === 'SALESPERSON') return '/sales/tasks';
   return '/design-list';
 }

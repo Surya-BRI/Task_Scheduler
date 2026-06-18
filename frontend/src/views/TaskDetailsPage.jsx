@@ -84,7 +84,7 @@ const STAGE_ITEMS = [
 ]
 
 const SPECIAL_STATUS = {
-  REVIEW_COMPLETED: { label: 'Completed',       hint: 'Task fully reviewed & closed', icon: CheckCircle2, border: 'border-emerald-400', bg: 'bg-emerald-50', iconBg: 'bg-emerald-500', text: 'text-emerald-800', hint2: 'text-emerald-600' },
+  CLIENT_ACCEPTED:  { label: 'Client Accepted', hint: 'Task accepted by client',       icon: CheckCircle2, border: 'border-emerald-400', bg: 'bg-emerald-50', iconBg: 'bg-emerald-500', text: 'text-emerald-800', hint2: 'text-emerald-600' },
   CLIENT_REJECTED:  { label: 'Client Rejected', hint: 'Rejected by client',           icon: Ban,          border: 'border-red-400',     bg: 'bg-red-50',     iconBg: 'bg-red-500',     text: 'text-red-800',     hint2: 'text-red-500' },
   ON_HOLD:          { label: 'On Hold',          hint: 'Task paused',                  icon: Pause,        border: 'border-amber-400',   bg: 'bg-amber-50',   iconBg: 'bg-amber-500',   text: 'text-amber-800',   hint2: 'text-amber-600' },
 }
@@ -728,6 +728,9 @@ function mapTaskToRecord(task) {
     subTeamLead: task.subTeamLead ?? '',
     designers: task.designers ?? '',
     projectDetails: task.projectDetails ?? [],
+    disciplineType: task.disciplineType ?? null,
+    signType: task.signType ?? null,
+    signFamily: task.signFamily ?? null,
   }
 }
 
@@ -763,7 +766,7 @@ function getTaskStatusBadgeClass(normalizedStatus) {
   switch (normalizedStatus) {
     case 'IN_PROGRESS':      return 'bg-blue-100 text-blue-700'
     case 'DESIGN_COMPLETED': return 'bg-emerald-100 text-emerald-700'
-    case 'REVIEW_COMPLETED': return 'bg-emerald-100 text-emerald-700'
+    case 'CLIENT_ACCEPTED':  return 'bg-emerald-100 text-emerald-700'
     case 'HOD_REVIEW':       return 'bg-violet-100 text-violet-700'
     case 'SALES_REVIEW':     return 'bg-indigo-100 text-indigo-700'
     case 'REWORK':           return 'bg-red-100 text-red-700'
@@ -771,6 +774,24 @@ function getTaskStatusBadgeClass(normalizedStatus) {
     case 'DESIGN_PLANNED':   return 'bg-sky-100 text-sky-700'
     default:                 return 'bg-slate-100 text-slate-600'
   }
+}
+
+const DISCIPLINE_PILL_CLASSES = {
+  Artwork:   'bg-blue-100 text-blue-700',
+  Technical: 'bg-orange-100 text-orange-700',
+  Location:  'bg-green-100 text-green-700',
+  'As-Built':'bg-purple-100 text-purple-700',
+  BIM:       'bg-teal-100 text-teal-700',
+}
+
+function DisciplinePill({ type }) {
+  if (!type) return <span className="text-slate-400">—</span>
+  const cls = DISCIPLINE_PILL_CLASSES[type] ?? 'bg-slate-100 text-slate-600'
+  return (
+    <span className={`inline-block rounded-full px-2 py-0.5 text-[10px] font-semibold ${cls}`}>
+      {type}
+    </span>
+  )
 }
 
 function ProjectTaskList({ tasks, loading, onView }) {
@@ -781,9 +802,10 @@ function ProjectTaskList({ tasks, loading, onView }) {
         <span className="text-[11px] text-slate-400">{tasks.length} task{tasks.length !== 1 ? 's' : ''}</span>
       </div>
       <div className="overflow-hidden rounded-md border border-slate-200">
-        <div className="grid grid-cols-[1fr_1fr_1fr_1fr_1fr_80px_44px] bg-slate-100 px-2.5 py-1.5 text-[11px] font-semibold text-slate-600">
+        <div className="grid grid-cols-[1.2fr_0.5fr_1fr_0.9fr_1fr_1fr_80px_44px] bg-slate-100 px-2.5 py-1.5 text-[11px] font-semibold text-slate-600">
           <div>Task No</div>
           <div>Revision</div>
+          <div>Sign Family</div>
           <div>Type</div>
           <div>Status</div>
           <div>Designer</div>
@@ -804,11 +826,15 @@ function ProjectTaskList({ tasks, loading, onView }) {
               return (
                 <li
                   key={task.id}
-                  className="grid grid-cols-[1fr_1fr_1fr_1fr_1fr_80px_44px] items-center px-2.5 py-1.5 text-xs text-slate-700 hover:bg-slate-50"
+                  className="grid grid-cols-[1.2fr_0.5fr_1fr_0.9fr_1fr_1fr_80px_44px] items-center px-2.5 py-2 text-xs text-slate-700 hover:bg-slate-50"
                 >
-                  <span className="truncate font-medium text-slate-900">{task.taskNo || '—'}</span>
+                  <span className="min-w-0">
+                    <span className="block truncate font-medium text-slate-900">{task.taskNo || '—'}</span>
+                    {task.signType && <span className="block truncate text-[10px] text-slate-400">{task.signType}</span>}
+                  </span>
                   <span>{task.revisionCode || '—'}</span>
-                  <span className="capitalize">{task.designType || task.project?.category || '—'}</span>
+                  <span className="truncate text-slate-600">{task.signFamily || '—'}</span>
+                  <span><DisciplinePill type={task.disciplineType} /></span>
                   <span>
                     <span className={`inline-block rounded-full px-2 py-0.5 text-[10px] font-semibold ${getTaskStatusBadgeClass(normalized)}`}>
                       {getStatusLabel(task.status)}
@@ -1065,11 +1091,13 @@ export function TaskDetailsPage() {
     chatterMessage.trim().length > 0 && !resolvingProjectId && !resolvingTaskId
   const hasExistingTask = Boolean(taskId || isUuid(record?.taskId ?? record?.id))
   const taskStatus = record?.status ?? null
-  const isTerminalStatus = taskStatus === 'REVIEW_COMPLETED' || taskStatus === 'CLIENT_REJECTED'
-  const isPostSubmitStatus = ['DESIGN_COMPLETED', 'HOD_REVIEW', 'SALES_REVIEW', 'REWORK', 'REVIEW_COMPLETED', 'CLIENT_REJECTED', 'ON_HOLD'].includes(taskStatus)
+  const isTerminalStatus = taskStatus === 'CLIENT_ACCEPTED' || taskStatus === 'CLIENT_REJECTED'
+  const isPostSubmitStatus = ['DESIGN_COMPLETED', 'HOD_REVIEW', 'SALES_REVIEW', 'REWORK', 'CLIENT_ACCEPTED', 'CLIENT_REJECTED', 'ON_HOLD'].includes(taskStatus)
   const showTimer = !isCreationRoute && hasExistingTask && Boolean(taskId) && !isTerminalStatus && (from === 'designer-queue' || from === 'designer-design-list')
   const _session = getSession()
   const isHod = ['HOD', 'ADMIN', 'PROJECT_MANAGER'].includes(_session?.role ?? '')
+  const isSales = _session?.role === 'SALESPERSON'
+  const isDesigner = _session?.role === 'DESIGNER'
   const tabs = isCreationRoute && !isRetail ? [...TABS, PROJECT_TAB] : TABS
   useEffect(() => {
     let alive = true
@@ -1776,6 +1804,7 @@ export function TaskDetailsPage() {
                           launchCompleteModal={launchCompleteModal}
                           onConsumedLaunchFlags={clearTimerLaunchParams}
                           onSubmitComplete={() => setTaskRefreshCounter((c) => c + 1)}
+                          onStatusChange={() => setTaskRefreshCounter((c) => c + 1)}
                         />
                       ) : null}
                       {isPostSubmitStatus && submittedSession ? (
@@ -1844,7 +1873,12 @@ export function TaskDetailsPage() {
                               </div>
                             )}
                           </div>
+                          {/* HOD action panel — DESIGN_COMPLETED, HOD_REVIEW, and ON_HOLD (when parked from HOD's stages) */}
                           {isHod && !isTerminalStatus && (
+                            taskStatus === 'DESIGN_COMPLETED' ||
+                            taskStatus === 'HOD_REVIEW' ||
+                            (taskStatus === 'ON_HOLD' && record?.holdPreviousStatus !== 'SALES_REVIEW')
+                          ) && (
                             <div className="mt-3 pt-3 border-t border-slate-200">
                               <p className="text-[10px] font-semibold text-slate-400 uppercase tracking-wide mb-2">Move Status</p>
                               <div className="flex flex-wrap gap-2">
@@ -1859,28 +1893,43 @@ export function TaskDetailsPage() {
                                 )}
                                 {taskStatus === 'HOD_REVIEW' && (<>
                                   <button type="button" onClick={() => handleStatusChange('SALES_REVIEW')} className="rounded-md bg-orange-500 px-3 py-1.5 text-xs font-semibold text-white hover:bg-orange-600 transition-colors">Send to Sales</button>
-                                  <button type="button" onClick={() => handleStatusChange('REVIEW_COMPLETED')} className="rounded-md bg-emerald-600 px-3 py-1.5 text-xs font-semibold text-white hover:bg-emerald-700 transition-colors">Complete Review</button>
                                   <button type="button" onClick={() => { setReworkNote(''); setReworkDialogOpen(true); }} className="rounded-md bg-red-500 px-3 py-1.5 text-xs font-semibold text-white hover:bg-red-600 transition-colors">Request Rework</button>
-                                  <button type="button" onClick={() => handleStatusChange('DESIGN_COMPLETED')} className="rounded-md border border-slate-300 bg-white px-3 py-1.5 text-xs font-semibold text-slate-600 hover:bg-slate-50 transition-colors">← Back to Design Complete</button>
                                 </>)}
-                                {taskStatus === 'SALES_REVIEW' && (<>
-                                  <button type="button" onClick={() => handleStatusChange('REVIEW_COMPLETED')} className="rounded-md bg-emerald-600 px-3 py-1.5 text-xs font-semibold text-white hover:bg-emerald-700 transition-colors">Mark Completed</button>
-                                  <button type="button" onClick={() => handleStatusChange('CLIENT_REJECTED')} className="rounded-md bg-rose-600 px-3 py-1.5 text-xs font-semibold text-white hover:bg-rose-700 transition-colors">Client Rejected</button>
-                                  <button type="button" onClick={() => { setReworkNote(''); setReworkDialogOpen(true); }} className="rounded-md bg-red-500 px-3 py-1.5 text-xs font-semibold text-white hover:bg-red-600 transition-colors">Request Rework</button>
-                                  <button type="button" onClick={() => handleStatusChange('HOD_REVIEW')} className="rounded-md border border-slate-300 bg-white px-3 py-1.5 text-xs font-semibold text-slate-600 hover:bg-slate-50 transition-colors">← Back to HOD Review</button>
-                                </>)}
-                                {taskStatus === 'REWORK' && (<>
-                                  <button type="button" onClick={() => handleStatusChange('HOD_REVIEW')} className="rounded-md bg-violet-600 px-3 py-1.5 text-xs font-semibold text-white hover:bg-violet-700 transition-colors">Back to HOD Review</button>
-                                  <button type="button" onClick={() => handleStatusChange('DESIGN_COMPLETED')} className="rounded-md border border-slate-300 bg-white px-3 py-1.5 text-xs font-semibold text-slate-600 hover:bg-slate-50 transition-colors">← Back to Design Complete</button>
-                                </>)}
-                                {taskStatus === 'ON_HOLD' && (<>
-                                  <button type="button" onClick={() => handleStatusChange('HOD_REVIEW')} className="rounded-md bg-violet-600 px-3 py-1.5 text-xs font-semibold text-white hover:bg-violet-700 transition-colors">Resume — HOD Review</button>
-                                  <button type="button" onClick={() => handleStatusChange('DESIGN_COMPLETED')} className="rounded-md bg-blue-600 px-3 py-1.5 text-xs font-semibold text-white hover:bg-blue-700 transition-colors">Return to Design Complete</button>
-                                  <button type="button" onClick={() => handleStatusChange('REWORK')} className="rounded-md bg-red-500 px-3 py-1.5 text-xs font-semibold text-white hover:bg-red-600 transition-colors">Request Rework</button>
-                                </>)}
+                                {taskStatus === 'ON_HOLD' && (
+                                  <button type="button" onClick={() => handleStatusChange(record?.holdPreviousStatus || 'HOD_REVIEW')} className="rounded-md bg-violet-600 px-3 py-1.5 text-xs font-semibold text-white hover:bg-violet-700 transition-colors">Resume</button>
+                                )}
                                 {taskStatus !== 'ON_HOLD' && (
                                   <button type="button" onClick={() => handleStatusChange('ON_HOLD')} className="rounded-md border border-slate-300 bg-white px-3 py-1.5 text-xs font-semibold text-slate-600 hover:bg-slate-50 transition-colors">Put On Hold</button>
                                 )}
+                              </div>
+                            </div>
+                          )}
+                          {/* Salesperson action panel — SALES_REVIEW stage and ON_HOLD when parked from SALES_REVIEW */}
+                          {isSales && !isTerminalStatus && (
+                            taskStatus === 'SALES_REVIEW' ||
+                            (taskStatus === 'ON_HOLD' && record?.holdPreviousStatus === 'SALES_REVIEW')
+                          ) && (
+                            <div className="mt-3 pt-3 border-t border-slate-200">
+                              <p className="text-[10px] font-semibold text-slate-400 uppercase tracking-wide mb-2">Sales Review Actions</p>
+                              <div className="flex flex-wrap gap-2">
+                                {taskStatus === 'SALES_REVIEW' && (<>
+                                  <button type="button" onClick={() => handleStatusChange('CLIENT_ACCEPTED')} className="rounded-md bg-emerald-600 px-3 py-1.5 text-xs font-semibold text-white hover:bg-emerald-700 transition-colors">Client Accepted</button>
+                                  <button type="button" onClick={() => handleStatusChange('CLIENT_REJECTED')} className="rounded-md bg-rose-600 px-3 py-1.5 text-xs font-semibold text-white hover:bg-rose-700 transition-colors">Client Rejected</button>
+                                  <button type="button" onClick={() => { setReworkNote(''); setReworkDialogOpen(true); }} className="rounded-md bg-red-500 px-3 py-1.5 text-xs font-semibold text-white hover:bg-red-600 transition-colors">Request Rework</button>
+                                  <button type="button" onClick={() => handleStatusChange('ON_HOLD')} className="rounded-md border border-slate-300 bg-white px-3 py-1.5 text-xs font-semibold text-slate-600 hover:bg-slate-50 transition-colors">Put On Hold</button>
+                                </>)}
+                                {taskStatus === 'ON_HOLD' && (
+                                  <button type="button" onClick={() => handleStatusChange(record?.holdPreviousStatus || 'SALES_REVIEW')} className="rounded-md bg-orange-500 px-3 py-1.5 text-xs font-semibold text-white hover:bg-orange-600 transition-colors">Resume</button>
+                                )}
+                              </div>
+                            </div>
+                          )}
+                          {/* Designer action panel — resubmit from REWORK back to HOD */}
+                          {isDesigner && taskStatus === 'REWORK' && (
+                            <div className="mt-3 pt-3 border-t border-slate-200">
+                              <p className="text-[10px] font-semibold text-slate-400 uppercase tracking-wide mb-2">Rework Actions</p>
+                              <div className="flex flex-wrap gap-2">
+                                <button type="button" onClick={() => handleStatusChange('HOD_REVIEW')} className="rounded-md bg-violet-600 px-3 py-1.5 text-xs font-semibold text-white hover:bg-violet-700 transition-colors">Submit for HOD Review</button>
                               </div>
                             </div>
                           )}
@@ -1890,12 +1939,25 @@ export function TaskDetailsPage() {
                         <div className="mt-4 border-t border-slate-200 pt-3">
                           <p className="mb-2 text-xs font-semibold text-slate-700">Work Scope</p>
                           <div className="space-y-2">
-                            {record.projectDetails.map((detail, idx) => (
-                              <div key={detail.id ?? idx} className="rounded-lg border border-slate-200 bg-white p-3">
-                                {(detail.signType || detail.planCode || detail.deadline) && (
-                                  <div className="mb-3 flex flex-wrap gap-x-5 gap-y-1 text-xs">
-                                    {detail.signType && (
-                                      <span className="text-slate-500">Sign Type: <span className="font-semibold text-slate-800">{detail.signType}</span></span>
+                            {record.projectDetails.map((detail, idx) => {
+                              const DISC_HOURS = [
+                                { key: 'artwork',   label: 'Artwork',   hours: detail.artworkHours },
+                                { key: 'technical', label: 'Technical', hours: detail.technicalHours },
+                                { key: 'location',  label: 'Location',  hours: detail.locationHours },
+                                { key: 'asBuilt',   label: 'As-Built',  hours: detail.asBuiltHours },
+                                { key: 'bim',       label: 'BIM',       hours: null },
+                              ]
+                              const activeDiscipline =
+                                DISC_HOURS.find(d => d.label === record.disciplineType) ??
+                                DISC_HOURS.find(d => detail[d.key])
+                              return (
+                                <div key={detail.id ?? idx} className="rounded-lg border border-slate-200 bg-white p-3">
+                                  <div className="flex flex-wrap items-center gap-x-5 gap-y-1 text-xs">
+                                    {(detail.signType || record.signType) && (
+                                      <span className="text-slate-500">Sign Type: <span className="font-semibold text-slate-800">{detail.signType || record.signType}</span></span>
+                                    )}
+                                    {record.signFamily && (
+                                      <span className="text-slate-500">Sign Family: <span className="font-semibold text-slate-800">{record.signFamily}</span></span>
                                     )}
                                     {detail.planCode && (
                                       <span className="text-slate-500">Plan Code: <span className="font-semibold text-slate-800">{detail.planCode}</span></span>
@@ -1904,32 +1966,17 @@ export function TaskDetailsPage() {
                                       <span className="text-slate-500">Deadline: <span className="font-semibold text-slate-800">{new Date(detail.deadline).toLocaleDateString('en-GB')}</span></span>
                                     )}
                                   </div>
-                                )}
-                                <div className="grid grid-cols-2 gap-2 sm:grid-cols-3">
-                                  {[
-                                    { flag: detail.artwork,   hours: detail.artworkHours,   label: 'Artwork' },
-                                    { flag: detail.technical, hours: detail.technicalHours, label: 'Technical' },
-                                    { flag: detail.location,  hours: detail.locationHours,  label: 'Location' },
-                                    { flag: detail.asBuilt,   hours: detail.asBuiltHours,   label: 'As-Built' },
-                                    { flag: detail.bim,       hours: null,                  label: 'BIM' },
-                                  ].map(({ flag, hours, label }) => (
-                                    <div
-                                      key={label}
-                                      className={`flex items-center gap-2 rounded-md px-2.5 py-1.5 text-xs ${flag ? 'bg-emerald-50 text-emerald-800' : 'bg-slate-50 text-slate-400'}`}
-                                    >
-                                      {flag
-                                        ? <CheckCircle2 className="h-3.5 w-3.5 shrink-0 text-emerald-500" />
-                                        : <div className="h-3.5 w-3.5 shrink-0 rounded-full border border-slate-300" />
-                                      }
-                                      <span className="font-medium">{label}</span>
-                                      {flag && hours != null && (
-                                        <span className="ml-auto text-[11px] text-emerald-600">{hours}h</span>
+                                  {activeDiscipline && (
+                                    <div className="mt-2 flex items-center gap-2">
+                                      <DisciplinePill type={activeDiscipline.label} />
+                                      {activeDiscipline.hours != null && activeDiscipline.hours > 0 && (
+                                        <span className="text-xs text-slate-500">{activeDiscipline.hours}h estimated</span>
                                       )}
                                     </div>
-                                  ))}
+                                  )}
                                 </div>
-                              </div>
-                            ))}
+                              )
+                            })}
                           </div>
                         </div>
                       )}
