@@ -9,6 +9,9 @@ export type LeaveRequestDto = {
   toDate: string;
   status: string;
   type: string;
+  halfDaySession?: string | null;
+  leaveDurationDays: number;
+  leaveDurationLabel: string;
   createdBy: string;
   approverId?: string | null;
   approverName?: string | null;
@@ -42,7 +45,8 @@ export function fetchLeaveTeamRequests(params?: { status?: string; designerId?: 
 
 export function createLeaveRequest(data: {
   userId: string;
-  type: string;
+  type: 'Full Day' | 'Half Day';
+  halfDaySession?: 'First Half' | 'Second Half';
   startDate: string;
   endDate?: string;
   reasonCategory: string;
@@ -54,7 +58,8 @@ export function createLeaveRequest(data: {
 export function updateLeaveRequest(
   id: string,
   data: {
-    type?: string;
+    type?: 'Full Day' | 'Half Day';
+    halfDaySession?: 'First Half' | 'Second Half';
     startDate?: string;
     endDate?: string;
     reason?: string;

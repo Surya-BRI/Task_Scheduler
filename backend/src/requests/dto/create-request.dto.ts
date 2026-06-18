@@ -19,6 +19,11 @@ export class CreateLeaveRequestDto {
   @IsDateString()
   endDate?: string;
 
+  @IsOptional()
+  @IsString()
+  @MaxLength(50)
+  halfDaySession?: string;
+
   @IsNotEmpty()
   @IsString()
   @IsIn([...LEAVE_REASON_OPTIONS])

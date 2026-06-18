@@ -78,6 +78,7 @@ async function main() {
     body: JSON.stringify({
       userId: d2,
       type: 'Half Day',
+      halfDaySession: 'First Half',
       startDate: sharedDate,
       endDate: sharedDate,
       reason: 'Designer 2 shared day',

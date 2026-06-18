@@ -15,6 +15,12 @@ import {
   aggregateStatusCounts,
   COMPLETED_STATUS_FILTER,
 } from './task-status-buckets.util';
+import {
+  calculateLeaveDurationDays,
+  formatLeaveDurationLabel,
+  normalizeHalfDaySession,
+  normalizeLeaveType,
+} from '../requests/leave-request.validation';
 const INBOX_ACTION_LABELS: Record<string, string> = {
   [ActivityAction.TASK_CREATED]: 'Task created',
   [ActivityAction.ASSIGNED_TASK]: 'Task assigned',
@@ -473,10 +479,19 @@ export class DashboardService {
       const designerId = row.user?.id ?? row.userId;
       const from = row.startDate.toISOString().split('T')[0];
       const to = (row.endDate ?? row.startDate).toISOString().split('T')[0];
+      const leaveType = normalizeLeaveType(row.type) ?? 'Full Day';
+      const halfDaySession = normalizeHalfDaySession(row.halfDaySession);
+      const leaveDuration = formatLeaveDurationLabel(
+        calculateLeaveDurationDays(leaveType, {
+          startDate: row.startDate,
+          endDate: row.endDate ?? row.startDate,
+        }),
+      );
       const itemKey = `leave-${row.id}`;
+      const sessionLabel = leaveType === 'Half Day' && halfDaySession ? ` (${halfDaySession})` : '';
       return {
         id: row.id,
-        summary: `${requester} — Leave ${from} to ${to}`,
+        summary: `${requester} — ${leaveType}${sessionLabel} leave ${from} to ${to} (${leaveDuration})`,
         occurredAt: row.createdAt.toISOString(),
         taskNo: null,
         requestType: 'leave',

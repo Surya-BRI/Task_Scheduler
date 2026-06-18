@@ -1,11 +1,15 @@
 import {
   buildLeaveDateRange,
+  calculateLeaveDurationDays,
   dateRangesOverlap,
   dateRangesOverlapIso,
   dateToDateOnlyIso,
   DUPLICATE_LEAVE_ERROR_MESSAGE,
+  formatLeaveDurationLabel,
   findOverlappingLeave,
   isLeaveRangeCompleted,
+  normalizeHalfDaySession,
+  normalizeLeaveType,
   overlapErrorMessage,
   parseDateOnly,
   validateLeaveDates,
@@ -39,6 +43,23 @@ describe('leave-request.validation', () => {
         expect(result.range.startDate.toISOString().slice(0, 10)).toBe('2026-06-10');
         expect(result.range.endDate.toISOString().slice(0, 10)).toBe('2026-06-12');
       }
+    });
+  });
+
+  describe('leave type and duration', () => {
+    it('maps legacy Leave values to Full Day', () => {
+      expect(normalizeLeaveType('Leave')).toBe('Full Day');
+      expect(normalizeLeaveType('Full-Day')).toBe('Full Day');
+      expect(normalizeLeaveType('Half Day')).toBe('Half Day');
+      expect(normalizeHalfDaySession('AM')).toBe('First Half');
+      expect(normalizeHalfDaySession('afternoon')).toBe('Second Half');
+    });
+
+    it('calculates half-day and full-day durations', () => {
+      expect(calculateLeaveDurationDays('Half Day', buildLeaveDateRange('2026-06-10', '2026-06-10'))).toBe(0.5);
+      expect(calculateLeaveDurationDays('Full Day', buildLeaveDateRange('2026-06-10', '2026-06-12'))).toBe(3);
+      expect(formatLeaveDurationLabel(0.5)).toBe('0.5 day');
+      expect(formatLeaveDurationLabel(1)).toBe('1 day');
     });
   });
 
@@ -137,6 +158,23 @@ describe('leave-request.validation', () => {
       ];
       expect(findOverlappingLeave(rows, range, 'keep')).toBeNull();
       expect(findOverlappingLeave(rows, range)?.id).toBe('keep');
+    });
+
+    it('allows different half-day sessions on the same date', () => {
+      const sameDay = buildLeaveDateRange('2026-08-10', '2026-08-10');
+      const rows = [
+        {
+          id: 'first-half',
+          startDate: parseDateOnly('2026-08-10'),
+          endDate: parseDateOnly('2026-08-10'),
+          status: 'PENDING',
+          type: 'Half Day',
+          halfDaySession: 'First Half',
+        },
+      ];
+
+      expect(findOverlappingLeave(rows, sameDay, undefined, 'Half Day', 'Second Half')).toBeNull();
+      expect(findOverlappingLeave(rows, sameDay, undefined, 'Half Day', 'First Half')?.id).toBe('first-half');
     });
   });
 
