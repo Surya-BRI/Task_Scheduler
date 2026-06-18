@@ -88,7 +88,6 @@ const DEFAULT_STATS = {
 const EMPTY_OT_FORM = {
   projectId: "",
   taskId: "",
-  date: "",
   estimatedRemaining: "2 hours",
   requestedHours: "1 hour",
   reason: "",
@@ -500,10 +499,9 @@ export default function RequestsClient() {
           ...EMPTY_OT_FORM,
           projectId: first.projectId,
           taskId: first.id,
-          date: utcDateOnlyString(),
         });
       } else {
-        setOtForm({ ...EMPTY_OT_FORM, date: utcDateOnlyString() });
+        setOtForm(EMPTY_OT_FORM);
       }
     } catch (e) {
       setAssignedTasks([]);
@@ -867,7 +865,6 @@ export default function RequestsClient() {
     if (prefillApplied.current || !activeDesignerId) return;
     const taskId = searchParams?.get("taskId") || "";
     const projectId = searchParams?.get("projectId") || "";
-    const date = searchParams?.get("date") || "";
     const estimated = searchParams?.get("estimated") || "";
     if (taskId || projectId) {
       prefillApplied.current = true;
@@ -875,7 +872,6 @@ export default function RequestsClient() {
         ...f,
         projectId: projectId || f.projectId,
         taskId: taskId || f.taskId,
-        date: date || f.date,
         estimatedRemaining: estimated ? `${estimated} hours` : f.estimatedRemaining,
       }));
       setTimeout(() => {
@@ -907,11 +903,8 @@ export default function RequestsClient() {
       toast.warning("Cannot exceed 4 hours allowed limit.");
       return;
     }
-    if (!otForm.date) {
-      toast.warning("Please select a date.");
-      return;
-    }
-    if (!isOvertimeDateAllowed(otForm.date)) {
+    const requestDate = utcDateOnlyString();
+    if (!isOvertimeDateAllowed(requestDate)) {
       toast.warning("Overtime can only be submitted for today.");
       return;
     }
@@ -920,7 +913,7 @@ export default function RequestsClient() {
     try {
       const payload = {
         taskId: String(otForm.taskId).trim(),
-        date: otForm.date,
+        date: requestDate,
         estimatedRemaining: otForm.estimatedRemaining,
         requestedHours: otForm.requestedHours,
         reason: otForm.reason,
@@ -932,7 +925,7 @@ export default function RequestsClient() {
       await createOvertimeRequest(payload);
       await Promise.all([loadOvertime(), isHOD ? loadHodOvertimeInbox() : Promise.resolve()]);
       toast.success(isHOD ? "Overtime auto-approved" : "Overtime request submitted successfully!");
-      setOtForm((f) => ({ ...f, date: utcDateOnlyString(), reason: "" }));
+      setOtForm((f) => ({ ...f, reason: "" }));
     } catch (err) {
       const message =
         err instanceof Error
@@ -1504,16 +1497,10 @@ export default function RequestsClient() {
                     </select>
                   </div>
                   <div>
-                    <label className="mb-1.5 block text-sm font-medium text-slate-700">Date</label>
-                    <input
-                      type="date"
-                      value={otForm.date}
-                      min={utcDateOnlyString()}
-                      max={utcDateOnlyString()}
-                      onChange={(e) => setOtForm({ ...otForm, date: e.target.value })}
-                      className={inputClass}
-                      required
-                    />
+                    <span className="mb-1.5 block text-sm font-medium text-slate-700">Request Date</span>
+                    <div className="flex min-h-10 items-center rounded-md border border-slate-200 bg-slate-50 px-3 py-2 text-sm font-medium text-slate-700">
+                      Today, {formatDate(utcDateOnlyString())}
+                    </div>
                   </div>
                   <div>
                     <label className="mb-1.5 block text-sm font-medium text-slate-700">Estimated Remaining Work</label>

@@ -127,11 +127,10 @@ export default function SchedulerGrid({ schedule, weekDates = [], designerId, is
 
   const handleOtClick = isDesignerMode && designerId
     ? (task) => {
-        const today = new Date().toISOString().slice(0, 10);
         const hrs = task.estimatedHours || (task.endHr - task.startHr) || "";
         const taskId = task.parentId || task.id || "";
         router.push(
-          `/designer/requests?tab=overtime&taskId=${taskId}&date=${today}&estimated=${hrs}#overtime`
+          `/designer/requests?tab=overtime&taskId=${taskId}&estimated=${hrs}#overtime`
         );
       }
     : null;
