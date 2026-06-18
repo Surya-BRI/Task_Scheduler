@@ -50,6 +50,13 @@ const PRIVATE_CHATTER_ITEM_CLASS =
 const PRIVATE_CHATTER_MESSAGE_CLASS =
   "mt-2 block break-words rounded-md border border-blue-100 bg-white/80 px-2.5 py-2 text-sm text-slate-700";
 
+const COMMENT_FORMATS = {
+  bold: { open: "**", close: "**" },
+  italic: { open: "*", close: "*" },
+  underline: { open: "__", close: "__" },
+  strike: { open: "~~", close: "~~" },
+};
+
 function formatTaskCatalogLabel(task) {
   const title = String(task?.title ?? "").trim();
   const taskNo = String(task?.taskNo ?? "").trim();
@@ -815,10 +822,17 @@ function ChatterCard({
   const hasComments = displayComments.length > 0;
   const textareaRef = useRef(null);
   const cardRef = useRef(null);
+  const [activeCommentFormats, setActiveCommentFormats] = useState({});
   const postMentionUsers = useMemo(
     () => resolveMentionUsersForDisplay(post.message, post.mentionedUsers, mentionUsers),
     [post.message, post.mentionedUsers, mentionUsers],
   );
+
+  useEffect(() => {
+    if (!isComposerOpen) {
+      setActiveCommentFormats({});
+    }
+  }, [isComposerOpen]);
 
   useEffect(() => {
     const element = cardRef.current;
@@ -846,20 +860,43 @@ function ChatterCard({
     return () => observer.disconnect();
   }, [post.id, onBecomeVisible]);
 
-  function applyFormat(syntax) {
+  function applyFormat(formatName) {
     const el = textareaRef.current
     if (!el) return
+    if (typeof el.applyRichFormat === "function") {
+      el.applyRichFormat(formatName)
+      setActiveCommentFormats((prev) => ({ ...prev, [formatName]: !prev[formatName] }))
+      return
+    }
+    const syntax = COMMENT_FORMATS[formatName]
+    if (!syntax) return
     const start = el.selectionStart
     const end = el.selectionEnd
     const selected = draftComment.slice(start, end)
-    const [open, close] = Array.isArray(syntax) ? syntax : [syntax, syntax]
+    const { open, close } = syntax
+    if (!selected) {
+      setActiveCommentFormats((prev) => ({ ...prev, [formatName]: !prev[formatName] }))
+      requestAnimationFrame(() => el.focus())
+      return
+    }
     const newText = draftComment.slice(0, start) + open + selected + close + draftComment.slice(end)
     onDraftChange(newText)
     setTimeout(() => {
       el.focus()
-      const cursor = selected ? end + open.length + close.length : start + open.length
+      const cursor = end + open.length + close.length
       el.setSelectionRange(cursor, cursor)
     }, 0)
+  }
+
+  function formatInsertedCommentText(text) {
+    const active = Object.entries(COMMENT_FORMATS)
+      .filter(([name]) => activeCommentFormats[name])
+      .map(([, syntax]) => syntax);
+    if (active.length === 0) return text;
+    return active.reduce(
+      (formatted, syntax) => `${syntax.open}${formatted}${syntax.close}`,
+      text,
+    );
   }
 
   function keepCommentComposerFocus(event) {
@@ -869,6 +906,10 @@ function ChatterCard({
   function insertAtCursor(text) {
     const el = textareaRef.current
     if (!el) return
+    if (typeof el.insertText === "function") {
+      el.insertText(text)
+      return
+    }
     const start = el.selectionStart
     const newText = draftComment.slice(0, start) + text + draftComment.slice(start)
     onDraftChange(newText)
@@ -1028,6 +1069,7 @@ function ChatterCard({
             value={draftComment}
             onChange={onDraftChange}
             onMentionIdsChange={onMentionIdsChange}
+            transformInsertedText={formatInsertedCommentText}
             richPreview
             placeholder="Write a comment... Use @ to mention someone"
             minRows={3}
@@ -1037,10 +1079,10 @@ function ChatterCard({
           />
           <div className="mt-3 flex items-center justify-between">
             <div className="flex items-center gap-1 text-sm font-medium text-slate-500">
-              <button type="button" title="Bold (**text**)" onMouseDown={keepCommentComposerFocus} onClick={() => applyFormat(['**', '**'])} className="rounded px-1.5 py-0.5 font-bold hover:bg-slate-200 hover:text-slate-800 transition-colors">B</button>
-              <button type="button" title="Italic (*text*)" onMouseDown={keepCommentComposerFocus} onClick={() => applyFormat(['*', '*'])} className="rounded px-1.5 py-0.5 italic hover:bg-slate-200 hover:text-slate-800 transition-colors">I</button>
-              <button type="button" title="Underline (__text__)" onMouseDown={keepCommentComposerFocus} onClick={() => applyFormat(['__', '__'])} className="rounded px-1.5 py-0.5 underline hover:bg-slate-200 hover:text-slate-800 transition-colors">U</button>
-              <button type="button" title="Strikethrough (~~text~~)" onMouseDown={keepCommentComposerFocus} onClick={() => applyFormat(['~~', '~~'])} className="rounded px-1.5 py-0.5 line-through hover:bg-slate-200 hover:text-slate-800 transition-colors">S</button>
+              <button type="button" title="Bold" aria-pressed={Boolean(activeCommentFormats.bold)} onMouseDown={keepCommentComposerFocus} onClick={() => applyFormat('bold')} className={`rounded px-1.5 py-0.5 font-bold transition-colors ${activeCommentFormats.bold ? "bg-slate-800 text-white" : "hover:bg-slate-200 hover:text-slate-800"}`}>B</button>
+              <button type="button" title="Italic" aria-pressed={Boolean(activeCommentFormats.italic)} onMouseDown={keepCommentComposerFocus} onClick={() => applyFormat('italic')} className={`rounded px-1.5 py-0.5 italic transition-colors ${activeCommentFormats.italic ? "bg-slate-800 text-white" : "hover:bg-slate-200 hover:text-slate-800"}`}>I</button>
+              <button type="button" title="Underline" aria-pressed={Boolean(activeCommentFormats.underline)} onMouseDown={keepCommentComposerFocus} onClick={() => applyFormat('underline')} className={`rounded px-1.5 py-0.5 underline transition-colors ${activeCommentFormats.underline ? "bg-slate-800 text-white" : "hover:bg-slate-200 hover:text-slate-800"}`}>U</button>
+              <button type="button" title="Strikethrough" aria-pressed={Boolean(activeCommentFormats.strike)} onMouseDown={keepCommentComposerFocus} onClick={() => applyFormat('strike')} className={`rounded px-1.5 py-0.5 line-through transition-colors ${activeCommentFormats.strike ? "bg-slate-800 text-white" : "hover:bg-slate-200 hover:text-slate-800"}`}>S</button>
               <span className="mx-1 text-slate-300">|</span>
               <button type="button" title="Mention someone" onMouseDown={keepCommentComposerFocus} onClick={() => insertAtCursor('@')} className="rounded px-1.5 py-0.5 hover:bg-slate-200 hover:text-slate-800 transition-colors">@</button>
             </div>
@@ -1084,6 +1126,7 @@ export function ChatterScreen() {
   const [editingPost, setEditingPost] = useState(null);
   const [editMessage, setEditMessage] = useState("");
   const [isSavingEdit, setIsSavingEdit] = useState(false);
+  const [mentionUsersDirectoryBase, setMentionUsersDirectoryBase] = useState([]);
   const mentionUsersRef = useRef([]);
   const commentMentionIdsRef = useRef({});
   const loadMoreSentinelRef = useRef(null);
@@ -1099,7 +1142,7 @@ export function ChatterScreen() {
   const currentUserId = useMemo(() => normalizeUserId(getSession()?.id ?? null), []);
   const mentionUsersDirectory = useMemo(() => {
     const map = new Map();
-    for (const user of mentionUsersRef.current) {
+    for (const user of mentionUsersDirectoryBase) {
       if (user?.id) map.set(user.id, user);
     }
     for (const post of posts) {
@@ -1113,7 +1156,7 @@ export function ChatterScreen() {
       }
     }
     return [...map.values()];
-  }, [posts]);
+  }, [mentionUsersDirectoryBase, posts]);
   const currentUserName = useMemo(() => getSession()?.fullName ?? '', []);
 
   const applySeenUpdates = useCallback((updates) => {
@@ -1314,10 +1357,13 @@ export function ChatterScreen() {
     void reloadPrivateFeeds();
     listChatterMentionUsers()
       .then((users) => {
-        mentionUsersRef.current = Array.isArray(users) ? users : [];
+        const rows = Array.isArray(users) ? users : [];
+        mentionUsersRef.current = rows;
+        setMentionUsersDirectoryBase(rows);
       })
       .catch(() => {
         mentionUsersRef.current = [];
+        setMentionUsersDirectoryBase([]);
       });
   }, [currentUserId, reloadPosts, reloadPrivateFeeds]);
 
