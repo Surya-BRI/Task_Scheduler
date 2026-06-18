@@ -310,7 +310,7 @@ export default function RequestsClient() {
       router.push(buildDesignSchedulerPath());
       return;
     }
-    router.back();
+    router.replace("/designer/dashboard");
   };
 
   const displayName = isHOD ? activeDesignerName : (sessionName ?? activeDesignerName);
