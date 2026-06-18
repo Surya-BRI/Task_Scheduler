@@ -98,6 +98,7 @@ export function buildMentionUserMap(users) {
  */
 export function applyChatterRichTextFormatting(text) {
   return String(text ?? '')
+    .replace(/\*\*\*(.+?)\*\*\*/gs, '<strong><em>$1</em></strong>')
     .replace(/\*\*(.+?)\*\*/gs, '<strong>$1</strong>')
     .replace(/~~(.+?)~~/gs, '<del>$1</del>')
     .replace(/__(.+?)__/gs, '<u>$1</u>')

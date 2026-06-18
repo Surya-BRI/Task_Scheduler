@@ -47,8 +47,21 @@ const PRIORITY_STYLES = {
 const PRIVATE_CHATTER_ITEM_CLASS =
   "w-full min-w-0 whitespace-normal rounded-lg border border-blue-200 border-l-4 border-l-blue-500 bg-blue-50 p-3 text-left shadow-sm transition-colors hover:border-blue-300 hover:bg-blue-100/70 hover:shadow-md focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-blue-400 focus-visible:ring-offset-1";
 
+const PRIVATE_CHATTER_READ_ITEM_CLASS =
+  "w-full min-w-0 whitespace-normal rounded-lg border border-slate-200 bg-white p-3 text-left shadow-sm transition-colors hover:border-slate-300 hover:bg-slate-50 hover:shadow-md focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-blue-400 focus-visible:ring-offset-1";
+
 const PRIVATE_CHATTER_MESSAGE_CLASS =
   "mt-2 block break-words rounded-md border border-blue-100 bg-white/80 px-2.5 py-2 text-sm text-slate-700";
+
+const PRIVATE_CHATTER_READ_MESSAGE_CLASS =
+  "mt-2 block break-words rounded-md border border-slate-100 bg-slate-50 px-2.5 py-2 text-sm text-slate-700";
+
+const COMMENT_FORMATS = {
+  bold: { open: "**", close: "**" },
+  italic: { open: "*", close: "*" },
+  underline: { open: "__", close: "__" },
+  strike: { open: "~~", close: "~~" },
+};
 
 function formatTaskCatalogLabel(task) {
   const title = String(task?.title ?? "").trim();
@@ -745,6 +758,30 @@ function buildPrivateMentionEntries(posts, currentUserId, { trustApiFilter = fal
   );
 }
 
+function getPrivateChatterViewedStorageKey(userId) {
+  return `chatter.private.viewed.${userId}`;
+}
+
+function readPrivateChatterViewedIds(userId) {
+  if (!userId || typeof window === "undefined") return new Set();
+  try {
+    const raw = window.localStorage.getItem(getPrivateChatterViewedStorageKey(userId));
+    const ids = JSON.parse(raw ?? "[]");
+    return new Set(Array.isArray(ids) ? ids.filter((id) => typeof id === "string") : []);
+  } catch {
+    return new Set();
+  }
+}
+
+function writePrivateChatterViewedIds(userId, ids) {
+  if (!userId || typeof window === "undefined") return;
+  try {
+    window.localStorage.setItem(getPrivateChatterViewedStorageKey(userId), JSON.stringify([...ids]));
+  } catch {
+    // Ignore storage failures; the current session state still clears the highlight.
+  }
+}
+
 function SeenByLine({ post, className = "" }) {
   const summary = useMemo(() => formatSeenBySummary(post), [post]);
   return (
@@ -761,12 +798,13 @@ function SeenByLine({ post, className = "" }) {
 
 function PrivateChatterEntry({ item, mentionUsersDirectory, onOpen }) {
   const projectName = String(item.projectName ?? "").trim() || "—";
+  const isRead = Boolean(item.isRead);
 
   return (
     <button
       type="button"
-      onClick={() => onOpen(item.postId)}
-      className={PRIVATE_CHATTER_ITEM_CLASS}
+      onClick={() => onOpen(item)}
+      className={isRead ? PRIVATE_CHATTER_READ_ITEM_CLASS : PRIVATE_CHATTER_ITEM_CLASS}
     >
       <p className="break-words text-sm font-semibold text-slate-900">{item.title}</p>
       {item.taskName ? (
@@ -775,7 +813,7 @@ function PrivateChatterEntry({ item, mentionUsersDirectory, onOpen }) {
       <ChatterMentionText
         message={item.message}
         users={mentionUsersDirectory}
-        className={PRIVATE_CHATTER_MESSAGE_CLASS}
+        className={isRead ? PRIVATE_CHATTER_READ_MESSAGE_CLASS : PRIVATE_CHATTER_MESSAGE_CLASS}
       />
       <div className="mt-2 flex flex-wrap items-baseline gap-x-1.5 gap-y-0.5 text-xs text-slate-500">
         <span className="min-w-0 break-words font-medium text-slate-600" title={projectName}>
@@ -815,10 +853,17 @@ function ChatterCard({
   const hasComments = displayComments.length > 0;
   const textareaRef = useRef(null);
   const cardRef = useRef(null);
+  const [activeCommentFormats, setActiveCommentFormats] = useState({});
   const postMentionUsers = useMemo(
     () => resolveMentionUsersForDisplay(post.message, post.mentionedUsers, mentionUsers),
     [post.message, post.mentionedUsers, mentionUsers],
   );
+
+  useEffect(() => {
+    if (!isComposerOpen) {
+      setActiveCommentFormats({});
+    }
+  }, [isComposerOpen]);
 
   useEffect(() => {
     const element = cardRef.current;
@@ -846,20 +891,43 @@ function ChatterCard({
     return () => observer.disconnect();
   }, [post.id, onBecomeVisible]);
 
-  function applyFormat(syntax) {
+  function applyFormat(formatName) {
     const el = textareaRef.current
     if (!el) return
+    if (typeof el.applyRichFormat === "function") {
+      el.applyRichFormat(formatName)
+      setActiveCommentFormats((prev) => ({ ...prev, [formatName]: !prev[formatName] }))
+      return
+    }
+    const syntax = COMMENT_FORMATS[formatName]
+    if (!syntax) return
     const start = el.selectionStart
     const end = el.selectionEnd
     const selected = draftComment.slice(start, end)
-    const [open, close] = Array.isArray(syntax) ? syntax : [syntax, syntax]
+    const { open, close } = syntax
+    if (!selected) {
+      setActiveCommentFormats((prev) => ({ ...prev, [formatName]: !prev[formatName] }))
+      requestAnimationFrame(() => el.focus())
+      return
+    }
     const newText = draftComment.slice(0, start) + open + selected + close + draftComment.slice(end)
     onDraftChange(newText)
     setTimeout(() => {
       el.focus()
-      const cursor = selected ? end + open.length + close.length : start + open.length
+      const cursor = end + open.length + close.length
       el.setSelectionRange(cursor, cursor)
     }, 0)
+  }
+
+  function formatInsertedCommentText(text) {
+    const active = Object.entries(COMMENT_FORMATS)
+      .filter(([name]) => activeCommentFormats[name])
+      .map(([, syntax]) => syntax);
+    if (active.length === 0) return text;
+    return active.reduce(
+      (formatted, syntax) => `${syntax.open}${formatted}${syntax.close}`,
+      text,
+    );
   }
 
   function keepCommentComposerFocus(event) {
@@ -869,6 +937,10 @@ function ChatterCard({
   function insertAtCursor(text) {
     const el = textareaRef.current
     if (!el) return
+    if (typeof el.insertText === "function") {
+      el.insertText(text)
+      return
+    }
     const start = el.selectionStart
     const newText = draftComment.slice(0, start) + text + draftComment.slice(start)
     onDraftChange(newText)
@@ -1028,6 +1100,7 @@ function ChatterCard({
             value={draftComment}
             onChange={onDraftChange}
             onMentionIdsChange={onMentionIdsChange}
+            transformInsertedText={formatInsertedCommentText}
             richPreview
             placeholder="Write a comment... Use @ to mention someone"
             minRows={3}
@@ -1037,10 +1110,10 @@ function ChatterCard({
           />
           <div className="mt-3 flex items-center justify-between">
             <div className="flex items-center gap-1 text-sm font-medium text-slate-500">
-              <button type="button" title="Bold (**text**)" onMouseDown={keepCommentComposerFocus} onClick={() => applyFormat(['**', '**'])} className="rounded px-1.5 py-0.5 font-bold hover:bg-slate-200 hover:text-slate-800 transition-colors">B</button>
-              <button type="button" title="Italic (*text*)" onMouseDown={keepCommentComposerFocus} onClick={() => applyFormat(['*', '*'])} className="rounded px-1.5 py-0.5 italic hover:bg-slate-200 hover:text-slate-800 transition-colors">I</button>
-              <button type="button" title="Underline (__text__)" onMouseDown={keepCommentComposerFocus} onClick={() => applyFormat(['__', '__'])} className="rounded px-1.5 py-0.5 underline hover:bg-slate-200 hover:text-slate-800 transition-colors">U</button>
-              <button type="button" title="Strikethrough (~~text~~)" onMouseDown={keepCommentComposerFocus} onClick={() => applyFormat(['~~', '~~'])} className="rounded px-1.5 py-0.5 line-through hover:bg-slate-200 hover:text-slate-800 transition-colors">S</button>
+              <button type="button" title="Bold" aria-pressed={Boolean(activeCommentFormats.bold)} onMouseDown={keepCommentComposerFocus} onClick={() => applyFormat('bold')} className={`rounded px-1.5 py-0.5 font-bold transition-colors ${activeCommentFormats.bold ? "bg-slate-800 text-white" : "hover:bg-slate-200 hover:text-slate-800"}`}>B</button>
+              <button type="button" title="Italic" aria-pressed={Boolean(activeCommentFormats.italic)} onMouseDown={keepCommentComposerFocus} onClick={() => applyFormat('italic')} className={`rounded px-1.5 py-0.5 italic transition-colors ${activeCommentFormats.italic ? "bg-slate-800 text-white" : "hover:bg-slate-200 hover:text-slate-800"}`}>I</button>
+              <button type="button" title="Underline" aria-pressed={Boolean(activeCommentFormats.underline)} onMouseDown={keepCommentComposerFocus} onClick={() => applyFormat('underline')} className={`rounded px-1.5 py-0.5 underline transition-colors ${activeCommentFormats.underline ? "bg-slate-800 text-white" : "hover:bg-slate-200 hover:text-slate-800"}`}>U</button>
+              <button type="button" title="Strikethrough" aria-pressed={Boolean(activeCommentFormats.strike)} onMouseDown={keepCommentComposerFocus} onClick={() => applyFormat('strike')} className={`rounded px-1.5 py-0.5 line-through transition-colors ${activeCommentFormats.strike ? "bg-slate-800 text-white" : "hover:bg-slate-200 hover:text-slate-800"}`}>S</button>
               <span className="mx-1 text-slate-300">|</span>
               <button type="button" title="Mention someone" onMouseDown={keepCommentComposerFocus} onClick={() => insertAtCursor('@')} className="rounded px-1.5 py-0.5 hover:bg-slate-200 hover:text-slate-800 transition-colors">@</button>
             </div>
@@ -1084,6 +1157,7 @@ export function ChatterScreen() {
   const [editingPost, setEditingPost] = useState(null);
   const [editMessage, setEditMessage] = useState("");
   const [isSavingEdit, setIsSavingEdit] = useState(false);
+  const [mentionUsersDirectoryBase, setMentionUsersDirectoryBase] = useState([]);
   const mentionUsersRef = useRef([]);
   const commentMentionIdsRef = useRef({});
   const loadMoreSentinelRef = useRef(null);
@@ -1097,9 +1171,12 @@ export function ChatterScreen() {
   const urlCommentId = searchParams.get("commentId");
 
   const currentUserId = useMemo(() => normalizeUserId(getSession()?.id ?? null), []);
+  const [viewedPrivateEntryIds, setViewedPrivateEntryIds] = useState(
+    () => readPrivateChatterViewedIds(currentUserId),
+  );
   const mentionUsersDirectory = useMemo(() => {
     const map = new Map();
-    for (const user of mentionUsersRef.current) {
+    for (const user of mentionUsersDirectoryBase) {
       if (user?.id) map.set(user.id, user);
     }
     for (const post of posts) {
@@ -1113,8 +1190,26 @@ export function ChatterScreen() {
       }
     }
     return [...map.values()];
-  }, [posts]);
+  }, [mentionUsersDirectoryBase, posts]);
   const currentUserName = useMemo(() => getSession()?.fullName ?? '', []);
+
+  useEffect(() => {
+    setViewedPrivateEntryIds(readPrivateChatterViewedIds(currentUserId));
+  }, [currentUserId]);
+
+  const markPrivateEntryViewed = useCallback(
+    (entryId) => {
+      if (!currentUserId || !entryId) return;
+      setViewedPrivateEntryIds((prev) => {
+        if (prev.has(entryId)) return prev;
+        const next = new Set(prev);
+        next.add(entryId);
+        writePrivateChatterViewedIds(currentUserId, next);
+        return next;
+      });
+    },
+    [currentUserId],
+  );
 
   const applySeenUpdates = useCallback((updates) => {
     if (!Array.isArray(updates) || updates.length === 0) return;
@@ -1314,10 +1409,13 @@ export function ChatterScreen() {
     void reloadPrivateFeeds();
     listChatterMentionUsers()
       .then((users) => {
-        mentionUsersRef.current = Array.isArray(users) ? users : [];
+        const rows = Array.isArray(users) ? users : [];
+        mentionUsersRef.current = rows;
+        setMentionUsersDirectoryBase(rows);
       })
       .catch(() => {
         mentionUsersRef.current = [];
+        setMentionUsersDirectoryBase([]);
       });
   }, [currentUserId, reloadPosts, reloadPrivateFeeds]);
 
@@ -1392,11 +1490,13 @@ export function ChatterScreen() {
 
   const privateMentions = useMemo(() => {
     if (!currentUserId) return [];
+    const applyReadState = (entries) =>
+      entries.map((entry) => ({ ...entry, isRead: viewedPrivateEntryIds.has(entry.id) }));
     if (mentionFeedPosts.length > 0) {
-      return buildPrivateMentionEntries(mentionFeedPosts, currentUserId, { trustApiFilter: true });
+      return applyReadState(buildPrivateMentionEntries(mentionFeedPosts, currentUserId, { trustApiFilter: true }));
     }
-    return buildPrivateMentionEntries(sortedPosts, currentUserId);
-  }, [mentionFeedPosts, sortedPosts, currentUserId]);
+    return applyReadState(buildPrivateMentionEntries(sortedPosts, currentUserId));
+  }, [mentionFeedPosts, sortedPosts, currentUserId, viewedPrivateEntryIds]);
 
   const privateComments = useMemo(() => {
     if (!currentUserId) return [];
@@ -1417,13 +1517,14 @@ export function ChatterScreen() {
           message: latestMyComment?.message ?? post.message,
           time: formatChatterTime(latestMyComment?.createdAt ?? post.updatedAt),
           updatedAt: latestMyComment?.createdAt ?? post.updatedAt,
+          isRead: viewedPrivateEntryIds.has(`${post.id}-${latestMyComment?.id ?? post.id}`),
         };
       })
       .sort(
         (a, b) =>
           new Date(b.updatedAt ?? 0).getTime() - new Date(a.updatedAt ?? 0).getTime(),
       );
-  }, [commentedFeedPosts, sortedPosts, currentUserId]);
+  }, [commentedFeedPosts, sortedPosts, currentUserId, viewedPrivateEntryIds]);
 
   const taskUpdates = useMemo(() => {
     const byTask = new Map();
@@ -1491,7 +1592,12 @@ export function ChatterScreen() {
     setCurrentDate(new Date(Number(yyyy), Number(mm) - 1, Number(dd)));
   };
 
-  const openDiscussion = (postId) => {
+  const openDiscussion = (itemOrPostId) => {
+    const postId = typeof itemOrPostId === "string" ? itemOrPostId : itemOrPostId?.postId;
+    if (!postId) return;
+    if (typeof itemOrPostId !== "string") {
+      markPrivateEntryViewed(itemOrPostId.id);
+    }
     setFocusedPostId(postId);
     setActiveTab("posts");
     setOpenComposerPostId(postId);
