@@ -1,4 +1,5 @@
 import { Injectable, NotFoundException } from '@nestjs/common';
+import { randomUUID } from 'crypto';
 import { PrismaService } from '../prisma/prisma.service';
 
 @Injectable()
@@ -51,7 +52,7 @@ export class NotificationsService {
   }
 
   async create(data: { userId: string; title: string; message: string; linkUrl?: string }) {
-    return this.prisma.notification.create({ data });
+    return this.prisma.notification.create({ data: { id: randomUUID(), ...data } });
   }
 
   // Returns true if the same userId+title+linkUrl notification was already sent today (midnight reset)

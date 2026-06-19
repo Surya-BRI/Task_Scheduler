@@ -37,6 +37,8 @@ export const ActivityAction = {
   OVERTIME_AUTO_APPROVED: 'OVERTIME_AUTO_APPROVED',
   LEAVE_AUTO_APPROVED: 'LEAVE_AUTO_APPROVED',
   CHATTER_MENTION: 'CHATTER_MENTION',
+  DEADLINE_REMINDER: 'DEADLINE_REMINDER',
+  DEADLINE_OVERDUE: 'DEADLINE_OVERDUE',
 } as const;
 
 export type ActivityActionType = (typeof ActivityAction)[keyof typeof ActivityAction];

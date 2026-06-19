@@ -10,6 +10,8 @@ const MILESTONE_ACTIONS = new Set([
   ActivityAction.TASK_COMPLETED,
   ActivityAction.CLIENT_APPROVED,
   ActivityAction.CLIENT_REJECTED_TASK,
+  ActivityAction.DEADLINE_REMINDER,
+  ActivityAction.DEADLINE_OVERDUE,
 ]);
 
 function formatStatusLabel(status?: string | null): string | null {
@@ -240,6 +242,8 @@ export class ActivitiesService {
       case ActivityAction.OVERTIME_REQUEST_REJECTED:
       case ActivityAction.OVERTIME_REQUEST_WITHDRAWN:
       case ActivityAction.OVERTIME_REQUEST_STATUS_CHANGED:
+      case ActivityAction.DEADLINE_REMINDER:
+      case ActivityAction.DEADLINE_OVERDUE:
         return [...base, txt(' for task '), taskLink];
       default:
         return base;
@@ -249,7 +253,7 @@ export class ActivitiesService {
   private formatSeverity(action: string): 'info' | 'success' | 'warning' {
     if (action === ActivityAction.TASK_CREATED) return 'success';
     if (action === ActivityAction.TASK_COMPLETED || action === ActivityAction.CLIENT_APPROVED) return 'success';
-    if (action === ActivityAction.CLIENT_REJECTED_TASK) return 'warning';
+    if (action === ActivityAction.CLIENT_REJECTED_TASK || action === ActivityAction.DEADLINE_OVERDUE) return 'warning';
     if (action === ActivityAction.STATUS_CHANGED || action === ActivityAction.ASSIGNED_TASK) return 'info';
     if (action === ActivityAction.PROJECT_FILE_DELETED) return 'warning';
     return 'info';
@@ -400,7 +404,7 @@ export class ActivitiesService {
     return result.data.map((item) => ({
       id: item.id,
       action: item.action,
-      kind: MILESTONE_ACTIONS.has(item.action as any) ? 'project_milestone' : 'task_update',
+      kind: MILESTONE_ACTIONS.has(item.action) ? 'project_milestone' : 'task_update',
       user: item.actor,
       messageSegments: this.buildSegments(item),
       occurredAt: item.occurredAt,
