@@ -1212,7 +1212,7 @@ export class TasksService {
     files: Express.Multer.File[],
   ) {
     if (!this.isUuid(taskId)) throw new BadRequestException('Invalid task id');
-    const task = await this.prisma.task.findUnique({ where: { id: taskId } });
+    const task = await this.prisma.task.findUnique({ where: { id: taskId }, select: TASK_SELECT });
     if (!task) throw new NotFoundException('Task not found');
 
     // Upload files to S3
@@ -1282,6 +1282,20 @@ export class TasksService {
       return session;
     });
 
+    const previousStatusApi = this.toApiTaskStatus(task.status);
+    const submittedTaskSnapshot = {
+      id: task.id,
+      taskNo: task.taskNo,
+      opNo: task.opNo,
+      title: task.title ?? undefined,
+      status: 'DESIGN_COMPLETED',
+    };
+    const submittedProjectSnapshot = {
+      id: task.project?.id,
+      projectNo: task.project?.projectNo,
+      name: task.project?.name,
+    };
+
     await this.activityLogger.log({
       action: ActivityAction.TASK_WORK_SUBMITTED,
       userId,
@@ -1289,7 +1303,8 @@ export class TasksService {
       details: {
         event: ActivityAction.TASK_WORK_SUBMITTED,
         messageKey: 'task_work_submitted',
-        taskSnapshot: { id: task.id, taskNo: task.taskNo, opNo: task.opNo, title: task.title ?? undefined },
+        taskSnapshot: submittedTaskSnapshot,
+        projectSnapshot: submittedProjectSnapshot,
         changes: {
           durationSeconds: dto.durationSeconds,
           fileCount: uploadedFiles.length,
@@ -1298,6 +1313,25 @@ export class TasksService {
         context: { sessionId: session.id, source: 'tasks.submitWork' },
       },
     });
+
+    if (!COMPLETED_STATUS_FILTER.includes(previousStatusApi)) {
+      await this.activityLogger.log({
+        action: ActivityAction.TASK_COMPLETED,
+        userId,
+        taskId,
+        details: {
+          event: ActivityAction.TASK_COMPLETED,
+          messageKey: 'task_completed',
+          taskSnapshot: submittedTaskSnapshot,
+          projectSnapshot: submittedProjectSnapshot,
+          changes: {
+            oldStatus: previousStatusApi,
+            newStatus: 'DESIGN_COMPLETED',
+          },
+          context: { sessionId: session.id, source: 'tasks.submitWork' },
+        },
+      });
+    }
 
     // Notify all HODs that work has been submitted and is ready for review
     try {

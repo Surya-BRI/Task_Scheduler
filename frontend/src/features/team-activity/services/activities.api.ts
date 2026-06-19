@@ -21,6 +21,14 @@ export interface TeamActivity {
   year: number;
   priority: string;
   project?: string;
+  projectId?: string | null;
+  projectNo?: string | null;
+  projectName?: string | null;
+  taskId?: string | null;
+  taskNo?: string | null;
+  taskName?: string | null;
+  status?: string | null;
+  statusLabel?: string | null;
   team?: string;
 }
 

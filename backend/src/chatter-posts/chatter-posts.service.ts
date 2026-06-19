@@ -986,7 +986,7 @@ export class ChatterPostsService implements OnModuleInit {
     }
     const taskOpNo = resolveTaskOpNo(row.opNo, row.taskNo);
     return {
-      taskName: taskOpNo,
+      taskName: row.title?.trim() || taskOpNo,
       projectName: row.projectName?.trim() || null,
       projectId: row.projectId != null ? String(row.projectId) : null,
       taskOpNo,
@@ -1308,8 +1308,20 @@ export class ChatterPostsService implements OnModuleInit {
       details: {
         event: ActivityAction.CREATED_CHATTER_COMMENT,
         messageKey: 'chatter_comment_created',
-        taskSnapshot: postExists[0].taskId ? { id: postExists[0].taskId } : undefined,
-        projectSnapshot: postExists[0].projectId ? { id: postExists[0].projectId } : undefined,
+        taskSnapshot: postExists[0].taskId
+          ? {
+              id: postExists[0].taskId,
+              taskNo: postMeta?.taskOpNo ?? undefined,
+              title: postMeta?.taskName ?? postMeta?.taskOpNo ?? undefined,
+            }
+          : undefined,
+        projectSnapshot: postExists[0].projectId
+          ? {
+              id: postExists[0].projectId,
+              projectNo: postMeta?.projectNo ?? undefined,
+              name: postMeta?.projectName ?? undefined,
+            }
+          : undefined,
         changes: { postId: normalizedPostId },
         context: { projectId: postExists[0].projectId ?? null, postId: normalizedPostId },
       },
@@ -1533,8 +1545,20 @@ export class ChatterPostsService implements OnModuleInit {
       details: {
         event: ActivityAction.CREATED_CHATTER_POST,
         messageKey: 'chatter_post_created',
-        taskSnapshot: newPost.taskId ? { id: newPost.taskId } : undefined,
-        projectSnapshot: projectId ? { id: projectId } : undefined,
+        taskSnapshot: newPost.taskId
+          ? {
+              id: newPost.taskId,
+              taskNo: taskMeta.taskOpNo ?? undefined,
+              title: taskMeta.taskName ?? undefined,
+            }
+          : undefined,
+        projectSnapshot: projectId
+          ? {
+              id: projectId,
+              projectNo: taskMeta.projectNo ?? projectMeta.projectNo ?? undefined,
+              name: projectName ?? undefined,
+            }
+          : undefined,
         changes: {
           title: resolvedTitle,
           postType: dto.postType ?? null,

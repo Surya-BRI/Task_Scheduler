@@ -12,6 +12,16 @@ const MILESTONE_ACTIONS = new Set([
   ActivityAction.CLIENT_REJECTED_TASK,
 ]);
 
+function formatStatusLabel(status?: string | null): string | null {
+  if (!status) return null;
+  return status
+    .toLowerCase()
+    .split('_')
+    .filter(Boolean)
+    .map((part) => part.charAt(0).toUpperCase() + part.slice(1))
+    .join(' ');
+}
+
 type FindInput = {
   limit?: number;
   cursor?: string;
@@ -26,26 +36,102 @@ type FindInput = {
 export class ActivitiesService {
   constructor(private readonly prisma: PrismaService) {}
 
-  private formatOvertimeSummary(messageKey: string, _details: any, actorName: string): string {
-    if (messageKey === 'overtime_request_submitted') {
-      return `${actorName} submitted an overtime request`;
-    }
-    if (messageKey === 'overtime_request_updated') {
-      return `${actorName} updated an overtime request`;
-    }
-    if (messageKey === 'overtime_request_approved') {
-      return `${actorName} approved an overtime request`;
-    }
-    if (messageKey === 'overtime_request_rejected') {
-      return `${actorName} rejected an overtime request`;
-    }
-    if (messageKey === 'overtime_request_withdrawn') {
-      return `${actorName} withdrew an overtime request`;
-    }
-    return `${actorName} updated an overtime request`;
+  private cleanName(value: unknown): string | null {
+    return typeof value === 'string' && value.trim() ? value.trim() : null;
   }
 
-  private formatSummary(action: string, details: any, actorName: string): string {
+  private contextName(details: any, keys: string[], fallback?: string): string {
+    const context = details?.context ?? {};
+    for (const key of keys) {
+      const name = this.cleanName(context[key]);
+      if (name) return name;
+    }
+    return fallback ?? 'Unknown user';
+  }
+
+  private requestRecipientName(details: any): string {
+    return this.contextName(
+      details,
+      ['recipientName', 'receiverName', 'approverName', 'reviewerName', 'hodName'],
+      'HOD',
+    );
+  }
+
+  private requestSenderName(details: any, actorName: string): string {
+    return this.contextName(
+      details,
+      ['requesterName', 'designerName', 'beneficiaryName', 'beneficiaryUserName'],
+      actorName,
+    );
+  }
+
+  private requestReviewerName(details: any, actorName: string): string {
+    return this.contextName(
+      details,
+      ['reviewerName', 'approverName', 'revokerName', 'receiverName', 'recipientName'],
+      actorName,
+    );
+  }
+
+  private requestLabel(kind: string): string {
+    const article = /^[aeiou]/i.test(kind.trim()) ? 'an' : 'a';
+    return `${article} ${kind}`;
+  }
+
+  private formatRequestSummary(
+    kind: string,
+    messageKey: string,
+    details: any,
+    actorName: string,
+  ): string {
+    const senderName = this.requestSenderName(details, actorName);
+    const recipientName = this.requestRecipientName(details);
+    const reviewerName = this.requestReviewerName(details, actorName);
+    const status = String(details?.changes?.newStatus ?? details?.changes?.status ?? '').toLowerCase();
+    const requestLabel = this.requestLabel(kind);
+
+    if (messageKey.endsWith('_submitted')) {
+      return `${senderName} sent ${requestLabel} request to ${recipientName}`;
+    }
+
+    if (messageKey.endsWith('_auto_approved')) {
+      return `${reviewerName} sent and accepted ${requestLabel} request for ${senderName}`;
+    }
+
+    if (messageKey.endsWith('_updated')) {
+      return `${senderName} updated the ${kind} request to ${recipientName}`;
+    }
+
+    if (
+      messageKey.endsWith('_approved') ||
+      (messageKey.endsWith('_status_changed') && status.includes('approved'))
+    ) {
+      return `${reviewerName} accepted the ${kind} request from ${senderName}`;
+    }
+
+    if (
+      messageKey.endsWith('_rejected') ||
+      (messageKey.endsWith('_status_changed') && status.includes('rejected'))
+    ) {
+      return `${reviewerName} rejected the ${kind} request from ${senderName}`;
+    }
+
+    if (messageKey.endsWith('_cancelled')) {
+      return `${senderName} cancelled the ${kind} request to ${recipientName}`;
+    }
+
+    if (messageKey.endsWith('_revoked')) {
+      return `${reviewerName} revoked the ${kind} request from ${senderName}`;
+    }
+
+    if (messageKey.endsWith('_withdrawn')) {
+      return `${senderName} withdrew the ${kind} request to ${recipientName}`;
+    }
+
+    return `${actorName} updated a ${kind} request`;
+  }
+
+  private formatSummary(action: string, details: any, actorName: string, taskTitle?: string | null): string {
     const msg = details?.messageKey;
     if (msg === 'task_created') return `${actorName} created task ${details?.taskSnapshot?.taskNo ?? ''}`.trim();
     if (msg === 'task_assigned') return `${actorName} assigned task to ${details?.changes?.newAssigneeName ?? 'assignee'}`;
@@ -59,9 +145,14 @@ export class ActivitiesService {
     if (msg === 'task_file_uploaded') return `${actorName} uploaded ${details?.fileMeta?.fileName ?? 'a file'} to task files`;
     if (msg === 'chatter_post_created') {
       const title = details?.changes?.title?.trim();
+      const taskName = taskTitle ?? details?.taskSnapshot?.title ?? details?.taskSnapshot?.taskNo;
+      if (taskName) return `${actorName} posted in chatter on Task: ${taskName}`;
       return title ? `${actorName} posted in chatter: ${title}` : `${actorName} posted in chatter`;
     }
-    if (msg === 'chatter_comment_created') return `${actorName} commented on chatter`;
+    if (msg === 'chatter_comment_created') {
+      const taskName = taskTitle ?? details?.taskSnapshot?.title ?? details?.taskSnapshot?.taskNo;
+      return taskName ? `${actorName} commented on chatter on Task: ${taskName}` : `${actorName} commented on chatter`;
+    }
     if (msg === 'task_work_submitted') {
       const mins = Math.round((details?.changes?.durationSeconds ?? 0) / 60);
       const taskNo = details?.taskSnapshot?.taskNo ?? '';
@@ -82,39 +173,35 @@ export class ActivitiesService {
     if (msg === 'scheduler_week_saved') return `${actorName} saved the schedule for week of ${details?.context?.weekStart ?? ''}`;
     if (msg === 'scheduler_week_locked') return `${actorName} locked the schedule for week of ${details?.context?.weekStart ?? ''}`;
     if (msg === 'scheduler_week_unlocked') return `${actorName} unlocked the schedule for week of ${details?.context?.weekStart ?? ''}`;
-    if (msg === 'leave_request_submitted')
-      return `${actorName} submitted a ${details?.context?.type ?? 'leave'} request`;
-    if (msg === 'leave_request_updated') return `${actorName} updated a pending leave request`;
-    if (msg === 'leave_request_cancelled') return `${actorName} cancelled a leave request`;
-    if (msg === 'leave_request_revoked') {
-      const dn = details?.context?.designerName ?? details?.context?.requesterName;
-      return dn
-        ? `${actorName} revoked ${dn}'s approved leave request`
-        : `${actorName} revoked an approved leave request`;
+    if (
+      msg === 'leave_request_submitted' ||
+      msg === 'leave_auto_approved' ||
+      msg === 'leave_request_updated' ||
+      msg === 'leave_request_cancelled' ||
+      msg === 'leave_request_revoked' ||
+      msg === 'leave_request_status_changed'
+    ) {
+      return this.formatRequestSummary('leave', msg, details, actorName);
     }
-    if (msg === 'leave_request_status_changed')
-      return `${actorName} ${(details?.changes?.newStatus as string)?.toLowerCase() ?? 'updated'} a leave request`;
-    if (msg === 'regularization_submitted')
-      return `${actorName} submitted a regularization request`;
-    if (msg === 'regularization_approved') {
-      const dn = details?.context?.designerName;
-      return dn ? `${actorName} approved ${dn}'s regularization request` : `${actorName} approved a regularization request`;
+    if (
+      msg === 'regularization_submitted' ||
+      msg === 'regularization_auto_approved' ||
+      msg === 'regularization_approved' ||
+      msg === 'regularization_rejected' ||
+      msg === 'regularization_status_changed'
+    ) {
+      return this.formatRequestSummary('regularization', msg, details, actorName);
     }
-    if (msg === 'regularization_rejected') {
-      const dn = details?.context?.designerName;
-      return dn ? `${actorName} rejected ${dn}'s regularization request` : `${actorName} rejected a regularization request`;
-    }
-    if (msg === 'regularization_status_changed')
-      return `${actorName} ${(details?.changes?.newStatus as string)?.toLowerCase() ?? 'updated'} a regularization request`;
     if (
       msg === 'overtime_request_submitted' ||
+      msg === 'overtime_auto_approved' ||
       msg === 'overtime_request_updated' ||
       msg === 'overtime_request_approved' ||
       msg === 'overtime_request_rejected' ||
       msg === 'overtime_request_withdrawn' ||
       msg === 'overtime_request_status_changed'
     ) {
-      return this.formatOvertimeSummary(msg, details, actorName);
+      return this.formatRequestSummary('overtime', msg, details, actorName);
     }
     const readable = action.toLowerCase().replace(/_/g, ' ');
     return `${actorName} ${readable}`;
@@ -127,7 +214,7 @@ export class ActivitiesService {
 
     if (!t) return base;
 
-    const taskLink = { type: 'link' as const, label: t.taskNo, href: `/design-list/task/${t.id}` };
+    const taskLink = { type: 'link' as const, label: t.title ?? t.taskNo ?? 'task', href: `/design-list/task/${t.id}` };
 
     switch (item.action) {
       case ActivityAction.TASK_CREATED:
@@ -138,10 +225,16 @@ export class ActivitiesService {
       case ActivityAction.CLIENT_APPROVED:
       case ActivityAction.CLIENT_REJECTED_TASK:
         return [...base, txt(' — '), taskLink];
+      case ActivityAction.CREATED_CHATTER_POST:
+        return [txt(`${item.actor.name} posted in chatter on Task: `), taskLink];
+      case ActivityAction.CREATED_CHATTER_COMMENT:
+        return [txt(`${item.actor.name} commented on chatter on Task: `), taskLink];
       case ActivityAction.REGULARIZATION_SUBMITTED:
+      case ActivityAction.REGULARIZATION_AUTO_APPROVED:
       case ActivityAction.REGULARIZATION_APPROVED:
       case ActivityAction.REGULARIZATION_REJECTED:
       case ActivityAction.OVERTIME_REQUEST_SUBMITTED:
+      case ActivityAction.OVERTIME_AUTO_APPROVED:
       case ActivityAction.OVERTIME_REQUEST_UPDATED:
       case ActivityAction.OVERTIME_REQUEST_APPROVED:
       case ActivityAction.OVERTIME_REQUEST_REJECTED:
@@ -214,6 +307,47 @@ export class ActivitiesService {
       details = { raw: row.details };
     }
     const actorName = row.user?.fullName ?? 'Unknown user';
+    const taskSnapshot = details?.taskSnapshot ?? {};
+    const projectSnapshot = details?.projectSnapshot ?? {};
+    const task = row.task
+      ? {
+          id: row.task.id,
+          taskNo: row.task.taskNo,
+          opNo: row.task.opNo,
+          title: row.task.title,
+          status: taskSnapshot.status ?? details?.changes?.newStatus ?? row.task.status ?? null,
+          priority: row.task.priority,
+          dueDate: row.task.dueDate ? row.task.dueDate.toISOString() : null,
+          assigneeName: row.task.assignee?.fullName ?? null,
+          hodName: row.task.retailDetails?.[0]?.hodName ?? null,
+        }
+      : taskSnapshot?.id
+        ? {
+            id: taskSnapshot.id,
+            taskNo: taskSnapshot.taskNo ?? null,
+            opNo: taskSnapshot.opNo ?? null,
+            title: taskSnapshot.title ?? null,
+            status: taskSnapshot.status ?? null,
+            priority: null,
+            dueDate: null,
+            assigneeName: null,
+            hodName: null,
+          }
+        : null;
+    const project = row.task?.project
+      ? {
+          id: row.task.project.id,
+          projectNo: row.task.project.projectNo,
+          name: row.task.project.name,
+        }
+      : projectSnapshot?.id || projectSnapshot?.name || projectSnapshot?.projectNo
+        ? {
+            id: projectSnapshot.id ?? null,
+            projectNo: projectSnapshot.projectNo ?? null,
+            name: projectSnapshot.name ?? null,
+          }
+        : null;
+
     return {
       id: row.id,
       action: row.action,
@@ -223,27 +357,10 @@ export class ActivitiesService {
         name: actorName,
         avatarUrl: `https://ui-avatars.com/api/?name=${encodeURIComponent(actorName)}&background=random`,
       },
-      task: row.task
-        ? {
-            id: row.task.id,
-            taskNo: row.task.taskNo,
-            opNo: row.task.opNo,
-            title: row.task.title,
-            priority: row.task.priority,
-            dueDate: row.task.dueDate ? row.task.dueDate.toISOString() : null,
-            assigneeName: row.task.assignee?.fullName ?? null,
-            hodName: row.task.retailDetails?.[0]?.hodName ?? null,
-          }
-        : null,
-      project: row.task?.project
-        ? {
-            id: row.task.project.id,
-            projectNo: row.task.project.projectNo,
-            name: row.task.project.name,
-          }
-        : null,
+      task,
+      project,
       details,
-      summary: this.formatSummary(row.action, details, actorName),
+      summary: this.formatSummary(row.action, details, actorName, task?.title ?? task?.taskNo ?? null),
       severity: this.formatSeverity(row.action),
     };
   }
@@ -257,6 +374,7 @@ export class ActivitiesService {
           taskNo: true,
           opNo: true,
           title: true,
+          status: true,
           priority: true,
           dueDate: true,
           assignee: { select: { id: true, fullName: true } },
@@ -287,6 +405,14 @@ export class ActivitiesService {
       year: new Date(item.occurredAt).getFullYear(),
       priority: item.task?.priority ? item.task.priority.toLowerCase() : 'normal',
       project: item.project?.name ?? null,
+      projectId: item.project?.id ?? null,
+      projectNo: item.project?.projectNo ?? null,
+      projectName: item.project?.name ?? null,
+      taskId: item.task?.id ?? null,
+      taskNo: item.task?.taskNo ?? null,
+      taskName: item.task?.title ?? item.task?.taskNo ?? null,
+      status: item.task?.status ?? item.details?.changes?.newStatus ?? null,
+      statusLabel: formatStatusLabel(item.task?.status ?? item.details?.changes?.newStatus ?? null),
       team: null,
     }));
   }
