@@ -123,6 +123,18 @@ Authorization: Bearer <accessToken>
 - If missing there, API checks ERP master tables and hydrates `ErpTSProject` on-demand.
 - Returns `404` only if project code is not found in either source.
 
+## Split-Task Architecture (Important)
+
+A task is "split" when the HOD assigns it to multiple designers in the scheduler (hours split across days/designers). Key rules that apply everywhere in the codebase:
+
+- `Task.assigneeId` is set to `null` for split tasks. All designers are in `ErpTSTaskDesigner` junction.
+- Single-designer tasks keep `assigneeId` populated and may or may not have a junction row.
+- **Any query filtering by designer must check both:** `assigneeId = userId` OR `taskDesigners.some({ designerId: userId })`.
+- Setting a task to ON_HOLD via `PATCH /tasks/:id/status` automatically deletes all future `SchedulerAssignment` rows.
+- Notifications for status changes (COMPLETED, REWORK) and scheduler saves are sent to all junction-table designers, not just `assigneeId`.
+- Work submission (`POST /tasks/:id/submit-work`) builds the submitter display name from the junction when `assigneeId` is null.
+- SQL migration: `backend/prisma/sql/add-task-designer-junction.sql`
+
 ## Task Create Rules (Important)
 
 For `POST /api/v1/tasks/extended`:

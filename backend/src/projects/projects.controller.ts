@@ -40,7 +40,7 @@ export class ProjectsController {
 
   /** GET /projects?status=ACTIVE&category=Retail&search=abc&page=1&limit=20 */
   @Get()
-  @Roles(UserRole.HOD, UserRole.DESIGNER)
+  @Roles(UserRole.HOD, UserRole.DESIGNER, UserRole.SALESPERSON)
   findAll(
     @Query('status') status?: string,
     @Query('category') category?: string,
@@ -53,14 +53,14 @@ export class ProjectsController {
 
   /** GET /projects/by-project-no/:projectNo */
   @Get('by-project-no/:projectNo')
-  @Roles(UserRole.HOD, UserRole.DESIGNER)
+  @Roles(UserRole.HOD, UserRole.DESIGNER, UserRole.SALESPERSON)
   findByProjectNo(@Param('projectNo') projectNo: string) {
     return this.projectsService.findByProjectNo(projectNo);
   }
 
   /** GET /projects/:id — returns project with its tasks */
   @Get(':id')
-  @Roles(UserRole.HOD, UserRole.DESIGNER)
+  @Roles(UserRole.HOD, UserRole.DESIGNER, UserRole.SALESPERSON)
   findOne(@Param('id') id: string) {
     return this.projectsService.findOne(id);
   }
@@ -92,7 +92,7 @@ export class ProjectsController {
   }
 
   @Get(':id/files')
-  @Roles(UserRole.HOD, UserRole.DESIGNER)
+  @Roles(UserRole.HOD, UserRole.DESIGNER, UserRole.SALESPERSON)
   getFiles(@Param('id') id: string) {
     return this.projectsService.getProjectFiles(id);
   }

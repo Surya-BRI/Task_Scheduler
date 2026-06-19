@@ -15,4 +15,26 @@ export class UpdateTaskStatusDto {
   @IsString()
   @MaxLength(2000)
   reworkNote?: string;
+
+  // Reference file pre-uploaded via POST /tasks/upload-file
+  @IsOptional()
+  @IsString()
+  @MaxLength(500)
+  reworkAttachmentUrl?: string;
+
+  @IsOptional()
+  @IsString()
+  @MaxLength(255)
+  reworkAttachmentName?: string;
+
+  // External reference link
+  @IsOptional()
+  @IsString()
+  @MaxLength(500)
+  reworkLinkUrl?: string;
+
+  @IsOptional()
+  @IsString()
+  @MaxLength(255)
+  reworkLinkName?: string;
 }

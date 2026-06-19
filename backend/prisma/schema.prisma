@@ -71,6 +71,7 @@ model User {
   conversations            ConversationParticipant[]
   messages                 Message[]                  @relation("MessageSender")
   workSessions             TaskWorkSession[]          @relation("WorkSessionDesigner")
+  taskDesignerEntries      TaskDesigner[]             @relation("TaskDesignerUsers")
   overtimeApproved         OvertimeRequest[]          @relation("OvertimeApprovedBy")
   overtimeRejected         OvertimeRequest[]          @relation("OvertimeRejectedBy")
   overtimeApprovalHistories OvertimeApprovalHistory[]  @relation("OvertimeActionBy")
@@ -128,6 +129,14 @@ model Task {
   completedAt        DateTime?
   holdPreviousStatus String?   @db.NVarChar(50)
 
+  // Rework context — populated on the NEW revision task when rework is issued
+  reworkNote             String?  @db.NVarChar(Max)
+  reworkAttachmentUrl    String?  @db.NVarChar(500)
+  reworkAttachmentName   String?  @db.NVarChar(255)
+  reworkLinkUrl          String?  @db.NVarChar(500)
+  reworkLinkName         String?  @db.NVarChar(255)
+  previousRevisionTaskId String?  @db.NVarChar(36)
+
   technicalHead  String?  @db.NVarChar(255)
   teamLead       String?  @db.NVarChar(255)
   subTeamLead    String?  @db.NVarChar(255)
@@ -144,6 +153,7 @@ model Task {
   projectDetails         ProjectTaskDetail[]
   signRows               ProjectSignRow[]
   workSessions           TaskWorkSession[]
+  taskDesigners          TaskDesigner[]         @relation("TaskDesigners")
 
   createdAt DateTime @default(dbgenerated("sysutcdatetime()"))
   updatedAt DateTime @default(dbgenerated("sysutcdatetime()")) @updatedAt
@@ -719,4 +729,21 @@ model TaskWorkSessionFile {
 
   @@index([sessionId])
   @@map("ErpTSTaskWorkSessionFile")
+}
+
+// ---------------------------------------------------------
+// TASK DESIGNER JUNCTION (split task multi-designer support)
+// ---------------------------------------------------------
+model TaskDesigner {
+  id         String @id @default(dbgenerated("newid()")) @db.UniqueIdentifier
+  taskId     String @db.UniqueIdentifier
+  designerId String @db.UniqueIdentifier
+
+  task       Task   @relation("TaskDesigners", fields: [taskId], references: [id], onDelete: Cascade, onUpdate: NoAction)
+  designer   User   @relation("TaskDesignerUsers", fields: [designerId], references: [id], onDelete: NoAction, onUpdate: NoAction)
+
+  @@unique([taskId, designerId])
+  @@index([taskId])
+  @@index([designerId])
+  @@map("ErpTSTaskDesigner")
 }

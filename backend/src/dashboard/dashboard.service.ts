@@ -366,7 +366,17 @@ export class DashboardService {
 
   private async buildMetricsTaskWhere(userId: string, role: UserRole) {
     if (role === UserRole.DESIGNER) {
-      return { assigneeId: userId };
+      const junctionIds = await this.prisma.taskDesigner.findMany({
+        where: { designerId: userId },
+        select: { taskId: true },
+      });
+      const splitIds = junctionIds.map((r) => r.taskId);
+      return {
+        OR: [
+          { assigneeId: userId },
+          ...(splitIds.length > 0 ? [{ id: { in: splitIds } }] : []),
+        ],
+      };
     }
     if (role === UserRole.HOD) {
       const viewer = await this.prisma.user.findUnique({

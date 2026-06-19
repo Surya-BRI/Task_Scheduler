@@ -13,7 +13,7 @@ export class ActivitiesController {
   constructor(private readonly activitiesService: ActivitiesService) {}
 
   @Get()
-  @Roles(UserRole.HOD, UserRole.DESIGNER)
+  @Roles(UserRole.HOD, UserRole.DESIGNER, UserRole.SALESPERSON)
   findAll(
     @Query('limit') limit?: string,
     @Query('userId') userId?: string,
@@ -29,7 +29,7 @@ export class ActivitiesController {
   }
 
   @Get('task/:taskId')
-  @Roles(UserRole.HOD, UserRole.DESIGNER)
+  @Roles(UserRole.HOD, UserRole.DESIGNER, UserRole.SALESPERSON)
   findByTask(
     @Param('taskId') taskId: string,
     @Query('limit') limit?: string,
@@ -43,7 +43,7 @@ export class ActivitiesController {
   }
 
   @Get('project/:projectId')
-  @Roles(UserRole.HOD, UserRole.DESIGNER)
+  @Roles(UserRole.HOD, UserRole.DESIGNER, UserRole.SALESPERSON)
   findByProject(
     @Param('projectId') projectId: string,
     @Query('limit') limit?: string,

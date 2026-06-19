@@ -1,6 +1,6 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import { toast } from 'sonner'
-import { Ban, Calendar, CheckCircle2, ChevronLeft, CircleCheck, Clock3, FileText, Flag, Hourglass, Info, Link, Pause, Pencil, Shield, Trash2, Upload } from 'lucide-react'
+import { Ban, Calendar, CheckCircle2, ChevronLeft, CircleCheck, Clock3, ExternalLink, FileText, Flag, Hourglass, Info, Link, Pause, Pencil, RotateCcw, Shield, Trash2, Upload } from 'lucide-react'
 import { useParams, usePathname, useRouter, useSearchParams } from 'next/navigation'
 import DatePicker from 'react-datepicker'
 import { CreateTaskModal } from '../components/CreateTaskModal'
@@ -605,9 +605,11 @@ function ActivityTimelinePane({
                         <span className="font-semibold text-slate-800">Assigned Designer:</span>{' '}
                         {item.task.assigneeName ?? '-'}
                       </p>
-                      <p>
-                        <span className="font-semibold text-slate-800">HOD:</span> {hodDisplayName(item.task.hodName)}
-                      </p>
+                      {item.task.hodName ? (
+                        <p>
+                          <span className="font-semibold text-slate-800">HOD:</span> {hodDisplayName(item.task.hodName)}
+                        </p>
+                      ) : null}
                     </div>
                   ) : null}
                 </div>
@@ -727,6 +729,8 @@ function mapTaskToRecord(task) {
     teamLead: task.teamLead ?? '',
     subTeamLead: task.subTeamLead ?? '',
     designers: task.designers ?? '',
+    assignedTo: task.assignee?.fullName
+      || (task.taskDesigners?.length > 0 ? task.taskDesigners.map(d => d.designer.fullName).join(', ') : 'Unassigned'),
     projectDetails: task.projectDetails ?? [],
     disciplineType: task.disciplineType ?? null,
     signType: task.signType ?? null,
@@ -840,7 +844,12 @@ function ProjectTaskList({ tasks, loading, onView }) {
                       {getStatusLabel(task.status)}
                     </span>
                   </span>
-                  <span className="truncate">{task.assignee?.fullName || 'Unassigned'}</span>
+                  <span className="truncate">
+                    {task.assignee?.fullName ||
+                      (task.taskDesigners?.length > 0
+                        ? task.taskDesigners.map(d => d.designer.fullName).join(', ')
+                        : 'Unassigned')}
+                  </span>
                   <span className="text-slate-500">{task.dueDate ? new Date(task.dueDate).toLocaleDateString('en-GB') : '—'}</span>
                   <button
                     type="button"
@@ -875,6 +884,9 @@ export function TaskDetailsPage() {
   const [reworkDialogOpen, setReworkDialogOpen] = useState(false)
   const [reworkNote, setReworkNote] = useState('')
   const [reworkSubmitting, setReworkSubmitting] = useState(false)
+  const [reworkFile, setReworkFile] = useState(null) // { url, name } | null
+  const [reworkFileUploading, setReworkFileUploading] = useState(false)
+  const [reworkLink, setReworkLink] = useState({ url: '', name: '' })
   const [createModalOpen, setCreateModalOpen] = useState(false)
   const [projectCreateModalOpen, setProjectCreateModalOpen] = useState(false)
   const [createdTasks, setCreatedTasks] = useState([])
@@ -1029,16 +1041,24 @@ export function TaskDetailsPage() {
   const launchPauseModal = searchParams.get('openPause') === '1'
   const launchCompleteModal = searchParams.get('openComplete') === '1'
 
-  const handleStatusChange = useCallback(async (newStatus, reworkNote) => {
+  const handleStatusChange = useCallback(async (newStatus, reworkNote, reworkFileArg, reworkLinkArg) => {
     if (!taskId) return
     try {
-      await apiClient.patch(`/tasks/${taskId}/status`, {
+      const res = await apiClient.patch(`/tasks/${taskId}/status`, {
         status: newStatus,
         ...(reworkNote ? { reworkNote } : {}),
+        ...(reworkFileArg?.url ? { reworkAttachmentUrl: reworkFileArg.url, reworkAttachmentName: reworkFileArg.name } : {}),
+        ...(reworkLinkArg?.url ? { reworkLinkUrl: reworkLinkArg.url, reworkLinkName: reworkLinkArg.name } : {}),
       })
+      if (newStatus === 'REWORK' && res?.newRevisionTaskNo) {
+        toast.success(`Rework issued — revision ${res.newRevisionTaskNo} created and queued for assignment.`)
+      } else if (newStatus === 'REWORK') {
+        toast.error('Rework issued but revision task creation failed — check backend logs.')
+      }
       setTaskRefreshCounter((c) => c + 1)
-    } catch {
-      // status update failed — refresh anyway to show current state
+    } catch (err) {
+      const msg = err?.response?.data?.message || err?.message || 'Status update failed'
+      toast.error(msg)
       setTaskRefreshCounter((c) => c + 1)
     }
   }, [taskId])
@@ -1706,6 +1726,42 @@ export function TaskDetailsPage() {
             ) : null}
           </div>
 
+          {(record?.reworkNote || record?.reworkAttachmentUrl || record?.reworkLinkUrl) && (
+            <div className="rounded-lg border border-amber-200 bg-amber-50 p-3 flex flex-col gap-2">
+              <div className="flex items-center gap-1.5">
+                <RotateCcw size={13} className="text-amber-600 shrink-0" />
+                <span className="text-xs font-semibold text-amber-800">Rework Instructions</span>
+              </div>
+              {record.reworkNote && (
+                <p className="text-xs text-amber-900 whitespace-pre-wrap">{record.reworkNote}</p>
+              )}
+              <div className="flex flex-wrap gap-3">
+                {record.reworkAttachmentUrl && (
+                  <a
+                    href={record.reworkAttachmentUrl}
+                    target="_blank"
+                    rel="noopener noreferrer"
+                    className="inline-flex items-center gap-1.5 text-xs text-amber-700 underline hover:text-amber-900"
+                  >
+                    <FileText size={12} />
+                    {record.reworkAttachmentName || 'Reference File'}
+                  </a>
+                )}
+                {record.reworkLinkUrl && (
+                  <a
+                    href={record.reworkLinkUrl}
+                    target="_blank"
+                    rel="noopener noreferrer"
+                    className="inline-flex items-center gap-1.5 text-xs text-amber-700 underline hover:text-amber-900"
+                  >
+                    <ExternalLink size={12} />
+                    {record.reworkLinkName || record.reworkLinkUrl}
+                  </a>
+                )}
+              </div>
+            </div>
+          )}
+
           <div className="grid gap-2.5 lg:grid-cols-[1fr_265px]">
             <section className="rounded-lg border border-slate-200 bg-white p-2.5 shadow-sm">
               <div className="flex items-center justify-between border-b border-slate-200 pb-1.5">
@@ -1757,6 +1813,7 @@ export function TaskDetailsPage() {
                           <DetailRow label="Deadline" value={record.deadline ?? '-'} />
                           <DetailRow label="Created By (HOD)" value={taskAuditInfo.createdByHod} />
                           <DetailRow label="Reviewer HOD" value={record.reviewerHod ?? '-'} />
+                          <DetailRow label="Assigned To" value={record.assignedTo ?? 'Unassigned'} />
                         </div>
                       </div>
                       <div className="mt-2.5">
@@ -1873,68 +1930,70 @@ export function TaskDetailsPage() {
                               </div>
                             )}
                           </div>
-                          {/* HOD action panel — DESIGN_COMPLETED, HOD_REVIEW, and ON_HOLD (when parked from HOD's stages) */}
-                          {isHod && !isTerminalStatus && (
-                            taskStatus === 'DESIGN_COMPLETED' ||
-                            taskStatus === 'HOD_REVIEW' ||
-                            (taskStatus === 'ON_HOLD' && record?.holdPreviousStatus !== 'SALES_REVIEW')
-                          ) && (
-                            <div className="mt-3 pt-3 border-t border-slate-200">
-                              <p className="text-[10px] font-semibold text-slate-400 uppercase tracking-wide mb-2">Move Status</p>
-                              <div className="flex flex-wrap gap-2">
-                                {taskStatus === 'DESIGN_COMPLETED' && (
-                                  <button
-                                    type="button"
-                                    onClick={() => handleStatusChange('HOD_REVIEW')}
-                                    className="rounded-md bg-violet-600 px-3 py-1.5 text-xs font-semibold text-white hover:bg-violet-700 transition-colors"
-                                  >
-                                    Start HOD Review
-                                  </button>
-                                )}
-                                {taskStatus === 'HOD_REVIEW' && (<>
-                                  <button type="button" onClick={() => handleStatusChange('SALES_REVIEW')} className="rounded-md bg-orange-500 px-3 py-1.5 text-xs font-semibold text-white hover:bg-orange-600 transition-colors">Send to Sales</button>
-                                  <button type="button" onClick={() => { setReworkNote(''); setReworkDialogOpen(true); }} className="rounded-md bg-red-500 px-3 py-1.5 text-xs font-semibold text-white hover:bg-red-600 transition-colors">Request Rework</button>
-                                </>)}
-                                {taskStatus === 'ON_HOLD' && (
-                                  <button type="button" onClick={() => handleStatusChange(record?.holdPreviousStatus || 'HOD_REVIEW')} className="rounded-md bg-violet-600 px-3 py-1.5 text-xs font-semibold text-white hover:bg-violet-700 transition-colors">Resume</button>
-                                )}
-                                {taskStatus !== 'ON_HOLD' && (
-                                  <button type="button" onClick={() => handleStatusChange('ON_HOLD')} className="rounded-md border border-slate-300 bg-white px-3 py-1.5 text-xs font-semibold text-slate-600 hover:bg-slate-50 transition-colors">Put On Hold</button>
-                                )}
-                              </div>
-                            </div>
-                          )}
-                          {/* Salesperson action panel — SALES_REVIEW stage and ON_HOLD when parked from SALES_REVIEW */}
-                          {isSales && !isTerminalStatus && (
-                            taskStatus === 'SALES_REVIEW' ||
-                            (taskStatus === 'ON_HOLD' && record?.holdPreviousStatus === 'SALES_REVIEW')
-                          ) && (
-                            <div className="mt-3 pt-3 border-t border-slate-200">
-                              <p className="text-[10px] font-semibold text-slate-400 uppercase tracking-wide mb-2">Sales Review Actions</p>
-                              <div className="flex flex-wrap gap-2">
-                                {taskStatus === 'SALES_REVIEW' && (<>
-                                  <button type="button" onClick={() => handleStatusChange('CLIENT_ACCEPTED')} className="rounded-md bg-emerald-600 px-3 py-1.5 text-xs font-semibold text-white hover:bg-emerald-700 transition-colors">Client Accepted</button>
-                                  <button type="button" onClick={() => handleStatusChange('CLIENT_REJECTED')} className="rounded-md bg-rose-600 px-3 py-1.5 text-xs font-semibold text-white hover:bg-rose-700 transition-colors">Client Rejected</button>
-                                  <button type="button" onClick={() => { setReworkNote(''); setReworkDialogOpen(true); }} className="rounded-md bg-red-500 px-3 py-1.5 text-xs font-semibold text-white hover:bg-red-600 transition-colors">Request Rework</button>
-                                  <button type="button" onClick={() => handleStatusChange('ON_HOLD')} className="rounded-md border border-slate-300 bg-white px-3 py-1.5 text-xs font-semibold text-slate-600 hover:bg-slate-50 transition-colors">Put On Hold</button>
-                                </>)}
-                                {taskStatus === 'ON_HOLD' && (
-                                  <button type="button" onClick={() => handleStatusChange(record?.holdPreviousStatus || 'SALES_REVIEW')} className="rounded-md bg-orange-500 px-3 py-1.5 text-xs font-semibold text-white hover:bg-orange-600 transition-colors">Resume</button>
-                                )}
-                              </div>
-                            </div>
-                          )}
-                          {/* Designer action panel — resubmit from REWORK back to HOD */}
-                          {isDesigner && taskStatus === 'REWORK' && (
-                            <div className="mt-3 pt-3 border-t border-slate-200">
-                              <p className="text-[10px] font-semibold text-slate-400 uppercase tracking-wide mb-2">Rework Actions</p>
-                              <div className="flex flex-wrap gap-2">
-                                <button type="button" onClick={() => handleStatusChange('HOD_REVIEW')} className="rounded-md bg-violet-600 px-3 py-1.5 text-xs font-semibold text-white hover:bg-violet-700 transition-colors">Submit for HOD Review</button>
-                              </div>
-                            </div>
-                          )}
                         </div>
                       ) : null}
+                      {/* HOD action panel — any active stage except SALES_REVIEW (which belongs to salesperson) */}
+                      {isHod && !isTerminalStatus &&
+                        taskStatus !== 'SALES_REVIEW' &&
+                        !(taskStatus === 'ON_HOLD' && record?.holdPreviousStatus === 'SALES_REVIEW')
+                      && (
+                        <div className="mt-4 pt-3 border-t border-slate-200">
+                          <p className="text-[10px] font-semibold text-slate-400 uppercase tracking-wide mb-2">Move Status</p>
+                          <div className="flex flex-wrap gap-2">
+                            {taskStatus === 'DESIGN_COMPLETED' && (
+                              <button
+                                type="button"
+                                onClick={() => handleStatusChange('HOD_REVIEW')}
+                                className="rounded-md bg-violet-600 px-3 py-1.5 text-xs font-semibold text-white hover:bg-violet-700 transition-colors"
+                              >
+                                Start HOD Review
+                              </button>
+                            )}
+                            {taskStatus === 'HOD_REVIEW' && (<>
+                              <button type="button" onClick={() => handleStatusChange('SALES_REVIEW')} className="rounded-md bg-orange-500 px-3 py-1.5 text-xs font-semibold text-white hover:bg-orange-600 transition-colors">Send to Sales</button>
+                            </>)}
+                            {taskStatus === 'ON_HOLD' && (
+                              <button type="button" onClick={() => handleStatusChange(record?.holdPreviousStatus || 'HOD_REVIEW')} className="rounded-md bg-violet-600 px-3 py-1.5 text-xs font-semibold text-white hover:bg-violet-700 transition-colors">Resume</button>
+                            )}
+                            {taskStatus !== 'ON_HOLD' && (
+                              <button type="button" onClick={() => handleStatusChange('ON_HOLD')} className="rounded-md border border-slate-300 bg-white px-3 py-1.5 text-xs font-semibold text-slate-600 hover:bg-slate-50 transition-colors">Put On Hold</button>
+                            )}
+                          </div>
+                        </div>
+                      )}
+                      {/* Salesperson action panel — SALES_REVIEW, CLIENT_REJECTED, and ON_HOLD parked from SALES_REVIEW */}
+                      {isSales && (
+                        taskStatus === 'SALES_REVIEW' ||
+                        taskStatus === 'CLIENT_REJECTED' ||
+                        (taskStatus === 'ON_HOLD' && record?.holdPreviousStatus === 'SALES_REVIEW')
+                      ) && (
+                        <div className="mt-4 pt-3 border-t border-slate-200">
+                          <p className="text-[10px] font-semibold text-slate-400 uppercase tracking-wide mb-2">Sales Review Actions</p>
+                          <div className="flex flex-wrap gap-2">
+                            {taskStatus === 'SALES_REVIEW' && (<>
+                              <button type="button" onClick={() => handleStatusChange('CLIENT_ACCEPTED')} className="rounded-md bg-emerald-600 px-3 py-1.5 text-xs font-semibold text-white hover:bg-emerald-700 transition-colors">Client Accepted</button>
+                              <button type="button" onClick={() => handleStatusChange('CLIENT_REJECTED')} className="rounded-md bg-rose-600 px-3 py-1.5 text-xs font-semibold text-white hover:bg-rose-700 transition-colors">Client Rejected</button>
+                              <button type="button" onClick={() => { setReworkNote(''); setReworkFile(null); setReworkLink({ url: '', name: '' }); setReworkDialogOpen(true); }} className="rounded-md bg-red-500 px-3 py-1.5 text-xs font-semibold text-white hover:bg-red-600 transition-colors">Request Rework</button>
+                              <button type="button" onClick={() => handleStatusChange('ON_HOLD')} className="rounded-md border border-slate-300 bg-white px-3 py-1.5 text-xs font-semibold text-slate-600 hover:bg-slate-50 transition-colors">Put On Hold</button>
+                            </>)}
+                            {taskStatus === 'CLIENT_REJECTED' && (
+                              <button type="button" onClick={() => { setReworkNote(''); setReworkFile(null); setReworkLink({ url: '', name: '' }); setReworkDialogOpen(true); }} className="rounded-md bg-red-500 px-3 py-1.5 text-xs font-semibold text-white hover:bg-red-600 transition-colors">Issue Rework</button>
+                            )}
+                            {taskStatus === 'ON_HOLD' && (
+                              <button type="button" onClick={() => handleStatusChange(record?.holdPreviousStatus || 'SALES_REVIEW')} className="rounded-md bg-orange-500 px-3 py-1.5 text-xs font-semibold text-white hover:bg-orange-600 transition-colors">Resume</button>
+                            )}
+                          </div>
+                        </div>
+                      )}
+                      {/* Designer action panel — resubmit from REWORK back to HOD */}
+                      {isDesigner && taskStatus === 'REWORK' && (
+                        <div className="mt-4 pt-3 border-t border-slate-200">
+                          <p className="text-[10px] font-semibold text-slate-400 uppercase tracking-wide mb-2">Rework Actions</p>
+                          <div className="flex flex-wrap gap-2">
+                            <button type="button" onClick={() => handleStatusChange('HOD_REVIEW')} className="rounded-md bg-violet-600 px-3 py-1.5 text-xs font-semibold text-white hover:bg-violet-700 transition-colors">Submit for HOD Review</button>
+                          </div>
+                        </div>
+                      )}
                       {(record?.projectDetails?.length ?? 0) > 0 && (
                         <div className="mt-4 border-t border-slate-200 pt-3">
                           <p className="mb-2 text-xs font-semibold text-slate-700">Work Scope</p>
@@ -2394,20 +2453,79 @@ export function TaskDetailsPage() {
 
       {reworkDialogOpen && (
         <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/40 p-4">
-          <div className="bg-white rounded-xl shadow-xl w-full max-w-md flex flex-col gap-4 p-6">
+          <div className="bg-white rounded-xl shadow-xl w-full max-w-lg flex flex-col gap-4 p-6">
             <div>
-              <h2 className="text-sm font-bold text-slate-900">Request Rework</h2>
-              <p className="mt-1 text-xs text-slate-500">Describe what needs to be corrected. This note will be sent to the designer as a notification and saved in the task chatter.</p>
+              <h2 className="text-sm font-bold text-slate-900">Issue Rework</h2>
+              <p className="mt-1 text-xs text-slate-500">A new revision task will be created with these instructions. The original task stays in its current status.</p>
             </div>
-            <textarea
-              className="w-full rounded-md border border-slate-300 p-2.5 text-xs text-slate-800 resize-none focus:outline-none focus:ring-2 focus:ring-red-400"
-              rows={5}
-              placeholder="e.g. Please revise the sign dimensions on sheet 3 and update the colour palette to match the revised brief..."
-              value={reworkNote}
-              onChange={(e) => setReworkNote(e.target.value)}
-              autoFocus
-            />
-            <div className="flex justify-end gap-2">
+            <div className="flex flex-col gap-1">
+              <label className="text-xs font-semibold text-slate-700">Rework Instructions <span className="text-red-500">*</span></label>
+              <textarea
+                className="w-full rounded-md border border-slate-300 p-2.5 text-xs text-slate-800 resize-none focus:outline-none focus:ring-2 focus:ring-red-400"
+                rows={4}
+                placeholder="e.g. Please revise the sign dimensions on sheet 3 and update the colour palette to match the revised brief..."
+                value={reworkNote}
+                onChange={(e) => setReworkNote(e.target.value)}
+                autoFocus
+              />
+            </div>
+            {/* File attachment */}
+            <div className="flex flex-col gap-1">
+              <label className="text-xs font-semibold text-slate-700">Reference File <span className="text-slate-400 font-normal">(optional)</span></label>
+              {reworkFile ? (
+                <div className="flex items-center gap-2 rounded-md border border-slate-200 bg-slate-50 px-3 py-2">
+                  <FileText size={13} className="text-slate-500 shrink-0" />
+                  <span className="text-xs text-slate-700 flex-1 truncate">{reworkFile.name}</span>
+                  <button type="button" onClick={() => setReworkFile(null)} className="text-slate-400 hover:text-red-500 text-xs transition-colors">✕</button>
+                </div>
+              ) : (
+                <label className={`flex items-center gap-2 rounded-md border border-dashed border-slate-300 px-3 py-2 cursor-pointer hover:bg-slate-50 transition-colors ${reworkFileUploading ? 'opacity-50 pointer-events-none' : ''}`}>
+                  <Upload size={13} className="text-slate-400 shrink-0" />
+                  <span className="text-xs text-slate-500">{reworkFileUploading ? 'Uploading…' : 'Click to attach a file'}</span>
+                  <input
+                    type="file"
+                    className="hidden"
+                    onChange={async (e) => {
+                      const file = e.target.files?.[0]
+                      if (!file) return
+                      setReworkFileUploading(true)
+                      try {
+                        const form = new FormData()
+                        form.append('file', file)
+                        const res = await apiClient.post('/tasks/upload-file', form)
+                        setReworkFile({ url: res.fileUrl, name: res.fileName })
+                      } catch {
+                        toast.error('File upload failed')
+                      } finally {
+                        setReworkFileUploading(false)
+                        e.target.value = ''
+                      }
+                    }}
+                  />
+                </label>
+              )}
+            </div>
+            {/* Reference link */}
+            <div className="flex flex-col gap-1">
+              <label className="text-xs font-semibold text-slate-700">Reference Link <span className="text-slate-400 font-normal">(optional)</span></label>
+              <div className="flex gap-2">
+                <input
+                  type="url"
+                  className="flex-1 rounded-md border border-slate-300 px-2.5 py-1.5 text-xs text-slate-800 focus:outline-none focus:ring-2 focus:ring-red-400"
+                  placeholder="https://…"
+                  value={reworkLink.url}
+                  onChange={(e) => setReworkLink((l) => ({ ...l, url: e.target.value }))}
+                />
+                <input
+                  type="text"
+                  className="w-32 rounded-md border border-slate-300 px-2.5 py-1.5 text-xs text-slate-800 focus:outline-none focus:ring-2 focus:ring-red-400"
+                  placeholder="Label"
+                  value={reworkLink.name}
+                  onChange={(e) => setReworkLink((l) => ({ ...l, name: e.target.value }))}
+                />
+              </div>
+            </div>
+            <div className="flex justify-end gap-2 pt-1">
               <button
                 type="button"
                 onClick={() => setReworkDialogOpen(false)}
@@ -2417,16 +2535,16 @@ export function TaskDetailsPage() {
               </button>
               <button
                 type="button"
-                disabled={!reworkNote.trim() || reworkSubmitting}
+                disabled={!reworkNote.trim() || reworkSubmitting || reworkFileUploading}
                 onClick={async () => {
                   setReworkSubmitting(true)
-                  await handleStatusChange('REWORK', reworkNote.trim())
+                  await handleStatusChange('REWORK', reworkNote.trim(), reworkFile, reworkLink.url ? reworkLink : null)
                   setReworkDialogOpen(false)
                   setReworkSubmitting(false)
                 }}
                 className="rounded-md bg-red-500 px-4 py-1.5 text-xs font-semibold text-white hover:bg-red-600 disabled:opacity-50 transition-colors"
               >
-                {reworkSubmitting ? 'Sending…' : 'Send for Rework'}
+                {reworkSubmitting ? 'Creating revision…' : 'Issue Rework'}
               </button>
             </div>
           </div>

@@ -226,7 +226,7 @@ export function DesignListRecordPage() {
                       <RowField label="Project Name" value={record.name.toUpperCase()} />
                       <RowField label="Project No" value={record.projectNo} />
                       <RowField label="Business Unit" value={record.businessUnit} />
-                      <RowField label="Project Manager" value={record.assignee?.name ?? 'John'} />
+                      <RowField label="Project Manager" value={record.assignee?.name ?? 'Unassigned'} />
                       <RowField label="Priority Level" value={record.agingDays > 20 ? 'High' : 'Medium'} />
                       <RowField label="Date of Issued" value={record.created} />
                     </div>

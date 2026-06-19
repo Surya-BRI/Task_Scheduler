@@ -34,6 +34,12 @@ const TASK_SELECT = {
   startedAt: true,
   completedAt: true,
   holdPreviousStatus: true,
+  reworkNote: true,
+  reworkAttachmentUrl: true,
+  reworkAttachmentName: true,
+  reworkLinkUrl: true,
+  reworkLinkName: true,
+  previousRevisionTaskId: true,
   technicalHead: true,
   teamLead: true,
   subTeamLead: true,
@@ -42,6 +48,7 @@ const TASK_SELECT = {
   project: { select: { id: true, name: true, projectNo: true, category: true } },
   assigneeId: true,
   assignee: { select: { id: true, fullName: true, email: true } },
+  taskDesigners: { select: { designer: { select: { id: true, fullName: true, email: true } } } },
   retailDetails: {
     select: {
       id: true,
@@ -123,10 +130,17 @@ const TASK_LIST_SELECT = {
   startedAt: true,
   completedAt: true,
   holdPreviousStatus: true,
+  reworkNote: true,
+  reworkAttachmentUrl: true,
+  reworkAttachmentName: true,
+  reworkLinkUrl: true,
+  reworkLinkName: true,
+  previousRevisionTaskId: true,
   projectId: true,
   project: { select: { id: true, name: true, projectNo: true, category: true, salesPerson: true } },
   assigneeId: true,
   assignee: { select: { id: true, fullName: true, email: true } },
+  taskDesigners: { select: { designer: { select: { id: true, fullName: true, email: true } } } },
   retailDetails: { select: { hoursRequired: true } },
   projectDetails: { select: { artworkHours: true, technicalHours: true, locationHours: true, asBuiltHours: true } },
   createdAt: true,
@@ -869,23 +883,35 @@ export class TasksService {
     const skip = (page - 1) * limit;
 
     // Role-based base filters
-    const baseWhere: Record<string, unknown> =
-      role === UserRole.DESIGNER
-        ? { assigneeId: userId }
-        : role === UserRole.SALESPERSON
-        ? { status: 'SALES_REVIEW' }
-        : {};
+    const baseWhere: Record<string, unknown> = role === UserRole.SALESPERSON ? { status: 'SALES_REVIEW' } : {};
+
+    if (role === UserRole.DESIGNER) {
+      // Include tasks assigned directly OR via the junction table (split tasks)
+      baseWhere.AND = [
+        {
+          OR: [
+            { assigneeId: userId },
+            { taskDesigners: { some: { designerId: userId } } },
+          ],
+        },
+      ];
+    }
 
     if (projectId) baseWhere.projectId = projectId;
     if (status) baseWhere.status = this.toDbTaskStatus(status);
     if (priority) baseWhere.priority = priority;
     if (assigneeId) baseWhere.assigneeId = assigneeId;
     if (search) {
-      baseWhere.OR = [
+      const searchOr = [
         { title: { contains: search } },
         { opNo: { contains: search } },
         { description: { contains: search } },
       ];
+      if (baseWhere.AND) {
+        (baseWhere.AND as any[]).push({ OR: searchOr });
+      } else {
+        baseWhere.OR = searchOr;
+      }
     }
 
     const [data, total] = await Promise.all([
@@ -962,6 +988,10 @@ export class TasksService {
       select: TASK_SELECT,
     });
 
+    // Keep junction table in sync with direct assignment
+    await this.prisma.taskDesigner.deleteMany({ where: { taskId: id } });
+    await this.prisma.taskDesigner.create({ data: { taskId: id, designerId: dto.assigneeId } });
+
     await this.activityLogger.log({
       action: ActivityAction.ASSIGNED_TASK,
       userId: actingUserId,
@@ -1028,12 +1058,20 @@ export class TasksService {
     const existing = await this.prisma.task.findUnique({ where: { id } });
     if (!existing) throw new NotFoundException('Task not found');
     if (role === UserRole.DESIGNER && existing.assigneeId !== userId) {
-      throw new ForbiddenException('Designers can only update status on their own tasks');
+      const inJunction = await this.prisma.taskDesigner.findUnique({
+        where: { taskId_designerId: { taskId: id, designerId: userId } },
+      });
+      if (!inJunction) throw new ForbiddenException('Designers can only update status on their own tasks');
+    }
+
+    // Only SALESPERSON and ADMIN can issue rework
+    const newStatusApi = this.toApiTaskStatus(dto.status);
+    if (newStatusApi === 'REWORK' && role !== UserRole.SALESPERSON && role !== UserRole.ADMIN) {
+      throw new ForbiddenException('Only SALESPERSON or ADMIN can issue rework');
     }
 
     // Auto-track startedAt / completedAt timestamps
     const now = new Date();
-    const newStatusApi = this.toApiTaskStatus(dto.status);
     let newStatusDb = this.toDbTaskStatus(dto.status);
     const extraData: Record<string, unknown> = {};
 
@@ -1055,11 +1093,29 @@ export class TasksService {
     if ((effectiveStatusApi === 'WIP' || effectiveStatusApi === 'IN_PROGRESS') && !existing.startedAt) extraData.startedAt = now;
     if (COMPLETED_STATUS_FILTER.includes(effectiveStatusApi)) extraData.completedAt = now;
 
-    const updatedTask = await this.prisma.task.update({
-      where: { id },
-      data: { status: newStatusDb, ...extraData },
-      select: TASK_SELECT,
-    });
+    // When issuing REWORK from CLIENT_REJECTED: keep old task as CLIENT_REJECTED — only create the revision
+    const skipStatusUpdate = currentStatusApi === 'CLIENT_REJECTED' && newStatusApi === 'REWORK';
+
+    let updatedTask: Awaited<ReturnType<typeof this.prisma.task.findUniqueOrThrow>>;
+    if (skipStatusUpdate) {
+      updatedTask = await (this.prisma.task.findUniqueOrThrow as any)({ where: { id }, select: TASK_SELECT });
+    } else {
+      updatedTask = await (this.prisma.task.update as any)({
+        where: { id },
+        data: { status: newStatusDb, ...extraData },
+        select: TASK_SELECT,
+      });
+    }
+
+    // When transitioning to ON_HOLD, remove all future scheduler assignments so the
+    // task doesn't appear as assigned on the scheduler grid
+    if (newStatusApi === 'ON_HOLD') {
+      const todayMidnight = new Date();
+      todayMidnight.setHours(0, 0, 0, 0);
+      await this.prisma.schedulerAssignment.deleteMany({
+        where: { taskId: id, weekStartDate: { gte: todayMidnight } },
+      });
+    }
 
     const milestoneAction =
       effectiveStatusApi === 'DESIGN_COMPLETED' ? ActivityAction.TASK_COMPLETED :
@@ -1077,16 +1133,16 @@ export class TasksService {
         event: logAction,
         messageKey,
         taskSnapshot: {
-          id: updatedTask.id,
-          taskNo: updatedTask.taskNo,
-          opNo: updatedTask.opNo,
-          title: updatedTask.title ?? undefined,
-          status: updatedTask.status,
+          id: (updatedTask as any).id,
+          taskNo: (updatedTask as any).taskNo,
+          opNo: (updatedTask as any).opNo,
+          title: (updatedTask as any).title ?? undefined,
+          status: (updatedTask as any).status,
         },
         projectSnapshot: {
-          id: updatedTask.project?.id,
-          projectNo: updatedTask.project?.projectNo,
-          name: updatedTask.project?.name,
+          id: (updatedTask as any).project?.id,
+          projectNo: (updatedTask as any).project?.projectNo,
+          name: (updatedTask as any).project?.name,
         },
         changes: {
           oldStatus: this.toApiTaskStatus(existing.status),
@@ -1104,22 +1160,33 @@ export class TasksService {
 
     if (COMPLETED_STATUS_FILTER.includes(effectiveStatusApi)) {
       const linkUrlStatus =
-        updatedTask.designType?.toLowerCase() === 'retail'
+        (updatedTask as any).designType?.toLowerCase() === 'retail'
           ? `/retail-task-view/${id}`
           : `/project-task-view/${id}`;
-      const statusMessage = `${updatedTask.taskNo} — ${updatedTask.project?.name ?? 'Unknown Project'} status changed to ${effectiveStatusApi}`;
+      const statusMessage = `${(updatedTask as any).taskNo} — ${(updatedTask as any).project?.name ?? 'Unknown Project'} status changed to ${effectiveStatusApi}`;
       const hodUsersStatus = await this.prisma.user.findMany({
         where: { role: { name: { in: ['HOD', 'ADMIN'] } } },
         select: { id: true },
       });
-      if (updatedTask.assigneeId) {
+      if ((updatedTask as any).assigneeId) {
         this.notificationsService
-          .create({ userId: updatedTask.assigneeId, title: 'Task Marked Complete', message: statusMessage, linkUrl: linkUrlStatus })
+          .create({ userId: (updatedTask as any).assigneeId, title: 'Task Marked Complete', message: statusMessage, linkUrl: linkUrlStatus })
           .catch((err) => this.logger.error('Failed to send complete notification to designer', err));
-        this.dashboardRealtime?.notifyUserNotificationRefresh(updatedTask.assigneeId);
+        this.dashboardRealtime?.notifyUserNotificationRefresh((updatedTask as any).assigneeId);
+      }
+      // Notify split-task designers (junction table) who don't have assigneeId
+      const splitDesignersComplete = await this.prisma.taskDesigner.findMany({
+        where: { taskId: id, NOT: { designerId: (updatedTask as any).assigneeId ?? '' } },
+        select: { designerId: true },
+      });
+      for (const { designerId } of splitDesignersComplete) {
+        this.notificationsService
+          .create({ userId: designerId, title: 'Task Marked Complete', message: statusMessage, linkUrl: linkUrlStatus })
+          .catch((err) => this.logger.error('Failed to send complete notification to split designer', err));
+        this.dashboardRealtime?.notifyUserNotificationRefresh(designerId);
       }
       for (const hod of hodUsersStatus) {
-        if (hod.id !== updatedTask.assigneeId) {
+        if (hod.id !== (updatedTask as any).assigneeId) {
           this.notificationsService
             .create({ userId: hod.id, title: 'Task Completed', message: statusMessage, linkUrl: linkUrlStatus })
             .catch((err) => this.logger.error('Failed to send complete notification to HOD', err));
@@ -1128,50 +1195,280 @@ export class TasksService {
       }
     }
 
-    // When HOD sends task back for REWORK with a note — create chatter post + notify designer
-    if (effectiveStatusApi === 'REWORK' && dto.reworkNote?.trim()) {
-      const note = dto.reworkNote.trim();
+    // REWORK — notify original designers and create new revision task
+    let reworkResult: { id: string; taskNo: string } | null = null;
+    if (effectiveStatusApi === 'REWORK') {
       const taskLink =
-        updatedTask.designType?.toLowerCase() === 'retail'
+        (updatedTask as any).designType?.toLowerCase() === 'retail'
           ? `/retail-task-view/${id}`
           : `/project-task-view/${id}`;
+      const note = dto.reworkNote?.trim() ?? '';
 
-      try {
-        await this.prisma.chatterPost.create({
-          data: {
-            taskId: id,
-            title: 'Rework Instructions',
-            message: `Rework Required:\n\n${note}`,
-            postType: 'REWORK',
-            authorId: userId,
-            ...(updatedTask.assigneeId ? { mentionUserId: updatedTask.assigneeId } : {}),
-          },
-        });
-      } catch (err) {
-        this.logger.error('Failed to create rework chatter post', err);
-      }
-
-      if (updatedTask.assigneeId) {
+      // Notify the original task's designer(s) that rework was issued
+      if ((updatedTask as any).assigneeId) {
         this.notificationsService
           .create({
-            userId: updatedTask.assigneeId,
-            title: `Rework Required — ${updatedTask.taskNo}`,
-            message: note,
+            userId: (updatedTask as any).assigneeId,
+            title: `Rework Issued — ${(updatedTask as any).taskNo}`,
+            message: note || 'Task has been sent for rework.',
             linkUrl: taskLink,
           })
           .catch((err) => this.logger.error('Failed to send rework notification', err));
-        this.dashboardRealtime?.notifyUserNotificationRefresh(updatedTask.assigneeId);
+        this.dashboardRealtime?.notifyUserNotificationRefresh((updatedTask as any).assigneeId);
       }
+      const splitDesignersRework = await this.prisma.taskDesigner.findMany({
+        where: { taskId: id, NOT: { designerId: (updatedTask as any).assigneeId ?? '' } },
+        select: { designerId: true },
+      });
+      for (const { designerId } of splitDesignersRework) {
+        this.notificationsService
+          .create({
+            userId: designerId,
+            title: `Rework Issued — ${(updatedTask as any).taskNo}`,
+            message: note || 'Task has been sent for rework.',
+            linkUrl: taskLink,
+          })
+          .catch((err) => this.logger.error('Failed to send rework notification to split designer', err));
+        this.dashboardRealtime?.notifyUserNotificationRefresh(designerId);
+      }
+
+      // Create the new revision task
+      reworkResult = await this.createRevisionFromRework(existing, dto, userId);
     }
 
-    const withUrls = await this.withSignedAttachmentUrls(updatedTask);
-    return this.normalizeTaskForApi(withUrls);
+    const withUrls = await this.withSignedAttachmentUrls(updatedTask as any);
+    const normalized = this.normalizeTaskForApi(withUrls as any);
+    return {
+      ...normalized,
+      ...(reworkResult ? { newRevisionTaskId: reworkResult.id, newRevisionTaskNo: reworkResult.taskNo } : {}),
+    };
+  }
+
+  private async createRevisionFromRework(
+    originalTask: { id: string; projectId: string; opNo: string | null; designType: string | null; signType: string | null; signFamily: string | null; disciplineType: string | null; title: string | null; description: string | null; priority: string; dueDate: Date | null; technicalHead: string | null; teamLead: string | null; subTeamLead: string | null; designers: string | null },
+    dto: UpdateTaskStatusDto,
+    userId: string,
+  ): Promise<{ id: string; taskNo: string }> {
+    const opNo = originalTask.opNo ?? '';
+    const designType = originalTask.designType ?? 'PROJECT';
+
+    // Fetch detail rows and attachments from the original task
+    const originalFull = await this.prisma.task.findUnique({
+      where: { id: originalTask.id },
+      select: {
+        retailDetails: {
+          select: {
+            providedFile: true, fileKey: true, fileUrl: true, hodName: true,
+            designTypes: true, hoursRequired: true, comment: true,
+            signFamily: true, signType: true, planCode: true,
+            contractRef: true, quantity: true, deadline: true,
+            attachments: { select: { fileKey: true, fileName: true, mimeType: true, sizeBytes: true } },
+          },
+        },
+        projectDetails: {
+          select: {
+            signType: true, planCode: true, area: true, level: true,
+            artwork: true, artworkHours: true, technical: true, technicalHours: true,
+            location: true, locationHours: true, asBuilt: true, asBuiltHours: true,
+            bim: true, deadline: true, comment: true,
+            attachments: { select: { fileKey: true, fileName: true, mimeType: true, sizeBytes: true } },
+          },
+        },
+      },
+    });
+
+    this.logger.log(`createRevisionFromRework: start — original=${originalTask.id} opNo=${opNo} designType=${designType} projectId=${originalTask.projectId}`);
+    const result = await this.prisma.$transaction(async (tx) => {
+      // Resolve next revision code
+      const nextRevision = await this.resolveNextRevisionCode(tx, {
+        projectId: originalTask.projectId,
+        opNo,
+        designType,
+        signType: originalTask.signType,
+      });
+      this.logger.log(`createRevisionFromRework: nextRevision=${nextRevision}`);
+
+      const newTaskNo = this.buildTaskNo(opNo);
+
+      // Build auto-title for project tasks (same pattern as createExtended)
+      let newTitle: string | null = originalTask.title || null;
+      if (designType === 'PROJECT' || designType === 'project') {
+        newTitle = [opNo, originalTask.signType, originalTask.disciplineType, nextRevision]
+          .filter(Boolean).join(' - ') || originalTask.title || null;
+      }
+
+      this.logger.log(`createRevisionFromRework: creating task taskNo=${newTaskNo} title=${newTitle}`);
+      // Create the new revision task (core fields only — rework context applied separately below)
+      const newTask = await tx.task.create({
+        data: {
+          taskNo: newTaskNo,
+          opNo: opNo || null,
+          title: newTitle,
+          revisionCode: nextRevision,
+          designType,
+          signType: originalTask.signType,
+          signFamily: originalTask.signFamily,
+          disciplineType: originalTask.disciplineType,
+          description: originalTask.description,
+          status: 'DESIGN_NEW',
+          priority: originalTask.priority,
+          projectId: originalTask.projectId,
+          assigneeId: null,
+          dueDate: originalTask.dueDate,
+          technicalHead: originalTask.technicalHead,
+          teamLead: originalTask.teamLead,
+          subTeamLead: originalTask.subTeamLead,
+          designers: originalTask.designers,
+        },
+        select: { id: true, taskNo: true },
+      });
+
+      this.logger.log(`createRevisionFromRework: task created id=${newTask.id} taskNo=${newTask.taskNo}`);
+
+      // Clone retail detail + attachments
+      if (originalFull?.retailDetails && originalFull.retailDetails.length > 0) {
+        for (const detail of originalFull.retailDetails) {
+          const newDetail = await tx.retailTaskDetail.create({
+            data: {
+              taskId: newTask.id,
+              providedFile: detail.providedFile,
+              fileKey: detail.fileKey,
+              fileUrl: detail.fileUrl,
+              hodName: detail.hodName,
+              designTypes: detail.designTypes,
+              hoursRequired: detail.hoursRequired,
+              comment: detail.comment,
+              signFamily: detail.signFamily,
+              signType: detail.signType,
+              planCode: detail.planCode,
+              contractRef: detail.contractRef,
+              quantity: detail.quantity,
+              deadline: detail.deadline,
+            },
+            select: { id: true },
+          });
+          for (const att of detail.attachments) {
+            await tx.retailTaskDetailAttachment.create({
+              data: { retailTaskDetailId: newDetail.id, fileKey: att.fileKey, fileName: att.fileName, mimeType: att.mimeType, sizeBytes: att.sizeBytes },
+            });
+          }
+        }
+      }
+
+      // Clone project detail + attachments
+      if (originalFull?.projectDetails && originalFull.projectDetails.length > 0) {
+        for (const detail of originalFull.projectDetails) {
+          const newDetail = await tx.projectTaskDetail.create({
+            data: {
+              taskId: newTask.id,
+              signType: detail.signType,
+              planCode: detail.planCode,
+              area: detail.area,
+              level: detail.level,
+              artwork: detail.artwork,
+              artworkHours: detail.artworkHours,
+              technical: detail.technical,
+              technicalHours: detail.technicalHours,
+              location: detail.location,
+              locationHours: detail.locationHours,
+              asBuilt: detail.asBuilt,
+              asBuiltHours: detail.asBuiltHours,
+              bim: detail.bim,
+              deadline: detail.deadline,
+              comment: detail.comment,
+            },
+            select: { id: true },
+          });
+          for (const att of detail.attachments) {
+            await tx.projectTaskDetailAttachment.create({
+              data: { projectTaskDetailId: newDetail.id, fileKey: att.fileKey, fileName: att.fileName, mimeType: att.mimeType, sizeBytes: att.sizeBytes },
+            });
+          }
+        }
+      }
+
+      return { id: newTask.id, taskNo: newTask.taskNo, _revision: nextRevision };
+    });
+
+    // Everything below uses this.prisma — must be outside the transaction to avoid P2028.
+
+    // Rework context fields
+    await (this.prisma.task.update as any)({
+      where: { id: result.id },
+      data: {
+        reworkNote: dto.reworkNote?.trim() || null,
+        reworkAttachmentUrl: dto.reworkAttachmentUrl || null,
+        reworkAttachmentName: dto.reworkAttachmentName || null,
+        reworkLinkUrl: dto.reworkLinkUrl || null,
+        reworkLinkName: dto.reworkLinkName || null,
+        previousRevisionTaskId: originalTask.id,
+      },
+    }).catch((err: unknown) => {
+      this.logger.warn('Rework context fields not saved:', err);
+    });
+
+    // Chatter post with rework instructions
+    const note = dto.reworkNote?.trim();
+    if (note) {
+      await this.prisma.chatterPost.create({
+        data: {
+          taskId: result.id,
+          title: 'Rework Instructions',
+          message: `Rework Required:\n\n${note}`,
+          postType: 'REWORK',
+          authorId: userId,
+        },
+      }).catch((err) => this.logger.error('Failed to create rework chatter post', err));
+    }
+
+    // Activity log
+    await this.activityLogger.log({
+      action: ActivityAction.TASK_CREATED,
+      userId,
+      taskId: result.id,
+      details: {
+        event: ActivityAction.TASK_CREATED,
+        messageKey: 'task_created',
+        taskSnapshot: { id: result.id, taskNo: result.taskNo },
+        context: { source: 'rework_revision', previousTaskId: originalTask.id, revisionCode: result._revision },
+      },
+    }).catch((err) => this.logger.error('Failed to log rework revision activity', err));
+
+    // Notify HODs
+    const hodUsers = await this.prisma.user.findMany({
+      where: { role: { name: { in: ['HOD', 'ADMIN'] } } },
+      select: { id: true },
+    });
+    const taskLink = designType?.toLowerCase() === 'retail'
+      ? `/retail-task-view/${result.id}`
+      : `/project-task-view/${result.id}`;
+    for (const hod of hodUsers) {
+      this.notificationsService
+        .create({
+          userId: hod.id,
+          title: `New Revision Created — ${result.taskNo}`,
+          message: `Revision ${result._revision} created from rework. Awaiting assignment.`,
+          linkUrl: taskLink,
+        })
+        .catch((err) => this.logger.error('Failed to send new revision notification to HOD', err));
+      this.dashboardRealtime?.notifyUserNotificationRefresh(hod.id);
+    }
+
+    return { id: result.id, taskNo: result.taskNo };
   }
 
   /** Dashboard: task counts per status for a given set of users */
   async getStatusSummary(userId: string, role: UserRole) {
-    const where: Record<string, unknown> =
-      role === UserRole.DESIGNER ? { assigneeId: userId } : {};
+    const where: Record<string, unknown> = {};
+
+    if (role === UserRole.DESIGNER) {
+      const junctionTaskIds = await this.prisma.taskDesigner.findMany({
+        where: { designerId: userId },
+        select: { taskId: true },
+      });
+      const splitIds = junctionTaskIds.map((r) => r.taskId);
+      where.OR = [{ assigneeId: userId }, ...(splitIds.length > 0 ? [{ id: { in: splitIds } }] : [])];
+    }
 
     const tasks = await this.prisma.task.groupBy({
       by: ['status'],
@@ -1342,6 +1639,7 @@ export class TasksService {
           designType: true,
           project: { select: { name: true } },
           assignee: { select: { fullName: true } },
+          taskDesigners: { select: { designer: { select: { fullName: true } } } },
         },
       });
       if (submittedTask) {
@@ -1349,7 +1647,11 @@ export class TasksService {
           submittedTask.designType?.toLowerCase() === 'retail'
             ? `/retail-task-view/${taskId}`
             : `/project-task-view/${taskId}`;
-        const submitterName = submittedTask.assignee?.fullName ?? 'Designer';
+        const submitterName =
+          submittedTask.assignee?.fullName ??
+          ((submittedTask as any).taskDesigners?.length > 0
+            ? (submittedTask as any).taskDesigners.map((d: any) => d.designer.fullName).join(', ')
+            : 'Designer');
         const submitMsg = `${submittedTask.taskNo} — ${submittedTask.project?.name ?? 'Unknown Project'} work submitted by ${submitterName}. Ready for review.`;
         const hodUsers = await this.prisma.user.findMany({
           where: { role: { name: { in: ['HOD', 'ADMIN'] } } },

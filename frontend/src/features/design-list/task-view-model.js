@@ -99,6 +99,11 @@ export function mapTaskToDesignRow(task) {
     submissionDate: deadlineDate,
     agingDays: computeAgingDays(createdDate),
     assigneeId: task?.assigneeId || null,
+    designerNames:
+      task?.assignee?.fullName ||
+      (task?.taskDesigners?.length > 0
+        ? task.taskDesigners.map((d) => d.designer.fullName).join(', ')
+        : null),
     revisionCode: task?.revisionCode || "—",
   };
 }
