@@ -386,15 +386,9 @@ function buildSchedulerStateFromErpAssignments(records, rows, designers) {
         if (!Number.isFinite(dayIdx) || dayIdx < 0 || dayIdx > 6)
             continue;
         if (!schedulesObj[designerId]) {
-            schedulesObj[designerId] = {
-                "0": [],
-                "1": [],
-                "2": [],
-                "3": [],
-                "4": [],
-                "5": [],
-                "6": [],
-            };
+            // designerId not in the known DESIGNER-role list — skip this row to avoid
+            // sending a non-designer ID to the backend (which rejects with 400).
+            continue;
         }
         const dayStr = String(dayIdx);
         if (!schedulesObj[designerId][dayStr])
@@ -631,7 +625,28 @@ export function DesignSchedulerScreen() {
                 });
             });
         });
-        return assignments.filter((a) => Number.isFinite(a.assignedHours) && a.assignedHours > 0);
+        const filtered = assignments.filter((a) => Number.isFinite(a.assignedHours) && a.assignedHours > 0);
+        // Fix duplicate splitIndex: when multiple parts of the same task land on the
+        // same designer+day (e.g. after re-assignment resets splitIndex to null),
+        // auto-assign sequential splitIndex so the backend uniqueness check passes.
+        const groupCount = new Map();
+        filtered.forEach((a) => {
+            const key = `${a.designerId}|${a.dayIndex}|${a.taskId}`;
+            groupCount.set(key, (groupCount.get(key) ?? 0) + 1);
+        });
+        const groupSeen = new Map();
+        filtered.forEach((a) => {
+            const key = `${a.designerId}|${a.dayIndex}|${a.taskId}`;
+            const count = groupCount.get(key) ?? 1;
+            if (count > 1) {
+                const idx = (groupSeen.get(key) ?? 0) + 1;
+                groupSeen.set(key, idx);
+                a.splitIndex = idx;
+                a.totalParts = count;
+                a.parentId = a.parentId ?? a.taskId;
+            }
+        });
+        return filtered;
     };
 
     const reloadWeek = useCallback(async () => {
@@ -886,7 +901,7 @@ export function DesignSchedulerScreen() {
         return task.name;
     };
     /** Canonical design-list id for URLs: split segments share parentId with the originating task row. */
-    const getDesignListRoutingTaskId = (task) => task?.totalParts > 1 && task.parentId
+    const getDesignListRoutingTaskId = (task) => task?.parentId && task.parentId !== task.id
         ? task.parentId
         : task?.id;
     const getNextTaskId = () => {
@@ -981,31 +996,44 @@ export function DesignSchedulerScreen() {
         setLoadedFromErp(false);
         const taskBefore = tasks[taskId];
         const parentId = taskBefore?.parentId;
-        const isSplitPart = taskBefore?.totalParts > 1 && parentId && newStatus === 'unassigned';
-
-        // Collect all sibling split IDs sharing the same parentId
-        const siblingIds = isSplitPart
+        const siblingIds = parentId
             ? Object.keys(tasks).filter(id => id !== taskId && tasks[id]?.parentId === parentId)
             : [];
+        const isSplitPart = siblingIds.length > 0 && (newStatus === 'unassigned' || newStatus === 'ON_HOLD');
 
-        const newSchedules = (sourceId === 'unassigned' || sourceId === 'ON_HOLD')
-            ? schedules
-            : (() => {
-                const s = cloneState(schedules);
-                // Remove the dragged task from its day
+        const newSchedules = (() => {
+            const s = cloneState(schedules);
+            // Only remove from source calendar if task came from a designer cell, not sidebar
+            if (sourceId !== 'unassigned' && sourceId !== 'ON_HOLD') {
                 if (s[sourceId]?.[sourceDay]) {
                     s[sourceId][sourceDay] = s[sourceId][sourceDay].filter(id => id !== taskId);
                 }
-                // Remove all orphaned sibling splits from every day
-                if (siblingIds.length > 0) {
-                    for (const dId of Object.keys(s)) {
-                        for (const dKey of Object.keys(s[dId])) {
-                            s[dId][dKey] = s[dId][dKey].filter(id => !siblingIds.includes(id));
-                        }
+            }
+            // Always remove orphaned sibling splits regardless of source
+            if (siblingIds.length > 0) {
+                for (const dId of Object.keys(s)) {
+                    for (const dKey of Object.keys(s[dId])) {
+                        s[dId][dKey] = s[dId][dKey].filter(id => !siblingIds.includes(id));
                     }
                 }
-                return s;
-            })();
+                // Clean siblings from next week's overflow localStorage
+                try {
+                    const currentWeekStart = formatLocalYyyyMmDd(getWeekDays(currentDate)[0]);
+                    const nextWeekKey = SCHEDULER_OVERFLOW_KEY(addDaysToDateStr(currentWeekStart, 7));
+                    const storedOverflow = localStorage.getItem(nextWeekKey);
+                    if (storedOverflow) {
+                        const overflowEntries = JSON.parse(storedOverflow);
+                        const cleaned = overflowEntries.filter(e => !siblingIds.includes(e.taskId));
+                        if (cleaned.length > 0) {
+                            localStorage.setItem(nextWeekKey, JSON.stringify(cleaned));
+                        } else {
+                            localStorage.removeItem(nextWeekKey);
+                        }
+                    }
+                } catch { /* localStorage unavailable */ }
+            }
+            return s;
+        })();
         setSchedules(newSchedules);
 
         let nextTasks = { ...tasks };
@@ -1016,34 +1044,44 @@ export function DesignSchedulerScreen() {
             // Remove all split IDs
             for (const id of allPartIds) delete nextTasks[id];
             // Restore the original task at full hours as unassigned
+            const parentBase = tasks[parentId] ?? taskBefore;
             nextTasks[parentId] = {
-                ...(tasks[parentId] ?? taskBefore),
+                ...parentBase,
                 id: parentId,
                 estimatedHours: totalHours,
                 splitIndex: undefined,
                 totalParts: undefined,
-                status: 'unassigned',
-                holdStartedAt: undefined,
+                parentId: undefined,
+                status: newStatus,
+                holdStartedAt: newStatus === "ON_HOLD" ? new Date() : undefined,
+                holdPreviousStatus: newStatus === "ON_HOLD"
+                    ? (parentBase.status ?? taskBefore.status)
+                    : parentBase.holdPreviousStatus,
             };
         } else {
             const nextTask = {
                 ...taskBefore,
                 status: newStatus,
                 holdStartedAt: newStatus === "ON_HOLD" ? new Date() : undefined,
+                holdPreviousStatus: newStatus === "ON_HOLD"
+                    ? taskBefore.status
+                    : taskBefore.holdPreviousStatus,
             };
             nextTasks[taskId] = nextTask;
         }
 
         const backendStatus = newStatus === "ON_HOLD"
             ? "ON_HOLD"
-            : (droppedTask.holdPreviousStatus ?? "PENDING");
+            : (taskBefore?.holdPreviousStatus ?? "PENDING");
         setTasks(nextTasks);
-        if (!isUuid(taskId)) {
+        // For split consolidation, the canonical UUID is parentId (not the split fragment's temp ID)
+        const apiTaskId = (isSplitPart && isUuid(parentId)) ? parentId : taskId;
+        if (!isUuid(apiTaskId)) {
             persistWeekSnapshot(newSchedules, nextTasks);
             return;
         }
-        apiClient.patch(`/tasks/${taskId}/status`, { status: backendStatus }).catch((error) => {
-            console.warn("Unable to persist task status change", { taskId, backendStatus, error });
+        apiClient.patch(`/tasks/${apiTaskId}/status`, { status: backendStatus }).catch((error) => {
+            console.warn("Unable to persist task status change", { apiTaskId, backendStatus, error });
             toast.error("Failed to update task status. Please try again.");
         });
         persistWeekSnapshot(newSchedules, nextTasks);
@@ -1076,25 +1114,10 @@ export function DesignSchedulerScreen() {
         });
     };
     const toggleHoldState = (taskId, shouldHold) => {
-        const taskBefore = tasks[taskId];
-        if (!taskBefore)
-            return;
-        const nextStatus = shouldHold ? "ON_HOLD" : "unassigned";
-        setTasks((prev) => ({
-            ...prev,
-            [taskId]: {
-                ...taskBefore,
-                status: nextStatus,
-                holdStartedAt: shouldHold ? new Date() : undefined,
-            },
-        }));
-        const backendStatus = shouldHold
-            ? "ON_HOLD"
-            : (tasks[taskId]?.holdPreviousStatus ?? "PENDING");
-        if (!isUuid(taskId)) return;
-        apiClient.patch(`/tasks/${taskId}/status`, { status: backendStatus }).catch((error) => {
-            console.warn("Unable to persist hold toggle", { taskId, backendStatus, error });
-        });
+        if (!tasks[taskId]) return;
+        const newStatus = shouldHold ? 'ON_HOLD' : 'unassigned';
+        // Route through commitPanelDrop so sibling fragments are consolidated when holding
+        commitPanelDrop(taskId, tasks[taskId].status === 'ON_HOLD' ? 'ON_HOLD' : 'unassigned', undefined, newStatus);
     };
     const lowerSearchQuery = searchQuery.toLowerCase();
     const unassignedTasks = useMemo(() => Object.values(tasks).filter((t) => t.status === "unassigned" && t.name.toLowerCase().includes(lowerSearchQuery)), [tasks, lowerSearchQuery]);
@@ -1125,7 +1148,7 @@ export function DesignSchedulerScreen() {
                         const taskInfo = currentTasks[tid];
                         const taskH = taskInfo?.estimatedHours || 0;
                         // Keep split parts in their assigned sequence instead of re-packing them.
-                        if (taskInfo?.parentId && taskInfo?.totalParts && taskInfo.totalParts > 1) {
+                        if (taskInfo?.parentId && taskInfo.parentId !== taskInfo.id) {
                             keptInSource.push(tid);
                             continue;
                         }

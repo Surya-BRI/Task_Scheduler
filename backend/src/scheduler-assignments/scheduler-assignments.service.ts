@@ -452,6 +452,7 @@ export class SchedulerAssignmentsService {
       }
 
       const reassignedTasks: Array<{ taskId: string; oldAssigneeId: string | null; newAssigneeId: string }> = [];
+      const splitTasks: Array<{ taskId: string; designerIds: string[] }> = [];
 
       if (affectedTaskIds.length > 0) {
         const affectedTasks = await tx.task.findMany({
@@ -491,11 +492,32 @@ export class SchedulerAssignmentsService {
             } else if (task.assigneeId !== null) {
               unassignOnlyIds.push(task.id);
             }
+          } else {
+            // Split across multiple designers — null out assigneeId so the task
+            // doesn't falsely appear assigned to only one person.
+            updateData.assigneeId = null;
           }
 
           if (assignedDesigner && assignedDesigner !== task.assigneeId) {
             reassignedTasks.push({ taskId: task.id, oldAssigneeId: task.assigneeId ?? null, newAssigneeId: assignedDesigner });
           }
+          if (designerSet.size > 1) {
+            splitTasks.push({ taskId: task.id, designerIds: [...designerSet] });
+          }
+        }
+      }
+
+      // Sync ErpTSTaskDesigner junction: reflects all designers assigned to each task this week.
+      if (affectedTaskIds.length > 0) {
+        await tx.taskDesigner.deleteMany({ where: { taskId: { in: affectedTaskIds } } });
+        const junctionRows: { taskId: string; designerId: string }[] = [];
+        for (const [taskId, designerSet] of assigneesByTask.entries()) {
+          for (const designerId of designerSet) {
+            junctionRows.push({ taskId, designerId });
+          }
+        }
+        if (junctionRows.length > 0) {
+          await tx.taskDesigner.createMany({ data: junctionRows });
         }
 
         for (const [assigneeId, ids] of assignPlannedByDesigner.entries()) {
@@ -558,6 +580,7 @@ export class SchedulerAssignmentsService {
         updatedAt: updatedWeek.updatedAt,
         updatedBy: updatedWeek.updatedBy,
         reassignedTasks,
+        splitTasks,
       };
     });
 
@@ -627,6 +650,37 @@ export class SchedulerAssignmentsService {
             this.notificationsService
               .create({ userId: hod.id, title: 'Task Scheduled', message: hodMsg, linkUrl: taskLink })
               .catch((err) => this.logger.error('Failed to notify HOD on scheduler assign', err));
+            this.dashboardRealtime?.notifyUserNotificationRefresh(hod.id);
+          }
+        }
+      }
+
+      // Notify each designer individually for split tasks (assigneeId = null, multiple designers)
+      if (result.splitTasks?.length) {
+        const splitTaskIds = result.splitTasks.map((s) => s.taskId);
+        const splitDesignerIds = Array.from(new Set(result.splitTasks.flatMap((s) => s.designerIds)));
+        const [splitTaskDetails, splitDesigners] = await Promise.all([
+          this.prisma.task.findMany({ where: { id: { in: splitTaskIds } }, select: { id: true, taskNo: true } }),
+          this.prisma.user.findMany({ where: { id: { in: splitDesignerIds } }, select: { id: true, fullName: true } }),
+        ]);
+        const splitTaskById = new Map(splitTaskDetails.map((t) => [t.id, t]));
+        const splitNameById = new Map(splitDesigners.map((d) => [d.id, d.fullName]));
+
+        for (const { taskId, designerIds } of result.splitTasks) {
+          const task = splitTaskById.get(taskId);
+          if (!task) continue;
+          const taskLink = `/project-task-view/${taskId}`;
+          const designerNames = designerIds.map((id) => splitNameById.get(id) ?? 'Designer').join(', ');
+          for (const designerId of designerIds) {
+            this.notificationsService
+              .create({ userId: designerId, title: 'Task Scheduled for You', message: `${task.taskNo} has been scheduled for you.`, linkUrl: taskLink })
+              .catch((err) => this.logger.error('Failed to notify split designer on scheduler save', err));
+            this.dashboardRealtime?.notifyUserNotificationRefresh(designerId);
+          }
+          for (const hod of hodUsers) {
+            this.notificationsService
+              .create({ userId: hod.id, title: 'Task Scheduled', message: `${task.taskNo} split across: ${designerNames}.`, linkUrl: taskLink })
+              .catch((err) => this.logger.error('Failed to notify HOD on split task', err));
             this.dashboardRealtime?.notifyUserNotificationRefresh(hod.id);
           }
         }

@@ -275,6 +275,7 @@ export class ActivitiesService {
     } else if (input.requestingUserRole === UserRole.DESIGNER && input.requestingUserId) {
       where.OR = [
         { task: { assigneeId: input.requestingUserId } },
+        { task: { taskDesigners: { some: { designerId: input.requestingUserId } } } },
         { userId: input.requestingUserId },
       ];
     }
@@ -318,7 +319,10 @@ export class ActivitiesService {
           status: taskSnapshot.status ?? details?.changes?.newStatus ?? row.task.status ?? null,
           priority: row.task.priority,
           dueDate: row.task.dueDate ? row.task.dueDate.toISOString() : null,
-          assigneeName: row.task.assignee?.fullName ?? null,
+          assigneeName: row.task.assignee?.fullName
+            ?? (row.task.taskDesigners?.length > 0
+              ? row.task.taskDesigners.map((td: any) => td.designer.fullName).join(', ')
+              : null),
           hodName: row.task.retailDetails?.[0]?.hodName ?? null,
         }
       : taskSnapshot?.id
@@ -378,6 +382,7 @@ export class ActivitiesService {
           priority: true,
           dueDate: true,
           assignee: { select: { id: true, fullName: true } },
+          taskDesigners: { select: { designer: { select: { id: true, fullName: true } } } },
           retailDetails: { select: { hodName: true } },
           project: { select: { id: true, name: true, projectNo: true } },
         },

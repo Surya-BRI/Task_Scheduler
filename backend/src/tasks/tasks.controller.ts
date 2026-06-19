@@ -53,7 +53,7 @@ export class TasksController {
   }
 
   @Post('upload-file')
-  @Roles(UserRole.HOD)
+  @Roles(UserRole.HOD, UserRole.SALESPERSON)
   @UseInterceptors(
     FileInterceptor('file', {
       storage: memoryStorage(),

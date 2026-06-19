@@ -383,7 +383,12 @@ function ProjectTaskList({ tasks, loading, onView }) {
                       {getStatusLabel(task.status)}
                     </span>
                   </span>
-                  <span className="truncate">{task.assignee?.fullName || 'Unassigned'}</span>
+                  <span className="truncate">
+                    {task.assignee?.fullName ||
+                      (task.taskDesigners?.length > 0
+                        ? task.taskDesigners.map(d => d.designer.fullName).join(', ')
+                        : 'Unassigned')}
+                  </span>
                   <span className="text-slate-500">{task.dueDate ? new Date(task.dueDate).toLocaleDateString('en-GB') : '—'}</span>
                   <button
                     type="button"

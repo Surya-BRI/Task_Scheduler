@@ -327,18 +327,20 @@ export class ChatterPostsService implements OnModuleInit {
       if (resolvedTaskId) {
         const task = await this.prisma.task.findUnique({
           where: { id: resolvedTaskId },
-          select: { assigneeId: true, projectId: true },
+          select: { assigneeId: true, projectId: true, taskDesigners: { select: { designerId: true } } },
         });
         addEligibleId(task?.assigneeId);
+        task?.taskDesigners?.forEach((td) => addEligibleId(td.designerId));
         if (task?.projectId) resolvedProjectId = task.projectId;
       }
       if (resolvedProjectId) {
         const projectTasks = await this.prisma.task.findMany({
-          where: { projectId: resolvedProjectId, assigneeId: { not: null } },
-          select: { assigneeId: true },
+          where: { projectId: resolvedProjectId },
+          select: { assigneeId: true, taskDesigners: { select: { designerId: true } } },
         });
         for (const row of projectTasks) {
           addEligibleId(row.assigneeId);
+          row.taskDesigners?.forEach((td) => addEligibleId(td.designerId));
         }
       }
 
