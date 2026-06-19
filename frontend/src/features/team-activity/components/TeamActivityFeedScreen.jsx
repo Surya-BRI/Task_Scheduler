@@ -50,6 +50,8 @@ export function TeamActivityFeedScreenInner() {
 
   const [activities, setActivities] = useState([]);
   const [loading, setLoading] = useState(true);
+  const [activityError, setActivityError] = useState("");
+  const lastActivityErrorRef = useRef("");
 
   useEffect(() => {
     let active = true;
@@ -59,12 +61,20 @@ export function TeamActivityFeedScreenInner() {
           if (active) {
             setActivities(data);
             setLikes(buildInitialLikes(data));
+            setActivityError("");
+            lastActivityErrorRef.current = "";
             setLoading(false);
           }
         })
         .catch(err => {
-          console.error("Failed to load activities", err);
-          if (active) setLoading(false);
+          if (!active) return;
+          const message = err instanceof Error ? err.message : "Failed to load activities.";
+          setActivityError(message);
+          setLoading(false);
+          if (lastActivityErrorRef.current !== message) {
+            lastActivityErrorRef.current = message;
+            console.warn("Team Activity feed temporarily unavailable:", message);
+          }
         });
     }
     load();
@@ -173,6 +183,12 @@ export function TeamActivityFeedScreenInner() {
           priority={priority}
           onPriorityChange={setPriority}
         />
+
+        {activityError ? (
+          <div className="ui-alert-warning">
+            Team Activity is temporarily unavailable: {activityError}. The feed will retry automatically.
+          </div>
+        ) : null}
 
         {showIndividualsRoster ? (
           loading ? <div className="p-4 text-center text-slate-500">Loading...</div> :

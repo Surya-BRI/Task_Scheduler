@@ -55,7 +55,7 @@ export class ActivitiesService {
     return `${actorName} updated an overtime request`;
   }
 
-  private formatSummary(action: string, details: any, actorName: string): string {
+  private formatSummary(action: string, details: any, actorName: string, taskTitle?: string | null): string {
     const msg = details?.messageKey;
     if (msg === 'task_created') return `${actorName} created task ${details?.taskSnapshot?.taskNo ?? ''}`.trim();
     if (msg === 'task_assigned') return `${actorName} assigned task to ${details?.changes?.newAssigneeName ?? 'assignee'}`;
@@ -69,9 +69,14 @@ export class ActivitiesService {
     if (msg === 'task_file_uploaded') return `${actorName} uploaded ${details?.fileMeta?.fileName ?? 'a file'} to task files`;
     if (msg === 'chatter_post_created') {
       const title = details?.changes?.title?.trim();
+      const taskName = taskTitle ?? details?.taskSnapshot?.title ?? details?.taskSnapshot?.taskNo;
+      if (taskName) return `${actorName} posted in chatter on Task: ${taskName}`;
       return title ? `${actorName} posted in chatter: ${title}` : `${actorName} posted in chatter`;
     }
-    if (msg === 'chatter_comment_created') return `${actorName} commented on chatter`;
+    if (msg === 'chatter_comment_created') {
+      const taskName = taskTitle ?? details?.taskSnapshot?.title ?? details?.taskSnapshot?.taskNo;
+      return taskName ? `${actorName} commented on chatter on Task: ${taskName}` : `${actorName} commented on chatter`;
+    }
     if (msg === 'task_work_submitted') {
       const mins = Math.round((details?.changes?.durationSeconds ?? 0) / 60);
       const taskNo = details?.taskSnapshot?.taskNo ?? '';
@@ -137,7 +142,7 @@ export class ActivitiesService {
 
     if (!t) return base;
 
-    const taskLink = { type: 'link' as const, label: t.taskNo, href: `/design-list/task/${t.id}` };
+    const taskLink = { type: 'link' as const, label: t.title ?? t.taskNo ?? 'task', href: `/design-list/task/${t.id}` };
 
     switch (item.action) {
       case ActivityAction.TASK_CREATED:
@@ -148,6 +153,10 @@ export class ActivitiesService {
       case ActivityAction.CLIENT_APPROVED:
       case ActivityAction.CLIENT_REJECTED_TASK:
         return [...base, txt(' — '), taskLink];
+      case ActivityAction.CREATED_CHATTER_POST:
+        return [txt(`${item.actor.name} posted in chatter on Task: `), taskLink];
+      case ActivityAction.CREATED_CHATTER_COMMENT:
+        return [txt(`${item.actor.name} commented on chatter on Task: `), taskLink];
       case ActivityAction.REGULARIZATION_SUBMITTED:
       case ActivityAction.REGULARIZATION_APPROVED:
       case ActivityAction.REGULARIZATION_REJECTED:
@@ -277,7 +286,7 @@ export class ActivitiesService {
       task,
       project,
       details,
-      summary: this.formatSummary(row.action, details, actorName),
+      summary: this.formatSummary(row.action, details, actorName, task?.title ?? task?.taskNo ?? null),
       severity: this.formatSeverity(row.action),
     };
   }

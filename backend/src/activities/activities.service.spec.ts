@@ -45,4 +45,17 @@ describe('ActivitiesService', () => {
       expect(summary).toBe('Alex Johnson submitted an overtime request');
     });
   });
+
+  describe('chatter summaries', () => {
+    it('includes task title for task chatter posts', () => {
+      const summary = (service as any).formatSummary(
+        'CREATED_CHATTER_POST',
+        { messageKey: 'chatter_post_created' },
+        'Sarah Mitchell',
+        'Retail Signage Layout',
+      );
+
+      expect(summary).toBe('Sarah Mitchell posted in chatter on Task: Retail Signage Layout');
+    });
+  });
 });
