@@ -64,6 +64,7 @@ export function TeamActivityFilters({
           value={activityKind}
           onChange={onActivityKind}
           options={[
+            { label: "All", value: "all" },
             { label: "Task update", value: "task_update" },
             { label: "Milestone", value: "project_milestone" },
           ]}

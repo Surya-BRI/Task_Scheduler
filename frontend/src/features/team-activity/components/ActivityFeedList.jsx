@@ -5,6 +5,7 @@ import { ChevronLeft } from "lucide-react";
 import { ActivityFeedItem } from "./ActivityFeedItem";
 
 const SECTION = {
+  all: "Team Activity",
   task_update: "Task Update",
   project_milestone: "Project Milestone",
 };

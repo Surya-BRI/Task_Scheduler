@@ -12,6 +12,16 @@ const MILESTONE_ACTIONS = new Set([
   ActivityAction.CLIENT_REJECTED_TASK,
 ]);
 
+function formatStatusLabel(status?: string | null): string | null {
+  if (!status) return null;
+  return status
+    .toLowerCase()
+    .split('_')
+    .filter(Boolean)
+    .map((part) => part.charAt(0).toUpperCase() + part.slice(1))
+    .join(' ');
+}
+
 type FindInput = {
   limit?: number;
   cursor?: string;
@@ -214,6 +224,47 @@ export class ActivitiesService {
       details = { raw: row.details };
     }
     const actorName = row.user?.fullName ?? 'Unknown user';
+    const taskSnapshot = details?.taskSnapshot ?? {};
+    const projectSnapshot = details?.projectSnapshot ?? {};
+    const task = row.task
+      ? {
+          id: row.task.id,
+          taskNo: row.task.taskNo,
+          opNo: row.task.opNo,
+          title: row.task.title,
+          status: taskSnapshot.status ?? details?.changes?.newStatus ?? row.task.status ?? null,
+          priority: row.task.priority,
+          dueDate: row.task.dueDate ? row.task.dueDate.toISOString() : null,
+          assigneeName: row.task.assignee?.fullName ?? null,
+          hodName: row.task.retailDetails?.[0]?.hodName ?? null,
+        }
+      : taskSnapshot?.id
+        ? {
+            id: taskSnapshot.id,
+            taskNo: taskSnapshot.taskNo ?? null,
+            opNo: taskSnapshot.opNo ?? null,
+            title: taskSnapshot.title ?? null,
+            status: taskSnapshot.status ?? null,
+            priority: null,
+            dueDate: null,
+            assigneeName: null,
+            hodName: null,
+          }
+        : null;
+    const project = row.task?.project
+      ? {
+          id: row.task.project.id,
+          projectNo: row.task.project.projectNo,
+          name: row.task.project.name,
+        }
+      : projectSnapshot?.id || projectSnapshot?.name || projectSnapshot?.projectNo
+        ? {
+            id: projectSnapshot.id ?? null,
+            projectNo: projectSnapshot.projectNo ?? null,
+            name: projectSnapshot.name ?? null,
+          }
+        : null;
+
     return {
       id: row.id,
       action: row.action,
@@ -223,25 +274,8 @@ export class ActivitiesService {
         name: actorName,
         avatarUrl: `https://ui-avatars.com/api/?name=${encodeURIComponent(actorName)}&background=random`,
       },
-      task: row.task
-        ? {
-            id: row.task.id,
-            taskNo: row.task.taskNo,
-            opNo: row.task.opNo,
-            title: row.task.title,
-            priority: row.task.priority,
-            dueDate: row.task.dueDate ? row.task.dueDate.toISOString() : null,
-            assigneeName: row.task.assignee?.fullName ?? null,
-            hodName: row.task.retailDetails?.[0]?.hodName ?? null,
-          }
-        : null,
-      project: row.task?.project
-        ? {
-            id: row.task.project.id,
-            projectNo: row.task.project.projectNo,
-            name: row.task.project.name,
-          }
-        : null,
+      task,
+      project,
       details,
       summary: this.formatSummary(row.action, details, actorName),
       severity: this.formatSeverity(row.action),
@@ -257,6 +291,7 @@ export class ActivitiesService {
           taskNo: true,
           opNo: true,
           title: true,
+          status: true,
           priority: true,
           dueDate: true,
           assignee: { select: { id: true, fullName: true } },
@@ -287,6 +322,14 @@ export class ActivitiesService {
       year: new Date(item.occurredAt).getFullYear(),
       priority: item.task?.priority ? item.task.priority.toLowerCase() : 'normal',
       project: item.project?.name ?? null,
+      projectId: item.project?.id ?? null,
+      projectNo: item.project?.projectNo ?? null,
+      projectName: item.project?.name ?? null,
+      taskId: item.task?.id ?? null,
+      taskNo: item.task?.taskNo ?? null,
+      taskName: item.task?.title ?? item.task?.taskNo ?? null,
+      status: item.task?.status ?? item.details?.changes?.newStatus ?? null,
+      statusLabel: formatStatusLabel(item.task?.status ?? item.details?.changes?.newStatus ?? null),
       team: null,
     }));
   }

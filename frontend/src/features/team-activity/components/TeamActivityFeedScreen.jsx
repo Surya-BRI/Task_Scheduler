@@ -28,7 +28,7 @@ export function TeamActivityFeedScreenInner() {
   const seededFromDesignList = useRef(false);
 
   const [teammateMode, setTeammateMode] = useState("all");
-  const [activityKind, setActivityKind] = useState("task_update");
+  const [activityKind, setActivityKind] = useState("all");
   const [sortMonthIndex, setSortMonthIndex] = useState("all");
   const [priority, setPriority] = useState("all");
   const [dateRange, setDateRange] = useState(DEFAULT_RANGE);
