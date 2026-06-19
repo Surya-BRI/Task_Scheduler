@@ -453,22 +453,22 @@ export class SchedulerAssignmentsService {
 
       const reassignedTasks: Array<{ taskId: string; oldAssigneeId: string | null; newAssigneeId: string }> = [];
       const splitTasks: Array<{ taskId: string; designerIds: string[] }> = [];
+      const assignOnlyByDesigner = new Map<string, string[]>();
+      const assignPlannedByDesigner = new Map<string, string[]>();
+      const unassignOnlyIds: string[] = [];
+      const unassignNewIds: string[] = [];
+      const splitAssigneeNullIds: string[] = [];
+      const pushGroupedTask = (map: Map<string, string[]>, key: string, taskId: string) => {
+        const ids = map.get(key) ?? [];
+        ids.push(taskId);
+        map.set(key, ids);
+      };
 
       if (affectedTaskIds.length > 0) {
         const affectedTasks = await tx.task.findMany({
           where: { id: { in: affectedTaskIds } },
           select: { id: true, status: true, assigneeId: true },
         });
-
-        const assignOnlyByDesigner = new Map<string, string[]>();
-        const assignPlannedByDesigner = new Map<string, string[]>();
-        const unassignOnlyIds: string[] = [];
-        const unassignNewIds: string[] = [];
-        const pushGroupedTask = (map: Map<string, string[]>, key: string, taskId: string) => {
-          const ids = map.get(key) ?? [];
-          ids.push(taskId);
-          map.set(key, ids);
-        };
 
         for (const task of affectedTasks) {
           const designerSet = assigneesByTask.get(task.id) ?? new Set<string>();
@@ -495,7 +495,9 @@ export class SchedulerAssignmentsService {
           } else {
             // Split across multiple designers — null out assigneeId so the task
             // doesn't falsely appear assigned to only one person.
-            updateData.assigneeId = null;
+            if (task.assigneeId !== null) {
+              splitAssigneeNullIds.push(task.id);
+            }
           }
 
           if (assignedDesigner && assignedDesigner !== task.assigneeId) {
@@ -509,7 +511,10 @@ export class SchedulerAssignmentsService {
 
       // Sync ErpTSTaskDesigner junction: reflects all designers assigned to each task this week.
       if (affectedTaskIds.length > 0) {
-        await tx.taskDesigner.deleteMany({ where: { taskId: { in: affectedTaskIds } } });
+        await tx.$executeRaw`
+          DELETE FROM ErpTSTaskDesigner
+          WHERE taskId IN (${Prisma.join(affectedTaskIds)})
+        `;
         const junctionRows: { taskId: string; designerId: string }[] = [];
         for (const [taskId, designerSet] of assigneesByTask.entries()) {
           for (const designerId of designerSet) {
@@ -517,7 +522,10 @@ export class SchedulerAssignmentsService {
           }
         }
         if (junctionRows.length > 0) {
-          await tx.taskDesigner.createMany({ data: junctionRows });
+          await tx.$executeRaw`
+            INSERT INTO ErpTSTaskDesigner (taskId, designerId)
+            VALUES ${Prisma.join(junctionRows.map((row) => Prisma.sql`(${row.taskId}, ${row.designerId})`))}
+          `;
         }
 
         for (const [assigneeId, ids] of assignPlannedByDesigner.entries()) {
@@ -541,6 +549,12 @@ export class SchedulerAssignmentsService {
         if (unassignOnlyIds.length > 0) {
           await tx.task.updateMany({
             where: { id: { in: unassignOnlyIds } },
+            data: { assigneeId: null },
+          });
+        }
+        if (splitAssigneeNullIds.length > 0) {
+          await tx.task.updateMany({
+            where: { id: { in: splitAssigneeNullIds } },
             data: { assigneeId: null },
           });
         }

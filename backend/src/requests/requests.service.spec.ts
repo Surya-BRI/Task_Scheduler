@@ -166,6 +166,44 @@ describe('RequestsService', () => {
       ).rejects.toThrow(DUPLICATE_LEAVE_ERROR_MESSAGE);
     });
 
+    it('allows reapplication over cancelled and revoked leave dates', async () => {
+      const start = futureStart();
+      mockPrisma.user.findUnique.mockResolvedValue({
+        role: { name: UserRole.DESIGNER },
+        departmentId: 'dept-1',
+      });
+      mockPrisma.leaveRequest.findMany.mockResolvedValue([
+        {
+          id: 'cancelled-block',
+          startDate: new Date(`${start}T00:00:00.000Z`),
+          endDate: new Date(`${start}T00:00:00.000Z`),
+          status: 'CANCELLED',
+        },
+        {
+          id: 'revoked-block',
+          startDate: new Date(`${start}T00:00:00.000Z`),
+          endDate: new Date(`${start}T00:00:00.000Z`),
+          status: 'REVOKED',
+        },
+      ]);
+      mockPrisma.leaveRequest.create.mockResolvedValue({
+        ...pendingLeave,
+        startDate: new Date(`${start}T00:00:00.000Z`),
+        endDate: new Date(`${start}T00:00:00.000Z`),
+      });
+
+      await expect(
+        service.create(designerId, UserRole.DESIGNER, {
+          userId: designerId,
+          type: 'Full Day',
+          startDate: start,
+          endDate: start,
+          reasonCategory: 'Vacation',
+        }),
+      ).resolves.toMatchObject({ status: 'PENDING' });
+      expect(mockPrisma.leaveRequest.create).toHaveBeenCalled();
+    });
+
     it('creates valid leave request', async () => {
       const start = futureStart();
       mockPrisma.user.findUnique.mockResolvedValue({

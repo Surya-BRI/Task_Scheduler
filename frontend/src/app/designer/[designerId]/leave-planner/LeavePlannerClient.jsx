@@ -81,8 +81,11 @@ function findLeavesOnDate(leaves, dateStr) {
   });
 }
 
-/** Active leaves only — revoked/cancelled/rejected do not block calendar colors */
-function findActiveLeavesOnDate(leaves, dateStr) {
+function findVisibleLeavesOnDate(leaves, dateStr) {
+  return findLeavesOnDate(leaves, dateStr);
+}
+
+function findBlockingLeavesOnDate(leaves, dateStr) {
   return findLeavesOnDate(leaves, dateStr).filter((leave) => {
     const status = normalizeLeaveStatus(leave.status);
     return status === "PENDING" || status === "APPROVED";
@@ -612,21 +615,22 @@ export default function LeavePlannerClient() {
     if (day > DAYS_IN_MONTH[monthIndex]) return;
 
     const dateStr = `${YEAR}-${String(monthIndex + 1).padStart(2, '0')}-${String(day).padStart(2, '0')}`;
-    const activeDayLeaves = findActiveLeavesOnDate(activeCalendarLeaves, dateStr);
+    const dayLeaves = findVisibleLeavesOnDate(activeCalendarLeaves, dateStr);
+    const blockingDayLeaves = findBlockingLeavesOnDate(activeCalendarLeaves, dateStr);
 
-    if (canReview && activeDayLeaves.length > 0) {
-      setDayLeavesList(activeDayLeaves);
+    if (canReview && dayLeaves.length > 0) {
+      setDayLeavesList(dayLeaves);
       setDayLeavesDate(dateStr);
       setIsDayLeavesModalOpen(true);
       return;
     }
 
-    if (activeDayLeaves.length === 1) {
-      openReviewModal(activeDayLeaves[0]);
+    if (blockingDayLeaves.length === 1) {
+      openReviewModal(blockingDayLeaves[0]);
       return;
     }
-    if (activeDayLeaves.length > 1) {
-      setDayLeavesList(activeDayLeaves);
+    if (blockingDayLeaves.length > 1) {
+      setDayLeavesList(blockingDayLeaves);
       setDayLeavesDate(dateStr);
       setIsDayLeavesModalOpen(true);
       return;
@@ -882,7 +886,7 @@ export default function LeavePlannerClient() {
     }
   };
 
-  const getLeavesOnDate = (dateStr) => findActiveLeavesOnDate(activeCalendarLeaves, dateStr);
+  const getLeavesOnDate = (dateStr) => findVisibleLeavesOnDate(activeCalendarLeaves, dateStr);
 
   const getCellClass = (monthIndex, day) => {
     if (day > DAYS_IN_MONTH[monthIndex]) return "bg-slate-100/50 pointer-events-none";
