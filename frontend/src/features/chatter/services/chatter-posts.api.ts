@@ -447,6 +447,10 @@ export function listChatterPosts(params?: {
     .then(normalizeChatterPostsPagedResponse);
 }
 
+export function getChatterPost(postId: string) {
+  return apiClient.get<ChatterPostDto>(`/chatter-posts/${encodeURIComponent(postId)}`);
+}
+
 function postMatchesTaskOpNo(
   post: ChatterPostDto,
   taskOpNo?: string | null,

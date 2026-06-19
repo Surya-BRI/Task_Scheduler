@@ -1,7 +1,7 @@
 "use client";
 
 import { useMemo, useState, useEffect, useRef, useCallback } from "react";
-import { useSearchParams } from "next/navigation";
+import { useRouter, useSearchParams } from "next/navigation";
 import { toast } from "sonner";
 import { CalendarDays, Link2, MessageCircle, MoreHorizontal, PlusSquare, Search, ThumbsUp, X } from "lucide-react";
 import { Navbar } from "@/components/Navbar";
@@ -12,6 +12,7 @@ import {
   deleteChatterPost,
   formatChatterTime,
   formatMentionSummary,
+  getChatterPost,
   getMondayOfWeek,
   likeChatterPost,
   markChatterPostsSeen,
@@ -717,6 +718,7 @@ function buildPrivateMentionEntries(posts, currentUserId, { trustApiFilter = fal
       entries.push({
         id: `${post.id}-post`,
         postId: post.id,
+        commentId: null,
         title: post.title,
         taskName: post.taskName,
         projectName: post.projectName,
@@ -730,6 +732,7 @@ function buildPrivateMentionEntries(posts, currentUserId, { trustApiFilter = fal
       entries.push({
         id: `${post.id}-${comment.id}`,
         postId: post.id,
+        commentId: comment.id,
         title: post.title,
         taskName: post.taskName,
         projectName: post.projectName,
@@ -743,6 +746,7 @@ function buildPrivateMentionEntries(posts, currentUserId, { trustApiFilter = fal
       entries.push({
         id: `${post.id}-mention`,
         postId: post.id,
+        commentId: null,
         title: post.title,
         taskName: post.taskName,
         projectName: post.projectName,
@@ -1133,6 +1137,7 @@ function ChatterCard({
 }
 
 export function ChatterScreen() {
+  const router = useRouter();
   const searchParams = useSearchParams();
   const [posts, setPosts] = useState([]);
   const [nextCursor, setNextCursor] = useState(null);
@@ -1167,8 +1172,10 @@ export function ChatterScreen() {
   const seenPendingRef = useRef(new Set());
   const seenRecordedRef = useRef(new Set());
   const seenFlushTimerRef = useRef(null);
+  const focusedPostFetchRef = useRef(new Set());
   const urlPostId = searchParams.get("postId");
   const urlCommentId = searchParams.get("commentId");
+  const urlTab = searchParams.get("tab");
 
   const currentUserId = useMemo(() => normalizeUserId(getSession()?.id ?? null), []);
   const [viewedPrivateEntryIds, setViewedPrivateEntryIds] = useState(
@@ -1425,8 +1432,45 @@ export function ChatterScreen() {
     }
   }, [activeTab, reloadPrivateFeeds]);
 
+  const mergePostIntoFeed = useCallback((feedPost) => {
+    if (!feedPost?.id) return;
+    setPosts((prev) => {
+      const existingIndex = prev.findIndex((post) => isSameUserId(post.id, feedPost.id));
+      if (existingIndex >= 0) {
+        return prev.map((post, index) => (index === existingIndex ? { ...post, ...feedPost } : post));
+      }
+      return [feedPost, ...prev];
+    });
+  }, []);
+
+  const ensureFocusedPostAvailable = useCallback(async (postId) => {
+    const normalizedPostId = normalizeUserId(postId) ?? postId;
+    if (!normalizedPostId) return;
+    if (posts.some((post) => isSameUserId(post.id, normalizedPostId))) return;
+
+    const cachedPost = [...mentionFeedPosts, ...commentedFeedPosts].find((post) =>
+      isSameUserId(post.id, normalizedPostId),
+    );
+    if (cachedPost) {
+      mergePostIntoFeed(cachedPost);
+      return;
+    }
+
+    if (focusedPostFetchRef.current.has(normalizedPostId)) return;
+    focusedPostFetchRef.current.add(normalizedPostId);
+    try {
+      const dto = await getChatterPost(normalizedPostId);
+      mergePostIntoFeed(mapChatterPostDtoToFeedPost(dto, currentUserId));
+    } catch (err) {
+      toast.error(err instanceof Error ? err.message : "Could not open the mentioned chatter post.");
+    } finally {
+      focusedPostFetchRef.current.delete(normalizedPostId);
+    }
+  }, [posts, mentionFeedPosts, commentedFeedPosts, mergePostIntoFeed, currentUserId]);
+
   useEffect(() => {
     if (!urlPostId || postsLoading) return;
+    void ensureFocusedPostAvailable(urlPostId);
     setFocusedPostId(urlPostId);
     setActiveTab("posts");
     setOpenComposerPostId(urlCommentId ? urlPostId : null);
@@ -1435,7 +1479,7 @@ export function ChatterScreen() {
       const targetId = urlCommentId ? `chatter-comment-${urlCommentId}` : `chatter-post-${urlPostId}`;
       document.getElementById(targetId)?.scrollIntoView({ behavior: "smooth", block: "center" });
     });
-  }, [urlPostId, urlCommentId, postsLoading, posts.length, queueMarkPostSeen]);
+  }, [urlPostId, urlCommentId, postsLoading, posts.length, queueMarkPostSeen, ensureFocusedPostAvailable]);
 
   useEffect(() => {
     return onChatterRefresh(() => {
@@ -1470,6 +1514,35 @@ export function ChatterScreen() {
       })
       .catch(() => setTaskCatalog([]));
   }, [taskCatalogLoaded]);
+
+  const openChatterTab = useCallback(
+    (tab) => {
+      setActiveTab(tab);
+      setFocusedPostId(null);
+      setOpenComposerPostId(null);
+      if (tab === "task-updates") {
+        loadTaskCatalog();
+      }
+
+      const qs = new URLSearchParams();
+      if (tab !== "posts") qs.set("tab", tab);
+      const suffix = qs.toString();
+      router.push(suffix ? `/chatter?${suffix}` : "/chatter");
+    },
+    [loadTaskCatalog, router],
+  );
+
+  useEffect(() => {
+    if (urlPostId) return;
+    if (urlTab === "private") {
+      setActiveTab("private");
+      return;
+    }
+    if (urlTab === "task-updates") {
+      setActiveTab("task-updates");
+      loadTaskCatalog();
+    }
+  }, [urlPostId, urlTab, loadTaskCatalog]);
 
   const weekLabel = useMemo(() => {
     const monday = new Date(getMondayOfWeek(currentDate));
@@ -1511,6 +1584,7 @@ export function ChatterScreen() {
         return {
           id: `${post.id}-${latestMyComment?.id ?? post.id}`,
           postId: post.id,
+          commentId: latestMyComment?.id ?? null,
           title: post.title,
           taskName: post.taskName,
           projectName: post.projectName,
@@ -1595,12 +1669,16 @@ export function ChatterScreen() {
   const openDiscussion = (itemOrPostId) => {
     const postId = typeof itemOrPostId === "string" ? itemOrPostId : itemOrPostId?.postId;
     if (!postId) return;
+    const commentId = typeof itemOrPostId === "string" ? null : itemOrPostId?.commentId;
     if (typeof itemOrPostId !== "string") {
       markPrivateEntryViewed(itemOrPostId.id);
     }
+    const qs = new URLSearchParams({ postId });
+    if (commentId) qs.set("commentId", commentId);
+    router.push(`/chatter?${qs.toString()}`);
     setFocusedPostId(postId);
     setActiveTab("posts");
-    setOpenComposerPostId(postId);
+    setOpenComposerPostId(commentId ? postId : null);
   };
 
   const resolveMentionUserIds = (message) =>
@@ -1799,20 +1877,17 @@ export function ChatterScreen() {
             <SegmentButton
               label="Posts"
               isActive={activeTab === "posts"}
-              onClick={() => setActiveTab("posts")}
+              onClick={() => openChatterTab("posts")}
             />
             <SegmentButton
               label="Private"
               isActive={activeTab === "private"}
-              onClick={() => setActiveTab("private")}
+              onClick={() => openChatterTab("private")}
             />
             <SegmentButton
               label="Task Updates"
               isActive={activeTab === "task-updates"}
-              onClick={() => {
-                setActiveTab("task-updates");
-                loadTaskCatalog();
-              }}
+              onClick={() => openChatterTab("task-updates")}
             />
           </div>
           <div className="flex items-center gap-3 text-slate-600">
@@ -1949,7 +2024,7 @@ export function ChatterScreen() {
         {activeTab === "private" ? (
           <section className="mt-3 grid min-w-0 gap-3 md:grid-cols-2">
             <div className="ui-surface min-w-0 p-3">
-              <h2 className="mb-2 text-sm font-semibold text-slate-900">Mentioned to You</h2>
+              <h2 className="mb-2 text-sm font-semibold text-slate-900">Mentioned You</h2>
               <div className="space-y-2">
                 {privateMentions.length === 0 ? (
                   <p className="text-sm text-slate-500">No mentions for you yet.</p>
