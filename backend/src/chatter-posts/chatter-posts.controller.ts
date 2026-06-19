@@ -6,6 +6,7 @@ import {
   HttpCode,
   HttpStatus,
   Logger,
+  NotFoundException,
   Param,
   Patch,
   Post,
@@ -72,6 +73,13 @@ export class ChatterPostsController {
     @CurrentUser() user: { sub: string },
   ) {
     return this.chatterPostsService.markPostsSeen(dto.postIds, user.sub);
+  }
+
+  @Get(':postId')
+  async findOne(@Param('postId') postId: string) {
+    const post = await this.chatterPostsService.loadPostById(postId);
+    if (!post) throw new NotFoundException('Chatter post not found');
+    return post;
   }
 
   @Get(':postId/comments')
