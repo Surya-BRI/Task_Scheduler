@@ -325,6 +325,18 @@ export class RequestsService implements OnModuleInit {
     });
   }
 
+  private async resolveHodRecipientName(departmentId: string | null | undefined): Promise<string> {
+    let targets = await this.findDepartmentHods(departmentId);
+    if (targets.length === 0) {
+      targets = await this.prisma.user.findMany({
+        where: { role: { name: UserRole.HOD } },
+        select: { id: true, fullName: true },
+        take: 1,
+      });
+    }
+    return targets[0]?.fullName?.trim() || 'HOD';
+  }
+
   private formatLeaveDates(from: string, to: string): string {
     return from === to ? from : `${from} to ${to}`;
   }
@@ -686,6 +698,15 @@ export class RequestsService implements OnModuleInit {
     const submitMessageKey = hodAutoApprove
       ? 'leave_auto_approved'
       : 'leave_request_submitted';
+    const submitter = hodAutoApprove
+      ? await this.prisma.user.findUnique({
+          where: { id: submitterId },
+          select: { fullName: true },
+        })
+      : null;
+    const recipientName = hodAutoApprove
+      ? requester.fullName
+      : await this.resolveHodRecipientName(requester.departmentId);
 
     await this.activityLogger.log({
       action: submitAction,
@@ -704,15 +725,16 @@ export class RequestsService implements OnModuleInit {
           autoApproved: hodAutoApprove,
           submittedByHod: hodAutoApprove,
           reasonCategory: dto.reasonCategory,
+          requesterName: requester.fullName,
+          designerName: requester.fullName,
+          recipientName,
+          approverName: submitter?.fullName ?? undefined,
+          reviewerName: submitter?.fullName ?? undefined,
         },
       },
     });
 
     if (hodAutoApprove) {
-      const submitter = await this.prisma.user.findUnique({
-        where: { id: submitterId },
-        select: { fullName: true },
-      });
       if (resolvedId !== submitterId) {
         await this.notifyRequesterOnReview(
           view,
@@ -821,6 +843,9 @@ export class RequestsService implements OnModuleInit {
           requestId: id,
           halfDaySession: nextHalfDaySession,
           leaveDurationDays: calculateLeaveDurationDays(nextType, range),
+          requesterName: existing.user.fullName,
+          designerName: existing.user.fullName,
+          recipientName: existing.approver?.fullName ?? 'HOD',
         },
       },
     });
@@ -877,7 +902,12 @@ export class RequestsService implements OnModuleInit {
         event: ActivityAction.LEAVE_REQUEST_CANCELLED,
         messageKey: 'leave_request_cancelled',
         changes: { status: { from: existing.status, to: 'CANCELLED' } },
-        context: { requestId: id },
+        context: {
+          requestId: id,
+          requesterName: existing.user.fullName,
+          designerName: existing.user.fullName,
+          recipientName: existing.approver?.fullName ?? 'HOD',
+        },
       },
     });
 
@@ -929,12 +959,19 @@ export class RequestsService implements OnModuleInit {
 
     await this.activityLogger.log({
       action: ActivityAction.LEAVE_REQUEST_STATUS_CHANGED,
-      userId: req.userId,
+      userId: reviewerId,
       details: {
         event: ActivityAction.LEAVE_REQUEST_STATUS_CHANGED,
         messageKey: 'leave_request_status_changed',
         changes: { newStatus: status, approverId: reviewerId },
-        context: { requestId: id },
+        context: {
+          requestId: id,
+          requesterName: existing.user.fullName,
+          designerName: existing.user.fullName,
+          recipientName: req.approver?.fullName ?? 'HOD',
+          approverName: req.approver?.fullName ?? undefined,
+          reviewerName: req.approver?.fullName ?? undefined,
+        },
       },
     });
 
@@ -1032,8 +1069,10 @@ export class RequestsService implements OnModuleInit {
           requestId: id,
           designerId: existing.userId,
           designerName: existing.user.fullName,
+          requesterName: existing.user.fullName,
           revokedAt: revokedAt.toISOString(),
           revokerName: revoker?.fullName ?? 'HOD',
+          reviewerName: revoker?.fullName ?? 'HOD',
         },
       },
     });

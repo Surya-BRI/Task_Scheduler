@@ -36,23 +36,99 @@ type FindInput = {
 export class ActivitiesService {
   constructor(private readonly prisma: PrismaService) {}
 
-  private formatOvertimeSummary(messageKey: string, _details: any, actorName: string): string {
-    if (messageKey === 'overtime_request_submitted') {
-      return `${actorName} submitted an overtime request`;
+  private cleanName(value: unknown): string | null {
+    return typeof value === 'string' && value.trim() ? value.trim() : null;
+  }
+
+  private contextName(details: any, keys: string[], fallback?: string): string {
+    const context = details?.context ?? {};
+    for (const key of keys) {
+      const name = this.cleanName(context[key]);
+      if (name) return name;
     }
-    if (messageKey === 'overtime_request_updated') {
-      return `${actorName} updated an overtime request`;
+    return fallback ?? 'Unknown user';
+  }
+
+  private requestRecipientName(details: any): string {
+    return this.contextName(
+      details,
+      ['recipientName', 'receiverName', 'approverName', 'reviewerName', 'hodName'],
+      'HOD',
+    );
+  }
+
+  private requestSenderName(details: any, actorName: string): string {
+    return this.contextName(
+      details,
+      ['requesterName', 'designerName', 'beneficiaryName', 'beneficiaryUserName'],
+      actorName,
+    );
+  }
+
+  private requestReviewerName(details: any, actorName: string): string {
+    return this.contextName(
+      details,
+      ['reviewerName', 'approverName', 'revokerName', 'receiverName', 'recipientName'],
+      actorName,
+    );
+  }
+
+  private requestLabel(kind: string): string {
+    const article = /^[aeiou]/i.test(kind.trim()) ? 'an' : 'a';
+    return `${article} ${kind}`;
+  }
+
+  private formatRequestSummary(
+    kind: string,
+    messageKey: string,
+    details: any,
+    actorName: string,
+  ): string {
+    const senderName = this.requestSenderName(details, actorName);
+    const recipientName = this.requestRecipientName(details);
+    const reviewerName = this.requestReviewerName(details, actorName);
+    const status = String(details?.changes?.newStatus ?? details?.changes?.status ?? '').toLowerCase();
+    const requestLabel = this.requestLabel(kind);
+
+    if (messageKey.endsWith('_submitted')) {
+      return `${senderName} sent ${requestLabel} request to ${recipientName}`;
     }
-    if (messageKey === 'overtime_request_approved') {
-      return `${actorName} approved an overtime request`;
+
+    if (messageKey.endsWith('_auto_approved')) {
+      return `${reviewerName} sent and accepted ${requestLabel} request for ${senderName}`;
     }
-    if (messageKey === 'overtime_request_rejected') {
-      return `${actorName} rejected an overtime request`;
+
+    if (messageKey.endsWith('_updated')) {
+      return `${senderName} updated the ${kind} request to ${recipientName}`;
     }
-    if (messageKey === 'overtime_request_withdrawn') {
-      return `${actorName} withdrew an overtime request`;
+
+    if (
+      messageKey.endsWith('_approved') ||
+      (messageKey.endsWith('_status_changed') && status.includes('approved'))
+    ) {
+      return `${reviewerName} accepted the ${kind} request from ${senderName}`;
     }
-    return `${actorName} updated an overtime request`;
+
+    if (
+      messageKey.endsWith('_rejected') ||
+      (messageKey.endsWith('_status_changed') && status.includes('rejected'))
+    ) {
+      return `${reviewerName} rejected the ${kind} request from ${senderName}`;
+    }
+
+    if (messageKey.endsWith('_cancelled')) {
+      return `${senderName} cancelled the ${kind} request to ${recipientName}`;
+    }
+
+    if (messageKey.endsWith('_revoked')) {
+      return `${reviewerName} revoked the ${kind} request from ${senderName}`;
+    }
+
+    if (messageKey.endsWith('_withdrawn')) {
+      return `${senderName} withdrew the ${kind} request to ${recipientName}`;
+    }
+
+    return `${actorName} updated a ${kind} request`;
   }
 
   private formatSummary(action: string, details: any, actorName: string, taskTitle?: string | null): string {
@@ -97,39 +173,35 @@ export class ActivitiesService {
     if (msg === 'scheduler_week_saved') return `${actorName} saved the schedule for week of ${details?.context?.weekStart ?? ''}`;
     if (msg === 'scheduler_week_locked') return `${actorName} locked the schedule for week of ${details?.context?.weekStart ?? ''}`;
     if (msg === 'scheduler_week_unlocked') return `${actorName} unlocked the schedule for week of ${details?.context?.weekStart ?? ''}`;
-    if (msg === 'leave_request_submitted')
-      return `${actorName} submitted a ${details?.context?.type ?? 'leave'} request`;
-    if (msg === 'leave_request_updated') return `${actorName} updated a pending leave request`;
-    if (msg === 'leave_request_cancelled') return `${actorName} cancelled a leave request`;
-    if (msg === 'leave_request_revoked') {
-      const dn = details?.context?.designerName ?? details?.context?.requesterName;
-      return dn
-        ? `${actorName} revoked ${dn}'s approved leave request`
-        : `${actorName} revoked an approved leave request`;
+    if (
+      msg === 'leave_request_submitted' ||
+      msg === 'leave_auto_approved' ||
+      msg === 'leave_request_updated' ||
+      msg === 'leave_request_cancelled' ||
+      msg === 'leave_request_revoked' ||
+      msg === 'leave_request_status_changed'
+    ) {
+      return this.formatRequestSummary('leave', msg, details, actorName);
     }
-    if (msg === 'leave_request_status_changed')
-      return `${actorName} ${(details?.changes?.newStatus as string)?.toLowerCase() ?? 'updated'} a leave request`;
-    if (msg === 'regularization_submitted')
-      return `${actorName} submitted a regularization request`;
-    if (msg === 'regularization_approved') {
-      const dn = details?.context?.designerName;
-      return dn ? `${actorName} approved ${dn}'s regularization request` : `${actorName} approved a regularization request`;
+    if (
+      msg === 'regularization_submitted' ||
+      msg === 'regularization_auto_approved' ||
+      msg === 'regularization_approved' ||
+      msg === 'regularization_rejected' ||
+      msg === 'regularization_status_changed'
+    ) {
+      return this.formatRequestSummary('regularization', msg, details, actorName);
     }
-    if (msg === 'regularization_rejected') {
-      const dn = details?.context?.designerName;
-      return dn ? `${actorName} rejected ${dn}'s regularization request` : `${actorName} rejected a regularization request`;
-    }
-    if (msg === 'regularization_status_changed')
-      return `${actorName} ${(details?.changes?.newStatus as string)?.toLowerCase() ?? 'updated'} a regularization request`;
     if (
       msg === 'overtime_request_submitted' ||
+      msg === 'overtime_auto_approved' ||
       msg === 'overtime_request_updated' ||
       msg === 'overtime_request_approved' ||
       msg === 'overtime_request_rejected' ||
       msg === 'overtime_request_withdrawn' ||
       msg === 'overtime_request_status_changed'
     ) {
-      return this.formatOvertimeSummary(msg, details, actorName);
+      return this.formatRequestSummary('overtime', msg, details, actorName);
     }
     const readable = action.toLowerCase().replace(/_/g, ' ');
     return `${actorName} ${readable}`;
@@ -158,9 +230,11 @@ export class ActivitiesService {
       case ActivityAction.CREATED_CHATTER_COMMENT:
         return [txt(`${item.actor.name} commented on chatter on Task: `), taskLink];
       case ActivityAction.REGULARIZATION_SUBMITTED:
+      case ActivityAction.REGULARIZATION_AUTO_APPROVED:
       case ActivityAction.REGULARIZATION_APPROVED:
       case ActivityAction.REGULARIZATION_REJECTED:
       case ActivityAction.OVERTIME_REQUEST_SUBMITTED:
+      case ActivityAction.OVERTIME_AUTO_APPROVED:
       case ActivityAction.OVERTIME_REQUEST_UPDATED:
       case ActivityAction.OVERTIME_REQUEST_APPROVED:
       case ActivityAction.OVERTIME_REQUEST_REJECTED:
