@@ -58,14 +58,13 @@ Triggered when `allowOvertime=true` assignment uses hours beyond 8h/day on any p
 
 > After any user change (not on ERP snapshot load), the scheduler automatically backfills gaps by pulling tasks forward from later days.
 
-Runs as a React effect whenever `schedules` or `tasks` change and `loadedFromErp === false`.
+Runs as a React effect whenever `schedules` reference changes and `loadedFromErp === false`.
 
 **Sub-rule 4a — Whole task fits**
 - If a task from day N fits entirely in the gap on day M (M < N) → move it whole
-- If a task is too large for the gap → leave it where it is (no auto-split)
 
 **Sub-rule 4b — Optimizer splits to fill gaps**
-- If a task is too large to move whole but the gap is ≥ `MIN_SPLIT_HOURS (1h)` → the optimizer splits it: the gap-filling portion moves to the earlier day, the remainder stays on the source day
+- If a task is too large to move whole but the gap is ≥ `MIN_SPLIT_HOURS (1h)` → the optimizer splits it: the gap-filling portion moves to the earlier day, the remainder stays on the source day with reduced hours
 - Gaps smaller than `MIN_SPLIT_HOURS` are skipped (task left in place)
 - The optimizer does NOT split on ERP reload (`loadedFromErp=true` blocks it entirely)
 
@@ -73,6 +72,11 @@ Runs as a React effect whenever `schedules` or `tasks` change and `loadedFromErp
 - targetDay loops Mon→Thu (0→3); sourceDay loops targetDay+1→Fri
 - Friday is only ever a source, never a target
 - Only fills up to `DAILY_CAPACITY (8h)` — never creates overtime
+
+**Sub-rule 4d — Schedules-reference guard**
+- The optimizer effect tracks the last `schedules` object reference via `lastOptimizerSchedulesRef`
+- If only `tasks` changed (e.g. `flushPersist` patching `splitIndex`/`totalParts`) but `schedules` is the same reference → optimizer is skipped entirely
+- This prevents 4+ redundant `cloneState` calls per user action when many splits are present
 
 **Sub-rule 4e — Persist after optimizer**
 - When the optimizer makes any change, it calls `persistWeekSnapshot` so the backend stays in sync
@@ -102,13 +106,14 @@ Runs as a React effect whenever `schedules` or `tasks` change and `loadedFromErp
 
 ---
 
-## Rule 7 — Optimizer Always Runs
+## Rule 7 — ERP Reload Preserves Exactly What Was Saved
 
-> The optimizer runs on every load, including the initial ERP snapshot load.
+> When loading an existing week from the backend, the schedule is displayed exactly as saved — the optimizer does NOT run.
 
-- `loadedFromErp` is always set to `false` after state is built from the backend, so the optimizer effect runs immediately
-- If the backend has gaps (e.g. Wed=7h, Thu=1h), they are filled and re-persisted on load
-- This ensures the schedule is always gap-free regardless of how the data was saved
+- `reloadWeek` sets `loadedFromErp=true` when rows are returned from the API → the optimizer effect returns immediately
+- This prevents tasks from being rearranged or split on every page load
+- `loadedFromErp` is set back to `false` by `applyPreparedAssignment` and `commitPanelDrop` (any user drag action) so the optimizer resumes after the first user interaction
+- If no rows exist for the week (fresh week), `loadedFromErp=false` → optimizer runs normally on the mock state
 
 ---
 

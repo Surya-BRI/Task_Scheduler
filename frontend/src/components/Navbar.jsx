@@ -438,7 +438,8 @@ export function Navbar({ currentDate, onCalendarChange, dateRangeText }) {
 
   // Home button: HOD → projects-list, Designer → disabled / my-work
   const handleHomeClick = () => {
-    if (isDesigner) return // designers don't use the projects list
+    if (isDesigner) return
+    if (isSalesperson) { router.push('/sales/tasks'); return }
     router.push('/projects-list')
   }
 
@@ -469,13 +470,15 @@ export function Navbar({ currentDate, onCalendarChange, dateRangeText }) {
 
           {/* Right-side icons */}
           <div className="ml-auto flex items-center gap-1 sm:gap-2">
-            {/* Scheduler / Calendar icon */}
-            {currentDate ? (
-              /* HOD Master Scheduler — date display only, no picker */
-              <div className="flex items-center gap-2">
-                <span className="text-sm font-semibold text-slate-700">
-                  {new Date().toLocaleDateString('en-GB', { day: '2-digit', month: 'short', year: 'numeric' })}
-                </span>
+            {/* Date display — always visible */}
+            <span className="text-sm font-semibold text-slate-700">
+              {new Date().toLocaleDateString('en-GB', { day: '2-digit', month: 'short', year: 'numeric' })}
+            </span>
+
+            {/* Scheduler / Calendar icon — hidden for Salesperson */}
+            {!isSalesperson && (
+              currentDate ? (
+                /* HOD Master Scheduler — date display only, no picker */
                 <button
                   type="button"
                   className={`${utilityIconClass}${onScheduler ? ' bg-slate-100 text-slate-900' : ''}`}
@@ -483,12 +486,7 @@ export function Navbar({ currentDate, onCalendarChange, dateRangeText }) {
                 >
                   <Calendar className="h-5 w-5" strokeWidth={1.75} aria-hidden />
                 </button>
-              </div>
-            ) : (
-              <div className="flex items-center gap-2">
-                <span className="text-sm font-semibold text-slate-700">
-                  {new Date().toLocaleDateString('en-GB', { day: '2-digit', month: 'short', year: 'numeric' })}
-                </span>
+              ) : (
                 <button
                   type="button"
                   onClick={handleSchedulerClick}
@@ -499,7 +497,7 @@ export function Navbar({ currentDate, onCalendarChange, dateRangeText }) {
                 >
                   <Calendar className="h-5 w-5" strokeWidth={1.75} aria-hidden />
                 </button>
-              </div>
+              )
             )}
 
             {/* Projects overview — HOD / Admin / PM */}
@@ -529,23 +527,25 @@ export function Navbar({ currentDate, onCalendarChange, dateRangeText }) {
               <MessageSquareText className="h-5 w-5" strokeWidth={1.75} aria-hidden />
             </button>
 
-            {/* Team Activity — HOD only */}
-            <button
-              type="button"
-              onClick={() => {
-                if (isDesigner) {
-                  router.push('/designer/team-activity')
-                  return
-                }
-                router.push('/team-activity')
-              }}
-              title="Team Activity Feed"
-              aria-label="Open team activity feed"
-              aria-current={onTeamActivity ? 'page' : undefined}
-              className={`${utilityIconClass}${onTeamActivity ? ' bg-slate-100 text-slate-900' : ''}`}
-            >
-              <Clock className="h-5 w-5" strokeWidth={1.75} aria-hidden />
-            </button>
+            {/* Team Activity — hidden for Salesperson */}
+            {!isSalesperson && (
+              <button
+                type="button"
+                onClick={() => {
+                  if (isDesigner) {
+                    router.push('/designer/team-activity')
+                    return
+                  }
+                  router.push('/team-activity')
+                }}
+                title="Team Activity Feed"
+                aria-label="Open team activity feed"
+                aria-current={onTeamActivity ? 'page' : undefined}
+                className={`${utilityIconClass}${onTeamActivity ? ' bg-slate-100 text-slate-900' : ''}`}
+              >
+                <Clock className="h-5 w-5" strokeWidth={1.75} aria-hidden />
+              </button>
+            )}
 
             {/* Notifications */}
             <NotificationDropdown session={session} />

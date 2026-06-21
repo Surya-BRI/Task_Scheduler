@@ -177,6 +177,8 @@ export class TasksService {
 
   private toDbTaskStatus(status?: string | null) {
     const value = String(status ?? '').trim().toUpperCase();
+    if (value === 'PENDING') return 'DESIGN_NEW';
+    if (value === 'WIP') return 'IN_PROGRESS';
     return value;
   }
 
@@ -184,6 +186,8 @@ export class TasksService {
     const value = String(status ?? '').trim().toUpperCase();
     if (!value) return value;
     if (value === 'ON-HOLD') return 'ON_HOLD';
+    if (value === 'PENDING') return 'DESIGN_NEW';
+    if (value === 'WIP') return 'IN_PROGRESS';
     return value;
   }
 
@@ -982,9 +986,11 @@ export class TasksService {
     ]);
     if (!assignee) throw new NotFoundException('Assignee not found');
 
+    const rawStatus = String(existing.status ?? '').toUpperCase();
+    const shouldPromote = rawStatus === 'DESIGN_NEW' || rawStatus === 'PENDING';
     const updatedTask = await this.prisma.task.update({
       where: { id },
-      data: { assigneeId: dto.assigneeId },
+      data: { assigneeId: dto.assigneeId, ...(shouldPromote ? { status: 'DESIGN_PLANNED' } : {}) },
       select: TASK_SELECT,
     });
 
@@ -1090,7 +1096,7 @@ export class TasksService {
     // Use the effective status (after ON_HOLD restore) for timestamps, logging, and notifications
     const effectiveStatusApi = this.toApiTaskStatus(newStatusDb);
 
-    if ((effectiveStatusApi === 'WIP' || effectiveStatusApi === 'IN_PROGRESS') && !existing.startedAt) extraData.startedAt = now;
+    if (effectiveStatusApi === 'IN_PROGRESS' && !existing.startedAt) extraData.startedAt = now;
     if (COMPLETED_STATUS_FILTER.includes(effectiveStatusApi)) extraData.completedAt = now;
 
     // When issuing REWORK from CLIENT_REJECTED: keep old task as CLIENT_REJECTED — only create the revision
@@ -1192,6 +1198,25 @@ export class TasksService {
             .catch((err) => this.logger.error('Failed to send complete notification to HOD', err));
           this.dashboardRealtime?.notifyUserNotificationRefresh(hod.id);
         }
+      }
+    }
+
+    // SALES_REVIEW — notify all salesperson users that a task is waiting for their decision
+    if (effectiveStatusApi === 'SALES_REVIEW') {
+      const linkUrlSales =
+        (updatedTask as any).designType?.toLowerCase() === 'retail'
+          ? `/retail-task-view/${id}`
+          : `/project-task-view/${id}`;
+      const salesMessage = `${(updatedTask as any).taskNo} — ${(updatedTask as any).project?.name ?? 'Unknown Project'} is ready for your review.`;
+      const salespersons = await this.prisma.user.findMany({
+        where: { role: { name: 'SALESPERSON' } },
+        select: { id: true },
+      });
+      for (const sp of salespersons) {
+        this.notificationsService
+          .create({ userId: sp.id, title: `Task Ready for Review — ${(updatedTask as any).taskNo}`, message: salesMessage, linkUrl: linkUrlSales })
+          .catch((err) => this.logger.error('Failed to send sales-review notification to salesperson', err));
+        this.dashboardRealtime?.notifyUserNotificationRefresh(sp.id);
       }
     }
 
@@ -1454,6 +1479,23 @@ export class TasksService {
       this.dashboardRealtime?.notifyUserNotificationRefresh(hod.id);
     }
 
+    // Notify salesperson users so they can track the revision they triggered
+    const salespersonsRevision = await this.prisma.user.findMany({
+      where: { role: { name: 'SALESPERSON' } },
+      select: { id: true },
+    });
+    for (const sp of salespersonsRevision) {
+      this.notificationsService
+        .create({
+          userId: sp.id,
+          title: `New Revision Created — ${result.taskNo}`,
+          message: `Revision ${result._revision} created from your rework request. Awaiting designer assignment.`,
+          linkUrl: taskLink,
+        })
+        .catch((err) => this.logger.error('Failed to send new revision notification to salesperson', err));
+      this.dashboardRealtime?.notifyUserNotificationRefresh(sp.id);
+    }
+
     return { id: result.id, taskNo: result.taskNo };
   }
 
@@ -1687,11 +1729,12 @@ export class TasksService {
       submittedAt: session.submittedAt,
       submissionLink: session.submissionLink,
       submittedBy: session.designer?.fullName ?? null,
-      files: session.files.map((f) => ({
+      files: await Promise.all(session.files.map(async (f) => ({
         fileName: f.fileName,
         mimeType: f.mimeType,
         sizeBytes: f.sizeBytes == null ? null : Number(f.sizeBytes),
-      })),
+        fileUrl: f.fileKey ? await this.taskFilesService.createSignedReadUrl(f.fileKey) : null,
+      }))),
     };
   }
 

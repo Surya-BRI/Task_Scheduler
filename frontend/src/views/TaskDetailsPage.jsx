@@ -95,6 +95,7 @@ const TABS = [
   { id: 'chatter', label: 'Chatter' },
 ]
 const PROJECT_TAB = { id: 'team', label: 'Team' }
+const REWORK_TAB = { id: 'rework', label: 'Rework Instructions' }
 
 
 const HISTORY_FIELD_ACTIONS = new Set(['TASK_CREATED', 'ASSIGNED_TASK', 'STATUS_CHANGED'])
@@ -337,9 +338,9 @@ function FilesPanel({ projectId, files, uploading, resolvingProjectId, onPick, o
   return (
     <section className="rounded-lg border border-slate-200 bg-white p-3 shadow-sm">
       <h2 className="text-sm font-semibold text-slate-900">Project Files</h2>
-      <div className="mt-2 inline-flex rounded-md border border-slate-300 bg-slate-50 p-1 text-xs">
-        <button type="button" onClick={() => setMode('link')} className={`rounded px-2 py-1 font-semibold ${mode === 'link' ? 'bg-white text-slate-900' : 'text-slate-600'}`}>Paste Link</button>
-        <button type="button" onClick={() => setMode('browse')} className={`rounded px-2 py-1 font-semibold ${mode === 'browse' ? 'bg-white text-slate-900' : 'text-slate-600'}`}>Browse Files</button>
+      <div className="mt-2 inline-flex rounded-md border border-blue-500 bg-blue-50 p-1 text-xs">
+        <button type="button" onClick={() => setMode('link')} className={`rounded px-2 py-1 font-semibold transition-colors ${mode === 'link' ? 'bg-blue-600 text-white shadow-sm' : 'text-slate-600 hover:text-slate-900'}`}>Paste Link</button>
+        <button type="button" onClick={() => setMode('browse')} className={`rounded px-2 py-1 font-semibold transition-colors ${mode === 'browse' ? 'bg-blue-600 text-white shadow-sm' : 'text-slate-600 hover:text-slate-900'}`}>Browse Files</button>
       </div>
       {mode === 'link' ? (
         <div className="mt-2 space-y-2">
@@ -735,6 +736,12 @@ function mapTaskToRecord(task) {
     disciplineType: task.disciplineType ?? null,
     signType: task.signType ?? null,
     signFamily: task.signFamily ?? null,
+    reworkNote: task.reworkNote ?? null,
+    reworkAttachmentUrl: task.reworkAttachmentUrl ?? null,
+    reworkAttachmentName: task.reworkAttachmentName ?? null,
+    reworkLinkUrl: task.reworkLinkUrl ?? null,
+    reworkLinkName: task.reworkLinkName ?? null,
+    previousRevisionTaskId: task.previousRevisionTaskId ?? null,
   }
 }
 
@@ -868,7 +875,7 @@ function ProjectTaskList({ tasks, loading, onView }) {
   )
 }
 
-const TASK_TAB_IDS = ['details', 'activity', 'chatter', 'team']
+const TASK_TAB_IDS = ['details', 'activity', 'chatter', 'team', 'rework']
 export function TaskDetailsPage() {
   const router = useRouter()
   const pathname = usePathname()
@@ -887,6 +894,7 @@ export function TaskDetailsPage() {
   const [reworkFile, setReworkFile] = useState(null) // { url, name } | null
   const [reworkFileUploading, setReworkFileUploading] = useState(false)
   const [reworkLink, setReworkLink] = useState({ url: '', name: '' })
+  const [reworkRefMode, setReworkRefMode] = useState('file') // 'file' | 'link'
   const [createModalOpen, setCreateModalOpen] = useState(false)
   const [projectCreateModalOpen, setProjectCreateModalOpen] = useState(false)
   const [createdTasks, setCreatedTasks] = useState([])
@@ -906,7 +914,6 @@ export function TaskDetailsPage() {
   const today = new Date()
   const tomorrow = new Date()
   tomorrow.setDate(tomorrow.getDate() + 1)
-  const [dateIssued, setDateIssued] = useState(today)
   const [dateSubmission, setDateSubmission] = useState(tomorrow)
   const [technicalHead, setTechnicalHead] = useState('')
   const [teamLead, setTeamLead] = useState('')
@@ -938,6 +945,8 @@ export function TaskDetailsPage() {
   const [taskAuditInfo, setTaskAuditInfo] = useState({ createdByHod: '-' })
   const [taskRefreshCounter, setTaskRefreshCounter] = useState(0)
   const [submittedSession, setSubmittedSession] = useState(null)
+  const [prevRevisionSession, setPrevRevisionSession] = useState(null)
+  const [prevRevisionLoading, setPrevRevisionLoading] = useState(false)
 
   useEffect(() => {
     let alive = true
@@ -1113,12 +1122,15 @@ export function TaskDetailsPage() {
   const taskStatus = record?.status ?? null
   const isTerminalStatus = taskStatus === 'CLIENT_ACCEPTED' || taskStatus === 'CLIENT_REJECTED'
   const isPostSubmitStatus = ['DESIGN_COMPLETED', 'HOD_REVIEW', 'SALES_REVIEW', 'REWORK', 'CLIENT_ACCEPTED', 'CLIENT_REJECTED', 'ON_HOLD'].includes(taskStatus)
-  const showTimer = !isCreationRoute && hasExistingTask && Boolean(taskId) && !isTerminalStatus && (from === 'designer-queue' || from === 'designer-design-list')
+  const TIMER_ACTIVE_STATUSES = ['DESIGN_PLANNED', 'IN_PROGRESS', 'REWORK']
+  const showTimer = !isCreationRoute && hasExistingTask && Boolean(taskId) && TIMER_ACTIVE_STATUSES.includes(taskStatus) && (from === 'designer-queue' || from === 'designer-design-list')
   const _session = getSession()
   const isHod = ['HOD', 'ADMIN', 'PROJECT_MANAGER'].includes(_session?.role ?? '')
   const isSales = _session?.role === 'SALESPERSON'
   const isDesigner = _session?.role === 'DESIGNER'
-  const tabs = isCreationRoute && !isRetail ? [...TABS, PROJECT_TAB] : TABS
+  const hasReworkInstructions = Boolean(record?.previousRevisionTaskId)
+  const baseTabs = isCreationRoute && !isRetail ? [...TABS, PROJECT_TAB] : TABS
+  const tabs = hasReworkInstructions ? [...baseTabs, REWORK_TAB] : baseTabs
   useEffect(() => {
     let alive = true
     async function resolveProjectId() {
@@ -1297,6 +1309,18 @@ export function TaskDetailsPage() {
       .catch(() => { if (alive) setSubmittedSession(null) })
     return () => { alive = false }
   }, [taskId, isPostSubmitStatus])
+
+  useEffect(() => {
+    const prevId = record?.previousRevisionTaskId
+    if (!prevId) { setPrevRevisionSession(null); return }
+    let alive = true
+    setPrevRevisionLoading(true)
+    apiClient.get(`/tasks/${prevId}/submitted-session`)
+      .then((data) => { if (alive) setPrevRevisionSession(data ?? null) })
+      .catch(() => { if (alive) setPrevRevisionSession(null) })
+      .finally(() => { if (alive) setPrevRevisionLoading(false) })
+    return () => { alive = false }
+  }, [record?.previousRevisionTaskId])
 
   useEffect(() => {
     let alive = true
@@ -1726,41 +1750,6 @@ export function TaskDetailsPage() {
             ) : null}
           </div>
 
-          {(record?.reworkNote || record?.reworkAttachmentUrl || record?.reworkLinkUrl) && (
-            <div className="rounded-lg border border-amber-200 bg-amber-50 p-3 flex flex-col gap-2">
-              <div className="flex items-center gap-1.5">
-                <RotateCcw size={13} className="text-amber-600 shrink-0" />
-                <span className="text-xs font-semibold text-amber-800">Rework Instructions</span>
-              </div>
-              {record.reworkNote && (
-                <p className="text-xs text-amber-900 whitespace-pre-wrap">{record.reworkNote}</p>
-              )}
-              <div className="flex flex-wrap gap-3">
-                {record.reworkAttachmentUrl && (
-                  <a
-                    href={record.reworkAttachmentUrl}
-                    target="_blank"
-                    rel="noopener noreferrer"
-                    className="inline-flex items-center gap-1.5 text-xs text-amber-700 underline hover:text-amber-900"
-                  >
-                    <FileText size={12} />
-                    {record.reworkAttachmentName || 'Reference File'}
-                  </a>
-                )}
-                {record.reworkLinkUrl && (
-                  <a
-                    href={record.reworkLinkUrl}
-                    target="_blank"
-                    rel="noopener noreferrer"
-                    className="inline-flex items-center gap-1.5 text-xs text-amber-700 underline hover:text-amber-900"
-                  >
-                    <ExternalLink size={12} />
-                    {record.reworkLinkName || record.reworkLinkUrl}
-                  </a>
-                )}
-              </div>
-            </div>
-          )}
 
           <div className="grid gap-2.5 lg:grid-cols-[1fr_265px]">
             <section className="rounded-lg border border-slate-200 bg-white p-2.5 shadow-sm">
@@ -1916,7 +1905,19 @@ export function TaskDetailsPage() {
                                   {submittedSession.files?.map((f, i) => (
                                     <li key={i} className="flex items-center gap-2 rounded-md bg-white border border-slate-200 px-2.5 py-1.5 text-xs text-slate-800">
                                       <FileText className="h-3.5 w-3.5 shrink-0 text-slate-400" />
-                                      <span className="truncate" title={f.fileName}>{f.fileName}</span>
+                                      {f.fileUrl ? (
+                                        <a
+                                          href={f.fileUrl}
+                                          target="_blank"
+                                          rel="noreferrer"
+                                          className="truncate text-blue-600 hover:underline"
+                                          title={f.fileName}
+                                        >
+                                          {f.fileName}
+                                        </a>
+                                      ) : (
+                                        <span className="truncate" title={f.fileName}>{f.fileName}</span>
+                                      )}
                                       {f.sizeBytes && (
                                         <span className="ml-auto shrink-0 text-[10px] text-slate-400">
                                           {f.sizeBytes > 1024 * 1024
@@ -1973,11 +1974,11 @@ export function TaskDetailsPage() {
                             {taskStatus === 'SALES_REVIEW' && (<>
                               <button type="button" onClick={() => handleStatusChange('CLIENT_ACCEPTED')} className="rounded-md bg-emerald-600 px-3 py-1.5 text-xs font-semibold text-white hover:bg-emerald-700 transition-colors">Client Accepted</button>
                               <button type="button" onClick={() => handleStatusChange('CLIENT_REJECTED')} className="rounded-md bg-rose-600 px-3 py-1.5 text-xs font-semibold text-white hover:bg-rose-700 transition-colors">Client Rejected</button>
-                              <button type="button" onClick={() => { setReworkNote(''); setReworkFile(null); setReworkLink({ url: '', name: '' }); setReworkDialogOpen(true); }} className="rounded-md bg-red-500 px-3 py-1.5 text-xs font-semibold text-white hover:bg-red-600 transition-colors">Request Rework</button>
+                              <button type="button" onClick={() => { setReworkNote(''); setReworkFile(null); setReworkLink({ url: '', name: '' }); setReworkRefMode('file'); setReworkDialogOpen(true); }} className="rounded-md bg-red-500 px-3 py-1.5 text-xs font-semibold text-white hover:bg-red-600 transition-colors">Request Rework</button>
                               <button type="button" onClick={() => handleStatusChange('ON_HOLD')} className="rounded-md border border-slate-300 bg-white px-3 py-1.5 text-xs font-semibold text-slate-600 hover:bg-slate-50 transition-colors">Put On Hold</button>
                             </>)}
                             {taskStatus === 'CLIENT_REJECTED' && (
-                              <button type="button" onClick={() => { setReworkNote(''); setReworkFile(null); setReworkLink({ url: '', name: '' }); setReworkDialogOpen(true); }} className="rounded-md bg-red-500 px-3 py-1.5 text-xs font-semibold text-white hover:bg-red-600 transition-colors">Issue Rework</button>
+                              <button type="button" onClick={() => { setReworkNote(''); setReworkFile(null); setReworkLink({ url: '', name: '' }); setReworkRefMode('file'); setReworkDialogOpen(true); }} className="rounded-md bg-red-500 px-3 py-1.5 text-xs font-semibold text-white hover:bg-red-600 transition-colors">Issue Rework</button>
                             )}
                             {taskStatus === 'ON_HOLD' && (
                               <button type="button" onClick={() => handleStatusChange(record?.holdPreviousStatus || 'SALES_REVIEW')} className="rounded-md bg-orange-500 px-3 py-1.5 text-xs font-semibold text-white hover:bg-orange-600 transition-colors">Resume</button>
@@ -2106,18 +2107,11 @@ export function TaskDetailsPage() {
                     <div className="mt-3 border-t border-slate-200 pt-3">
                       <div className="grid gap-2.5 sm:grid-cols-2">
                         <DatePickerField
-                          id="retail-issued"
-                          label="Date of Issued"
-                          selected={dateIssued}
-                          onChange={setDateIssued}
-                          minDate={today}
-                        />
-                        <DatePickerField
                           id="retail-submission"
                           label="Date of Submission"
                           selected={dateSubmission}
                           onChange={setDateSubmission}
-                          minDate={dateIssued && dateIssued > tomorrow ? dateIssued : tomorrow}
+                          minDate={today}
                         />
                       </div>
                       <div className="mt-2.5 flex justify-end">
@@ -2133,13 +2127,12 @@ export function TaskDetailsPage() {
                   ) : (
                     <div className="mt-3 border-t border-slate-200 pt-3">
                       <div className="grid gap-2.5 sm:grid-cols-2">
-                        <DatePickerField id="project-issued" label="Date of Issued" selected={dateIssued} onChange={setDateIssued} minDate={today} />
                         <DatePickerField
                           id="project-submission"
                           label="Date of Submission"
                           selected={dateSubmission}
                           onChange={setDateSubmission}
-                          minDate={dateIssued && dateIssued > tomorrow ? dateIssued : tomorrow}
+                          minDate={today}
                         />
                       </div>
                       <ProjectDetailsTable opNo={record?.opNo} />
@@ -2351,6 +2344,103 @@ export function TaskDetailsPage() {
                 </div>
               ) : null}
 
+              {activeTab === 'rework' ? (
+                <div className="mt-3 space-y-4">
+                  <div>
+                    <div className="flex items-center gap-1.5 mb-1.5">
+                      <Flag className="h-3.5 w-3.5 text-slate-400" />
+                      <p className="text-[11px] font-semibold uppercase tracking-wide text-slate-800">Sales Instructions</p>
+                    </div>
+                    {record?.reworkNote ? (
+                      <p className="whitespace-pre-wrap rounded-lg border border-slate-200 bg-slate-50 px-3 py-2.5 text-sm text-slate-800">{record.reworkNote}</p>
+                    ) : (
+                      <p className="text-sm text-slate-500 italic">No written instructions were provided.</p>
+                    )}
+                    {record?.reworkAttachmentUrl && (
+                      <a
+                        href={record.reworkAttachmentUrl}
+                        target="_blank"
+                        rel="noopener noreferrer"
+                        className="mt-2 flex items-center gap-2.5 rounded-lg border border-slate-200 bg-white px-3 py-2.5 text-sm text-blue-700 hover:bg-slate-50 hover:underline"
+                      >
+                        <FileText className="h-4 w-4 shrink-0 text-slate-400" />
+                        <span className="truncate font-medium">{record.reworkAttachmentName || 'Reference File'}</span>
+                      </a>
+                    )}
+                    {record?.reworkLinkUrl && (
+                      <a
+                        href={record.reworkLinkUrl}
+                        target="_blank"
+                        rel="noopener noreferrer"
+                        className="mt-2 flex items-center gap-2.5 rounded-lg border border-slate-200 bg-white px-3 py-2.5 text-sm text-blue-700 hover:bg-slate-50 hover:underline"
+                      >
+                        <FileText className="h-4 w-4 shrink-0 text-slate-400" />
+                        <span className="truncate font-medium">{record.reworkLinkName || record.reworkLinkUrl}</span>
+                      </a>
+                    )}
+                  </div>
+
+                  {!record?.reworkNote && !record?.reworkAttachmentUrl && !record?.reworkLinkUrl && (
+                    <div className="rounded-lg border border-dashed border-slate-300 bg-slate-50 px-4 py-8 text-center text-sm text-slate-500">
+                      No rework instructions were attached to this revision.
+                    </div>
+                  )}
+
+                  {/* Previous Submission */}
+                  <div className="mt-2 pt-5 border-t border-slate-200">
+                    <div className="flex items-center gap-1.5 mb-3">
+                      <Clock3 className="h-3.5 w-3.5 text-slate-400" />
+                      <p className="text-[11px] font-semibold uppercase tracking-wide text-slate-800">Previous Submission</p>
+                    </div>
+                    {prevRevisionLoading ? (
+                      <p className="text-sm text-slate-400 italic">Loading…</p>
+                    ) : prevRevisionSession ? (
+                      <div className="rounded-lg border border-slate-200 bg-slate-50 divide-y divide-slate-200">
+                        <div className="flex flex-wrap gap-x-6 gap-y-1 px-3 py-2.5 text-xs text-slate-600">
+                          {prevRevisionSession.submittedBy && (
+                            <span><span className="font-semibold text-slate-500">Submitted by: </span>{prevRevisionSession.submittedBy}</span>
+                          )}
+                          {prevRevisionSession.submittedAt && (
+                            <span><span className="font-semibold text-slate-500">Date: </span>{new Date(prevRevisionSession.submittedAt).toLocaleString('en-GB', { day: '2-digit', month: 'short', year: 'numeric', hour: '2-digit', minute: '2-digit' })}</span>
+                          )}
+                          {prevRevisionSession.durationSeconds > 0 && (
+                            <span><span className="font-semibold text-slate-500">Duration: </span>{Math.floor(prevRevisionSession.durationSeconds / 3600)}h {Math.floor((prevRevisionSession.durationSeconds % 3600) / 60)}m</span>
+                          )}
+                        </div>
+                        {prevRevisionSession.files?.length > 0 && (
+                          <div className="px-3 py-2.5 space-y-1.5">
+                            <p className="text-[11px] font-semibold text-slate-400 uppercase tracking-wide mb-1">Files</p>
+                            {prevRevisionSession.files.map((f, i) => (
+                              <a key={i} href={f.fileUrl} target="_blank" rel="noopener noreferrer"
+                                className="flex items-center gap-2 rounded-md border border-slate-200 bg-white px-2.5 py-2 text-sm text-blue-700 hover:bg-slate-50 hover:underline">
+                                <FileText className="h-4 w-4 shrink-0 text-slate-400" />
+                                <span className="truncate font-medium">{f.fileName}</span>
+                                {f.sizeBytes && <span className="ml-auto shrink-0 text-xs text-slate-400">{(Number(f.sizeBytes) / 1024).toFixed(1)} KB</span>}
+                              </a>
+                            ))}
+                          </div>
+                        )}
+                        {prevRevisionSession.submissionLink && (
+                          <div className="px-3 py-2.5">
+                            <p className="text-[11px] font-semibold text-slate-400 uppercase tracking-wide mb-1">Submitted Docs</p>
+                            <a href={prevRevisionSession.submissionLink} target="_blank" rel="noopener noreferrer"
+                              className="flex items-center gap-2 rounded-md border border-slate-200 bg-white px-2.5 py-2 text-sm text-blue-700 hover:bg-slate-50 hover:underline">
+                              <FileText className="h-4 w-4 shrink-0 text-slate-400" />
+                              <span className="truncate">{prevRevisionSession.submissionLink}</span>
+                            </a>
+                          </div>
+                        )}
+                        {!prevRevisionSession.files?.length && !prevRevisionSession.submissionLink && (
+                          <div className="px-3 py-2.5 text-sm text-slate-500 italic">No files or links were submitted.</div>
+                        )}
+                      </div>
+                    ) : (
+                      <p className="text-sm text-slate-400 italic">No submission found for the previous revision.</p>
+                    )}
+                  </div>
+                </div>
+              ) : null}
+
             </section>
 
             <aside className="space-y-2.5">
@@ -2469,61 +2559,79 @@ export function TaskDetailsPage() {
                 autoFocus
               />
             </div>
-            {/* File attachment */}
-            <div className="flex flex-col gap-1">
-              <label className="text-xs font-semibold text-slate-700">Reference File <span className="text-slate-400 font-normal">(optional)</span></label>
-              {reworkFile ? (
-                <div className="flex items-center gap-2 rounded-md border border-slate-200 bg-slate-50 px-3 py-2">
-                  <FileText size={13} className="text-slate-500 shrink-0" />
-                  <span className="text-xs text-slate-700 flex-1 truncate">{reworkFile.name}</span>
-                  <button type="button" onClick={() => setReworkFile(null)} className="text-slate-400 hover:text-red-500 text-xs transition-colors">✕</button>
+            {/* Reference — toggled */}
+            <div className="flex flex-col gap-2">
+              <div className="flex items-center justify-between">
+                <label className="text-xs font-semibold text-slate-700">Reference <span className="text-slate-400 font-normal">(optional)</span></label>
+                <div className="inline-flex rounded-md border border-blue-500 bg-blue-50 p-0.5 text-xs">
+                  <button
+                    type="button"
+                    onClick={() => { setReworkRefMode('file'); setReworkLink({ url: '', name: '' }) }}
+                    className={`rounded px-2.5 py-1 font-semibold transition-colors ${reworkRefMode === 'file' ? 'bg-blue-600 text-white shadow-sm' : 'text-slate-500 hover:text-slate-700'}`}
+                  >
+                    Select File
+                  </button>
+                  <button
+                    type="button"
+                    onClick={() => { setReworkRefMode('link'); setReworkFile(null) }}
+                    className={`rounded px-2.5 py-1 font-semibold transition-colors ${reworkRefMode === 'link' ? 'bg-blue-600 text-white shadow-sm' : 'text-slate-500 hover:text-slate-700'}`}
+                  >
+                    Add Link
+                  </button>
                 </div>
-              ) : (
-                <label className={`flex items-center gap-2 rounded-md border border-dashed border-slate-300 px-3 py-2 cursor-pointer hover:bg-slate-50 transition-colors ${reworkFileUploading ? 'opacity-50 pointer-events-none' : ''}`}>
-                  <Upload size={13} className="text-slate-400 shrink-0" />
-                  <span className="text-xs text-slate-500">{reworkFileUploading ? 'Uploading…' : 'Click to attach a file'}</span>
-                  <input
-                    type="file"
-                    className="hidden"
-                    onChange={async (e) => {
-                      const file = e.target.files?.[0]
-                      if (!file) return
-                      setReworkFileUploading(true)
-                      try {
-                        const form = new FormData()
-                        form.append('file', file)
-                        const res = await apiClient.post('/tasks/upload-file', form)
-                        setReworkFile({ url: res.fileUrl, name: res.fileName })
-                      } catch {
-                        toast.error('File upload failed')
-                      } finally {
-                        setReworkFileUploading(false)
-                        e.target.value = ''
-                      }
-                    }}
-                  />
-                </label>
-              )}
-            </div>
-            {/* Reference link */}
-            <div className="flex flex-col gap-1">
-              <label className="text-xs font-semibold text-slate-700">Reference Link <span className="text-slate-400 font-normal">(optional)</span></label>
-              <div className="flex gap-2">
-                <input
-                  type="url"
-                  className="flex-1 rounded-md border border-slate-300 px-2.5 py-1.5 text-xs text-slate-800 focus:outline-none focus:ring-2 focus:ring-red-400"
-                  placeholder="https://…"
-                  value={reworkLink.url}
-                  onChange={(e) => setReworkLink((l) => ({ ...l, url: e.target.value }))}
-                />
-                <input
-                  type="text"
-                  className="w-32 rounded-md border border-slate-300 px-2.5 py-1.5 text-xs text-slate-800 focus:outline-none focus:ring-2 focus:ring-red-400"
-                  placeholder="Label"
-                  value={reworkLink.name}
-                  onChange={(e) => setReworkLink((l) => ({ ...l, name: e.target.value }))}
-                />
               </div>
+
+              {reworkRefMode === 'file' ? (
+                reworkFile ? (
+                  <div className="flex items-center gap-2 rounded-md border border-slate-200 bg-slate-50 px-3 py-2">
+                    <FileText size={13} className="text-slate-500 shrink-0" />
+                    <span className="text-xs text-slate-700 flex-1 truncate">{reworkFile.name}</span>
+                    <button type="button" onClick={() => setReworkFile(null)} className="text-slate-400 hover:text-red-500 text-xs transition-colors">✕</button>
+                  </div>
+                ) : (
+                  <label className={`flex items-center gap-2 rounded-md border border-dashed border-slate-300 px-3 py-2.5 cursor-pointer hover:bg-slate-50 transition-colors ${reworkFileUploading ? 'opacity-50 pointer-events-none' : ''}`}>
+                    <Upload size={13} className="text-slate-400 shrink-0" />
+                    <span className="text-xs text-slate-500">{reworkFileUploading ? 'Uploading…' : 'Click to attach a file'}</span>
+                    <input
+                      type="file"
+                      className="hidden"
+                      onChange={async (e) => {
+                        const file = e.target.files?.[0]
+                        if (!file) return
+                        setReworkFileUploading(true)
+                        try {
+                          const form = new FormData()
+                          form.append('file', file)
+                          const res = await apiClient.post('/tasks/upload-file', form)
+                          setReworkFile({ url: res.fileUrl, name: res.fileName })
+                        } catch {
+                          toast.error('File upload failed')
+                        } finally {
+                          setReworkFileUploading(false)
+                          e.target.value = ''
+                        }
+                      }}
+                    />
+                  </label>
+                )
+              ) : (
+                <div className="flex gap-2">
+                  <input
+                    type="url"
+                    className="flex-1 rounded-md border border-slate-300 px-2.5 py-1.5 text-xs text-slate-800 focus:outline-none focus:ring-2 focus:ring-red-400"
+                    placeholder="https://…"
+                    value={reworkLink.url}
+                    onChange={(e) => setReworkLink((l) => ({ ...l, url: e.target.value }))}
+                  />
+                  <input
+                    type="text"
+                    className="w-32 rounded-md border border-slate-300 px-2.5 py-1.5 text-xs text-slate-800 focus:outline-none focus:ring-2 focus:ring-red-400"
+                    placeholder="Label"
+                    value={reworkLink.name}
+                    onChange={(e) => setReworkLink((l) => ({ ...l, name: e.target.value }))}
+                  />
+                </div>
+              )}
             </div>
             <div className="flex justify-end gap-2 pt-1">
               <button
