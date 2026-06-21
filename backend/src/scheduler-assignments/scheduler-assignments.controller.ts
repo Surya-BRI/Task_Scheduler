@@ -50,4 +50,10 @@ export class SchedulerAssignmentsController {
   unlockWeek(@Param('weekStart') weekStart: string, @CurrentUser() user: JwtPayload) {
     return this.schedulerAssignmentsService.setWeekLock(weekStart, user.sub, false);
   }
+
+  @Delete('task/:taskId')
+  @Roles(UserRole.HOD, UserRole.ADMIN, UserRole.PROJECT_MANAGER)
+  clearTask(@Param('taskId') taskId: string) {
+    return this.schedulerAssignmentsService.clearTaskSchedule(taskId);
+  }
 }

@@ -355,6 +355,14 @@ export class SchedulerAssignmentsService {
     };
   }
 
+  async clearTaskSchedule(taskId: string): Promise<void> {
+    const todayMidnight = new Date();
+    todayMidnight.setHours(0, 0, 0, 0);
+    await this.prisma.schedulerAssignment.deleteMany({
+      where: { taskId, weekStartDate: { gte: todayMidnight } },
+    });
+  }
+
   async saveWeekSnapshot(weekStart: string, userId: string, dto: SaveSchedulerWeekDto) {
     const { weekStartDate, weekEndDate } = this.parseWeekStart(weekStart);
     this.validateAssignments(dto);
@@ -421,6 +429,77 @@ export class SchedulerAssignmentsService {
         };
       }
 
+      // --- Cross-week sequential split index recomputation ---
+      // If any assignments carry split metadata, recompute splitIndex/totalParts globally
+      // so that parts in other weeks are numbered sequentially (e.g. week1=1,2 + week2=3).
+      const splitTaskIds = Array.from(new Set(
+        dto.assignments
+          .filter(a => a.splitIndex != null || a.parentId != null)
+          .map(a => a.taskId),
+      ));
+
+      const otherWeekUpdates: Array<{ id: string; splitIndex: number; totalParts: number }> = [];
+
+      if (splitTaskIds.length > 0) {
+        const crossWeekRows = await tx.schedulerAssignment.findMany({
+          where: {
+            taskId: { in: splitTaskIds },
+            weekStartDate: { not: weekStartDate },
+          },
+          select: { id: true, taskId: true, dayIndex: true, weekStartDate: true, splitIndex: true, totalParts: true },
+          orderBy: [{ weekStartDate: 'asc' }, { dayIndex: 'asc' }],
+        });
+
+        const currentWeekMs = weekStartDate.getTime();
+
+        for (const taskId of splitTaskIds) {
+          const currentParts = dto.assignments
+            .filter(a => a.taskId === taskId)
+            .sort((a, b) => a.dayIndex - b.dayIndex);
+
+          if (currentParts.length === 0) continue;
+
+          const otherRows = (crossWeekRows as any[])
+            .filter(r => r.taskId === taskId)
+            .sort((a, b) => {
+              const wDiff = new Date(a.weekStartDate).getTime() - new Date(b.weekStartDate).getTime();
+              return wDiff !== 0 ? wDiff : a.dayIndex - b.dayIndex;
+            });
+
+          // Single part with no cross-week peers — skip, no global label needed
+          if (otherRows.length === 0 && currentParts.length <= 1) continue;
+
+          const beforeCurrent = otherRows.filter(r => new Date(r.weekStartDate).getTime() < currentWeekMs);
+          const afterCurrent = otherRows.filter(r => new Date(r.weekStartDate).getTime() > currentWeekMs);
+
+          // All parts in global chronological order: earlier weeks → current week → later weeks
+          const allParts: Array<
+            | { source: 'other'; row: (typeof crossWeekRows)[0] }
+            | { source: 'current'; assignment: (typeof dto.assignments)[0] }
+          > = [
+            ...beforeCurrent.map(r => ({ source: 'other' as const, row: r as any })),
+            ...currentParts.map(a => ({ source: 'current' as const, assignment: a })),
+            ...afterCurrent.map(r => ({ source: 'other' as const, row: r as any })),
+          ];
+
+          const totalParts = allParts.length;
+
+          allParts.forEach((part, idx) => {
+            const newSplitIndex = idx + 1;
+            if (part.source === 'current') {
+              part.assignment.splitIndex = newSplitIndex;
+              part.assignment.totalParts = totalParts;
+              if (!part.assignment.parentId) part.assignment.parentId = taskId;
+            } else {
+              if (part.row.splitIndex !== newSplitIndex || part.row.totalParts !== totalParts) {
+                otherWeekUpdates.push({ id: part.row.id as string, splitIndex: newSplitIndex, totalParts });
+              }
+            }
+          });
+        }
+      }
+      // --- End cross-week recomputation ---
+
       await tx.schedulerAssignment.deleteMany({ where: { weekStartDate } });
 
       if (dto.assignments.length > 0) {
@@ -442,6 +521,14 @@ export class SchedulerAssignmentsService {
         });
       }
 
+      // Propagate corrected splitIndex/totalParts to other weeks' rows
+      for (const upd of otherWeekUpdates) {
+        await tx.schedulerAssignment.update({
+          where: { id: upd.id },
+          data: { splitIndex: upd.splitIndex, totalParts: upd.totalParts },
+        });
+      }
+
       const prevTaskIds = Array.from(new Set(previousRows.map((r: any) => r.taskId).filter(Boolean))) as string[];
       const affectedTaskIds = Array.from(new Set([...prevTaskIds, ...taskIds]));
 
@@ -454,16 +541,18 @@ export class SchedulerAssignmentsService {
       const reassignedTasks: Array<{ taskId: string; oldAssigneeId: string | null; newAssigneeId: string }> = [];
       const splitTasks: Array<{ taskId: string; designerIds: string[] }> = [];
 
+      const assignOnlyByDesigner = new Map<string, string[]>();
+      const assignPlannedByDesigner = new Map<string, string[]>();
+      const unassignOnlyIds: string[] = [];
+      const unassignNewIds: string[] = [];
+      const splitNullIds: string[] = [];
+
       if (affectedTaskIds.length > 0) {
         const affectedTasks = await tx.task.findMany({
           where: { id: { in: affectedTaskIds } },
           select: { id: true, status: true, assigneeId: true },
         });
 
-        const assignOnlyByDesigner = new Map<string, string[]>();
-        const assignPlannedByDesigner = new Map<string, string[]>();
-        const unassignOnlyIds: string[] = [];
-        const unassignNewIds: string[] = [];
         const pushGroupedTask = (map: Map<string, string[]>, key: string, taskId: string) => {
           const ids = map.get(key) ?? [];
           ids.push(taskId);
@@ -495,7 +584,7 @@ export class SchedulerAssignmentsService {
           } else {
             // Split across multiple designers — null out assigneeId so the task
             // doesn't falsely appear assigned to only one person.
-            updateData.assigneeId = null;
+            splitNullIds.push(task.id);
           }
 
           if (assignedDesigner && assignedDesigner !== task.assigneeId) {
@@ -520,30 +609,21 @@ export class SchedulerAssignmentsService {
           await tx.taskDesigner.createMany({ data: junctionRows });
         }
 
-        for (const [assigneeId, ids] of assignPlannedByDesigner.entries()) {
-          await tx.task.updateMany({
-            where: { id: { in: ids } },
-            data: { assigneeId, status: 'DESIGN_PLANNED' },
-          });
-        }
-        for (const [assigneeId, ids] of assignOnlyByDesigner.entries()) {
-          await tx.task.updateMany({
-            where: { id: { in: ids } },
-            data: { assigneeId },
-          });
-        }
-        if (unassignNewIds.length > 0) {
-          await tx.task.updateMany({
-            where: { id: { in: unassignNewIds } },
-            data: { assigneeId: null, status: 'DESIGN_NEW' },
-          });
-        }
-        if (unassignOnlyIds.length > 0) {
-          await tx.task.updateMany({
-            where: { id: { in: unassignOnlyIds } },
-            data: { assigneeId: null },
-          });
-        }
+        const nullAssigneeIds = [...unassignOnlyIds, ...splitNullIds];
+        await Promise.all([
+          ...[...assignPlannedByDesigner.entries()].map(([assigneeId, ids]) =>
+            tx.task.updateMany({ where: { id: { in: ids } }, data: { assigneeId, status: 'DESIGN_PLANNED' } }),
+          ),
+          ...[...assignOnlyByDesigner.entries()].map(([assigneeId, ids]) =>
+            tx.task.updateMany({ where: { id: { in: ids } }, data: { assigneeId } }),
+          ),
+          unassignNewIds.length > 0
+            ? tx.task.updateMany({ where: { id: { in: unassignNewIds } }, data: { assigneeId: null, status: 'DESIGN_NEW' } })
+            : Promise.resolve(),
+          nullAssigneeIds.length > 0
+            ? tx.task.updateMany({ where: { id: { in: nullAssigneeIds } }, data: { assigneeId: null } })
+            : Promise.resolve(),
+        ]);
       }
 
       const nextVersion = existing.version + 1;

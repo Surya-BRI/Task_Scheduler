@@ -347,36 +347,18 @@ export function Navbar({ currentDate, onCalendarChange, dateRangeText }) {
           <div className="ml-auto flex items-center gap-1 sm:gap-2">
             {/* Scheduler / Calendar icon */}
             {currentDate ? (
-              /* HOD Master Scheduler — shows inline date picker */
+              /* HOD Master Scheduler — date display only, no picker */
               <div className="flex items-center gap-2">
                 <span className="text-sm font-semibold text-slate-700">
-                  {currentDate.toLocaleDateString('en-GB', { day: '2-digit', month: 'short', year: 'numeric' })}
+                  {new Date().toLocaleDateString('en-GB', { day: '2-digit', month: 'short', year: 'numeric' })}
                 </span>
-                <div className="relative">
-                  <button
-                    type="button"
-                    className={`${utilityIconClass}${onScheduler ? ' bg-slate-100 text-slate-900' : ''}`}
-                    aria-label="Select date"
-                  >
-                    <Calendar className="h-5 w-5" strokeWidth={1.75} aria-hidden />
-                  </button>
-                  <input
-                    type="date"
-                    className="absolute inset-0 w-full h-full opacity-0 cursor-pointer"
-                    value={`${currentDate.getFullYear()}-${String(currentDate.getMonth() + 1).padStart(2, '0')}-${String(currentDate.getDate()).padStart(2, '0')}`}
-                    onChange={(e) => {
-                      if (e.target.value && onCalendarChange) {
-                        const [y, m, d] = e.target.value.split('-')
-                        onCalendarChange(new Date(Number(y), Number(m) - 1, Number(d)))
-                      }
-                    }}
-                    onClick={(e) => {
-                      if ('showPicker' in e.currentTarget) {
-                        try { e.currentTarget.showPicker() } catch {}
-                      }
-                    }}
-                  />
-                </div>
+                <button
+                  type="button"
+                  className={`${utilityIconClass}${onScheduler ? ' bg-slate-100 text-slate-900' : ''}`}
+                  aria-label="Calendar"
+                >
+                  <Calendar className="h-5 w-5" strokeWidth={1.75} aria-hidden />
+                </button>
               </div>
             ) : (
               <div className="flex items-center gap-2">
