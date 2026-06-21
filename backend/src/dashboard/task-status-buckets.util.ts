@@ -17,8 +17,8 @@ export const ON_HOLD_TASK_STATUSES = ['ON_HOLD'] as const;
 
 export const COMPLETED_TASK_STATUSES = [
   'DESIGN_COMPLETED',
-  'REVIEW_COMPLETED',
-  // Legacy — kept so old DB rows still count as completed
+  'CLIENT_ACCEPTED',
+  // Legacy — old ERP rows only
   'COMPLETED',
   'APPROVED',
 ] as const;

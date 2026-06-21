@@ -1,6 +1,6 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import { toast } from 'sonner'
-import { Ban, Calendar, CheckCircle2, ChevronLeft, CircleCheck, Clock3, FileText, Flag, Hourglass, Info, Link, Pause, Pencil, Shield, Trash2, Upload } from 'lucide-react'
+import { Ban, Calendar, CheckCircle2, ChevronLeft, CircleCheck, Clock3, ExternalLink, FileText, Flag, Hourglass, Info, Link, Pause, Pencil, RotateCcw, Shield, Trash2, Upload } from 'lucide-react'
 import { useParams, usePathname, useRouter, useSearchParams } from 'next/navigation'
 import DatePicker from 'react-datepicker'
 import { CreateTaskModal } from '../components/CreateTaskModal'
@@ -14,13 +14,14 @@ import {
   createChatterPost,
   listChatterMentionUsers,
   listChatterPosts,
+  listChatterPostsForTask,
   normalizePriority,
   resolveEmbeddedChatterTitle,
 } from '@/features/chatter/services/chatter-posts.api'
 import { MentionTextarea } from '@/features/chatter/components/MentionTextarea'
 import { EmbeddedChatterCommentComposer } from '@/features/chatter/components/EmbeddedChatterCommentComposer'
 import { ChatterMentionText } from '@/features/chatter/components/ChatterMentionText'
-import { parseMentionUserIdsFromMessage } from '@/features/chatter/utils/mention-utils'
+import { parseMentionUserIdsFromMessage, resolveMentionUsersForDisplay } from '@/features/chatter/utils/mention-utils'
 import {
   resolveChatterMentionScope,
   resolvePageChatterMentionScope,
@@ -83,7 +84,7 @@ const STAGE_ITEMS = [
 ]
 
 const SPECIAL_STATUS = {
-  REVIEW_COMPLETED: { label: 'Completed',       hint: 'Task fully reviewed & closed', icon: CheckCircle2, border: 'border-emerald-400', bg: 'bg-emerald-50', iconBg: 'bg-emerald-500', text: 'text-emerald-800', hint2: 'text-emerald-600' },
+  CLIENT_ACCEPTED:  { label: 'Client Accepted', hint: 'Task accepted by client',       icon: CheckCircle2, border: 'border-emerald-400', bg: 'bg-emerald-50', iconBg: 'bg-emerald-500', text: 'text-emerald-800', hint2: 'text-emerald-600' },
   CLIENT_REJECTED:  { label: 'Client Rejected', hint: 'Rejected by client',           icon: Ban,          border: 'border-red-400',     bg: 'bg-red-50',     iconBg: 'bg-red-500',     text: 'text-red-800',     hint2: 'text-red-500' },
   ON_HOLD:          { label: 'On Hold',          hint: 'Task paused',                  icon: Pause,        border: 'border-amber-400',   bg: 'bg-amber-50',   iconBg: 'bg-amber-500',   text: 'text-amber-800',   hint2: 'text-amber-600' },
 }
@@ -94,6 +95,7 @@ const TABS = [
   { id: 'chatter', label: 'Chatter' },
 ]
 const PROJECT_TAB = { id: 'team', label: 'Team' }
+const REWORK_TAB = { id: 'rework', label: 'Rework Instructions' }
 
 
 const HISTORY_FIELD_ACTIONS = new Set(['TASK_CREATED', 'ASSIGNED_TASK', 'STATUS_CHANGED'])
@@ -336,9 +338,9 @@ function FilesPanel({ projectId, files, uploading, resolvingProjectId, onPick, o
   return (
     <section className="rounded-lg border border-slate-200 bg-white p-3 shadow-sm">
       <h2 className="text-sm font-semibold text-slate-900">Project Files</h2>
-      <div className="mt-2 inline-flex rounded-md border border-slate-300 bg-slate-50 p-1 text-xs">
-        <button type="button" onClick={() => setMode('link')} className={`rounded px-2 py-1 font-semibold ${mode === 'link' ? 'bg-white text-slate-900' : 'text-slate-600'}`}>Paste Link</button>
-        <button type="button" onClick={() => setMode('browse')} className={`rounded px-2 py-1 font-semibold ${mode === 'browse' ? 'bg-white text-slate-900' : 'text-slate-600'}`}>Browse Files</button>
+      <div className="mt-2 inline-flex rounded-md border border-blue-500 bg-blue-50 p-1 text-xs">
+        <button type="button" onClick={() => setMode('link')} className={`rounded px-2 py-1 font-semibold transition-colors ${mode === 'link' ? 'bg-blue-600 text-white shadow-sm' : 'text-slate-600 hover:text-slate-900'}`}>Paste Link</button>
+        <button type="button" onClick={() => setMode('browse')} className={`rounded px-2 py-1 font-semibold transition-colors ${mode === 'browse' ? 'bg-blue-600 text-white shadow-sm' : 'text-slate-600 hover:text-slate-900'}`}>Browse Files</button>
       </div>
       {mode === 'link' ? (
         <div className="mt-2 space-y-2">
@@ -604,9 +606,11 @@ function ActivityTimelinePane({
                         <span className="font-semibold text-slate-800">Assigned Designer:</span>{' '}
                         {item.task.assigneeName ?? '-'}
                       </p>
-                      <p>
-                        <span className="font-semibold text-slate-800">HOD:</span> {hodDisplayName(item.task.hodName)}
-                      </p>
+                      {item.task.hodName ? (
+                        <p>
+                          <span className="font-semibold text-slate-800">HOD:</span> {hodDisplayName(item.task.hodName)}
+                        </p>
+                      ) : null}
                     </div>
                   ) : null}
                 </div>
@@ -726,7 +730,18 @@ function mapTaskToRecord(task) {
     teamLead: task.teamLead ?? '',
     subTeamLead: task.subTeamLead ?? '',
     designers: task.designers ?? '',
+    assignedTo: task.assignee?.fullName
+      || (task.taskDesigners?.length > 0 ? task.taskDesigners.map(d => d.designer.fullName).join(', ') : 'Unassigned'),
     projectDetails: task.projectDetails ?? [],
+    disciplineType: task.disciplineType ?? null,
+    signType: task.signType ?? null,
+    signFamily: task.signFamily ?? null,
+    reworkNote: task.reworkNote ?? null,
+    reworkAttachmentUrl: task.reworkAttachmentUrl ?? null,
+    reworkAttachmentName: task.reworkAttachmentName ?? null,
+    reworkLinkUrl: task.reworkLinkUrl ?? null,
+    reworkLinkName: task.reworkLinkName ?? null,
+    previousRevisionTaskId: task.previousRevisionTaskId ?? null,
   }
 }
 
@@ -762,7 +777,7 @@ function getTaskStatusBadgeClass(normalizedStatus) {
   switch (normalizedStatus) {
     case 'IN_PROGRESS':      return 'bg-blue-100 text-blue-700'
     case 'DESIGN_COMPLETED': return 'bg-emerald-100 text-emerald-700'
-    case 'REVIEW_COMPLETED': return 'bg-emerald-100 text-emerald-700'
+    case 'CLIENT_ACCEPTED':  return 'bg-emerald-100 text-emerald-700'
     case 'HOD_REVIEW':       return 'bg-violet-100 text-violet-700'
     case 'SALES_REVIEW':     return 'bg-indigo-100 text-indigo-700'
     case 'REWORK':           return 'bg-red-100 text-red-700'
@@ -770,6 +785,24 @@ function getTaskStatusBadgeClass(normalizedStatus) {
     case 'DESIGN_PLANNED':   return 'bg-sky-100 text-sky-700'
     default:                 return 'bg-slate-100 text-slate-600'
   }
+}
+
+const DISCIPLINE_PILL_CLASSES = {
+  Artwork:   'bg-blue-100 text-blue-700',
+  Technical: 'bg-orange-100 text-orange-700',
+  Location:  'bg-green-100 text-green-700',
+  'As-Built':'bg-purple-100 text-purple-700',
+  BIM:       'bg-teal-100 text-teal-700',
+}
+
+function DisciplinePill({ type }) {
+  if (!type) return <span className="text-slate-400">—</span>
+  const cls = DISCIPLINE_PILL_CLASSES[type] ?? 'bg-slate-100 text-slate-600'
+  return (
+    <span className={`inline-block rounded-full px-2 py-0.5 text-[10px] font-semibold ${cls}`}>
+      {type}
+    </span>
+  )
 }
 
 function ProjectTaskList({ tasks, loading, onView }) {
@@ -780,9 +813,10 @@ function ProjectTaskList({ tasks, loading, onView }) {
         <span className="text-[11px] text-slate-400">{tasks.length} task{tasks.length !== 1 ? 's' : ''}</span>
       </div>
       <div className="overflow-hidden rounded-md border border-slate-200">
-        <div className="grid grid-cols-[1fr_1fr_1fr_1fr_1fr_80px_44px] bg-slate-100 px-2.5 py-1.5 text-[11px] font-semibold text-slate-600">
+        <div className="grid grid-cols-[1.2fr_0.5fr_1fr_0.9fr_1fr_1fr_80px_44px] bg-slate-100 px-2.5 py-1.5 text-[11px] font-semibold text-slate-600">
           <div>Task No</div>
           <div>Revision</div>
+          <div>Sign Family</div>
           <div>Type</div>
           <div>Status</div>
           <div>Designer</div>
@@ -803,17 +837,26 @@ function ProjectTaskList({ tasks, loading, onView }) {
               return (
                 <li
                   key={task.id}
-                  className="grid grid-cols-[1fr_1fr_1fr_1fr_1fr_80px_44px] items-center px-2.5 py-1.5 text-xs text-slate-700 hover:bg-slate-50"
+                  className="grid grid-cols-[1.2fr_0.5fr_1fr_0.9fr_1fr_1fr_80px_44px] items-center px-2.5 py-2 text-xs text-slate-700 hover:bg-slate-50"
                 >
-                  <span className="truncate font-medium text-slate-900">{task.taskNo || '—'}</span>
+                  <span className="min-w-0">
+                    <span className="block truncate font-medium text-slate-900">{task.taskNo || '—'}</span>
+                    {task.signType && <span className="block truncate text-[10px] text-slate-400">{task.signType}</span>}
+                  </span>
                   <span>{task.revisionCode || '—'}</span>
-                  <span className="capitalize">{task.designType || task.project?.category || '—'}</span>
+                  <span className="truncate text-slate-600">{task.signFamily || '—'}</span>
+                  <span><DisciplinePill type={task.disciplineType} /></span>
                   <span>
                     <span className={`inline-block rounded-full px-2 py-0.5 text-[10px] font-semibold ${getTaskStatusBadgeClass(normalized)}`}>
                       {getStatusLabel(task.status)}
                     </span>
                   </span>
-                  <span className="truncate">{task.assignee?.fullName || 'Unassigned'}</span>
+                  <span className="truncate">
+                    {task.assignee?.fullName ||
+                      (task.taskDesigners?.length > 0
+                        ? task.taskDesigners.map(d => d.designer.fullName).join(', ')
+                        : 'Unassigned')}
+                  </span>
                   <span className="text-slate-500">{task.dueDate ? new Date(task.dueDate).toLocaleDateString('en-GB') : '—'}</span>
                   <button
                     type="button"
@@ -832,7 +875,7 @@ function ProjectTaskList({ tasks, loading, onView }) {
   )
 }
 
-const TASK_TAB_IDS = ['details', 'activity', 'chatter', 'team']
+const TASK_TAB_IDS = ['details', 'activity', 'chatter', 'team', 'rework']
 export function TaskDetailsPage() {
   const router = useRouter()
   const pathname = usePathname()
@@ -848,6 +891,10 @@ export function TaskDetailsPage() {
   const [reworkDialogOpen, setReworkDialogOpen] = useState(false)
   const [reworkNote, setReworkNote] = useState('')
   const [reworkSubmitting, setReworkSubmitting] = useState(false)
+  const [reworkFile, setReworkFile] = useState(null) // { url, name } | null
+  const [reworkFileUploading, setReworkFileUploading] = useState(false)
+  const [reworkLink, setReworkLink] = useState({ url: '', name: '' })
+  const [reworkRefMode, setReworkRefMode] = useState('file') // 'file' | 'link'
   const [createModalOpen, setCreateModalOpen] = useState(false)
   const [projectCreateModalOpen, setProjectCreateModalOpen] = useState(false)
   const [createdTasks, setCreatedTasks] = useState([])
@@ -867,7 +914,6 @@ export function TaskDetailsPage() {
   const today = new Date()
   const tomorrow = new Date()
   tomorrow.setDate(tomorrow.getDate() + 1)
-  const [dateIssued, setDateIssued] = useState(today)
   const [dateSubmission, setDateSubmission] = useState(tomorrow)
   const [technicalHead, setTechnicalHead] = useState('')
   const [teamLead, setTeamLead] = useState('')
@@ -899,6 +945,8 @@ export function TaskDetailsPage() {
   const [taskAuditInfo, setTaskAuditInfo] = useState({ createdByHod: '-' })
   const [taskRefreshCounter, setTaskRefreshCounter] = useState(0)
   const [submittedSession, setSubmittedSession] = useState(null)
+  const [prevRevisionSession, setPrevRevisionSession] = useState(null)
+  const [prevRevisionLoading, setPrevRevisionLoading] = useState(false)
 
   useEffect(() => {
     let alive = true
@@ -1002,16 +1050,24 @@ export function TaskDetailsPage() {
   const launchPauseModal = searchParams.get('openPause') === '1'
   const launchCompleteModal = searchParams.get('openComplete') === '1'
 
-  const handleStatusChange = useCallback(async (newStatus, reworkNote) => {
+  const handleStatusChange = useCallback(async (newStatus, reworkNote, reworkFileArg, reworkLinkArg) => {
     if (!taskId) return
     try {
-      await apiClient.patch(`/tasks/${taskId}/status`, {
+      const res = await apiClient.patch(`/tasks/${taskId}/status`, {
         status: newStatus,
         ...(reworkNote ? { reworkNote } : {}),
+        ...(reworkFileArg?.url ? { reworkAttachmentUrl: reworkFileArg.url, reworkAttachmentName: reworkFileArg.name } : {}),
+        ...(reworkLinkArg?.url ? { reworkLinkUrl: reworkLinkArg.url, reworkLinkName: reworkLinkArg.name } : {}),
       })
+      if (newStatus === 'REWORK' && res?.newRevisionTaskNo) {
+        toast.success(`Rework issued — revision ${res.newRevisionTaskNo} created and queued for assignment.`)
+      } else if (newStatus === 'REWORK') {
+        toast.error('Rework issued but revision task creation failed — check backend logs.')
+      }
       setTaskRefreshCounter((c) => c + 1)
-    } catch {
-      // status update failed — refresh anyway to show current state
+    } catch (err) {
+      const msg = err?.response?.data?.message || err?.message || 'Status update failed'
+      toast.error(msg)
       setTaskRefreshCounter((c) => c + 1)
     }
   }, [taskId])
@@ -1064,12 +1120,17 @@ export function TaskDetailsPage() {
     chatterMessage.trim().length > 0 && !resolvingProjectId && !resolvingTaskId
   const hasExistingTask = Boolean(taskId || isUuid(record?.taskId ?? record?.id))
   const taskStatus = record?.status ?? null
-  const isTerminalStatus = taskStatus === 'REVIEW_COMPLETED' || taskStatus === 'CLIENT_REJECTED'
-  const isPostSubmitStatus = ['DESIGN_COMPLETED', 'HOD_REVIEW', 'SALES_REVIEW', 'REWORK', 'REVIEW_COMPLETED', 'CLIENT_REJECTED', 'ON_HOLD'].includes(taskStatus)
-  const showTimer = !isCreationRoute && hasExistingTask && Boolean(taskId) && !isTerminalStatus && (from === 'designer-queue' || from === 'designer-design-list')
+  const isTerminalStatus = taskStatus === 'CLIENT_ACCEPTED' || taskStatus === 'CLIENT_REJECTED'
+  const isPostSubmitStatus = ['DESIGN_COMPLETED', 'HOD_REVIEW', 'SALES_REVIEW', 'REWORK', 'CLIENT_ACCEPTED', 'CLIENT_REJECTED', 'ON_HOLD'].includes(taskStatus)
+  const TIMER_ACTIVE_STATUSES = ['DESIGN_PLANNED', 'IN_PROGRESS', 'REWORK']
+  const showTimer = !isCreationRoute && hasExistingTask && Boolean(taskId) && TIMER_ACTIVE_STATUSES.includes(taskStatus) && (from === 'designer-queue' || from === 'designer-design-list')
   const _session = getSession()
   const isHod = ['HOD', 'ADMIN', 'PROJECT_MANAGER'].includes(_session?.role ?? '')
-  const tabs = isCreationRoute && !isRetail ? [...TABS, PROJECT_TAB] : TABS
+  const isSales = _session?.role === 'SALESPERSON'
+  const isDesigner = _session?.role === 'DESIGNER'
+  const hasReworkInstructions = Boolean(record?.previousRevisionTaskId)
+  const baseTabs = isCreationRoute && !isRetail ? [...TABS, PROJECT_TAB] : TABS
+  const tabs = hasReworkInstructions ? [...baseTabs, REWORK_TAB] : baseTabs
   useEffect(() => {
     let alive = true
     async function resolveProjectId() {
@@ -1120,21 +1181,22 @@ export function TaskDetailsPage() {
   useEffect(() => {
     let alive = true
     async function resolveTaskId() {
+      const routeTaskId = routeId && isUuid(String(routeId).trim()) ? String(routeId).trim() : null
       if (!record) {
-        if (alive) setTaskId('')
+        if (alive) setTaskId(routeTaskId ?? '')
         return
       }
       setResolvingTaskId(true)
       try {
         const foundId = await resolveTaskIdForChatter({
-          taskId: record.taskId,
+          taskId: record.taskId ?? routeTaskId,
           recordId: record.id,
           opNo: record.opNo,
           projectId,
           fromTaskApi: Boolean(record.fromTaskApi),
         })
         if (!alive) return
-        setTaskId(foundId ?? '')
+        setTaskId(foundId ?? routeTaskId ?? '')
         if (foundId) {
           try {
             const fullTask = await apiClient.get(`/tasks/${encodeURIComponent(foundId)}`)
@@ -1155,7 +1217,7 @@ export function TaskDetailsPage() {
     return () => {
       alive = false
     }
-  }, [record?.taskId, record?.id, record?.opNo, record?.fromTaskApi, projectId])
+  }, [record?.taskId, record?.id, record?.opNo, record?.fromTaskApi, projectId, routeId])
 
   useEffect(() => {
     if (!record || isCreationRoute) return
@@ -1249,6 +1311,18 @@ export function TaskDetailsPage() {
   }, [taskId, isPostSubmitStatus])
 
   useEffect(() => {
+    const prevId = record?.previousRevisionTaskId
+    if (!prevId) { setPrevRevisionSession(null); return }
+    let alive = true
+    setPrevRevisionLoading(true)
+    apiClient.get(`/tasks/${prevId}/submitted-session`)
+      .then((data) => { if (alive) setPrevRevisionSession(data ?? null) })
+      .catch(() => { if (alive) setPrevRevisionSession(null) })
+      .finally(() => { if (alive) setPrevRevisionLoading(false) })
+    return () => { alive = false }
+  }, [record?.previousRevisionTaskId])
+
+  useEffect(() => {
     let alive = true
     async function fetchSidebarHistory() {
       if (!projectId) {
@@ -1292,10 +1366,18 @@ export function TaskDetailsPage() {
     setChatterError('')
     if (!silent) setChatterLoading(true)
     try {
-      const res = queryTaskId
-        ? await listChatterPosts({ taskId: queryTaskId, limit: 200 })
-        : await listChatterPosts({ projectId, limit: 200 })
-      const posts = Array.isArray(res?.data) ? res.data : (Array.isArray(res) ? res : [])
+      let posts
+      if (queryTaskId) {
+        posts = await listChatterPostsForTask({
+          taskId: queryTaskId,
+          projectId,
+          taskOpNo: record?.opNo ?? null,
+          limit: 200,
+        })
+      } else {
+        const res = await listChatterPosts({ projectId, limit: 200 })
+        posts = Array.isArray(res?.data) ? res.data : (Array.isArray(res) ? res : [])
+      }
       const normalized = [...posts]
       setChatterPosts((prev) =>
         mergeChatterPostLists(normalized, prev, { taskId: queryTaskId, projectId }),
@@ -1306,7 +1388,7 @@ export function TaskDetailsPage() {
     } finally {
       if (!silent) setChatterLoading(false)
     }
-  }, [projectId, taskId])
+  }, [projectId, taskId, record?.opNo])
 
   useEffect(() => {
     if (activeTab !== 'chatter') return
@@ -1668,6 +1750,7 @@ export function TaskDetailsPage() {
             ) : null}
           </div>
 
+
           <div className="grid gap-2.5 lg:grid-cols-[1fr_265px]">
             <section className="rounded-lg border border-slate-200 bg-white p-2.5 shadow-sm">
               <div className="flex items-center justify-between border-b border-slate-200 pb-1.5">
@@ -1719,6 +1802,7 @@ export function TaskDetailsPage() {
                           <DetailRow label="Deadline" value={record.deadline ?? '-'} />
                           <DetailRow label="Created By (HOD)" value={taskAuditInfo.createdByHod} />
                           <DetailRow label="Reviewer HOD" value={record.reviewerHod ?? '-'} />
+                          <DetailRow label="Assigned To" value={record.assignedTo ?? 'Unassigned'} />
                         </div>
                       </div>
                       <div className="mt-2.5">
@@ -1766,6 +1850,7 @@ export function TaskDetailsPage() {
                           launchCompleteModal={launchCompleteModal}
                           onConsumedLaunchFlags={clearTimerLaunchParams}
                           onSubmitComplete={() => setTaskRefreshCounter((c) => c + 1)}
+                          onStatusChange={() => setTaskRefreshCounter((c) => c + 1)}
                         />
                       ) : null}
                       {isPostSubmitStatus && submittedSession ? (
@@ -1820,7 +1905,19 @@ export function TaskDetailsPage() {
                                   {submittedSession.files?.map((f, i) => (
                                     <li key={i} className="flex items-center gap-2 rounded-md bg-white border border-slate-200 px-2.5 py-1.5 text-xs text-slate-800">
                                       <FileText className="h-3.5 w-3.5 shrink-0 text-slate-400" />
-                                      <span className="truncate" title={f.fileName}>{f.fileName}</span>
+                                      {f.fileUrl ? (
+                                        <a
+                                          href={f.fileUrl}
+                                          target="_blank"
+                                          rel="noreferrer"
+                                          className="truncate text-blue-600 hover:underline"
+                                          title={f.fileName}
+                                        >
+                                          {f.fileName}
+                                        </a>
+                                      ) : (
+                                        <span className="truncate" title={f.fileName}>{f.fileName}</span>
+                                      )}
                                       {f.sizeBytes && (
                                         <span className="ml-auto shrink-0 text-[10px] text-slate-400">
                                           {f.sizeBytes > 1024 * 1024
@@ -1834,58 +1931,93 @@ export function TaskDetailsPage() {
                               </div>
                             )}
                           </div>
-                          {isHod && !isTerminalStatus && (
-                            <div className="mt-3 pt-3 border-t border-slate-200">
-                              <p className="text-[10px] font-semibold text-slate-400 uppercase tracking-wide mb-2">Move Status</p>
-                              <div className="flex flex-wrap gap-2">
-                                {taskStatus === 'DESIGN_COMPLETED' && (
-                                  <button
-                                    type="button"
-                                    onClick={() => handleStatusChange('HOD_REVIEW')}
-                                    className="rounded-md bg-violet-600 px-3 py-1.5 text-xs font-semibold text-white hover:bg-violet-700 transition-colors"
-                                  >
-                                    Start HOD Review
-                                  </button>
-                                )}
-                                {taskStatus === 'HOD_REVIEW' && (<>
-                                  <button type="button" onClick={() => handleStatusChange('SALES_REVIEW')} className="rounded-md bg-orange-500 px-3 py-1.5 text-xs font-semibold text-white hover:bg-orange-600 transition-colors">Send to Sales</button>
-                                  <button type="button" onClick={() => handleStatusChange('REVIEW_COMPLETED')} className="rounded-md bg-emerald-600 px-3 py-1.5 text-xs font-semibold text-white hover:bg-emerald-700 transition-colors">Complete Review</button>
-                                  <button type="button" onClick={() => { setReworkNote(''); setReworkDialogOpen(true); }} className="rounded-md bg-red-500 px-3 py-1.5 text-xs font-semibold text-white hover:bg-red-600 transition-colors">Request Rework</button>
-                                  <button type="button" onClick={() => handleStatusChange('DESIGN_COMPLETED')} className="rounded-md border border-slate-300 bg-white px-3 py-1.5 text-xs font-semibold text-slate-600 hover:bg-slate-50 transition-colors">← Back to Design Complete</button>
-                                </>)}
-                                {taskStatus === 'SALES_REVIEW' && (<>
-                                  <button type="button" onClick={() => handleStatusChange('REVIEW_COMPLETED')} className="rounded-md bg-emerald-600 px-3 py-1.5 text-xs font-semibold text-white hover:bg-emerald-700 transition-colors">Mark Completed</button>
-                                  <button type="button" onClick={() => handleStatusChange('CLIENT_REJECTED')} className="rounded-md bg-rose-600 px-3 py-1.5 text-xs font-semibold text-white hover:bg-rose-700 transition-colors">Client Rejected</button>
-                                  <button type="button" onClick={() => { setReworkNote(''); setReworkDialogOpen(true); }} className="rounded-md bg-red-500 px-3 py-1.5 text-xs font-semibold text-white hover:bg-red-600 transition-colors">Request Rework</button>
-                                  <button type="button" onClick={() => handleStatusChange('HOD_REVIEW')} className="rounded-md border border-slate-300 bg-white px-3 py-1.5 text-xs font-semibold text-slate-600 hover:bg-slate-50 transition-colors">← Back to HOD Review</button>
-                                </>)}
-                                {taskStatus === 'REWORK' && (<>
-                                  <button type="button" onClick={() => handleStatusChange('HOD_REVIEW')} className="rounded-md bg-violet-600 px-3 py-1.5 text-xs font-semibold text-white hover:bg-violet-700 transition-colors">Back to HOD Review</button>
-                                  <button type="button" onClick={() => handleStatusChange('DESIGN_COMPLETED')} className="rounded-md border border-slate-300 bg-white px-3 py-1.5 text-xs font-semibold text-slate-600 hover:bg-slate-50 transition-colors">← Back to Design Complete</button>
-                                </>)}
-                                {taskStatus === 'ON_HOLD' && (<>
-                                  <button type="button" onClick={() => handleStatusChange('HOD_REVIEW')} className="rounded-md bg-violet-600 px-3 py-1.5 text-xs font-semibold text-white hover:bg-violet-700 transition-colors">Resume — HOD Review</button>
-                                  <button type="button" onClick={() => handleStatusChange('DESIGN_COMPLETED')} className="rounded-md bg-blue-600 px-3 py-1.5 text-xs font-semibold text-white hover:bg-blue-700 transition-colors">Return to Design Complete</button>
-                                  <button type="button" onClick={() => handleStatusChange('REWORK')} className="rounded-md bg-red-500 px-3 py-1.5 text-xs font-semibold text-white hover:bg-red-600 transition-colors">Request Rework</button>
-                                </>)}
-                                {taskStatus !== 'ON_HOLD' && (
-                                  <button type="button" onClick={() => handleStatusChange('ON_HOLD')} className="rounded-md border border-slate-300 bg-white px-3 py-1.5 text-xs font-semibold text-slate-600 hover:bg-slate-50 transition-colors">Put On Hold</button>
-                                )}
-                              </div>
-                            </div>
-                          )}
                         </div>
                       ) : null}
+                      {/* HOD action panel — any active stage except SALES_REVIEW (which belongs to salesperson) */}
+                      {isHod && !isTerminalStatus &&
+                        taskStatus !== 'SALES_REVIEW' &&
+                        !(taskStatus === 'ON_HOLD' && record?.holdPreviousStatus === 'SALES_REVIEW')
+                      && (
+                        <div className="mt-4 pt-3 border-t border-slate-200">
+                          <p className="text-[10px] font-semibold text-slate-400 uppercase tracking-wide mb-2">Move Status</p>
+                          <div className="flex flex-wrap gap-2">
+                            {taskStatus === 'DESIGN_COMPLETED' && (
+                              <button
+                                type="button"
+                                onClick={() => handleStatusChange('HOD_REVIEW')}
+                                className="rounded-md bg-violet-600 px-3 py-1.5 text-xs font-semibold text-white hover:bg-violet-700 transition-colors"
+                              >
+                                Start HOD Review
+                              </button>
+                            )}
+                            {taskStatus === 'HOD_REVIEW' && (<>
+                              <button type="button" onClick={() => handleStatusChange('SALES_REVIEW')} className="rounded-md bg-orange-500 px-3 py-1.5 text-xs font-semibold text-white hover:bg-orange-600 transition-colors">Send to Sales</button>
+                            </>)}
+                            {taskStatus === 'ON_HOLD' && (
+                              <button type="button" onClick={() => handleStatusChange(record?.holdPreviousStatus || 'HOD_REVIEW')} className="rounded-md bg-violet-600 px-3 py-1.5 text-xs font-semibold text-white hover:bg-violet-700 transition-colors">Resume</button>
+                            )}
+                            {taskStatus !== 'ON_HOLD' && (
+                              <button type="button" onClick={() => handleStatusChange('ON_HOLD')} className="rounded-md border border-slate-300 bg-white px-3 py-1.5 text-xs font-semibold text-slate-600 hover:bg-slate-50 transition-colors">Put On Hold</button>
+                            )}
+                          </div>
+                        </div>
+                      )}
+                      {/* Salesperson action panel — SALES_REVIEW, CLIENT_REJECTED, and ON_HOLD parked from SALES_REVIEW */}
+                      {isSales && (
+                        taskStatus === 'SALES_REVIEW' ||
+                        taskStatus === 'CLIENT_REJECTED' ||
+                        (taskStatus === 'ON_HOLD' && record?.holdPreviousStatus === 'SALES_REVIEW')
+                      ) && (
+                        <div className="mt-4 pt-3 border-t border-slate-200">
+                          <p className="text-[10px] font-semibold text-slate-400 uppercase tracking-wide mb-2">Sales Review Actions</p>
+                          <div className="flex flex-wrap gap-2">
+                            {taskStatus === 'SALES_REVIEW' && (<>
+                              <button type="button" onClick={() => handleStatusChange('CLIENT_ACCEPTED')} className="rounded-md bg-emerald-600 px-3 py-1.5 text-xs font-semibold text-white hover:bg-emerald-700 transition-colors">Client Accepted</button>
+                              <button type="button" onClick={() => handleStatusChange('CLIENT_REJECTED')} className="rounded-md bg-rose-600 px-3 py-1.5 text-xs font-semibold text-white hover:bg-rose-700 transition-colors">Client Rejected</button>
+                              <button type="button" onClick={() => { setReworkNote(''); setReworkFile(null); setReworkLink({ url: '', name: '' }); setReworkRefMode('file'); setReworkDialogOpen(true); }} className="rounded-md bg-red-500 px-3 py-1.5 text-xs font-semibold text-white hover:bg-red-600 transition-colors">Request Rework</button>
+                              <button type="button" onClick={() => handleStatusChange('ON_HOLD')} className="rounded-md border border-slate-300 bg-white px-3 py-1.5 text-xs font-semibold text-slate-600 hover:bg-slate-50 transition-colors">Put On Hold</button>
+                            </>)}
+                            {taskStatus === 'CLIENT_REJECTED' && (
+                              <button type="button" onClick={() => { setReworkNote(''); setReworkFile(null); setReworkLink({ url: '', name: '' }); setReworkRefMode('file'); setReworkDialogOpen(true); }} className="rounded-md bg-red-500 px-3 py-1.5 text-xs font-semibold text-white hover:bg-red-600 transition-colors">Issue Rework</button>
+                            )}
+                            {taskStatus === 'ON_HOLD' && (
+                              <button type="button" onClick={() => handleStatusChange(record?.holdPreviousStatus || 'SALES_REVIEW')} className="rounded-md bg-orange-500 px-3 py-1.5 text-xs font-semibold text-white hover:bg-orange-600 transition-colors">Resume</button>
+                            )}
+                          </div>
+                        </div>
+                      )}
+                      {/* Designer action panel — resubmit from REWORK back to HOD */}
+                      {isDesigner && taskStatus === 'REWORK' && (
+                        <div className="mt-4 pt-3 border-t border-slate-200">
+                          <p className="text-[10px] font-semibold text-slate-400 uppercase tracking-wide mb-2">Rework Actions</p>
+                          <div className="flex flex-wrap gap-2">
+                            <button type="button" onClick={() => handleStatusChange('HOD_REVIEW')} className="rounded-md bg-violet-600 px-3 py-1.5 text-xs font-semibold text-white hover:bg-violet-700 transition-colors">Submit for HOD Review</button>
+                          </div>
+                        </div>
+                      )}
                       {(record?.projectDetails?.length ?? 0) > 0 && (
                         <div className="mt-4 border-t border-slate-200 pt-3">
                           <p className="mb-2 text-xs font-semibold text-slate-700">Work Scope</p>
                           <div className="space-y-2">
-                            {record.projectDetails.map((detail, idx) => (
-                              <div key={detail.id ?? idx} className="rounded-lg border border-slate-200 bg-white p-3">
-                                {(detail.signType || detail.planCode || detail.deadline) && (
-                                  <div className="mb-3 flex flex-wrap gap-x-5 gap-y-1 text-xs">
-                                    {detail.signType && (
-                                      <span className="text-slate-500">Sign Type: <span className="font-semibold text-slate-800">{detail.signType}</span></span>
+                            {record.projectDetails.map((detail, idx) => {
+                              const DISC_HOURS = [
+                                { key: 'artwork',   label: 'Artwork',   hours: detail.artworkHours },
+                                { key: 'technical', label: 'Technical', hours: detail.technicalHours },
+                                { key: 'location',  label: 'Location',  hours: detail.locationHours },
+                                { key: 'asBuilt',   label: 'As-Built',  hours: detail.asBuiltHours },
+                                { key: 'bim',       label: 'BIM',       hours: null },
+                              ]
+                              const activeDiscipline =
+                                DISC_HOURS.find(d => d.label === record.disciplineType) ??
+                                DISC_HOURS.find(d => detail[d.key])
+                              return (
+                                <div key={detail.id ?? idx} className="rounded-lg border border-slate-200 bg-white p-3">
+                                  <div className="flex flex-wrap items-center gap-x-5 gap-y-1 text-xs">
+                                    {(detail.signType || record.signType) && (
+                                      <span className="text-slate-500">Sign Type: <span className="font-semibold text-slate-800">{detail.signType || record.signType}</span></span>
+                                    )}
+                                    {record.signFamily && (
+                                      <span className="text-slate-500">Sign Family: <span className="font-semibold text-slate-800">{record.signFamily}</span></span>
                                     )}
                                     {detail.planCode && (
                                       <span className="text-slate-500">Plan Code: <span className="font-semibold text-slate-800">{detail.planCode}</span></span>
@@ -1894,32 +2026,17 @@ export function TaskDetailsPage() {
                                       <span className="text-slate-500">Deadline: <span className="font-semibold text-slate-800">{new Date(detail.deadline).toLocaleDateString('en-GB')}</span></span>
                                     )}
                                   </div>
-                                )}
-                                <div className="grid grid-cols-2 gap-2 sm:grid-cols-3">
-                                  {[
-                                    { flag: detail.artwork,   hours: detail.artworkHours,   label: 'Artwork' },
-                                    { flag: detail.technical, hours: detail.technicalHours, label: 'Technical' },
-                                    { flag: detail.location,  hours: detail.locationHours,  label: 'Location' },
-                                    { flag: detail.asBuilt,   hours: detail.asBuiltHours,   label: 'As-Built' },
-                                    { flag: detail.bim,       hours: null,                  label: 'BIM' },
-                                  ].map(({ flag, hours, label }) => (
-                                    <div
-                                      key={label}
-                                      className={`flex items-center gap-2 rounded-md px-2.5 py-1.5 text-xs ${flag ? 'bg-emerald-50 text-emerald-800' : 'bg-slate-50 text-slate-400'}`}
-                                    >
-                                      {flag
-                                        ? <CheckCircle2 className="h-3.5 w-3.5 shrink-0 text-emerald-500" />
-                                        : <div className="h-3.5 w-3.5 shrink-0 rounded-full border border-slate-300" />
-                                      }
-                                      <span className="font-medium">{label}</span>
-                                      {flag && hours != null && (
-                                        <span className="ml-auto text-[11px] text-emerald-600">{hours}h</span>
+                                  {activeDiscipline && (
+                                    <div className="mt-2 flex items-center gap-2">
+                                      <DisciplinePill type={activeDiscipline.label} />
+                                      {activeDiscipline.hours != null && activeDiscipline.hours > 0 && (
+                                        <span className="text-xs text-slate-500">{activeDiscipline.hours}h estimated</span>
                                       )}
                                     </div>
-                                  ))}
+                                  )}
                                 </div>
-                              </div>
-                            ))}
+                              )
+                            })}
                           </div>
                         </div>
                       )}
@@ -1990,18 +2107,11 @@ export function TaskDetailsPage() {
                     <div className="mt-3 border-t border-slate-200 pt-3">
                       <div className="grid gap-2.5 sm:grid-cols-2">
                         <DatePickerField
-                          id="retail-issued"
-                          label="Date of Issued"
-                          selected={dateIssued}
-                          onChange={setDateIssued}
-                          minDate={today}
-                        />
-                        <DatePickerField
                           id="retail-submission"
                           label="Date of Submission"
                           selected={dateSubmission}
                           onChange={setDateSubmission}
-                          minDate={dateIssued && dateIssued > tomorrow ? dateIssued : tomorrow}
+                          minDate={today}
                         />
                       </div>
                       <div className="mt-2.5 flex justify-end">
@@ -2017,13 +2127,12 @@ export function TaskDetailsPage() {
                   ) : (
                     <div className="mt-3 border-t border-slate-200 pt-3">
                       <div className="grid gap-2.5 sm:grid-cols-2">
-                        <DatePickerField id="project-issued" label="Date of Issued" selected={dateIssued} onChange={setDateIssued} minDate={today} />
                         <DatePickerField
                           id="project-submission"
                           label="Date of Submission"
                           selected={dateSubmission}
                           onChange={setDateSubmission}
-                          minDate={dateIssued && dateIssued > tomorrow ? dateIssued : tomorrow}
+                          minDate={today}
                         />
                       </div>
                       <ProjectDetailsTable opNo={record?.opNo} />
@@ -2193,7 +2302,11 @@ export function TaskDetailsPage() {
     </div>
     <p className="shrink-0 text-[10px] text-slate-500">{formatChatterDateTime(entry.createdAt)}</p>
   </div>
-  <ChatterMentionText message={entry.message} users={chatterMentionDirectory} className="mt-1 block" />
+  <ChatterMentionText
+    message={entry.message}
+    users={resolveMentionUsersForDisplay(entry.message, entry.mentionedUsers, chatterMentionDirectory)}
+    className="mt-1 block"
+  />
   <div className="mt-2 space-y-1">
     {(entry.comments ?? []).map((comment) => (
       <div
@@ -2207,7 +2320,11 @@ export function TaskDetailsPage() {
           </p>
           <p className="shrink-0 text-[10px] text-slate-500">{formatChatterDateTime(comment.createdAt)}</p>
         </div>
-        <ChatterMentionText message={comment.message} users={chatterMentionDirectory} className="mt-1 block" />
+        <ChatterMentionText
+          message={comment.message}
+          users={resolveMentionUsersForDisplay(comment.message, comment.mentionedUsers, chatterMentionDirectory)}
+          className="mt-1 block"
+        />
       </div>
     ))}
   </div>
@@ -2222,6 +2339,103 @@ export function TaskDetailsPage() {
                           />
                         </article>
                       ))
+                    )}
+                  </div>
+                </div>
+              ) : null}
+
+              {activeTab === 'rework' ? (
+                <div className="mt-3 space-y-4">
+                  <div>
+                    <div className="flex items-center gap-1.5 mb-1.5">
+                      <Flag className="h-3.5 w-3.5 text-slate-400" />
+                      <p className="text-[11px] font-semibold uppercase tracking-wide text-slate-800">Sales Instructions</p>
+                    </div>
+                    {record?.reworkNote ? (
+                      <p className="whitespace-pre-wrap rounded-lg border border-slate-200 bg-slate-50 px-3 py-2.5 text-sm text-slate-800">{record.reworkNote}</p>
+                    ) : (
+                      <p className="text-sm text-slate-500 italic">No written instructions were provided.</p>
+                    )}
+                    {record?.reworkAttachmentUrl && (
+                      <a
+                        href={record.reworkAttachmentUrl}
+                        target="_blank"
+                        rel="noopener noreferrer"
+                        className="mt-2 flex items-center gap-2.5 rounded-lg border border-slate-200 bg-white px-3 py-2.5 text-sm text-blue-700 hover:bg-slate-50 hover:underline"
+                      >
+                        <FileText className="h-4 w-4 shrink-0 text-slate-400" />
+                        <span className="truncate font-medium">{record.reworkAttachmentName || 'Reference File'}</span>
+                      </a>
+                    )}
+                    {record?.reworkLinkUrl && (
+                      <a
+                        href={record.reworkLinkUrl}
+                        target="_blank"
+                        rel="noopener noreferrer"
+                        className="mt-2 flex items-center gap-2.5 rounded-lg border border-slate-200 bg-white px-3 py-2.5 text-sm text-blue-700 hover:bg-slate-50 hover:underline"
+                      >
+                        <FileText className="h-4 w-4 shrink-0 text-slate-400" />
+                        <span className="truncate font-medium">{record.reworkLinkName || record.reworkLinkUrl}</span>
+                      </a>
+                    )}
+                  </div>
+
+                  {!record?.reworkNote && !record?.reworkAttachmentUrl && !record?.reworkLinkUrl && (
+                    <div className="rounded-lg border border-dashed border-slate-300 bg-slate-50 px-4 py-8 text-center text-sm text-slate-500">
+                      No rework instructions were attached to this revision.
+                    </div>
+                  )}
+
+                  {/* Previous Submission */}
+                  <div className="mt-2 pt-5 border-t border-slate-200">
+                    <div className="flex items-center gap-1.5 mb-3">
+                      <Clock3 className="h-3.5 w-3.5 text-slate-400" />
+                      <p className="text-[11px] font-semibold uppercase tracking-wide text-slate-800">Previous Submission</p>
+                    </div>
+                    {prevRevisionLoading ? (
+                      <p className="text-sm text-slate-400 italic">Loading…</p>
+                    ) : prevRevisionSession ? (
+                      <div className="rounded-lg border border-slate-200 bg-slate-50 divide-y divide-slate-200">
+                        <div className="flex flex-wrap gap-x-6 gap-y-1 px-3 py-2.5 text-xs text-slate-600">
+                          {prevRevisionSession.submittedBy && (
+                            <span><span className="font-semibold text-slate-500">Submitted by: </span>{prevRevisionSession.submittedBy}</span>
+                          )}
+                          {prevRevisionSession.submittedAt && (
+                            <span><span className="font-semibold text-slate-500">Date: </span>{new Date(prevRevisionSession.submittedAt).toLocaleString('en-GB', { day: '2-digit', month: 'short', year: 'numeric', hour: '2-digit', minute: '2-digit' })}</span>
+                          )}
+                          {prevRevisionSession.durationSeconds > 0 && (
+                            <span><span className="font-semibold text-slate-500">Duration: </span>{Math.floor(prevRevisionSession.durationSeconds / 3600)}h {Math.floor((prevRevisionSession.durationSeconds % 3600) / 60)}m</span>
+                          )}
+                        </div>
+                        {prevRevisionSession.files?.length > 0 && (
+                          <div className="px-3 py-2.5 space-y-1.5">
+                            <p className="text-[11px] font-semibold text-slate-400 uppercase tracking-wide mb-1">Files</p>
+                            {prevRevisionSession.files.map((f, i) => (
+                              <a key={i} href={f.fileUrl} target="_blank" rel="noopener noreferrer"
+                                className="flex items-center gap-2 rounded-md border border-slate-200 bg-white px-2.5 py-2 text-sm text-blue-700 hover:bg-slate-50 hover:underline">
+                                <FileText className="h-4 w-4 shrink-0 text-slate-400" />
+                                <span className="truncate font-medium">{f.fileName}</span>
+                                {f.sizeBytes && <span className="ml-auto shrink-0 text-xs text-slate-400">{(Number(f.sizeBytes) / 1024).toFixed(1)} KB</span>}
+                              </a>
+                            ))}
+                          </div>
+                        )}
+                        {prevRevisionSession.submissionLink && (
+                          <div className="px-3 py-2.5">
+                            <p className="text-[11px] font-semibold text-slate-400 uppercase tracking-wide mb-1">Submitted Docs</p>
+                            <a href={prevRevisionSession.submissionLink} target="_blank" rel="noopener noreferrer"
+                              className="flex items-center gap-2 rounded-md border border-slate-200 bg-white px-2.5 py-2 text-sm text-blue-700 hover:bg-slate-50 hover:underline">
+                              <FileText className="h-4 w-4 shrink-0 text-slate-400" />
+                              <span className="truncate">{prevRevisionSession.submissionLink}</span>
+                            </a>
+                          </div>
+                        )}
+                        {!prevRevisionSession.files?.length && !prevRevisionSession.submissionLink && (
+                          <div className="px-3 py-2.5 text-sm text-slate-500 italic">No files or links were submitted.</div>
+                        )}
+                      </div>
+                    ) : (
+                      <p className="text-sm text-slate-400 italic">No submission found for the previous revision.</p>
                     )}
                   </div>
                 </div>
@@ -2329,20 +2543,97 @@ export function TaskDetailsPage() {
 
       {reworkDialogOpen && (
         <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/40 p-4">
-          <div className="bg-white rounded-xl shadow-xl w-full max-w-md flex flex-col gap-4 p-6">
+          <div className="bg-white rounded-xl shadow-xl w-full max-w-lg flex flex-col gap-4 p-6">
             <div>
-              <h2 className="text-sm font-bold text-slate-900">Request Rework</h2>
-              <p className="mt-1 text-xs text-slate-500">Describe what needs to be corrected. This note will be sent to the designer as a notification and saved in the task chatter.</p>
+              <h2 className="text-sm font-bold text-slate-900">Issue Rework</h2>
+              <p className="mt-1 text-xs text-slate-500">A new revision task will be created with these instructions. The original task stays in its current status.</p>
             </div>
-            <textarea
-              className="w-full rounded-md border border-slate-300 p-2.5 text-xs text-slate-800 resize-none focus:outline-none focus:ring-2 focus:ring-red-400"
-              rows={5}
-              placeholder="e.g. Please revise the sign dimensions on sheet 3 and update the colour palette to match the revised brief..."
-              value={reworkNote}
-              onChange={(e) => setReworkNote(e.target.value)}
-              autoFocus
-            />
-            <div className="flex justify-end gap-2">
+            <div className="flex flex-col gap-1">
+              <label className="text-xs font-semibold text-slate-700">Rework Instructions <span className="text-red-500">*</span></label>
+              <textarea
+                className="w-full rounded-md border border-slate-300 p-2.5 text-xs text-slate-800 resize-none focus:outline-none focus:ring-2 focus:ring-red-400"
+                rows={4}
+                placeholder="e.g. Please revise the sign dimensions on sheet 3 and update the colour palette to match the revised brief..."
+                value={reworkNote}
+                onChange={(e) => setReworkNote(e.target.value)}
+                autoFocus
+              />
+            </div>
+            {/* Reference — toggled */}
+            <div className="flex flex-col gap-2">
+              <div className="flex items-center justify-between">
+                <label className="text-xs font-semibold text-slate-700">Reference <span className="text-slate-400 font-normal">(optional)</span></label>
+                <div className="inline-flex rounded-md border border-blue-500 bg-blue-50 p-0.5 text-xs">
+                  <button
+                    type="button"
+                    onClick={() => { setReworkRefMode('file'); setReworkLink({ url: '', name: '' }) }}
+                    className={`rounded px-2.5 py-1 font-semibold transition-colors ${reworkRefMode === 'file' ? 'bg-blue-600 text-white shadow-sm' : 'text-slate-500 hover:text-slate-700'}`}
+                  >
+                    Select File
+                  </button>
+                  <button
+                    type="button"
+                    onClick={() => { setReworkRefMode('link'); setReworkFile(null) }}
+                    className={`rounded px-2.5 py-1 font-semibold transition-colors ${reworkRefMode === 'link' ? 'bg-blue-600 text-white shadow-sm' : 'text-slate-500 hover:text-slate-700'}`}
+                  >
+                    Add Link
+                  </button>
+                </div>
+              </div>
+
+              {reworkRefMode === 'file' ? (
+                reworkFile ? (
+                  <div className="flex items-center gap-2 rounded-md border border-slate-200 bg-slate-50 px-3 py-2">
+                    <FileText size={13} className="text-slate-500 shrink-0" />
+                    <span className="text-xs text-slate-700 flex-1 truncate">{reworkFile.name}</span>
+                    <button type="button" onClick={() => setReworkFile(null)} className="text-slate-400 hover:text-red-500 text-xs transition-colors">✕</button>
+                  </div>
+                ) : (
+                  <label className={`flex items-center gap-2 rounded-md border border-dashed border-slate-300 px-3 py-2.5 cursor-pointer hover:bg-slate-50 transition-colors ${reworkFileUploading ? 'opacity-50 pointer-events-none' : ''}`}>
+                    <Upload size={13} className="text-slate-400 shrink-0" />
+                    <span className="text-xs text-slate-500">{reworkFileUploading ? 'Uploading…' : 'Click to attach a file'}</span>
+                    <input
+                      type="file"
+                      className="hidden"
+                      onChange={async (e) => {
+                        const file = e.target.files?.[0]
+                        if (!file) return
+                        setReworkFileUploading(true)
+                        try {
+                          const form = new FormData()
+                          form.append('file', file)
+                          const res = await apiClient.post('/tasks/upload-file', form)
+                          setReworkFile({ url: res.fileUrl, name: res.fileName })
+                        } catch {
+                          toast.error('File upload failed')
+                        } finally {
+                          setReworkFileUploading(false)
+                          e.target.value = ''
+                        }
+                      }}
+                    />
+                  </label>
+                )
+              ) : (
+                <div className="flex gap-2">
+                  <input
+                    type="url"
+                    className="flex-1 rounded-md border border-slate-300 px-2.5 py-1.5 text-xs text-slate-800 focus:outline-none focus:ring-2 focus:ring-red-400"
+                    placeholder="https://…"
+                    value={reworkLink.url}
+                    onChange={(e) => setReworkLink((l) => ({ ...l, url: e.target.value }))}
+                  />
+                  <input
+                    type="text"
+                    className="w-32 rounded-md border border-slate-300 px-2.5 py-1.5 text-xs text-slate-800 focus:outline-none focus:ring-2 focus:ring-red-400"
+                    placeholder="Label"
+                    value={reworkLink.name}
+                    onChange={(e) => setReworkLink((l) => ({ ...l, name: e.target.value }))}
+                  />
+                </div>
+              )}
+            </div>
+            <div className="flex justify-end gap-2 pt-1">
               <button
                 type="button"
                 onClick={() => setReworkDialogOpen(false)}
@@ -2352,16 +2643,16 @@ export function TaskDetailsPage() {
               </button>
               <button
                 type="button"
-                disabled={!reworkNote.trim() || reworkSubmitting}
+                disabled={!reworkNote.trim() || reworkSubmitting || reworkFileUploading}
                 onClick={async () => {
                   setReworkSubmitting(true)
-                  await handleStatusChange('REWORK', reworkNote.trim())
+                  await handleStatusChange('REWORK', reworkNote.trim(), reworkFile, reworkLink.url ? reworkLink : null)
                   setReworkDialogOpen(false)
                   setReworkSubmitting(false)
                 }}
                 className="rounded-md bg-red-500 px-4 py-1.5 text-xs font-semibold text-white hover:bg-red-600 disabled:opacity-50 transition-colors"
               >
-                {reworkSubmitting ? 'Sending…' : 'Send for Rework'}
+                {reworkSubmitting ? 'Creating revision…' : 'Issue Rework'}
               </button>
             </div>
           </div>

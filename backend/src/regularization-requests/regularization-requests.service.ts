@@ -538,6 +538,9 @@ export class RegularizationRequestsService implements RegularizationRequestsCont
           designerId: dto.designerId,
           departmentId: designer.departmentId ?? null,
           designerName: designer.fullName,
+          requesterName: designer.fullName,
+          recipientName: hodOnBehalf ? designer.fullName : hods[0]?.fullName ?? 'HOD',
+          approverName: hodOnBehalf ? undefined : hods[0]?.fullName ?? undefined,
           submitterId,
           submitterRole: role,
         },
@@ -622,7 +625,14 @@ export class RegularizationRequestsService implements RegularizationRequestsCont
         taskSnapshot: reviewTask
           ? { id: reviewTask.id, taskNo: reviewTask.taskNo, title: reviewTask.title ?? undefined }
           : undefined,
-        context: { designerId: updated.designerId, designerName: updated.designerName },
+        context: {
+          designerId: updated.designerId,
+          designerName: updated.designerName,
+          requesterName: updated.designerName,
+          recipientName: updated.approverName ?? 'HOD',
+          approverName: updated.approverName ?? undefined,
+          reviewerName: updated.approverName ?? undefined,
+        },
       },
     });
 

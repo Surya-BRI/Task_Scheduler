@@ -53,7 +53,7 @@ export class TasksController {
   }
 
   @Post('upload-file')
-  @Roles(UserRole.HOD)
+  @Roles(UserRole.HOD, UserRole.SALESPERSON)
   @UseInterceptors(
     FileInterceptor('file', {
       storage: memoryStorage(),
@@ -69,7 +69,7 @@ export class TasksController {
    *   ?projectId=&status=&priority=&assigneeId=&search=&page=1&limit=20
    */
   @Get()
-  @Roles(UserRole.HOD, UserRole.DESIGNER)
+  @Roles(UserRole.HOD, UserRole.DESIGNER, UserRole.SALESPERSON)
   findAll(
     @CurrentUser() user: JwtPayload,
     @Query('projectId') projectId?: string,
@@ -111,7 +111,7 @@ export class TasksController {
 
   /** GET /tasks/:id */
   @Get(':id')
-  @Roles(UserRole.HOD, UserRole.DESIGNER)
+  @Roles(UserRole.HOD, UserRole.DESIGNER, UserRole.SALESPERSON)
   findOne(@Param('id') id: string) {
     return this.tasksService.findOne(id);
   }
@@ -132,7 +132,7 @@ export class TasksController {
 
   /** PATCH /tasks/:id/status — all authenticated roles */
   @Patch(':id/status')
-  @Roles(UserRole.HOD, UserRole.DESIGNER)
+  @Roles(UserRole.HOD, UserRole.DESIGNER, UserRole.SALESPERSON)
   updateStatus(
     @Param('id') id: string,
     @CurrentUser() user: JwtPayload,
@@ -143,7 +143,7 @@ export class TasksController {
 
   /** GET /tasks/:id/sign-rows */
   @Get(':id/sign-rows')
-  @Roles(UserRole.HOD, UserRole.DESIGNER)
+  @Roles(UserRole.HOD, UserRole.DESIGNER, UserRole.SALESPERSON)
   getSignRows(@Param('id') id: string) {
     return this.tasksService.getSignRows(id);
   }
@@ -157,7 +157,7 @@ export class TasksController {
 
   /** GET /tasks/:id/submitted-session — fetch the most recent submitted work session */
   @Get(':id/submitted-session')
-  @Roles(UserRole.HOD, UserRole.DESIGNER)
+  @Roles(UserRole.HOD, UserRole.DESIGNER, UserRole.SALESPERSON)
   getSubmittedSession(@Param('id') id: string) {
     return this.tasksService.getSubmittedSession(id);
   }

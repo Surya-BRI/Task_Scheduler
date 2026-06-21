@@ -21,13 +21,16 @@ const ACTION_BADGE = {
   SCHEDULER_WEEK_LOCKED:          { label: "Schedule Locked",        color: "bg-orange-100 text-orange-700" },
   SCHEDULER_WEEK_UNLOCKED:        { label: "Schedule Unlocked",      color: "bg-orange-100 text-orange-700" },
   LEAVE_REQUEST_SUBMITTED:        { label: "Leave Request",          color: "bg-indigo-100 text-indigo-700" },
+  LEAVE_AUTO_APPROVED:            { label: "Leave Accepted",         color: "bg-emerald-100 text-emerald-700" },
   LEAVE_REQUEST_STATUS_CHANGED:   { label: "Leave Updated",          color: "bg-indigo-100 text-indigo-700" },
   LEAVE_REQUEST_REVOKED:          { label: "Leave Revoked",          color: "bg-orange-100 text-orange-700" },
   REGULARIZATION_SUBMITTED:       { label: "Regularization",         color: "bg-purple-100 text-purple-700" },
+  REGULARIZATION_AUTO_APPROVED:   { label: "Regularization Accepted", color: "bg-emerald-100 text-emerald-700" },
   REGULARIZATION_APPROVED:        { label: "Regularization Updated", color: "bg-purple-100 text-purple-700" },
   REGULARIZATION_REJECTED:        { label: "Regularization Updated", color: "bg-purple-100 text-purple-700" },
   REGULARIZATION_STATUS_CHANGED:  { label: "Regularization Updated", color: "bg-purple-100 text-purple-700" },
   OVERTIME_REQUEST_SUBMITTED:     { label: "Overtime Submitted",     color: "bg-rose-100 text-rose-700" },
+  OVERTIME_AUTO_APPROVED:         { label: "Overtime Accepted",      color: "bg-emerald-100 text-emerald-700" },
   OVERTIME_REQUEST_UPDATED:       { label: "Overtime Updated",       color: "bg-rose-100 text-rose-700" },
   OVERTIME_REQUEST_APPROVED:      { label: "Overtime Approved",      color: "bg-emerald-100 text-emerald-700" },
   OVERTIME_REQUEST_REJECTED:      { label: "Overtime Rejected",      color: "bg-red-100 text-red-700" },
@@ -58,6 +61,42 @@ function MessageBody({ segments }) {
   );
 }
 
+function formatTimestamp(value) {
+  const date = new Date(value);
+  if (Number.isNaN(date.getTime())) return null;
+  return date.toLocaleString("en-GB", {
+    day: "2-digit",
+    month: "short",
+    year: "numeric",
+    hour: "2-digit",
+    minute: "2-digit",
+  });
+}
+
+function MilestoneDetails({ item }) {
+  if (item.kind !== "project_milestone") return null;
+
+  const details = [
+    item.taskName || item.taskNo ? { label: "Task", value: item.taskName || item.taskNo } : null,
+    item.projectName || item.project ? { label: "Project", value: item.projectName || item.project } : null,
+    item.statusLabel || item.status ? { label: "Status", value: item.statusLabel || item.status } : null,
+    { label: "At", value: formatTimestamp(item.occurredAt) },
+  ].filter((detail) => detail?.value);
+
+  if (details.length === 0) return null;
+
+  return (
+    <dl className="mt-2 flex flex-wrap gap-x-3 gap-y-1 rounded-lg border border-slate-100 bg-slate-50/70 px-3 py-2 text-xs text-slate-600">
+      {details.map((detail) => (
+        <div key={detail.label} className="flex min-w-0 items-center gap-1.5">
+          <dt className="font-medium text-slate-500">{detail.label}:</dt>
+          <dd className="truncate font-semibold text-slate-700">{detail.value}</dd>
+        </div>
+      ))}
+    </dl>
+  );
+}
+
 export function ActivityFeedItem(props) {
   const { item, nowMs, liked, onToggleLike } = props;
 
@@ -82,6 +121,7 @@ export function ActivityFeedItem(props) {
           </span>
         )}
         <MessageBody segments={item.messageSegments} />
+        <MilestoneDetails item={item} />
         <p className="mt-1.5 text-xs leading-normal text-slate-500">{ts}</p>
       </div>
       <div className="flex shrink-0 items-start gap-0.5">

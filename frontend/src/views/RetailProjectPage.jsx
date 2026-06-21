@@ -14,13 +14,14 @@ import {
   createChatterPost,
   listChatterMentionUsers,
   listChatterPosts,
+  listChatterPostsForTask,
   normalizePriority,
   resolveEmbeddedChatterTitle,
 } from '@/features/chatter/services/chatter-posts.api'
 import { MentionTextarea } from '@/features/chatter/components/MentionTextarea'
 import { EmbeddedChatterCommentComposer } from '@/features/chatter/components/EmbeddedChatterCommentComposer'
 import { ChatterMentionText } from '@/features/chatter/components/ChatterMentionText'
-import { parseMentionUserIdsFromMessage } from '@/features/chatter/utils/mention-utils'
+import { parseMentionUserIdsFromMessage, resolveMentionUsersForDisplay } from '@/features/chatter/utils/mention-utils'
 import {
   resolveChatterMentionScope,
   resolvePageChatterMentionScope,
@@ -163,9 +164,9 @@ function FilesPanel({ projectId, files, uploading, onPick, onAddLink, onDelete }
   return (
     <section className="rounded-lg border border-slate-200 bg-white p-3 shadow-sm">
       <h2 className="text-sm font-semibold text-slate-900">Project Files</h2>
-      <div className="mt-2 inline-flex rounded-md border border-slate-300 bg-slate-50 p-1 text-xs">
-        <button type="button" onClick={() => setMode('link')} className={`rounded px-2 py-1 font-semibold ${mode === 'link' ? 'bg-white text-slate-900' : 'text-slate-600'}`}>Paste Link</button>
-        <button type="button" onClick={() => setMode('browse')} className={`rounded px-2 py-1 font-semibold ${mode === 'browse' ? 'bg-white text-slate-900' : 'text-slate-600'}`}>Browse Files</button>
+      <div className="mt-2 inline-flex rounded-md border border-blue-500 bg-blue-50 p-1 text-xs">
+        <button type="button" onClick={() => setMode('link')} className={`rounded px-2 py-1 font-semibold transition-colors ${mode === 'link' ? 'bg-blue-600 text-white shadow-sm' : 'text-slate-600 hover:text-slate-900'}`}>Paste Link</button>
+        <button type="button" onClick={() => setMode('browse')} className={`rounded px-2 py-1 font-semibold transition-colors ${mode === 'browse' ? 'bg-blue-600 text-white shadow-sm' : 'text-slate-600 hover:text-slate-900'}`}>Browse Files</button>
       </div>
       {mode === 'link' ? (
         <div className="mt-2 space-y-2">
@@ -331,7 +332,7 @@ function getTaskStatusBadgeClass(normalizedStatus) {
   switch (normalizedStatus) {
     case 'IN_PROGRESS':      return 'bg-blue-100 text-blue-700'
     case 'DESIGN_COMPLETED': return 'bg-emerald-100 text-emerald-700'
-    case 'REVIEW_COMPLETED': return 'bg-emerald-100 text-emerald-700'
+    case 'CLIENT_ACCEPTED':  return 'bg-emerald-100 text-emerald-700'
     case 'HOD_REVIEW':       return 'bg-violet-100 text-violet-700'
     case 'SALES_REVIEW':     return 'bg-indigo-100 text-indigo-700'
     case 'REWORK':           return 'bg-red-100 text-red-700'
@@ -382,7 +383,12 @@ function ProjectTaskList({ tasks, loading, onView }) {
                       {getStatusLabel(task.status)}
                     </span>
                   </span>
-                  <span className="truncate">{task.assignee?.fullName || 'Unassigned'}</span>
+                  <span className="truncate">
+                    {task.assignee?.fullName ||
+                      (task.taskDesigners?.length > 0
+                        ? task.taskDesigners.map(d => d.designer.fullName).join(', ')
+                        : 'Unassigned')}
+                  </span>
                   <span className="text-slate-500">{task.dueDate ? new Date(task.dueDate).toLocaleDateString('en-GB') : '—'}</span>
                   <button
                     type="button"
@@ -651,10 +657,18 @@ export function RetailProjectPage() {
     if (!silent) setChatterLoading(true)
     setChatterError('')
     try {
-      const res = queryTaskId
-        ? await listChatterPosts({ taskId: queryTaskId, limit: 200 })
-        : await listChatterPosts({ projectId, limit: 200 })
-      const posts = Array.isArray(res?.data) ? res.data : (Array.isArray(res) ? res : [])
+      let posts
+      if (queryTaskId) {
+        posts = await listChatterPostsForTask({
+          taskId: queryTaskId,
+          projectId,
+          taskOpNo: m?.opNo ?? null,
+          limit: 200,
+        })
+      } else {
+        const res = await listChatterPosts({ projectId, limit: 200 })
+        posts = Array.isArray(res?.data) ? res.data : (Array.isArray(res) ? res : [])
+      }
       const normalized = [...posts]
       setChatterPosts((prev) =>
         mergeChatterPostLists(normalized, prev, { taskId: queryTaskId, projectId }),
@@ -665,7 +679,7 @@ export function RetailProjectPage() {
     } finally {
       if (!silent) setChatterLoading(false)
     }
-  }, [projectId, taskId])
+  }, [projectId, taskId, m?.opNo])
 
   useEffect(() => {
     if (activeTab !== 'chatter') return
@@ -1187,7 +1201,11 @@ export function RetailProjectPage() {
     </div>
     <p className="shrink-0 text-[10px] text-slate-500">{formatChatterDateTime(entry.createdAt)}</p>
   </div>
-  <ChatterMentionText message={entry.message} users={chatterMentionDirectory} className="mt-1 block" />
+  <ChatterMentionText
+    message={entry.message}
+    users={resolveMentionUsersForDisplay(entry.message, entry.mentionedUsers, chatterMentionDirectory)}
+    className="mt-1 block"
+  />
   <div className="mt-2 space-y-1">
     {(entry.comments ?? []).map((comment) => (
       <div
@@ -1201,7 +1219,11 @@ export function RetailProjectPage() {
           </p>
           <p className="shrink-0 text-[10px] text-slate-500">{formatChatterDateTime(comment.createdAt)}</p>
         </div>
-        <ChatterMentionText message={comment.message} users={chatterMentionDirectory} className="mt-1 block" />
+        <ChatterMentionText
+          message={comment.message}
+          users={resolveMentionUsersForDisplay(comment.message, comment.mentionedUsers, chatterMentionDirectory)}
+          className="mt-1 block"
+        />
       </div>
     ))}
   </div>

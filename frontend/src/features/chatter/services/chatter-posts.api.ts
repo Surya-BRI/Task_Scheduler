@@ -1,6 +1,7 @@
 import { apiClient } from '@/lib/api-client';
 import { getAccessToken } from '@/lib/auth-token';
-import { isSameUserId } from '@/lib/user-id';
+import { isSameUserId, normalizeUserId } from '@/lib/user-id';
+import { parseMentionUserIdsFromMessage } from '../utils/mention-utils';
 
 export type ChatterMentionedUserDto = {
   id: string;
@@ -56,6 +57,8 @@ export type ChatterPostDto = {
   mentionedUsers?: ChatterMentionedUserDto[];
   priority: string | number | null;
   seenByCount: number;
+  seenByUsers?: ChatterMentionedUserDto[];
+  likeCount?: number;
   attachmentCount: number;
   isPinned: boolean;
   editedAt: string | null;
@@ -88,6 +91,8 @@ export type ChatterFeedPost = {
   responsibleUser: string;
   priority: 'low' | 'medium' | 'high' | null;
   seenBy: number;
+  seenByUsers?: ChatterMentionedUserDto[];
+  likeCount?: number;
   designerName?: string | null;
   comments: Array<{
     id: string;
@@ -95,6 +100,7 @@ export type ChatterFeedPost = {
     author: string;
     authorId: string | null;
     mentionUserId?: string | null;
+    mentionedUsers?: ChatterMentionedUserDto[];
     createdAt: string;
   }>;
   updatedAt: string;
@@ -206,13 +212,24 @@ export function resolveEmbeddedChatterTitle(
   return 'Discussion';
 }
 
-export function formatMentionSummary(users?: ChatterMentionedUserDto[], fallbackName?: string | null): string {
-  const names = (users ?? [])
-    .map((u) => u.fullName?.trim())
-    .filter(Boolean) as string[];
-  if (names.length > 0) return names.map((n) => `@${n}`).join(', ');
+export function formatMentionSummary(
+  users?: ChatterMentionedUserDto[],
+  fallbackName?: string | null,
+  message?: string | null,
+): string {
+  const directory = users ?? [];
+  const idsInMessage = new Set(parseMentionUserIdsFromMessage(message ?? '', directory));
+  const namesNotInBody = directory
+    .filter((u) => u?.id && u.fullName?.trim() && !idsInMessage.has(u.id))
+    .map((u) => u.fullName!.trim());
+  if (namesNotInBody.length > 0) return namesNotInBody.map((n) => `@${n}`).join(', ');
   const single = fallbackName?.trim();
-  if (single && !isUuidLike(single)) return `@${single}`;
+  if (single && !isUuidLike(single)) {
+    const fallbackInMessage =
+      parseMentionUserIdsFromMessage(message ?? '', [{ id: '__fallback__', fullName: single }])
+        .length > 0;
+    if (!fallbackInMessage) return `@${single}`;
+  }
   return '—';
 }
 
@@ -226,7 +243,15 @@ export function getMondayOfWeek(date: Date): string {
 export function mapCommentDtoToFeedComment(
   dto: ChatterCommentDto,
   currentUserId?: string | null,
-): { id: string; message: string; author: string; authorId: string | null; mentionUserId?: string | null; createdAt: string } {
+): {
+  id: string;
+  message: string;
+  author: string;
+  authorId: string | null;
+  mentionUserId?: string | null;
+  mentionedUsers?: ChatterMentionedUserDto[];
+  createdAt: string;
+} {
   const full = dto.authorName?.trim();
   const role = dto.authorRole?.trim();
   const pretty = full ? `${full}${role ? ` (${role})` : ''}` : null;
@@ -235,11 +260,15 @@ export function mapCommentDtoToFeedComment(
       ? 'You'
       : pretty ?? 'Unknown';
   return {
-    id: dto.id,
+    id: normalizeUserId(dto.id) ?? dto.id,
     message: dto.message || '',
     author: authorLabel,
     authorId: dto.authorId,
-    mentionUserId: dto.mentionUserId ?? null,
+    mentionUserId: normalizeUserId(dto.mentionUserId),
+    mentionedUsers: (dto.mentionedUsers ?? []).map((user) => ({
+      ...user,
+      id: normalizeUserId(user.id) ?? user.id,
+    })),
     createdAt: dto.createdAt,
   };
 }
@@ -258,7 +287,7 @@ export function mapChatterPostDtoToFeedPost(
       ? 'You'
       : pretty ?? 'Unknown';
   const mentionedUsers = dto.mentionedUsers ?? [];
-  const mention = formatMentionSummary(mentionedUsers, dto.mentionUserName);
+  const mention = formatMentionSummary(mentionedUsers, dto.mentionUserName, dto.message);
 
   const rawType = (dto.postType ?? '').trim();
   const lower = rawType.toLowerCase();
@@ -282,14 +311,17 @@ export function mapChatterPostDtoToFeedPost(
   }));
 
   const base: ChatterFeedPost = {
-    id: dto.id,
+    id: normalizeUserId(dto.id) ?? dto.id,
     title: resolveDisplayTitle(dto),
     author: authorLabel,
     authorId: dto.authorId,
     time: formatChatterTime(created),
     mention,
-    mentionUserId: dto.mentionUserId,
-    mentionedUsers,
+    mentionUserId: normalizeUserId(dto.mentionUserId),
+    mentionedUsers: (dto.mentionedUsers ?? []).map((user) => ({
+      ...user,
+      id: normalizeUserId(user.id) ?? user.id,
+    })),
     message: dto.message || '',
     projectName: resolveSidebarProjectName(dto) ?? '—',
     projectNo: dto.projectNo?.trim() || null,
@@ -300,7 +332,12 @@ export function mapChatterPostDtoToFeedPost(
     designerName: safeDisplayValue(dto.assigneeName),
     responsibleUser: authorLabel,
     priority: normalizePriority(dto.priority),
-    seenBy: dto.seenByCount,
+    seenBy: (dto.seenByUsers?.length ?? 0) > 0 ? dto.seenByUsers!.length : (dto.seenByCount ?? 0),
+    seenByUsers: (dto.seenByUsers ?? []).map((user) => ({
+      ...user,
+      id: normalizeUserId(user.id) ?? user.id,
+    })),
+    likeCount: dto.likeCount ?? 0,
     comments: (dto.comments ?? []).map((c) => mapCommentDtoToFeedComment(c, currentUserId)),
     updatedAt: dto.updatedAt || dto.createdAt || new Date(0).toISOString(),
     taskId: dto.taskId,
@@ -410,6 +447,56 @@ export function listChatterPosts(params?: {
     .then(normalizeChatterPostsPagedResponse);
 }
 
+export function getChatterPost(postId: string) {
+  return apiClient.get<ChatterPostDto>(`/chatter-posts/${encodeURIComponent(postId)}`);
+}
+
+function postMatchesTaskOpNo(
+  post: ChatterPostDto,
+  taskOpNo?: string | null,
+): boolean {
+  const needle = taskOpNo?.trim().toLowerCase();
+  if (!needle) return false;
+  const hay = [post.listingLabel, post.taskOpNo, post.taskName, post.title]
+    .map((v) => String(v ?? '').trim().toLowerCase())
+    .filter(Boolean)
+    .join(' ');
+  return hay.includes(needle) || needle.includes(hay);
+}
+
+/** Task chatter: task-scoped posts plus legacy project-scoped posts for the same OP. */
+export async function listChatterPostsForTask(params: {
+  taskId: string;
+  projectId?: string | null;
+  taskOpNo?: string | null;
+  limit?: number;
+}): Promise<ChatterPostDto[]> {
+  const limit = params.limit ?? 200;
+  const taskRes = await listChatterPosts({ taskId: params.taskId, limit });
+  const byId = new Map<string, ChatterPostDto>();
+  for (const post of taskRes.data ?? []) {
+    byId.set(post.id, post);
+  }
+
+  if (params.projectId) {
+    const projectRes = await listChatterPosts({ projectId: params.projectId, limit });
+    for (const post of projectRes.data ?? []) {
+      if (byId.has(post.id)) continue;
+      if (post.taskId === params.taskId) {
+        byId.set(post.id, post);
+        continue;
+      }
+      if (!post.taskId && postMatchesTaskOpNo(post, params.taskOpNo)) {
+        byId.set(post.id, post);
+      }
+    }
+  }
+
+  return [...byId.values()].sort(
+    (a, b) => new Date(b.createdAt).getTime() - new Date(a.createdAt).getTime(),
+  );
+}
+
 export function listChatterComments(postId: string) {
   return apiClient.get<ChatterCommentDto[]>(`/chatter-posts/${encodeURIComponent(postId)}/comments`);
 }
@@ -514,8 +601,22 @@ export function deleteChatterComment(postId: string, commentId: string) {
 }
 
 export function likeChatterPost(id: string) {
-  return apiClient.post<{ seenByCount: number; liked: boolean }>(
+  return apiClient.post<{ likeCount: number; liked: boolean }>(
     `/chatter-posts/${encodeURIComponent(id)}/like`,
     {},
   );
+}
+
+export type ChatterPostSeenUpdate = {
+  postId: string;
+  seenByCount: number;
+  seenByUsers: ChatterMentionedUserDto[];
+};
+
+export function markChatterPostsSeen(postIds: string[]) {
+  const ids = [...new Set(postIds.filter(Boolean))];
+  if (!ids.length) {
+    return Promise.resolve({ updates: [] as ChatterPostSeenUpdate[] });
+  }
+  return apiClient.post<{ updates: ChatterPostSeenUpdate[] }>('/chatter-posts/seen', { postIds: ids });
 }

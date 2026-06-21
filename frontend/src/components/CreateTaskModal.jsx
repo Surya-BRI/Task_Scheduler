@@ -311,9 +311,9 @@ export function CreateTaskModal({ open, onClose, onCreated, submissionDate, reco
               <label className="text-xs font-semibold text-slate-600" htmlFor="create-provided-files">
                 Task Files
               </label>
-              <div className="inline-flex rounded-md border border-slate-300 bg-slate-50 p-1 text-xs">
-                <button type="button" onClick={() => setFileMode('link')} className={`rounded px-2 py-1 font-semibold ${fileMode === 'link' ? 'bg-white text-slate-900' : 'text-slate-600'}`}>Paste Link</button>
-                <button type="button" onClick={() => setFileMode('browse')} className={`rounded px-2 py-1 font-semibold ${fileMode === 'browse' ? 'bg-white text-slate-900' : 'text-slate-600'}`}>Browse Files</button>
+              <div className="inline-flex rounded-md border border-blue-500 bg-blue-50 p-1 text-xs">
+                <button type="button" onClick={() => setFileMode('link')} className={`rounded px-2 py-1 font-semibold transition-colors ${fileMode === 'link' ? 'bg-blue-600 text-white shadow-sm' : 'text-slate-600 hover:text-slate-900'}`}>Paste Link</button>
+                <button type="button" onClick={() => setFileMode('browse')} className={`rounded px-2 py-1 font-semibold transition-colors ${fileMode === 'browse' ? 'bg-blue-600 text-white shadow-sm' : 'text-slate-600 hover:text-slate-900'}`}>Browse Files</button>
               </div>
             </div>
             {fileMode === 'link' ? (
@@ -340,7 +340,7 @@ export function CreateTaskModal({ open, onClose, onCreated, submissionDate, reco
                       setLinkAttachments((prev) => [...prev, { url, fileName: deriveFileNameFromUrl(url) }])
                       setLinkUrl('')
                     }}
-                    className="rounded-md border border-slate-300 px-3 py-2 text-sm font-medium text-slate-700 transition-colors hover:bg-slate-50"
+                    className="rounded-md border border-blue-400 bg-blue-50 px-3 py-2 text-sm font-medium text-blue-700 transition-colors hover:bg-blue-100"
                   >
                     Add Link
                   </button>

@@ -90,7 +90,7 @@ export function DesignListRecordPage() {
   const record = records.find((item) => item.id === recordKey)
   const [providedFile, setProvidedFile] = useState('Design.ZIP')
   const [submittedSession, setSubmittedSession] = useState(null)
-  const isTerminalStatus = record?.status === 'REVIEW_COMPLETED' || record?.status === 'CLIENT_REJECTED'
+  const isTerminalStatus = record?.status === 'CLIENT_ACCEPTED' || record?.status === 'CLIENT_REJECTED'
   const rawTab = searchParams.get('tab')
   const activeTab = RECORD_TAB_IDS.includes(rawTab) ? rawTab : 'details'
   const from = searchParams.get('from')
@@ -226,7 +226,7 @@ export function DesignListRecordPage() {
                       <RowField label="Project Name" value={record.name.toUpperCase()} />
                       <RowField label="Project No" value={record.projectNo} />
                       <RowField label="Business Unit" value={record.businessUnit} />
-                      <RowField label="Project Manager" value={record.assignee?.name ?? 'John'} />
+                      <RowField label="Project Manager" value={record.assignee?.name ?? 'Unassigned'} />
                       <RowField label="Priority Level" value={record.agingDays > 20 ? 'High' : 'Medium'} />
                       <RowField label="Date of Issued" value={record.created} />
                     </div>

@@ -6,6 +6,8 @@ export type SchedulerAssignmentRow = {
   taskId: string;
   dayIndex: number;
   assignedHours: number;
+  scheduledHours?: number;
+  approvedOvertimeHours?: number;
   parentId: string | null;
   splitIndex: number | null;
   totalParts: number | null;
@@ -59,4 +61,16 @@ export function saveSchedulerWeekSnapshot(
     updatedBy: string | null;
     assignments: SchedulerAssignmentRow[];
   }>(`/scheduler-assignments/week/${encodeURIComponent(weekStart)}`, payload);
+}
+
+export function lockSchedulerWeek(weekStart: string) {
+  return apiClient.post<SchedulerWeekMeta>(`/scheduler-assignments/week/${encodeURIComponent(weekStart)}/lock`, {});
+}
+
+export function unlockSchedulerWeek(weekStart: string) {
+  return apiClient.delete<SchedulerWeekMeta>(`/scheduler-assignments/week/${encodeURIComponent(weekStart)}/lock`);
+}
+
+export function clearTaskFromSchedule(taskId: string) {
+  return apiClient.delete(`/scheduler-assignments/task/${encodeURIComponent(taskId)}`);
 }

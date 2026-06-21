@@ -6,6 +6,7 @@ import {
   HttpCode,
   HttpStatus,
   Logger,
+  NotFoundException,
   Param,
   Patch,
   Post,
@@ -18,6 +19,7 @@ import { FilesInterceptor } from '@nestjs/platform-express';
 import { memoryStorage } from 'multer';
 import { CreateChatterCommentDto } from './dto/create-chatter-comment.dto';
 import { CreateChatterPostDto } from './dto/create-chatter-post.dto';
+import { MarkChatterPostsSeenDto } from './dto/mark-chatter-posts-seen.dto';
 import { UpdateChatterCommentDto, UpdateChatterPostDto } from './dto/update-chatter-post.dto';
 import { ChatterPostsService } from './chatter-posts.service';
 import { JwtAuthGuard } from '../common/guards/jwt-auth.guard';
@@ -63,6 +65,21 @@ export class ChatterPostsController {
       weekStart,
       cursor,
     );
+  }
+
+  @Post('seen')
+  markPostsSeen(
+    @Body() dto: MarkChatterPostsSeenDto,
+    @CurrentUser() user: { sub: string },
+  ) {
+    return this.chatterPostsService.markPostsSeen(dto.postIds, user.sub);
+  }
+
+  @Get(':postId')
+  async findOne(@Param('postId') postId: string) {
+    const post = await this.chatterPostsService.loadPostById(postId);
+    if (!post) throw new NotFoundException('Chatter post not found');
+    return post;
   }
 
   @Get(':postId/comments')

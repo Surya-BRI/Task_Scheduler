@@ -54,6 +54,35 @@ export class OvertimeRequestsService {
     return end;
   }
 
+  private async touchSchedulerWeekForOvertime(
+    request: { date?: Date | null },
+    userId: string,
+  ): Promise<void> {
+    if (!request.date) return;
+    const weekStartDate = this.getStartOfWeek(new Date(request.date));
+    try {
+      await this.prisma.schedulerWeek.upsert({
+        where: { weekStartDate },
+        create: {
+          weekStartDate,
+          version: 1,
+          isLocked: false,
+          updatedBy: userId,
+          lastPayloadHash: null,
+        },
+        update: {
+          version: { increment: 1 },
+          updatedBy: userId,
+          lastPayloadHash: null,
+        },
+      });
+    } catch (err) {
+      this.logger.warn(
+        `Scheduler week refresh failed for overtime approval: ${err instanceof Error ? err.message : err}`,
+      );
+    }
+  }
+
   /**
    * Core policy validations for Overtime request creation or updates.
    */
@@ -222,11 +251,11 @@ export class OvertimeRequestsService {
         opNo?: string | null;
         project?: { name?: string | null; projectNo?: string | null } | null;
       } | null;
-      designer?: { fullName?: string | null } | null;
+      designer?: { fullName?: string | null; departmentId?: string | null } | null;
     },
     action: ActivityActionType,
     messageKey: string,
-    extra?: { changes?: Record<string, unknown> },
+    extra?: { changes?: Record<string, unknown>; context?: Record<string, unknown> },
   ): ActivityDetailsPayload {
     const hours = request.requestedHours ?? request.totalHours;
     const hoursLabel =
@@ -258,6 +287,8 @@ export class OvertimeRequestsService {
       context: {
         designerId: request.designerId,
         designerName: request.designer?.fullName ?? undefined,
+        requesterName: request.designer?.fullName ?? undefined,
+        ...extra?.context,
       },
     };
   }
@@ -280,9 +311,10 @@ export class OvertimeRequestsService {
         opNo?: string | null;
         project?: { name?: string | null; projectNo?: string | null } | null;
       } | null;
-      designer?: { fullName?: string | null } | null;
+      designer?: { fullName?: string | null; departmentId?: string | null } | null;
     };
     changes?: Record<string, unknown>;
+    context?: Record<string, unknown>;
   }): Promise<void> {
     await this.activityLogger.log({
       action: params.action,
@@ -290,6 +322,7 @@ export class OvertimeRequestsService {
       taskId: params.request.taskId ?? null,
       details: this.buildOvertimeActivityDetails(params.request, params.action, params.messageKey, {
         changes: params.changes,
+        context: params.context,
       }),
     });
   }
@@ -518,16 +551,19 @@ export class OvertimeRequestsService {
       ).catch((err) => {
         this.logger.warn(`Designer OT notification failed: ${err instanceof Error ? err.message : err}`);
       });
+      await this.touchSchedulerWeekForOvertime(request, creatorId);
       this.dashboardRealtime?.notifyOverviewRefresh('overtime_approved');
       if (designerId) {
         this.dashboardRealtime?.notifyUserNotificationRefresh(designerId);
       }
     } else if (status === 'SUBMITTED') {
+      const recipientName = await this.resolveOvertimeApproverName(request.designer?.departmentId);
       await this.logOvertimeActivity({
         action: ActivityAction.OVERTIME_REQUEST_SUBMITTED,
         messageKey: 'overtime_request_submitted',
         userId: creatorId,
         request,
+        context: { recipientName },
       });
       try {
         await this.notifyApprovers(request);
@@ -612,11 +648,13 @@ export class OvertimeRequestsService {
     });
 
     if (status === 'SUBMITTED' && request.status !== 'SUBMITTED') {
+      const recipientName = await this.resolveOvertimeApproverName(updated.designer?.departmentId);
       await this.logOvertimeActivity({
         action: ActivityAction.OVERTIME_REQUEST_SUBMITTED,
         messageKey: 'overtime_request_submitted',
         userId,
         request: updated,
+        context: { recipientName },
       });
     } else {
       await this.logOvertimeActivity({
@@ -675,6 +713,7 @@ export class OvertimeRequestsService {
       messageKey: 'overtime_request_submitted',
       userId,
       request: updated,
+      context: { recipientName: await this.resolveOvertimeApproverName(updated.designer?.departmentId) },
     });
 
     await this.notifyApprovers(updated);
@@ -889,6 +928,9 @@ export class OvertimeRequestsService {
       });
 
       await this.notifyDesignerOfReview(updated, updateData.status, dto.comments);
+      if (approved) {
+        await this.touchSchedulerWeekForOvertime(updated, reviewerId);
+      }
 
       this.dashboardRealtime?.notifyOverviewRefresh(
         approved ? 'overtime_approved' : 'overtime_rejected',
@@ -1069,6 +1111,28 @@ export class OvertimeRequestsService {
     const params = new URLSearchParams({ overtimeId: requestId });
     if (designerId?.trim()) params.set('forDesignerId', designerId.trim());
     return `/designer/requests?${params.toString()}#overtime`;
+  }
+
+  private async resolveOvertimeApproverName(departmentId: string | null | undefined): Promise<string> {
+    let hods: Array<{ fullName: string | null }> = [];
+    if (departmentId) {
+      hods = await this.prisma.user.findMany({
+        where: {
+          departmentId,
+          role: { name: UserRole.HOD },
+        },
+        select: { fullName: true },
+        take: 1,
+      });
+    }
+    if (hods.length === 0) {
+      hods = await this.prisma.user.findMany({
+        where: { role: { name: UserRole.HOD } },
+        select: { fullName: true },
+        take: 1,
+      });
+    }
+    return hods[0]?.fullName?.trim() || 'HOD';
   }
 
   private async notifyApprovers(request: any) {

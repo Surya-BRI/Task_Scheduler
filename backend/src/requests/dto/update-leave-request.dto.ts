@@ -18,6 +18,12 @@ export class UpdateLeaveRequestDto {
   @IsOptional()
   @IsString()
   @IsNotEmpty()
+  @MaxLength(50)
+  halfDaySession?: string;
+
+  @IsOptional()
+  @IsString()
+  @IsNotEmpty()
   @MaxLength(4000)
   reason?: string;
 }

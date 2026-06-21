@@ -20,10 +20,15 @@ import { UpdateLeaveRequestDto } from './dto/update-leave-request.dto';
 import { UpdateRequestStatusDto } from './dto/update-request-status.dto';
 import { RevokeLeaveRequestDto } from './dto/revoke-leave-request.dto';
 import {
+  calculateLeaveDurationDays,
   dateToDateOnlyIso,
   findOverlappingLeave,
+  formatLeaveDurationLabel,
   isLeaveRangeCompleted,
+  LEAVE_TYPE_HALF_DAY,
+  normalizeHalfDaySession,
   normalizeLeaveStatus as normalizeLeaveStatusUtil,
+  normalizeLeaveType,
   overlapErrorMessage,
   todayDateOnlyIso,
   validateLeaveDates,
@@ -43,6 +48,9 @@ export type LeaveRequestView = {
   toDate: string;
   status: string;
   type: string;
+  halfDaySession: string | null;
+  leaveDurationDays: number;
+  leaveDurationLabel: string;
   createdBy: 'HOD' | 'Designer';
   approverId: string | null;
   approverName: string | null;
@@ -91,6 +99,10 @@ export class RequestsService implements OnModuleInit {
         IF COL_LENGTH('dbo.ErpTSLeaveRequest', 'revocationReason') IS NULL
         BEGIN
           ALTER TABLE dbo.ErpTSLeaveRequest ADD revocationReason NVARCHAR(MAX) NULL;
+        END
+        IF COL_LENGTH('dbo.ErpTSLeaveRequest', 'halfDaySession') IS NULL
+        BEGIN
+          ALTER TABLE dbo.ErpTSLeaveRequest ADD halfDaySession NVARCHAR(50) NULL;
         END
         IF COL_LENGTH('dbo.ErpTSLeaveRequest', 'id') IS NOT NULL
            AND NOT EXISTS (
@@ -162,17 +174,54 @@ export class RequestsService implements OnModuleInit {
     return result.range;
   }
 
+  private assertLeaveTypeOrThrow(type: string): string {
+    const normalized = normalizeLeaveType(type);
+    if (!normalized) {
+      throw new BadRequestException('Leave type must be either Full Day or Half Day');
+    }
+    return normalized;
+  }
+
+  private assertLeaveTypeMatchesDuration(type: string, range: LeaveDateRange): void {
+    if (
+      type === LEAVE_TYPE_HALF_DAY &&
+      this.toDateLabel(range.startDate) !== this.toDateLabel(range.endDate)
+    ) {
+      throw new BadRequestException('Half Day leave must start and end on the same date');
+    }
+  }
+
+  private resolveHalfDaySessionOrThrow(type: string, session?: string | null): string | null {
+    if (type !== LEAVE_TYPE_HALF_DAY) {
+      return null;
+    }
+    const normalized = normalizeHalfDaySession(session);
+    if (!normalized) {
+      throw new BadRequestException('Half Day leave requires a session: First Half or Second Half');
+    }
+    return normalized;
+  }
+
   private async assertNoOverlappingLeave(
     userId: string,
     range: LeaveDateRange,
+    type: string,
+    halfDaySession: string | null,
     excludeRequestId?: string,
   ): Promise<void> {
     const existing = await this.prisma.leaveRequest.findMany({
       where: { userId },
-      select: { id: true, startDate: true, endDate: true, status: true },
+      select: {
+        id: true,
+        startDate: true,
+        endDate: true,
+        status: true,
+        type: true,
+        halfDaySession: true,
+      },
     });
 
-    const conflict = findOverlappingLeave(existing, range, excludeRequestId);
+    const conflict = findOverlappingLeave(existing, range, excludeRequestId, type, halfDaySession);
     if (conflict) {
       throw new BadRequestException(overlapErrorMessage(conflict));
     }
@@ -205,6 +254,7 @@ export class RequestsService implements OnModuleInit {
       endDate: Date | null;
       status: string;
       type: string;
+      halfDaySession?: string | null;
       createdAt: Date;
       approverId?: string | null;
       approverRemarks?: string | null;
@@ -219,6 +269,12 @@ export class RequestsService implements OnModuleInit {
     designerIdOverride?: string,
   ): LeaveRequestView {
     const roleName = req.user.role.name;
+    const type = normalizeLeaveType(req.type) ?? 'Full Day';
+    const halfDaySession = type === LEAVE_TYPE_HALF_DAY
+      ? normalizeHalfDaySession(req.halfDaySession) ?? null
+      : null;
+    const range = { startDate: req.startDate, endDate: req.endDate ?? req.startDate };
+    const leaveDurationDays = calculateLeaveDurationDays(type, range);
     return {
       id: req.id,
       designerId: designerIdOverride ?? req.userId,
@@ -227,7 +283,10 @@ export class RequestsService implements OnModuleInit {
       fromDate: this.toDateLabel(req.startDate),
       toDate: this.toDateLabel(req.endDate ?? req.startDate),
       status: this.normalizeStatus(req.status),
-      type: req.type,
+      type,
+      halfDaySession,
+      leaveDurationDays,
+      leaveDurationLabel: formatLeaveDurationLabel(leaveDurationDays),
       createdBy: roleName === UserRole.HOD ? 'HOD' : 'Designer',
       approverId: req.approverId ?? null,
       approverName: req.approver?.fullName ?? null,
@@ -266,13 +325,33 @@ export class RequestsService implements OnModuleInit {
     });
   }
 
+  private async resolveHodRecipientName(departmentId: string | null | undefined): Promise<string> {
+    let targets = await this.findDepartmentHods(departmentId);
+    if (targets.length === 0) {
+      targets = await this.prisma.user.findMany({
+        where: { role: { name: UserRole.HOD } },
+        select: { id: true, fullName: true },
+        take: 1,
+      });
+    }
+    return targets[0]?.fullName?.trim() || 'HOD';
+  }
+
   private formatLeaveDates(from: string, to: string): string {
     return from === to ? from : `${from} to ${to}`;
   }
 
+  private formatLeaveTypeAndDuration(
+    view: Pick<LeaveRequestView, 'type' | 'halfDaySession' | 'leaveDurationLabel'>,
+  ): string {
+    const session = view.halfDaySession ? ` (${view.halfDaySession})` : '';
+    return `${view.type}${session}, ${view.leaveDurationLabel}`;
+  }
+
   private async notifyApproversOnCreate(view: LeaveRequestView) {
     const dates = this.formatLeaveDates(view.fromDate, view.toDate);
-    const messageBase = `Leave request ${view.id.slice(0, 8)}… for ${dates}. Reason: ${view.reason ?? '—'}.`;
+    const leaveDetails = this.formatLeaveTypeAndDuration(view);
+    const messageBase = `Leave request ${view.id.slice(0, 8)}… for ${dates} (${leaveDetails}). Reason: ${view.reason ?? '—'}.`;
 
     const requester = await this.prisma.user.findUnique({
       where: { id: view.designerId },
@@ -310,6 +389,7 @@ export class RequestsService implements OnModuleInit {
     actionVerb: string,
   ) {
     const dates = this.formatLeaveDates(view.fromDate, view.toDate);
+    const leaveDetails = this.formatLeaveTypeAndDuration(view);
     const requester = await this.prisma.user.findUnique({
       where: { id: view.designerId },
       select: { departmentId: true },
@@ -330,7 +410,7 @@ export class RequestsService implements OnModuleInit {
             id: randomUUID(),
             userId: approver.id,
             title,
-            message: `${view.requesterName} ${actionVerb} a leave request (${dates}). Reason: ${view.reason ?? '—'}.`,
+            message: `${view.requesterName} ${actionVerb} a leave request (${dates}, ${leaveDetails}). Reason: ${view.reason ?? '—'}.`,
             linkUrl: this.leaveLink(view.id, view.designerId),
           },
         });
@@ -346,6 +426,7 @@ export class RequestsService implements OnModuleInit {
     revokedAt: Date,
   ) {
     const dates = this.formatLeaveDates(view.fromDate, view.toDate);
+    const leaveDetails = this.formatLeaveTypeAndDuration(view);
     const reason = view.revocationReason?.trim() || '—';
 
     try {
@@ -354,7 +435,7 @@ export class RequestsService implements OnModuleInit {
           id: randomUUID(),
           userId: view.designerId,
           title: 'Leave Request Revoked',
-          message: `Your approved leave (${dates}) was revoked by ${revokerName}. Reason: ${reason}`,
+          message: `Your approved leave (${dates}, ${leaveDetails}) was revoked by ${revokerName}. Reason: ${reason}`,
           linkUrl: this.leaveLink(view.id, view.designerId),
         },
       });
@@ -371,6 +452,7 @@ export class RequestsService implements OnModuleInit {
   ) {
     const actionLabel = action === 'APPROVED' ? 'Approved' : 'Rejected';
     const dates = this.formatLeaveDates(view.fromDate, view.toDate);
+    const leaveDetails = this.formatLeaveTypeAndDuration(view);
     const timestamp = reviewedAt.toISOString();
     const remarks =
       action === 'REJECTED' && view.approverRemarks
@@ -383,7 +465,7 @@ export class RequestsService implements OnModuleInit {
           id: randomUUID(),
           userId: view.designerId,
           title: `Leave Request ${actionLabel}`,
-          message: `Leave ${view.id.slice(0, 8)}… (${dates}) was ${actionLabel.toLowerCase()} by ${reviewerName} at ${timestamp}.${remarks}`,
+          message: `Leave ${view.id.slice(0, 8)}… (${dates}, ${leaveDetails}) was ${actionLabel.toLowerCase()} by ${reviewerName} at ${timestamp}.${remarks}`,
           linkUrl: this.leaveLink(view.id, view.designerId),
         },
       });
@@ -435,6 +517,20 @@ export class RequestsService implements OnModuleInit {
     ) {
       throw new ForbiddenException('You can only review leave requests from your department');
     }
+  }
+
+  private async assertRevokerAccess(
+    revokerId: string,
+    role: UserRole,
+    request: { userId: string; user: { role: { name: string }; departmentId: string | null } },
+  ) {
+    if (role !== UserRole.HOD) {
+      throw new ForbiddenException('Only HOD can revoke leave requests');
+    }
+    if (revokerId === request.userId) {
+      return;
+    }
+    await this.assertReviewerAccess(revokerId, role, request);
   }
 
   async findAll(userId: string | undefined, requesterId: string, role: UserRole) {
@@ -565,8 +661,11 @@ export class RequestsService implements OnModuleInit {
       throw new BadRequestException(err instanceof Error ? err.message : 'Invalid leave reason');
     }
 
+    const type = this.assertLeaveTypeOrThrow(dto.type);
     const range = this.assertDatesOrThrow(dto.startDate, dto.endDate);
-    await this.assertNoOverlappingLeave(resolvedId, range);
+    this.assertLeaveTypeMatchesDuration(type, range);
+    const halfDaySession = this.resolveHalfDaySessionOrThrow(type, dto.halfDaySession);
+    await this.assertNoOverlappingLeave(resolvedId, range, type, halfDaySession);
 
     const hodAutoApprove = role === UserRole.HOD;
     const status = hodAutoApprove ? 'Approved' : 'Pending';
@@ -576,7 +675,8 @@ export class RequestsService implements OnModuleInit {
       data: {
         id: randomUUID(),
         userId: resolvedId,
-        type: dto.type.trim(),
+        type,
+        halfDaySession,
         startDate: range.startDate,
         endDate: range.endDate,
         reason,
@@ -598,6 +698,15 @@ export class RequestsService implements OnModuleInit {
     const submitMessageKey = hodAutoApprove
       ? 'leave_auto_approved'
       : 'leave_request_submitted';
+    const submitter = hodAutoApprove
+      ? await this.prisma.user.findUnique({
+          where: { id: submitterId },
+          select: { fullName: true },
+        })
+      : null;
+    const recipientName = hodAutoApprove
+      ? requester.fullName
+      : await this.resolveHodRecipientName(requester.departmentId);
 
     await this.activityLogger.log({
       action: submitAction,
@@ -607,22 +716,25 @@ export class RequestsService implements OnModuleInit {
         messageKey: submitMessageKey,
         context: {
           requestId: req.id,
-          type: dto.type,
+          type,
+          halfDaySession,
+          leaveDurationDays: calculateLeaveDurationDays(type, range),
           startDate: dto.startDate,
           endDate: dto.endDate ?? null,
           beneficiaryUserId: resolvedId,
           autoApproved: hodAutoApprove,
           submittedByHod: hodAutoApprove,
           reasonCategory: dto.reasonCategory,
+          requesterName: requester.fullName,
+          designerName: requester.fullName,
+          recipientName,
+          approverName: submitter?.fullName ?? undefined,
+          reviewerName: submitter?.fullName ?? undefined,
         },
       },
     });
 
     if (hodAutoApprove) {
-      const submitter = await this.prisma.user.findUnique({
-        where: { id: submitterId },
-        select: { fullName: true },
-      });
       if (resolvedId !== submitterId) {
         await this.notifyRequesterOnReview(
           view,
@@ -650,6 +762,7 @@ export class RequestsService implements OnModuleInit {
   ): Promise<LeaveRequestView> {
     const hasChange =
       dto.type !== undefined ||
+      dto.halfDaySession !== undefined ||
       dto.startDate !== undefined ||
       dto.endDate !== undefined ||
       dto.reason !== undefined;
@@ -665,7 +778,11 @@ export class RequestsService implements OnModuleInit {
 
     this.assertOwnerCanModifyPending(requesterId, role, existing);
 
-    const nextType = dto.type?.trim() ?? existing.type;
+    const nextType = this.assertLeaveTypeOrThrow(dto.type ?? existing.type);
+    const nextHalfDaySession = this.resolveHalfDaySessionOrThrow(
+      nextType,
+      dto.halfDaySession !== undefined ? dto.halfDaySession : existing.halfDaySession,
+    );
     const nextReason = dto.reason !== undefined ? dto.reason.trim() : existing.reason?.trim() ?? '';
     const nextStartIso =
       dto.startDate ?? this.toDateLabelFromDate(existing.startDate);
@@ -673,18 +790,22 @@ export class RequestsService implements OnModuleInit {
       dto.endDate ??
       this.toDateLabelFromDate(existing.endDate ?? existing.startDate);
 
-    if (!nextType.trim()) {
-      throw new BadRequestException('Leave type cannot be empty');
-    }
     if (!nextReason) {
       throw new BadRequestException('Reason is required for leave requests');
     }
 
     const range = this.assertDatesOrThrow(nextStartIso, nextEndIso);
-    await this.assertNoOverlappingLeave(existing.userId, range, id);
+    this.assertLeaveTypeMatchesDuration(nextType, range);
+    await this.assertNoOverlappingLeave(existing.userId, range, nextType, nextHalfDaySession, id);
 
     const changes: Record<string, { from: unknown; to: unknown }> = {};
-    if (existing.type !== nextType) changes.type = { from: existing.type, to: nextType };
+    const existingType = this.assertLeaveTypeOrThrow(existing.type);
+    const existingHalfDaySession =
+      existingType === LEAVE_TYPE_HALF_DAY ? normalizeHalfDaySession(existing.halfDaySession) : null;
+    if (existingType !== nextType) changes.type = { from: existingType, to: nextType };
+    if (existingHalfDaySession !== nextHalfDaySession) {
+      changes.halfDaySession = { from: existingHalfDaySession, to: nextHalfDaySession };
+    }
     if ((existing.reason ?? '') !== nextReason) changes.reason = { from: existing.reason, to: nextReason };
     if (existing.startDate.getTime() !== range.startDate.getTime()) {
       changes.startDate = { from: this.toDateLabel(existing.startDate), to: nextStartIso };
@@ -701,6 +822,7 @@ export class RequestsService implements OnModuleInit {
       where: { id },
       data: {
         type: nextType,
+        halfDaySession: nextHalfDaySession,
         reason: nextReason,
         startDate: range.startDate,
         endDate: range.endDate,
@@ -717,7 +839,14 @@ export class RequestsService implements OnModuleInit {
         event: ActivityAction.LEAVE_REQUEST_UPDATED,
         messageKey: 'leave_request_updated',
         changes,
-        context: { requestId: id },
+        context: {
+          requestId: id,
+          halfDaySession: nextHalfDaySession,
+          leaveDurationDays: calculateLeaveDurationDays(nextType, range),
+          requesterName: existing.user.fullName,
+          designerName: existing.user.fullName,
+          recipientName: existing.approver?.fullName ?? 'HOD',
+        },
       },
     });
 
@@ -773,7 +902,12 @@ export class RequestsService implements OnModuleInit {
         event: ActivityAction.LEAVE_REQUEST_CANCELLED,
         messageKey: 'leave_request_cancelled',
         changes: { status: { from: existing.status, to: 'CANCELLED' } },
-        context: { requestId: id },
+        context: {
+          requestId: id,
+          requesterName: existing.user.fullName,
+          designerName: existing.user.fullName,
+          recipientName: existing.approver?.fullName ?? 'HOD',
+        },
       },
     });
 
@@ -825,12 +959,19 @@ export class RequestsService implements OnModuleInit {
 
     await this.activityLogger.log({
       action: ActivityAction.LEAVE_REQUEST_STATUS_CHANGED,
-      userId: req.userId,
+      userId: reviewerId,
       details: {
         event: ActivityAction.LEAVE_REQUEST_STATUS_CHANGED,
         messageKey: 'leave_request_status_changed',
         changes: { newStatus: status, approverId: reviewerId },
-        context: { requestId: id },
+        context: {
+          requestId: id,
+          requesterName: existing.user.fullName,
+          designerName: existing.user.fullName,
+          recipientName: req.approver?.fullName ?? 'HOD',
+          approverName: req.approver?.fullName ?? undefined,
+          reviewerName: req.approver?.fullName ?? undefined,
+        },
       },
     });
 
@@ -888,7 +1029,7 @@ export class RequestsService implements OnModuleInit {
       throw new BadRequestException('Past or completed leave requests cannot be revoked');
     }
 
-    await this.assertReviewerAccess(reviewerId, role, existing);
+    await this.assertRevokerAccess(reviewerId, role, existing);
 
     const revoker = await this.prisma.user.findUnique({
       where: { id: reviewerId },
@@ -928,8 +1069,10 @@ export class RequestsService implements OnModuleInit {
           requestId: id,
           designerId: existing.userId,
           designerName: existing.user.fullName,
+          requesterName: existing.user.fullName,
           revokedAt: revokedAt.toISOString(),
           revokerName: revoker?.fullName ?? 'HOD',
+          reviewerName: revoker?.fullName ?? 'HOD',
         },
       },
     });

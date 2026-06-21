@@ -91,11 +91,13 @@ export function ProjectTaskTimer({
   launchCompleteModal,
   onConsumedLaunchFlags,
   onSubmitComplete,
+  onStatusChange,
   inline = false,
 }) {
   const [accumulatedSeconds, setAccumulatedSeconds] = useState(0)
   const [runStartAt, setRunStartAt] = useState(null)
   const [isHydrated, setIsHydrated] = useState(false)
+  const [submittedSeconds, setSubmittedSeconds] = useState(null)
   const [, tick] = useReducer((n) => n + 1, 0)
   const [pauseReason, setPauseReason] = useState('')
   const [showPauseDropdown, setShowPauseDropdown] = useState(false)
@@ -116,10 +118,24 @@ export function ProjectTaskTimer({
     'System issue',
   ]
 
-  const isLocked = taskStatus === 'REVIEW_COMPLETED' || taskStatus === 'CLIENT_REJECTED'
+  const isLocked = !['DESIGN_PLANNED', 'IN_PROGRESS', 'REWORK'].includes(taskStatus)
   const isRunning = runStartAt !== null && !isLocked
 
   useEffect(() => {
+    const locked = !['DESIGN_PLANNED', 'IN_PROGRESS', 'REWORK'].includes(taskStatus)
+
+    if (locked) {
+      // For submitted/locked tasks show the last submitted session duration
+      apiClient
+        .get(`/tasks/${taskId}/submitted-session`)
+        .then((data) => {
+          if (data?.durationSeconds) setSubmittedSeconds(data.durationSeconds)
+        })
+        .catch(() => {})
+        .finally(() => setIsHydrated(true))
+      return
+    }
+
     const { accumulatedSeconds: acc, runStartAt: start } = readPersisted(taskId)
     setAccumulatedSeconds(acc)
     setRunStartAt(start)
@@ -151,10 +167,11 @@ export function ProjectTaskTimer({
     }
 
     setIsHydrated(true)
-  }, [taskId])
+  }, [taskId, taskStatus])
 
   useEffect(() => {
     launchConsumed.current = false
+    setSubmittedSeconds(null)
   }, [taskId])
 
   useEffect(() => {
@@ -272,7 +289,9 @@ export function ProjectTaskTimer({
     writePersisted(taskId, accumulatedSeconds, startedAt)
     saveTimerStateToDb(taskId, accumulatedSeconds)
     // Move task to IN_PROGRESS so it reflects active work
-    apiClient.patch(`/tasks/${taskId}/status`, { status: 'IN_PROGRESS' }).catch(() => {})
+    apiClient.patch(`/tasks/${taskId}/status`, { status: 'IN_PROGRESS' })
+      .catch(() => {})
+      .finally(() => { onStatusChange?.() })
   }
 
   const handlePauseClick = () => {
@@ -391,7 +410,9 @@ export function ProjectTaskTimer({
     setShowSubmitConfirm(true)
   }
 
-  const displaySeconds = isLocked ? accumulatedSeconds : liveTotalSeconds(accumulatedSeconds, runStartAt)
+  const displaySeconds = isLocked
+    ? (submittedSeconds ?? accumulatedSeconds)
+    : liveTotalSeconds(accumulatedSeconds, runStartAt)
 
   const controlBtn = inline
     ? 'grid h-5 w-5 shrink-0 place-items-center rounded transition focus:outline-none focus-visible:ring-2 focus-visible:ring-offset-1 disabled:cursor-not-allowed'

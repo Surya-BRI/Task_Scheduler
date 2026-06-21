@@ -71,6 +71,7 @@ model User {
   conversations            ConversationParticipant[]
   messages                 Message[]                  @relation("MessageSender")
   workSessions             TaskWorkSession[]          @relation("WorkSessionDesigner")
+  taskDesignerEntries      TaskDesigner[]             @relation("TaskDesignerUsers")
   overtimeApproved         OvertimeRequest[]          @relation("OvertimeApprovedBy")
   overtimeRejected         OvertimeRequest[]          @relation("OvertimeRejectedBy")
   overtimeApprovalHistories OvertimeApprovalHistory[]  @relation("OvertimeActionBy")
@@ -115,15 +116,26 @@ model Task {
   title       String?   @db.NVarChar(200)
   revisionCode String?  @db.NVarChar(20)
   designType   String?  @db.NVarChar(80)
-  signType     String?  @db.NVarChar(255)
+  signType       String?  @db.NVarChar(255)
+  signFamily     String?  @db.NVarChar(255)
+  disciplineType String?  @db.NVarChar(50)
   description String?   @db.NVarChar(Max)
   status      String    @default("DESIGN_NEW") @db.NVarChar(20)
   priority    String    @default("Medium") @db.NVarChar(50)
   projectId   String    @db.UniqueIdentifier
   assigneeId  String?   @db.UniqueIdentifier
   dueDate     DateTime?
-  startedAt   DateTime?
-  completedAt DateTime?
+  startedAt          DateTime?
+  completedAt        DateTime?
+  holdPreviousStatus String?   @db.NVarChar(50)
+
+  // Rework context — populated on the NEW revision task when rework is issued
+  reworkNote             String?  @db.NVarChar(Max)
+  reworkAttachmentUrl    String?  @db.NVarChar(500)
+  reworkAttachmentName   String?  @db.NVarChar(255)
+  reworkLinkUrl          String?  @db.NVarChar(500)
+  reworkLinkName         String?  @db.NVarChar(255)
+  previousRevisionTaskId String?  @db.NVarChar(36)
 
   technicalHead  String?  @db.NVarChar(255)
   teamLead       String?  @db.NVarChar(255)
@@ -141,13 +153,14 @@ model Task {
   projectDetails         ProjectTaskDetail[]
   signRows               ProjectSignRow[]
   workSessions           TaskWorkSession[]
+  taskDesigners          TaskDesigner[]         @relation("TaskDesigners")
 
   createdAt DateTime @default(dbgenerated("sysutcdatetime()"))
   updatedAt DateTime @default(dbgenerated("sysutcdatetime()")) @updatedAt
 
   @@index([projectId])
   @@index([assigneeId])
-  @@index([projectId, opNo, designType, revisionCode, signType])
+  @@index([projectId, opNo, designType, revisionCode, signType, disciplineType])
   @@map("ErpTSTask")
 }
 
@@ -445,6 +458,7 @@ model LeaveRequest {
   status          String    @default("Pending") @db.NVarChar(255)
   startDate       DateTime
   endDate         DateTime?
+  halfDaySession  String?   @db.NVarChar(50)
   reason          String?   @db.NVarChar(Max)
   approverId      String?   @db.UniqueIdentifier
   approver        User?     @relation("LeaveApprover", fields: [approverId], references: [id], onDelete: NoAction, onUpdate: NoAction)
@@ -715,4 +729,21 @@ model TaskWorkSessionFile {
 
   @@index([sessionId])
   @@map("ErpTSTaskWorkSessionFile")
+}
+
+// ---------------------------------------------------------
+// TASK DESIGNER JUNCTION (split task multi-designer support)
+// ---------------------------------------------------------
+model TaskDesigner {
+  id         String @id @default(dbgenerated("newid()")) @db.UniqueIdentifier
+  taskId     String @db.UniqueIdentifier
+  designerId String @db.UniqueIdentifier
+
+  task       Task   @relation("TaskDesigners", fields: [taskId], references: [id], onDelete: Cascade, onUpdate: NoAction)
+  designer   User   @relation("TaskDesignerUsers", fields: [designerId], references: [id], onDelete: NoAction, onUpdate: NoAction)
+
+  @@unique([taskId, designerId])
+  @@index([taskId])
+  @@index([designerId])
+  @@map("ErpTSTaskDesigner")
 }

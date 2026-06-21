@@ -50,6 +50,7 @@ describe('RequestsService', () => {
     approverId: null,
     approverRemarks: null,
     reviewedAt: null,
+    halfDaySession: null,
     user: designerUser,
     approver: null,
   };
@@ -165,6 +166,44 @@ describe('RequestsService', () => {
       ).rejects.toThrow(DUPLICATE_LEAVE_ERROR_MESSAGE);
     });
 
+    it('allows reapplication over cancelled and revoked leave dates', async () => {
+      const start = futureStart();
+      mockPrisma.user.findUnique.mockResolvedValue({
+        role: { name: UserRole.DESIGNER },
+        departmentId: 'dept-1',
+      });
+      mockPrisma.leaveRequest.findMany.mockResolvedValue([
+        {
+          id: 'cancelled-block',
+          startDate: new Date(`${start}T00:00:00.000Z`),
+          endDate: new Date(`${start}T00:00:00.000Z`),
+          status: 'CANCELLED',
+        },
+        {
+          id: 'revoked-block',
+          startDate: new Date(`${start}T00:00:00.000Z`),
+          endDate: new Date(`${start}T00:00:00.000Z`),
+          status: 'REVOKED',
+        },
+      ]);
+      mockPrisma.leaveRequest.create.mockResolvedValue({
+        ...pendingLeave,
+        startDate: new Date(`${start}T00:00:00.000Z`),
+        endDate: new Date(`${start}T00:00:00.000Z`),
+      });
+
+      await expect(
+        service.create(designerId, UserRole.DESIGNER, {
+          userId: designerId,
+          type: 'Full Day',
+          startDate: start,
+          endDate: start,
+          reasonCategory: 'Vacation',
+        }),
+      ).resolves.toMatchObject({ status: 'PENDING' });
+      expect(mockPrisma.leaveRequest.create).toHaveBeenCalled();
+    });
+
     it('creates valid leave request', async () => {
       const start = futureStart();
       mockPrisma.user.findUnique.mockResolvedValue({
@@ -172,19 +211,91 @@ describe('RequestsService', () => {
         departmentId: 'dept-1',
       });
       mockPrisma.user.findMany.mockResolvedValue([{ id: hodId, fullName: 'HOD' }]);
-      mockPrisma.leaveRequest.create.mockResolvedValue(pendingLeave);
+      mockPrisma.leaveRequest.create.mockResolvedValue({
+        ...pendingLeave,
+        startDate: new Date(`${start}T00:00:00.000Z`),
+        endDate: new Date(`${start}T00:00:00.000Z`),
+      });
 
       const result = await service.create(designerId, UserRole.DESIGNER, {
         userId: designerId,
-        type: 'Leave',
+        type: 'Full Day',
         startDate: start,
         endDate: start,
         reasonCategory: 'Vacation',
       });
 
       expect(result.status).toBe('PENDING');
-      expect(mockPrisma.leaveRequest.create).toHaveBeenCalled();
+      expect(result.type).toBe('Full Day');
+      expect(result.leaveDurationDays).toBe(1);
+      expect(mockPrisma.leaveRequest.create).toHaveBeenCalledWith(
+        expect.objectContaining({
+          data: expect.objectContaining({ type: 'Full Day' }),
+        }),
+      );
       expect(mockActivityLogger.log).toHaveBeenCalled();
+    });
+
+    it('creates half-day leave with 0.5 day duration', async () => {
+      const start = futureStart();
+      mockPrisma.user.findUnique.mockResolvedValue({
+        role: { name: UserRole.DESIGNER },
+        departmentId: 'dept-1',
+      });
+      mockPrisma.leaveRequest.create.mockResolvedValue({
+        ...pendingLeave,
+        type: 'Half Day',
+        halfDaySession: 'First Half',
+        startDate: new Date(`${start}T00:00:00.000Z`),
+        endDate: new Date(`${start}T00:00:00.000Z`),
+      });
+
+      const result = await service.create(designerId, UserRole.DESIGNER, {
+        userId: designerId,
+        type: 'Half Day',
+        halfDaySession: 'First Half',
+        startDate: start,
+        endDate: start,
+        reasonCategory: 'Vacation',
+      });
+
+      expect(result.type).toBe('Half Day');
+      expect(result.halfDaySession).toBe('First Half');
+      expect(result.leaveDurationDays).toBe(0.5);
+      expect(result.leaveDurationLabel).toBe('0.5 day');
+    });
+
+    it('rejects half-day leave without a session', async () => {
+      const start = futureStart();
+      mockPrisma.user.findUnique.mockResolvedValue({ role: { name: UserRole.DESIGNER } });
+
+      await expect(
+        service.create(designerId, UserRole.DESIGNER, {
+          userId: designerId,
+          type: 'Half Day',
+          startDate: start,
+          endDate: start,
+          reasonCategory: 'Vacation',
+        }),
+      ).rejects.toThrow('Half Day leave requires a session');
+    });
+
+    it('rejects multi-day half-day leave', async () => {
+      const start = futureStart();
+      const end = new Date(`${start}T00:00:00.000Z`);
+      end.setUTCDate(end.getUTCDate() + 1);
+      mockPrisma.user.findUnique.mockResolvedValue({ role: { name: UserRole.DESIGNER } });
+
+      await expect(
+        service.create(designerId, UserRole.DESIGNER, {
+          userId: designerId,
+          type: 'Half Day',
+          halfDaySession: 'Second Half',
+          startDate: start,
+          endDate: end.toISOString().slice(0, 10),
+          reasonCategory: 'Vacation',
+        }),
+      ).rejects.toThrow('Half Day leave must start and end on the same date');
     });
   });
 
@@ -248,6 +359,23 @@ describe('RequestsService', () => {
   });
 
   describe('review', () => {
+    it('blocks HOD self-approval and self-rejection', async () => {
+      mockPrisma.leaveRequest.findUnique.mockResolvedValue({
+        ...pendingLeave,
+        userId: hodId,
+        user: {
+          id: hodId,
+          fullName: 'HOD User',
+          role: { name: UserRole.HOD },
+          departmentId: 'dept-1',
+        },
+      });
+
+      await expect(
+        service.review(leaveId, hodId, UserRole.HOD, { status: 'APPROVED' }),
+      ).rejects.toThrow('You cannot approve or reject your own leave request');
+    });
+
     it('blocks review of cancelled leave', async () => {
       mockPrisma.leaveRequest.findUnique.mockResolvedValue({ ...pendingLeave, status: 'CANCELLED' });
 
@@ -307,6 +435,37 @@ describe('RequestsService', () => {
       expect(mockActivityLogger.log).toHaveBeenCalledWith(
         expect.objectContaining({ action: 'LEAVE_REQUEST_REVOKED' }),
       );
+    });
+
+    it('allows HOD to revoke their own approved future leave', async () => {
+      const hodOwnLeave = {
+        ...approvedLeave,
+        userId: hodId,
+        user: {
+          id: hodId,
+          fullName: 'HOD User',
+          role: { name: UserRole.HOD },
+          departmentId: 'dept-1',
+        },
+      };
+      mockPrisma.leaveRequest.findUnique.mockResolvedValue(hodOwnLeave);
+      setupHodAccess();
+      mockPrisma.leaveRequest.update.mockResolvedValue({
+        ...hodOwnLeave,
+        status: 'REVOKED',
+        revokedById: hodId,
+        revokedAt: new Date(),
+        revocationReason: 'Personal plan changed',
+        revokedBy: { fullName: 'HOD User' },
+      });
+
+      const result = await service.revoke(leaveId, hodId, UserRole.HOD, {
+        reason: 'Personal plan changed',
+      });
+
+      expect(result.status).toBe('REVOKED');
+      expect(result.revokedById).toBe(hodId);
+      expect(result.revocationReason).toBe('Personal plan changed');
     });
 
     it('rejects revoke without reason', async () => {

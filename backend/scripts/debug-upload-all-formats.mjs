@@ -124,14 +124,17 @@ async function main() {
     { name: 'test.png', mime: 'image/png', bytes: Buffer.from(PNG_B64, 'base64') },
     { name: 'test.jpg', mime: 'image/jpeg', bytes: JPG_BYTES },
     { name: 'test.pdf', mime: 'application/pdf', bytes: PDF_BYTES },
-  ];
-  if (docxPath) {
-    cases.push({
+    {
       name: 'test.docx',
       mime: 'application/vnd.openxmlformats-officedocument.wordprocessingml.document',
-      bytes: readFileSync(docxPath),
-    });
-  }
+      bytes: Buffer.from('mock docx content'),
+    },
+    {
+      name: 'test.xlsx',
+      mime: 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet',
+      bytes: Buffer.from('mock xlsx content'),
+    },
+  ];
 
   const results = [];
   for (const c of cases) {

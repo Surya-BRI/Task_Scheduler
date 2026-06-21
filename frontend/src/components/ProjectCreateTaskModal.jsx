@@ -1,9 +1,25 @@
 import { useEffect, useId, useRef, useState } from 'react'
 import { ChevronDown, ChevronRight, Pencil, X } from 'lucide-react'
+
+function isValidHttpUrl(str) {
+  try { const u = new URL(str); return u.protocol === 'http:' || u.protocol === 'https:' } catch { return false }
+}
+function deriveFileNameFromUrl(url) {
+  try { const p = new URL(url).pathname; return decodeURIComponent(p.split('/').filter(Boolean).pop() || url) } catch { return url }
+}
 import { apiClient } from '@/lib/api-client'
+import { toast } from 'sonner'
 
 const PRIORITY_OPTIONS = ['Low', 'Medium', 'High']
 const REVISION_PATTERN = /^R\d+$/
+
+const DISCIPLINES = [
+  { key: 'artwork',   label: 'Artwork',   hoursKey: 'artHours' },
+  { key: 'technical', label: 'Technical', hoursKey: 'techHours' },
+  { key: 'location',  label: 'Location',  hoursKey: 'locationHours' },
+  { key: 'asBuilt',   label: 'As-Built',  hoursKey: 'asBuiltHours' },
+  { key: 'bim',       label: 'BIM',       hoursKey: null },
+]
 
 function getPriorityClasses(level) {
   if (level === 'High') return 'text-red-700 font-semibold'
@@ -70,6 +86,7 @@ function TickBox({ checked, onChange }) {
 export function ProjectCreateTaskModal({ open, onClose, onCreated, submissionDate, record }) {
   const titleId = useId()
   const revisionFetched = useRef(false)
+  const fileInputRef = useRef(null)
   const [rows, setRows] = useState([])
   const [rowsLoading, setRowsLoading] = useState(false)
   const [rowsError, setRowsError] = useState('')
@@ -84,6 +101,12 @@ export function ProjectCreateTaskModal({ open, onClose, onCreated, submissionDat
   const [fieldErrors, setFieldErrors] = useState({})
   const [touched, setTouched] = useState({})
   const [submitAttempted, setSubmitAttempted] = useState(false)
+  const [fileMode, setFileMode] = useState('link')
+  const [selectedFiles, setSelectedFiles] = useState([])
+  const [uploadedFiles, setUploadedFiles] = useState([])
+  const [linkAttachments, setLinkAttachments] = useState([])
+  const [linkUrl, setLinkUrl] = useState('')
+  const [linkError, setLinkError] = useState('')
 
   const startOfToday = new Date()
   startOfToday.setHours(0, 0, 0, 0)
@@ -122,6 +145,12 @@ export function ProjectCreateTaskModal({ open, onClose, onCreated, submissionDat
     setTouched({})
     setSubmitAttempted(false)
     setError('')
+    setFileMode('link')
+    setSelectedFiles([])
+    setUploadedFiles([])
+    setLinkAttachments([])
+    setLinkUrl('')
+    setLinkError('')
   }, [open, submissionDate])
 
   // Fetch sign types from live DB when modal opens
@@ -182,10 +211,12 @@ export function ProjectCreateTaskModal({ open, onClose, onCreated, submissionDat
     )
   }
 
-  // Count only child (sign type) rows — each selected child = one task
+  // Count ticked discipline checkboxes — each tick = one task
   const selectedCount = rows.reduce((count, row) => {
     for (const child of row.children ?? []) {
-      if (rowHasSelection(child)) count += 1
+      for (const disc of DISCIPLINES) {
+        if (child[disc.key]) count += 1
+      }
     }
     return count
   }, 0)
@@ -283,18 +314,36 @@ export function ProjectCreateTaskModal({ open, onClose, onCreated, submissionDat
           if (child[flag]) {
             const h = Number(child[hours])
             if (!child[hours] || Number.isNaN(h) || h < 1) {
-              setRowsError(`${label} hours must be a number (min 1) for all checked disciplines`)
+              toast.error(`${label} hours must be a number (min 1) for all checked disciplines`)
               return
             }
           }
         }
+        const hasAnyDiscipline = DISCIPLINES.some((d) => child[d.key])
+        if (hasAnyDiscipline && !child.deadline) {
+          toast.error(`Deadline is required for "${child.signType || 'sign type'}"`)
+          return
+        }
       }
     }
-    setRowsError('')
     setFieldErrors({})
     setError('')
     setSubmitting(true)
     try {
+      const newlyUploaded = []
+      for (const file of selectedFiles) {
+        const formData = new FormData()
+        formData.append('file', file)
+        const uploaded = await apiClient.post('/tasks/upload-file', formData)
+        newlyUploaded.push(uploaded)
+      }
+      const allUploaded = [...uploadedFiles, ...newlyUploaded]
+      setUploadedFiles(allUploaded)
+      const allAttachments = [
+        ...allUploaded.map((f) => ({ fileKey: f.key, fileName: f.fileName, mimeType: f.mimeType, size: f.size })),
+        ...linkAttachments.map((item) => ({ fileKey: item.url, fileName: item.fileName, mimeType: null, size: undefined })),
+      ]
+
       const fallbackDeadline =
         localDeadline instanceof Date && !Number.isNaN(localDeadline.getTime())
           ? localDeadline.toISOString()
@@ -317,26 +366,27 @@ export function ProjectCreateTaskModal({ open, onClose, onCreated, submissionDat
         return fallbackDeadline
       }
 
-      // Only collect child (sign type) rows — each becomes its own task
+      // One entry per ticked discipline per sign type — each entry becomes its own task
       const details = []
       for (const row of rows) {
         for (const child of row.children ?? []) {
-          if (rowHasSelection(child)) {
+          for (const disc of DISCIPLINES) {
+            if (!child[disc.key]) continue
             details.push({
               signType: child.signType || undefined,
+              signFamily: row.signType || undefined,
               planCode: planCode || undefined,
-              area: undefined,
-              level: undefined,
-              artwork: !!child.artwork,
-              artworkHours: child.artwork ? Number(child.artHours) : undefined,
-              technical: !!child.technical,
-              technicalHours: child.technical ? Number(child.techHours) : undefined,
-              location: !!child.location,
-              locationHours: child.location ? Number(child.locationHours) : undefined,
-              asBuilt: !!child.asBuilt,
-              asBuiltHours: child.asBuilt ? Number(child.asBuiltHours) : undefined,
-              bim: !!child.bim,
-              deadline: resolveDeadline(child.deadline),
+              disciplineType: disc.label,
+              artwork:        disc.key === 'artwork',
+              artworkHours:   disc.key === 'artwork' && disc.hoursKey ? Number(child[disc.hoursKey]) : undefined,
+              technical:      disc.key === 'technical',
+              technicalHours: disc.key === 'technical' && disc.hoursKey ? Number(child[disc.hoursKey]) : undefined,
+              location:       disc.key === 'location',
+              locationHours:  disc.key === 'location' && disc.hoursKey ? Number(child[disc.hoursKey]) : undefined,
+              asBuilt:        disc.key === 'asBuilt',
+              asBuiltHours:   disc.key === 'asBuilt' && disc.hoursKey ? Number(child[disc.hoursKey]) : undefined,
+              bim:            disc.key === 'bim',
+              deadline:       resolveDeadline(child.deadline),
             })
           }
         }
@@ -356,6 +406,7 @@ export function ProjectCreateTaskModal({ open, onClose, onCreated, submissionDat
           dueDate: fallbackDeadline,
         },
         projectDetails: details,
+        attachments: allAttachments.length > 0 ? allAttachments : undefined,
       }
 
       const result = await apiClient.post('/tasks/extended', payload)
@@ -457,6 +508,70 @@ export function ProjectCreateTaskModal({ open, onClose, onCreated, submissionDat
             </div>
           </div>
 
+          {/* Task Files toggle */}
+          <div>
+            <div className="flex items-center justify-between gap-3">
+              <label className="text-xs font-semibold text-slate-600">Task Files</label>
+              <div className={`inline-flex rounded-md border p-1 text-xs ${fileMode === 'link' || fileMode === 'browse' ? 'border-blue-500 bg-blue-50' : 'border-slate-300 bg-slate-50'}`}>
+                <button type="button" onClick={() => setFileMode('link')} className={`rounded px-2 py-1 font-semibold transition-colors ${fileMode === 'link' ? 'bg-blue-600 text-white shadow-sm' : 'text-slate-600 hover:text-slate-900'}`}>Paste Link</button>
+                <button type="button" onClick={() => setFileMode('browse')} className={`rounded px-2 py-1 font-semibold transition-colors ${fileMode === 'browse' ? 'bg-blue-600 text-white shadow-sm' : 'text-slate-600 hover:text-slate-900'}`}>Browse Files</button>
+              </div>
+            </div>
+            {fileMode === 'link' ? (
+              <div className="mt-2 space-y-2">
+                <div className="grid gap-2 sm:grid-cols-[1fr_auto]">
+                  <input
+                    value={linkUrl}
+                    onChange={(e) => { setLinkUrl(e.target.value); setLinkError('') }}
+                    placeholder="Paste Google Drive/S3/HTTP link"
+                    className="w-full rounded-md border border-slate-300 bg-white px-3 py-2 text-sm text-slate-900 outline-none transition-colors focus:border-blue-500 focus:ring-2 focus:ring-blue-500/20"
+                  />
+                  <button
+                    type="button"
+                    onClick={() => {
+                      const url = linkUrl.trim()
+                      if (!isValidHttpUrl(url)) { setLinkError('Enter a valid http/https URL'); return }
+                      setLinkAttachments((prev) => [...prev, { url, fileName: deriveFileNameFromUrl(url) }])
+                      setLinkUrl('')
+                    }}
+                    className="rounded-md border border-blue-400 bg-blue-50 px-3 py-2 text-sm font-medium text-blue-700 transition-colors hover:bg-blue-100"
+                  >
+                    Add Link
+                  </button>
+                </div>
+                {linkError ? <p className="text-xs text-red-600">{linkError}</p> : null}
+              </div>
+            ) : (
+              <div className="mt-2 grid gap-2 sm:grid-cols-[1fr_auto]">
+                <input
+                  value={selectedFiles.length === 0 ? '' : `${selectedFiles.length} file(s) selected`}
+                  readOnly
+                  placeholder="Select task files"
+                  className="w-full rounded-md border border-slate-300 bg-white px-3 py-2 text-sm text-slate-900 outline-none"
+                />
+                <button
+                  type="button"
+                  onClick={() => fileInputRef.current?.click()}
+                  className="shrink-0 rounded-md border border-slate-300 px-3 py-2 text-sm font-medium text-slate-700 transition-colors hover:bg-slate-50"
+                >
+                  Browse
+                </button>
+              </div>
+            )}
+            <input
+              ref={fileInputRef}
+              type="file"
+              multiple
+              className="hidden"
+              onChange={(e) => { setSelectedFiles(Array.from(e.target.files ?? [])); setUploadedFiles([]) }}
+            />
+            {(selectedFiles.length > 0 || linkAttachments.length > 0) && (
+              <div className="mt-2 rounded-md border border-slate-200 bg-slate-50 px-2 py-2 text-xs text-slate-600">
+                {[...selectedFiles.map((f) => f.name), ...linkAttachments.map((i) => i.fileName)].join(', ')}
+              </div>
+            )}
+          </div>
+
           <div className="flex items-center gap-2">
             <select
               value={selectedSignType}
@@ -541,7 +656,18 @@ export function ProjectCreateTaskModal({ open, onClose, onCreated, submissionDat
                           <div className="px-2 py-1.5 text-center"><TickBox checked={child.asBuilt} onChange={(v) => updateChildField(row.id, child.id, 'asBuilt', v)} /></div>
                           <div className="px-1 py-1.5"><TableInput type="number" value={child.asBuiltHours} onChange={(v) => updateChildField(row.id, child.id, 'asBuiltHours', v)} /></div>
                           <div className="px-2 py-1.5 text-center"><TickBox checked={child.bim} onChange={(v) => updateChildField(row.id, child.id, 'bim', v)} /></div>
-                          <div className="px-2 py-1.5"><TableInput type="date" value={child.deadline} onChange={(v) => updateChildField(row.id, child.id, 'deadline', v)} /></div>
+                          <div className="px-2 py-1.5">
+                            <input
+                              type="date"
+                              value={child.deadline}
+                              onChange={(e) => updateChildField(row.id, child.id, 'deadline', e.target.value)}
+                              className={`w-full rounded-full border px-2 text-xs text-slate-700 outline-none focus:border-blue-400 h-7 ${
+                                DISCIPLINES.some((d) => child[d.key]) && !child.deadline
+                                  ? 'border-red-400 bg-red-50'
+                                  : 'border-slate-200 bg-slate-50'
+                              }`}
+                            />
+                          </div>
                         </div>
                       ))}
                     </div>

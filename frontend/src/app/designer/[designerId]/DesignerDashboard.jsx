@@ -20,6 +20,7 @@ import {
 import { listSchedulerAssignmentsForWeek, getSchedulerWeekMeta } from "@/features/scheduler/services/scheduler-assignments.api";
 import { apiClient } from "@/lib/api-client";
 import { getSession } from "@/lib/mock-auth";
+import { connectDashboardRealtime } from "@/lib/realtime";
 
 const UUID_RE = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
 
@@ -75,7 +76,7 @@ function computeLiveData(tasks) {
   const currentYear = now.getFullYear();
 
   const onHold = tasks.filter((t) => t.status === "ON_HOLD");
-  const completed = tasks.filter((t) => t.status === "REVIEW_COMPLETED");
+  const completed = tasks.filter((t) => t.status === "CLIENT_ACCEPTED");
   const active = tasks.filter((t) =>
     ["DESIGN_NEW", "DESIGN_PLANNED", "IN_PROGRESS", "DESIGN_COMPLETED", "HOD_REVIEW", "SALES_REVIEW", "REWORK"].includes(t.status)
   );
@@ -208,6 +209,8 @@ function buildLiveScheduleData(assignments, tasksArr) {
         ? `${apiTask?.opNo ? apiTask.opNo + '-' : ''}${apiTask.revisionCode}`
         : apiTask?.opNo || `Task #${a.taskId.slice(0, 6)}`,
       estimatedHours: Number(a.assignedHours) || 0,
+      scheduledHours: Number(a.scheduledHours ?? a.assignedHours) || 0,
+      approvedOvertimeHours: Number(a.approvedOvertimeHours) || 0,
       colorClass: colorMap[a.taskId],
       splitIndex: a.splitIndex,
       totalParts: a.totalParts,
@@ -405,6 +408,14 @@ export default function DesignerDashboard({ designer: designerProp } = {}) {
       if (!document.hidden) fetchWeekAssignments(false);
     }, 30_000);
     return () => clearInterval(id);
+  }, [erpId, fetchWeekAssignments]);
+
+  useEffect(() => {
+    if (!erpId) return undefined;
+    return connectDashboardRealtime({
+      onDashboardRefresh: () => void fetchWeekAssignments(false),
+      onNotificationsRefresh: () => void fetchWeekAssignments(false),
+    });
   }, [erpId, fetchWeekAssignments]);
 
   // Fetch pending regularization count

@@ -8,6 +8,7 @@ const USER_SELECT = {
   id: true,
   email: true,
   fullName: true,
+  departmentId: true,
   role: { select: { id: true, name: true } },
   department: { select: { id: true, name: true } },
   createdAt: true,

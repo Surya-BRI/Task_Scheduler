@@ -32,17 +32,44 @@ describe('ActivitiesService', () => {
   });
 
   describe('overtime summaries', () => {
-    it('formats submitted overtime as actor + action only', () => {
+    it('formats submitted overtime with sender and recipient context', () => {
       const summary = (service as any).formatSummary(
         'OVERTIME_REQUEST_SUBMITTED',
         {
           messageKey: 'overtime_request_submitted',
           taskSnapshot: { taskNo: 'TSK-OP58199-20260604085458-55584' },
+          context: { designerName: 'Alex Johnson', recipientName: 'Morgan Lee' },
         },
         'Alex Johnson',
       );
 
-      expect(summary).toBe('Alex Johnson submitted an overtime request');
+      expect(summary).toBe('Alex Johnson sent an overtime request to Morgan Lee');
+    });
+
+    it('formats approved overtime with reviewer and requester context', () => {
+      const summary = (service as any).formatSummary(
+        'OVERTIME_REQUEST_APPROVED',
+        {
+          messageKey: 'overtime_request_approved',
+          context: { designerName: 'Alex Johnson', reviewerName: 'Morgan Lee' },
+        },
+        'Morgan Lee',
+      );
+
+      expect(summary).toBe('Morgan Lee accepted the overtime request from Alex Johnson');
+    });
+  });
+
+  describe('chatter summaries', () => {
+    it('includes task title for task chatter posts', () => {
+      const summary = (service as any).formatSummary(
+        'CREATED_CHATTER_POST',
+        { messageKey: 'chatter_post_created' },
+        'Sarah Mitchell',
+        'Retail Signage Layout',
+      );
+
+      expect(summary).toBe('Sarah Mitchell posted in chatter on Task: Retail Signage Layout');
     });
   });
 });
