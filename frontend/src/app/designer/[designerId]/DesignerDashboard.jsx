@@ -236,6 +236,9 @@ function buildLiveScheduleData(assignments, tasksArr) {
   (assignments || []).forEach((a) => {
     const key = a.splitIndex != null ? `${a.taskId}_s${a.splitIndex}` : a.taskId;
     const apiTask = taskById[a.taskId];
+    const approvedOvertimeHours = Number(a.approvedOvertimeHours) || 0;
+    const scheduledHours =
+      Number(a.scheduledHours ?? Math.max((Number(a.assignedHours) || 0) - approvedOvertimeHours, 0)) || 0;
     if (!colorMap[a.taskId]) {
       colorMap[a.taskId] = DASH_COLORS[colorIdx % DASH_COLORS.length];
       colorIdx++;
@@ -249,10 +252,11 @@ function buildLiveScheduleData(assignments, tasksArr) {
       baseName: apiTask?.revisionCode
         ? `${apiTask?.opNo ? apiTask.opNo + '-' : ''}${apiTask.revisionCode}`
         : apiTask?.opNo || `Task #${a.taskId.slice(0, 6)}`,
-      estimatedHours: Number(a.assignedHours) || 0,
-      scheduledHours: Number(a.scheduledHours ?? a.assignedHours) || 0,
-      approvedOvertimeHours: Number(a.approvedOvertimeHours) || 0,
+      estimatedHours: scheduledHours,
+      scheduledHours,
+      approvedOvertimeHours,
       colorClass: colorMap[a.taskId],
+      overtimeColorClass: "bg-red-100 border border-red-300 text-red-800",
       splitIndex: a.splitIndex,
       totalParts: a.totalParts,
     };
