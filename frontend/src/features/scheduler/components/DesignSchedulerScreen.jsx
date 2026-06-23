@@ -36,6 +36,18 @@ import {
     parseWeekStartDate,
     writeSchedulerNavState,
 } from "../utils/schedulerNavigationState";
+// Only these backend events should trigger a scheduler reload for other HODs.
+// Chatter, leave, notifications, etc. are irrelevant to the grid.
+const SCHEDULER_RELOAD_EVENTS = new Set([
+    'task_created',
+    'task_reassigned',
+    'task_status_changed',
+    'overtime_scheduler_action',
+    'scheduler_week_saved',
+    'scheduler_week_locked',
+    'scheduler_week_unlocked',
+]);
+
 // Capacity constants
 const DAILY_CAPACITY = 8; // 8hrs per day = normal capacity (green/blue)
 const MAX_DAILY_HOURS = 12; // absolute max assignable per day
@@ -581,6 +593,8 @@ export function DesignSchedulerScreen() {
     const persistInFlightRef      = useRef(false);
     const pendingPersistRef       = useRef(null);
     const flushPersistRef         = useRef(null);
+    const pendingReloadRef        = useRef(false);
+    const persistDebounceRef      = useRef(null);
     const persistWeekSnapshotRef  = useRef(null);
 
     const [searchQuery, setSearchQuery] = useState("");
@@ -709,7 +723,7 @@ export function DesignSchedulerScreen() {
             Object.entries(dayMap || {}).forEach(([dayStr, taskIds]) => {
                 const dayIndex = Number(dayStr);
                 if (!Number.isFinite(dayIndex) || dayIndex < 0 || dayIndex > 6) return;
-                (taskIds || []).forEach((taskId) => {
+                (taskIds || []).forEach((taskId, positionIndex) => {
                     const task = sourceTasks?.[taskId];
                     if (!task) return;
                     if (task.isOvertime) return;
@@ -724,6 +738,7 @@ export function DesignSchedulerScreen() {
                         parentId: isUuid(task.parentId) ? task.parentId : null,
                         splitIndex: Number.isFinite(task.splitIndex) ? Number(task.splitIndex) : null,
                         totalParts: Number.isFinite(task.totalParts) ? Number(task.totalParts) : null,
+                        position: positionIndex,
                         notes: null,
                     });
                 });
@@ -927,7 +942,12 @@ export function DesignSchedulerScreen() {
             console.warn('Unable to persist scheduler snapshot', error);
         } finally {
             persistInFlightRef.current = false;
-            flushPersistRef.current?.();
+            if (pendingReloadRef.current) {
+                pendingReloadRef.current = false;
+                reloadWeek();
+            } else {
+                flushPersistRef.current?.();
+            }
         }
     }, [currentDate, reloadWeek]);
     useEffect(() => {
@@ -937,7 +957,13 @@ export function DesignSchedulerScreen() {
     const persistWeekSnapshot = useCallback((nextSchedules, nextTasks) => {
         const weekStartStr = formatLocalYyyyMmDd(getWeekDays(currentDate)[0]);
         pendingPersistRef.current = { schedules: nextSchedules, tasks: nextTasks, weekStartStr };
-        flushPersist();
+        // Debounce: if another change arrives within 600ms, batch it into one save.
+        // Rapid sequential drops (moving multiple tasks quickly) → single PUT instead of many.
+        if (persistDebounceRef.current) clearTimeout(persistDebounceRef.current);
+        persistDebounceRef.current = setTimeout(() => {
+            persistDebounceRef.current = null;
+            flushPersist();
+        }, 600);
 
         // Carry split-overflow tasks to Monday of next week for the same designer.
         try {
@@ -1020,9 +1046,48 @@ export function DesignSchedulerScreen() {
         };
     }, [currentDate, reloadWeek]);
 
+    // Flush any debounced pending save when the user hides the tab (switches away or closes).
+    // The page is still alive at this point so the async PUT completes — prevents losing
+    // changes that were queued inside the 600ms debounce window.
+    useEffect(() => {
+        const onHide = () => {
+            if (document.visibilityState !== 'hidden') return;
+            if (!pendingPersistRef.current) return;
+            if (persistDebounceRef.current) {
+                clearTimeout(persistDebounceRef.current);
+                persistDebounceRef.current = null;
+            }
+            flushPersist();
+        };
+        document.addEventListener('visibilitychange', onHide);
+        return () => document.removeEventListener('visibilitychange', onHide);
+    }, [flushPersist]);
+
     useEffect(() => {
         return connectDashboardRealtime({
-            onDashboardRefresh: () => reloadWeek(),
+            onDashboardRefresh: (payload) => {
+                // Ignore events that don't affect the scheduler grid (chatter, leave, notifications…)
+                if (payload?.event && !SCHEDULER_RELOAD_EVENTS.has(payload.event)) return;
+                // Lock/unlock: sync state immediately without a full reload
+                if (payload?.event === 'scheduler_week_locked') {
+                    setIsWeekLocked(true);
+                    isWeekLockedRef.current = true;
+                    return;
+                }
+                if (payload?.event === 'scheduler_week_unlocked') {
+                    setIsWeekLocked(false);
+                    isWeekLockedRef.current = false;
+                    return;
+                }
+                // Defer if a snapshot save is pending or in-flight — our optimistic state is
+                // more current than the backend right now. Fire the reload in the finally block
+                // once the save lands so we don't overwrite correct local state with stale DB data.
+                if (persistInFlightRef.current || pendingPersistRef.current) {
+                    pendingReloadRef.current = true;
+                    return;
+                }
+                reloadWeek();
+            },
         });
     }, [reloadWeek]);
 

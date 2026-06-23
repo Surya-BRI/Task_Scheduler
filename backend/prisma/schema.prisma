@@ -570,6 +570,7 @@ model SchedulerAssignment {
   weekStartDate DateTime? @db.Date
   weekEndDate   DateTime? @db.Date
   notes         String?   @db.NVarChar(Max)
+  position      Int?      @default(0)
   isLocked      Boolean?  @default(false)
   assignedBy    String?   @db.UniqueIdentifier
   assignedByUser User?    @relation("SchedulerAssignedBy", fields: [assignedBy], references: [id], onDelete: NoAction, onUpdate: NoAction)

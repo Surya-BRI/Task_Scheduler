@@ -1915,6 +1915,18 @@ export function TaskDetailsPage() {
                           <DetailRow label="Revision" value={record.revisionCode ?? '-'} />
                           <DetailRow label="Task Status" value={record.status ?? '-'} />
                           <DetailRow label="Priority Level" value={record.priority ?? '-'} />
+                          <DetailRow
+                            label="Assigned Hours"
+                            value={(() => {
+                              if (record.hoursRequired > 0) return `${record.hoursRequired}h`
+                              const total = Array.isArray(record.projectDetails)
+                                ? record.projectDetails.reduce((sum, d) =>
+                                    sum + (Number(d.artworkHours) || 0) + (Number(d.technicalHours) || 0) +
+                                    (Number(d.locationHours) || 0) + (Number(d.asBuiltHours) || 0), 0)
+                                : 0
+                              return total > 0 ? `${total}h` : '-'
+                            })()}
+                          />
                         </div>
                         <div className="space-y-0.5">
                           <DetailRow label="Created Date" value={record.created ?? '-'} />

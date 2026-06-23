@@ -25,6 +25,8 @@ async function main(): Promise<void> {
 
   const demoAccounts = [
     { fullName: 'Sarah Mitchell', email: 'sarah.mitchell@bluerhine.com', password: 'hod123', role: hodRole },
+    { fullName: 'James Carter', email: 'james.carter@bluerhine.com', password: 'hod456', role: hodRole },
+    { fullName: 'Priya Sharma', email: 'priya.sharma@bluerhine.com', password: 'hod789', role: hodRole },
     { fullName: 'Alex Johnson', email: 'alex.johnson@bluerhine.com', password: 'alex123', role: designerRole },
     { fullName: 'Alexander Allen', email: 'alexander.allen@bluerhine.com', password: 'alex123', role: designerRole },
     { fullName: 'Benjamin Harris', email: 'benjamin.harris@bluerhine.com', password: 'ben123', role: designerRole },

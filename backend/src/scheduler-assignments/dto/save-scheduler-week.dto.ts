@@ -36,6 +36,12 @@ export class SchedulerAssignmentInputDto {
   totalParts?: number | null;
 
   @IsOptional()
+  @Type(() => Number)
+  @IsInt()
+  @Min(0)
+  position?: number;
+
+  @IsOptional()
   @IsString()
   notes?: string | null;
 }

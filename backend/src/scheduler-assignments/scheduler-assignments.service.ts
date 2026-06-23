@@ -250,7 +250,7 @@ export class SchedulerAssignmentsService {
     try {
       const rows = await this.prisma.schedulerAssignment.findMany({
         where: { weekStartDate, ...(designerId ? { designerId } : {}) },
-        orderBy: [{ designerId: 'asc' }, { dayIndex: 'asc' }, { id: 'asc' }],
+        orderBy: [{ designerId: 'asc' }, { dayIndex: 'asc' }, { position: 'asc' }, { id: 'asc' }],
       });
 
       const weekEndDate = new Date(weekStartDate);
@@ -408,8 +408,7 @@ export class SchedulerAssignmentsService {
           },
         });
 
-        const todayMidnight = new Date();
-        todayMidnight.setHours(0, 0, 0, 0);
+        const todayMidnight = new Date(new Date().toISOString().split('T')[0] + 'T00:00:00.000Z');
         await tx.schedulerAssignment.deleteMany({
           where: { taskId: request.taskId, weekStartDate: { gte: todayMidnight } },
         });
@@ -483,6 +482,8 @@ export class SchedulerAssignmentsService {
       },
     });
 
+    this.dashboardRealtime?.notifyOverviewRefresh(locked ? 'scheduler_week_locked' : 'scheduler_week_unlocked');
+
     return {
       weekStart,
       version: result.version,
@@ -493,8 +494,7 @@ export class SchedulerAssignmentsService {
   }
 
   async clearTaskSchedule(taskId: string): Promise<void> {
-    const todayMidnight = new Date();
-    todayMidnight.setHours(0, 0, 0, 0);
+    const todayMidnight = new Date(new Date().toISOString().split('T')[0] + 'T00:00:00.000Z');
     await this.prisma.schedulerAssignment.deleteMany({
       where: { taskId, weekStartDate: { gte: todayMidnight } },
     });
@@ -649,6 +649,7 @@ export class SchedulerAssignmentsService {
             parentId: a.parentId ?? null,
             splitIndex: a.splitIndex ?? null,
             totalParts: a.totalParts ?? null,
+            position: a.position ?? 0,
             weekStartDate,
             weekEndDate,
             notes: a.notes ?? null,
@@ -807,7 +808,7 @@ export class SchedulerAssignmentsService {
 
       const newRows = await tx.schedulerAssignment.findMany({
         where: { weekStartDate },
-        orderBy: [{ designerId: 'asc' }, { dayIndex: 'asc' }, { id: 'asc' }],
+        orderBy: [{ designerId: 'asc' }, { dayIndex: 'asc' }, { position: 'asc' }, { id: 'asc' }],
       });
 
       return {
@@ -941,6 +942,7 @@ export class SchedulerAssignmentsService {
           },
         },
       });
+      this.dashboardRealtime?.notifyOverviewRefresh('scheduler_week_saved');
     }
 
     return {

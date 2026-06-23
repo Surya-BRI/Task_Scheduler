@@ -1150,8 +1150,7 @@ export class TasksService {
     // When transitioning to ON_HOLD, remove all future scheduler assignments so the
     // task doesn't appear as assigned on the scheduler grid
     if (newStatusApi === 'ON_HOLD') {
-      const todayMidnight = new Date();
-      todayMidnight.setHours(0, 0, 0, 0);
+      const todayMidnight = new Date(new Date().toISOString().split('T')[0] + 'T00:00:00.000Z');
       await this.prisma.schedulerAssignment.deleteMany({
         where: { taskId: id, weekStartDate: { gte: todayMidnight } },
       });
