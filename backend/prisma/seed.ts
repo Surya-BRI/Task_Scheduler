@@ -51,40 +51,33 @@ async function main(): Promise<void> {
   }
 
   const qsUser = await prisma.user.findUnique({ where: { email: 'qs.team@bluerhine.com' } });
-  const completedProject = await prisma.project.upsert({
-    where: { projectNo: 'BRI-QS-COMPLETED-E2E' },
-    update: {
-      name: 'QS Completed Verification Project',
-      category: 'Project',
-      status: 'ACTIVE',
-      salesPerson: 'QS Test Data',
-    },
-    create: {
+  const completedProject = await (async () => {
+    const existing = await prisma.project.findUnique({ where: { projectNo: 'BRI-QS-COMPLETED-E2E' } });
+    if (existing) return existing;
+    return prisma.project.create({
+      data: {
       projectNo: 'BRI-QS-COMPLETED-E2E',
       name: 'QS Completed Verification Project',
-      category: 'Project',
+      category: 'QS_TEST',
       status: 'ACTIVE',
       salesPerson: 'QS Test Data',
-    },
-  });
-  const completedTask = await prisma.task.upsert({
-    where: { taskNo: 'TSK-QS-COMPLETED-E2E' },
-    update: {
-      projectId: completedProject.id,
-      title: 'Completed QS Sign Family Verification',
-      designType: 'Project',
-      status: 'DESIGN_COMPLETED',
-      priority: 'Low',
-    },
-    create: {
+      },
+    });
+  })();
+  const completedTask = await (async () => {
+    const existing = await prisma.task.findUnique({ where: { taskNo: 'TSK-QS-COMPLETED-E2E' } });
+    if (existing) return existing;
+    return prisma.task.create({
+      data: {
       taskNo: 'TSK-QS-COMPLETED-E2E',
       projectId: completedProject.id,
       title: 'Completed QS Sign Family Verification',
       designType: 'Project',
       status: 'DESIGN_COMPLETED',
       priority: 'Low',
-    },
-  });
+      },
+    });
+  })();
   await prisma.projectSignRow.deleteMany({ where: { taskId: completedTask.id } });
   await prisma.projectSignRow.create({
     data: {

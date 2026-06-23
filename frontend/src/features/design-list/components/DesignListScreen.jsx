@@ -211,6 +211,12 @@ export function DesignListScreen() {
   }, [filters.searchQuery, filters.status]);
 
   const filteredDesigns = useMemo(() => allDesigns.filter((d) => {
+    if (
+      d.designType === "QS_TEST" ||
+      d.projectNo === "BRI-QS-COMPLETED-E2E" ||
+      d.projectNo?.startsWith("BRI-QS-SMOKE-") ||
+      d.projectNo?.startsWith("BRI-QS-AUDIT-")
+    ) return false;
     if (filters.type && d.designType !== filters.type) return false;
     if (filters.salesPerson && d.salesPerson !== filters.salesPerson) return false;
     return matchDateRange(d.submissionDate, filters.startDate, filters.endDate);
