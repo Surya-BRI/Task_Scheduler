@@ -18,6 +18,7 @@ export type SchedulerAssignmentRow = {
   assignedBy: string | null;
   createdAt: Date;
   updatedAt: Date;
+  overtimeRequestIds?: string[];
 };
 
 export type SchedulerWeekMeta = {
@@ -73,4 +74,14 @@ export function unlockSchedulerWeek(weekStart: string) {
 
 export function clearTaskFromSchedule(taskId: string) {
   return apiClient.delete(`/scheduler-assignments/task/${encodeURIComponent(taskId)}`);
+}
+
+export function updateOvertimeRequestSchedulerAction(
+  requestId: string,
+  action: 'ON_HOLD' | 'UNASSIGN',
+) {
+  return apiClient.post(
+    `/scheduler-assignments/overtime-requests/${encodeURIComponent(requestId)}/action`,
+    { action },
+  );
 }
