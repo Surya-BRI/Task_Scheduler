@@ -9,6 +9,7 @@ describe('DashboardService', () => {
       groupBy: jest.fn(),
       findMany: jest.fn(),
     },
+    taskDesigner: { findMany: jest.fn() },
     project: { count: jest.fn() },
     schedulerAssignment: { findMany: jest.fn().mockResolvedValue([]) },
     activityLog: { findMany: jest.fn().mockResolvedValue([]) },
@@ -21,24 +22,36 @@ describe('DashboardService', () => {
 
   beforeEach(() => {
     jest.clearAllMocks();
+    prisma.taskDesigner.findMany.mockResolvedValue([]);
   });
 
   describe('getMetrics', () => {
-    it('scopes designer metrics to assigneeId', async () => {
+    it('scopes designer metrics to direct and split assignments', async () => {
       prisma.task.count.mockResolvedValue(4);
       prisma.task.groupBy.mockResolvedValue([
         { status: 'PENDING', _count: { status: 4 } },
       ]);
       prisma.task.findMany.mockResolvedValue([{ projectId: 'p1' }, { projectId: 'p2' }]);
+      prisma.taskDesigner.findMany.mockResolvedValue([{ taskId: 'split-task-1' }]);
 
       await service.getMetrics('designer-1', UserRole.DESIGNER);
 
       expect(prisma.task.count).toHaveBeenCalledWith({
-        where: { assigneeId: 'designer-1' },
+        where: {
+          OR: [
+            { assigneeId: 'designer-1' },
+            { id: { in: ['split-task-1'] } },
+          ],
+        },
       });
       expect(prisma.task.groupBy).toHaveBeenCalledWith(
         expect.objectContaining({
-          where: { assigneeId: 'designer-1' },
+          where: {
+            OR: [
+              { assigneeId: 'designer-1' },
+              { id: { in: ['split-task-1'] } },
+            ],
+          },
         }),
       );
     });
@@ -50,7 +63,7 @@ describe('DashboardService', () => {
         { status: 'PENDING', _count: { status: 17 } },
         { status: 'DESIGN_NEW', _count: { status: 17 } },
         { status: 'ON_HOLD', _count: { status: 1 } },
-        { status: 'COMPLETED', _count: { status: 2 } },
+        { status: 'CLIENT_ACCEPTED', _count: { status: 2 } },
       ]);
 
       prisma.user.findUnique.mockResolvedValue({ departmentId: null });
@@ -99,6 +112,7 @@ describe('DashboardService', () => {
           startDate: new Date('2026-06-10'),
           endDate: new Date('2026-06-12'),
           createdAt: new Date(),
+          type: 'Full Day',
           user: { id: 'designer-1', fullName: 'Alex Johnson' },
         },
       ]);
