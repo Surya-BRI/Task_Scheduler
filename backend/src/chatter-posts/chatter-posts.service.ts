@@ -620,6 +620,30 @@ export class ChatterPostsService implements OnModuleInit {
     return `/chatter?${q.toString()}`;
   }
 
+  private async assertQsChatterContextAccess(
+    taskId: string | null | undefined,
+    projectId: string | null | undefined,
+    userId: string,
+    role: UserRole | string,
+  ) {
+    if (String(role) !== UserRole.QS) return;
+    const task = optionalUuid(taskId);
+    const project = optionalUuid(projectId);
+    if (!task && !project) {
+      throw new ForbiddenException('QS chatter must be tied to an assigned project or task');
+    }
+    const rows = await this.prisma.$queryRaw<Array<{ id: string }>>(Prisma.sql`
+      SELECT TOP 1 [assignment].[id] AS [id]
+      FROM [ErpTSProjectQsAssignment] [assignment]
+      ${task ? Prisma.sql`INNER JOIN [ErpTSTask] [task] ON [task].[projectId] = [assignment].[projectId]` : Prisma.empty}
+      WHERE [assignment].[qsUserId] = ${userId}
+        ${task ? Prisma.sql`AND [task].[id] = ${task}` : Prisma.sql`AND [assignment].[projectId] = ${project}`}
+    `);
+    if (rows.length === 0) {
+      throw new ForbiddenException('QS users can only use chatter for assigned projects');
+    }
+  }
+
   private async notifyMentionedUsers(params: {
     mentionedUserIds: string[];
     authorId: string;
@@ -642,8 +666,6 @@ export class ChatterPostsService implements OnModuleInit {
       projectId: params.projectId,
     });
 
-    const verb = params.isComment ? 'commented and mentioned you' : 'mentioned you';
-
     for (const userId of uniqueUuids(params.mentionedUserIds)) {
       if (userId === params.authorId) continue;
       try {
@@ -657,25 +679,6 @@ export class ChatterPostsService implements OnModuleInit {
           },
         });
         this.dashboardRealtime?.notifyUserNotificationRefresh(userId);
-        await this.activityLogger.log({
-          action: ActivityAction.CHATTER_MENTION,
-          userId: params.authorId,
-          taskId: params.taskId ?? null,
-          details: {
-            event: ActivityAction.CHATTER_MENTION,
-            messageKey: 'chatter_mention',
-            changes: {
-              mentionedUserId: userId,
-              postId: params.postId,
-              commentId: params.commentId ?? null,
-            },
-            context: {
-              projectId: params.projectId ?? null,
-              postId: params.postId,
-              commentId: params.commentId ?? null,
-            },
-          },
-        });
       } catch (err) {
         this.logger.warn(`Mention notification failed for ${userId}: ${err}`);
       }
@@ -1119,6 +1122,8 @@ export class ChatterPostsService implements OnModuleInit {
     postTypeFilter?: string,
     weekStartFilter?: string,
     cursor?: string,
+    viewerId?: string,
+    viewerRole?: string,
   ): Promise<{ data: ChatterPostDto[]; pageInfo: { hasMore: boolean; nextCursor: string | null } }> {
     const limit = Math.min(200, Math.max(1, Number.parseInt(limitParam ?? '50', 10) || 50));
     const taskId = optionalUuid(taskIdFilter);
@@ -1128,6 +1133,15 @@ export class ChatterPostsService implements OnModuleInit {
     const postType = postTypeFilter?.trim() || null;
 
     const whereParts: string[] = [];
+    if (viewerRole === UserRole.QS) {
+      if (!viewerId) throw new ForbiddenException('QS access requires an authenticated user');
+      whereParts.push(`EXISTS (
+        SELECT 1
+        FROM ErpTSProjectQsAssignment qsa
+        WHERE qsa.qsUserId = ${sqlQuotedUuid(viewerId)}
+          AND qsa.projectId = COALESCE(t.projectId, p.projectId)
+      )`);
+    }
     if (taskId) {
       whereParts.push(`p.taskId = ${sqlQuotedUuid(taskId)}`);
     } else if (projectId) {
@@ -1248,7 +1262,7 @@ export class ChatterPostsService implements OnModuleInit {
     }
 
     const postExists = await this.prisma.$queryRaw<Array<{ id: string; taskId: string | null; projectId: string | null }>>`
-      SELECT TOP 1 p.id, p.taskId, t.projectId
+      SELECT TOP 1 p.id, p.taskId, COALESCE(t.projectId, p.projectId) AS projectId
       FROM ErpTSChatterPost p
       LEFT JOIN ErpTSTask t ON t.id = p.taskId
       WHERE p.id = ${normalizedPostId}`;
@@ -1257,6 +1271,7 @@ export class ChatterPostsService implements OnModuleInit {
     }
 
     const postContext = postExists[0];
+    await this.assertQsChatterContextAccess(postContext.taskId, postContext.projectId, authorId, authorRole);
     const mentionUserIds = await this.collectCommentMentionUserIds(
       dto,
       dto.message,
@@ -1447,6 +1462,7 @@ export class ChatterPostsService implements OnModuleInit {
     );
     const resolvedTitle = listingLabel ?? this.resolveDisplayTitle(dto.title, taskMeta.taskOpNo);
     const resolvedProjectId = taskMeta.projectId ?? dtoProjectId;
+    await this.assertQsChatterContextAccess(taskId, resolvedProjectId, authorId, authorRole);
     const mentionUserIds = await this.collectPostMentionUserIds(
       dto,
       dto.message,

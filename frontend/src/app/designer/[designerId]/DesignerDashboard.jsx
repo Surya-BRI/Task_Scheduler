@@ -19,10 +19,21 @@ import {
 } from "@/features/scheduler/utils/schedulerWeek";
 import { listSchedulerAssignmentsForWeek, getSchedulerWeekMeta } from "@/features/scheduler/services/scheduler-assignments.api";
 import { apiClient } from "@/lib/api-client";
+import { FROM_DESIGNER_QUEUE, taskViewPathForRecord } from "@/lib/design-list-routes";
 import { getSession } from "@/lib/mock-auth";
 import { connectDashboardRealtime } from "@/lib/realtime";
 
 const UUID_RE = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
+const ACTIVE_TASK_STATUSES = new Set([
+  "DESIGN_NEW",
+  "DESIGN_PLANNED",
+  "IN_PROGRESS",
+  "HOD_REVIEW",
+  "SALES_REVIEW",
+  "REWORK",
+  "CLIENT_REJECTED",
+]);
+const COMPLETED_TASK_STATUSES = new Set(["DESIGN_COMPLETED", "CLIENT_ACCEPTED"]);
 
 function fmtYmd(date) {
   const y = date.getFullYear();
@@ -67,6 +78,33 @@ function formatWorkTillLabel(date) {
   return `${d.toLocaleDateString("en-US", { weekday: "long" })} ${getOrdinal(d.getDate())}`;
 }
 
+function normalizeStatus(status) {
+  return String(status ?? "").trim().toUpperCase();
+}
+
+function taskSortDate(task) {
+  return new Date(task.completedAt ?? task.updatedAt ?? task.createdAt ?? 0).getTime();
+}
+
+async function fetchAllDesignerTasks(erpId) {
+  const limit = 200;
+  const firstPage = await apiClient.get(`/tasks?assigneeId=${erpId}&page=1&limit=${limit}`);
+  const firstRows = Array.isArray(firstPage?.data) ? firstPage.data : [];
+  const totalPages = Number(firstPage?.totalPages ?? 1);
+  if (totalPages <= 1) return firstRows;
+
+  const rest = await Promise.all(
+    Array.from({ length: totalPages - 1 }, (_, idx) =>
+      apiClient.get(`/tasks?assigneeId=${erpId}&page=${idx + 2}&limit=${limit}`).catch(() => null)
+    )
+  );
+
+  return rest.reduce((acc, page) => {
+    if (Array.isArray(page?.data)) acc.push(...page.data);
+    return acc;
+  }, firstRows);
+}
+
 function computeLiveData(tasks) {
   if (!Array.isArray(tasks) || tasks.length === 0) return null;
 
@@ -75,29 +113,31 @@ function computeLiveData(tasks) {
   const currentMonth = now.getMonth();
   const currentYear = now.getFullYear();
 
-  const onHold = tasks.filter((t) => t.status === "ON_HOLD");
-  const completed = tasks.filter((t) => t.status === "CLIENT_ACCEPTED");
-  const active = tasks.filter((t) =>
-    ["DESIGN_NEW", "DESIGN_PLANNED", "IN_PROGRESS", "DESIGN_COMPLETED", "HOD_REVIEW", "SALES_REVIEW", "REWORK"].includes(t.status)
-  );
+  const onHold = tasks
+    .filter((t) => normalizeStatus(t.status) === "ON_HOLD")
+    .sort((a, b) => taskSortDate(b) - taskSortDate(a));
+  const completed = tasks
+    .filter((t) => COMPLETED_TASK_STATUSES.has(normalizeStatus(t.status)))
+    .sort((a, b) => taskSortDate(b) - taskSortDate(a));
+  const active = tasks.filter((t) => ACTIVE_TASK_STATUSES.has(normalizeStatus(t.status)));
   const total = tasks.length || 1;
 
   // OnHoldTable rows
   const onHoldTasks = onHold.map((task, idx) => ({
+    id: task.id,
     no: idx + 1,
     details: task.title ?? task.opNo ?? "-",
     taskNo: task.taskNo ?? "-",
     projectDetails: task.project?.name ?? task.project?.projectNo ?? "-",
+    designType: task.designType ?? task.project?.category ?? null,
+    status: normalizeStatus(task.status),
     pct: 0,
     deadline: fmtDdMmYyyy(task.dueDate),
     urgent: task.dueDate ? new Date(task.dueDate) < threeDaysFromNow : false,
   }));
 
   // WeeksSection: group completed by ISO week, most recent = Week 1
-  const completedSorted = [...completed].sort(
-    (a, b) =>
-      new Date(b.updatedAt ?? b.createdAt) - new Date(a.updatedAt ?? a.createdAt)
-  );
+  const completedSorted = [...completed];
   const weekGroups = {};
   for (const task of completedSorted) {
     const dateVal = task.updatedAt ?? task.createdAt;
@@ -105,17 +145,18 @@ function computeLiveData(tasks) {
     const weekKey = `${new Date(dateVal).getFullYear()}-W${getISOWeek(dateVal)}`;
     if (!weekGroups[weekKey]) weekGroups[weekKey] = [];
     weekGroups[weekKey].push({
+      id: task.id,
       taskNo: task.taskNo ?? "-",
       projectDetails: task.project?.name ?? task.project?.projectNo ?? "-",
       designType: task.designType ?? null,
       revisionCode: task.revisionCode ?? null,
+      status: normalizeStatus(task.status),
       pctComplete: 100,
       deadline: fmtDdMmYyyy(task.dueDate),
     });
   }
   const completedTasksByWeek = {};
   Object.keys(weekGroups)
-    .slice(0, 4)
     .forEach((key, idx) => {
       completedTasksByWeek[`Week ${idx + 1}`] = weekGroups[key];
     });
@@ -195,6 +236,9 @@ function buildLiveScheduleData(assignments, tasksArr) {
   (assignments || []).forEach((a) => {
     const key = a.splitIndex != null ? `${a.taskId}_s${a.splitIndex}` : a.taskId;
     const apiTask = taskById[a.taskId];
+    const approvedOvertimeHours = Number(a.approvedOvertimeHours) || 0;
+    const scheduledHours =
+      Number(a.scheduledHours ?? Math.max((Number(a.assignedHours) || 0) - approvedOvertimeHours, 0)) || 0;
     if (!colorMap[a.taskId]) {
       colorMap[a.taskId] = DASH_COLORS[colorIdx % DASH_COLORS.length];
       colorIdx++;
@@ -208,10 +252,11 @@ function buildLiveScheduleData(assignments, tasksArr) {
       baseName: apiTask?.revisionCode
         ? `${apiTask?.opNo ? apiTask.opNo + '-' : ''}${apiTask.revisionCode}`
         : apiTask?.opNo || `Task #${a.taskId.slice(0, 6)}`,
-      estimatedHours: Number(a.assignedHours) || 0,
-      scheduledHours: Number(a.scheduledHours ?? a.assignedHours) || 0,
-      approvedOvertimeHours: Number(a.approvedOvertimeHours) || 0,
+      estimatedHours: scheduledHours,
+      scheduledHours,
+      approvedOvertimeHours,
       colorClass: colorMap[a.taskId],
+      overtimeColorClass: "bg-red-100 border border-red-300 text-red-800",
       splitIndex: a.splitIndex,
       totalParts: a.totalParts,
     };
@@ -314,10 +359,9 @@ export default function DesignerDashboard({ designer: designerProp } = {}) {
   useEffect(() => {
     if (!erpId) return;
     let cancelled = false;
-    apiClient.get(`/tasks?assigneeId=${erpId}&page=1&limit=200`)
-      .then((tasksRes) => {
+    fetchAllDesignerTasks(erpId)
+      .then((tasks) => {
         if (cancelled) return;
-        const tasks = Array.isArray(tasksRes?.data) ? tasksRes.data : [];
         allTasksRef.current = tasks;
         const computed = computeLiveData(tasks);
         if (computed) setLiveData(computed);
@@ -492,7 +536,15 @@ export default function DesignerDashboard({ designer: designerProp } = {}) {
 
   const onHoldTasks = liveData?.onHoldTasks ?? designer.onHoldTasks;
   const completedTasksByWeek = liveData?.completedTasksByWeek ?? designer.completedTasksByWeek;
+  const completedTaskCount = Object.values(completedTasksByWeek).reduce(
+    (acc, tasks) => acc + (Array.isArray(tasks) ? tasks.length : 0),
+    0
+  );
   const donut = liveData?.donut ?? designer.donut;
+
+  const openTask = useCallback((task) => {
+    router.push(taskViewPathForRecord(task, { from: FROM_DESIGNER_QUEUE }));
+  }, [router]);
 
   return (
     <div className="app-shell flex flex-col font-sans">
@@ -554,14 +606,14 @@ export default function DesignerDashboard({ designer: designerProp } = {}) {
               onClick={() => setActivePanel(activePanel === "onHold" ? null : "onHold")}
               className={`ui-chip-button ${activePanel === "onHold" ? "ui-chip-button-active" : ""}`}
             >
-              On Hold Tasks
+              On Hold Tasks ({onHoldTasks.length})
             </button>
             <button
               type="button"
               onClick={() => setActivePanel(activePanel === "completed" ? null : "completed")}
               className={`ui-chip-button ${activePanel === "completed" ? "ui-chip-button-active" : ""}`}
             >
-              Completed Tasks
+              Completed Tasks ({completedTaskCount})
             </button>
             {isDesignerMode && (
               <div className="ml-auto flex gap-3">
@@ -583,9 +635,9 @@ export default function DesignerDashboard({ designer: designerProp } = {}) {
             )}
           </div>
 
-          {activePanel === "onHold" && <OnHoldTable tasks={onHoldTasks} />}
+          {activePanel === "onHold" && <OnHoldTable tasks={onHoldTasks} onOpenTask={openTask} />}
           {activePanel === "completed" && (
-            <WeeksSection completedTasksByWeek={completedTasksByWeek} />
+            <WeeksSection completedTasksByWeek={completedTasksByWeek} onOpenTask={openTask} />
           )}
         </div>
 

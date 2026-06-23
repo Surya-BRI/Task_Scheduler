@@ -7,7 +7,7 @@
   "license": "UNLICENSED",
   "scripts": {
     "clean": "node -e \"try{require('fs').rmSync('dist',{recursive:true,force:true});require('fs').rmSync('tsconfig.build.tsbuildinfo',{force:true})}catch(e){}\"",
-    "build": "nest build && node -e \"const fs=require('fs'),path=require('path'),main=path.join('dist','main.js'),shim=path.join('dist','src','main.js');if(!fs.existsSync(main)){console.error('Build output missing:',main);process.exit(1)}fs.mkdirSync(path.dirname(shim),{recursive:true});fs.writeFileSync(shim,\\\"require('../main.js');\\\\n\\\",'utf8');console.log('Legacy PM2 entry ready:',shim)\"",
+    "build": "nest build && node -e \"const fs=require('fs'),path=require('path');const d=path.join(process.cwd(),'dist','src');fs.mkdirSync(d,{recursive:true});fs.writeFileSync(path.join(d,'main.js'),\\\"require('../main.js');\\n\\\")\"",
     "start:pm2": "pm2 start ecosystem.config.cjs",
     "format": "prettier --write \"src/**/*.ts\" \"test/**/*.ts\"",
     "start": "nest start",
@@ -26,6 +26,7 @@
     "prisma:migrate": "prisma migrate dev",
     "prisma:seed": "tsx prisma/seed.ts",
     "prisma:ensure-tables": "tsx prisma/ensure-activity-log-table.ts",
+    "prisma:ensure-project-qs-assignments": "tsx prisma/ensure-project-qs-assignments.ts",
     "prisma:ensure-foreign-keys": "tsx prisma/ensure-foreign-keys.ts",
     "prisma:audit-schema": "tsx prisma/scripts/audit-erp-ts-schema.ts",
     "typecheck": "tsc --noEmit"

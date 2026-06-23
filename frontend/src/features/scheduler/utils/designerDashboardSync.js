@@ -3,6 +3,7 @@ export const SCHEDULER_DASHBOARD_SYNC_EVENT = "design-scheduler:updated";
 
 const DAY_NAMES = ["Monday", "Tuesday", "Wednesday", "Thursday", "Friday", "Saturday", "Sunday"];
 const MAX_DAILY_HOURS = 12;
+const NORMAL_DAILY_HOURS = 8;
 
 const toTaskLabel = (task) => {
   if (task.splitIndex && task.totalParts && task.totalParts > 1) {
@@ -17,8 +18,20 @@ const toPositiveHours = (value) => {
   return parsed;
 };
 
+const getRegularHours = (task) => {
+  if (task?.isOvertime) return 0;
+  return toPositiveHours(task?.scheduledHours ?? task?.estimatedHours);
+};
+
+const getOvertimeHours = (task) => {
+  if (task?.isOvertime) return toPositiveHours(task?.approvedOvertimeHours ?? task?.estimatedHours);
+  return toPositiveHours(task?.approvedOvertimeHours);
+};
+
 const buildDaySlot = (taskIds, tasksMap) => {
-  let cursor = 0;
+  let regularCursor = 0;
+  let overtimeCursor = NORMAL_DAILY_HOURS;
+  let hasOvertime = false;
   const rawTasks = [];
   const rawTaskIds = [];
   const rawRecordIds = [];
@@ -26,27 +39,49 @@ const buildDaySlot = (taskIds, tasksMap) => {
   for (const taskId of taskIds) {
     const task = tasksMap[taskId];
     if (!task) continue;
-    const hours = toPositiveHours(task.estimatedHours);
-    if (!hours) continue;
+    const regularHours = getRegularHours(task);
+    const overtimeHours = getOvertimeHours(task);
+    if (!regularHours && !overtimeHours) continue;
     rawTaskIds.push(task.id);
     rawRecordIds.push(task.parentId ?? task.id);
 
-    const startHr = cursor;
-    const endHr = cursor + hours;
-    cursor = endHr;
+    if (regularHours > 0) {
+      const startHr = regularCursor;
+      const endHr = regularCursor + regularHours;
+      regularCursor = endHr;
 
-    rawTasks.push({
-      id: task.id,
-      label: toTaskLabel(task),
-      estimatedHours: hours,
-      colorClass: task.colorClass,
-      startHr,
-      endHr,
-    });
+      rawTasks.push({
+        id: task.id,
+        label: toTaskLabel(task),
+        estimatedHours: regularHours,
+        colorClass: task.colorClass,
+        startHr,
+        endHr,
+        isOvertime: false,
+      });
+    }
+
+    if (overtimeHours > 0) {
+      hasOvertime = true;
+      const startHr = overtimeCursor;
+      const endHr = overtimeCursor + overtimeHours;
+      overtimeCursor = endHr;
+
+      rawTasks.push({
+        id: `${task.id}-ot`,
+        parentId: task.parentId ?? task.id,
+        label: `${toTaskLabel(task)} (OT)`,
+        estimatedHours: overtimeHours,
+        colorClass: task.overtimeColorClass ?? "bg-red-100 border border-red-300 text-red-800",
+        startHr,
+        endHr,
+        isOvertime: true,
+      });
+    }
   }
 
   const assignedStartHr = 0;
-  const assignedEndHr = Math.min(cursor, MAX_DAILY_HOURS);
+  const assignedEndHr = Math.min(Math.max(regularCursor, hasOvertime ? overtimeCursor : 0), MAX_DAILY_HOURS);
 
   const boundedTasks = [];
   for (const task of rawTasks) {

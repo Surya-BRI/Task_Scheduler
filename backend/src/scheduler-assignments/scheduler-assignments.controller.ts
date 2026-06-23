@@ -7,6 +7,7 @@ import { UserRole } from '../common/constants/roles.enum';
 import { CurrentUser } from '../common/decorators/current-user.decorator';
 import type { JwtPayload } from '../common/types/jwt-payload.type';
 import { SaveSchedulerWeekDto } from './dto/save-scheduler-week.dto';
+import { UpdateOvertimeSchedulerActionDto } from './dto/update-overtime-scheduler-action.dto';
 
 @UseGuards(JwtAuthGuard, RolesGuard)
 @Controller('scheduler-assignments')
@@ -55,5 +56,19 @@ export class SchedulerAssignmentsController {
   @Roles(UserRole.HOD, UserRole.ADMIN, UserRole.PROJECT_MANAGER)
   clearTask(@Param('taskId') taskId: string) {
     return this.schedulerAssignmentsService.clearTaskSchedule(taskId);
+  }
+
+  @Post('overtime-requests/:requestId/action')
+  @Roles(UserRole.HOD)
+  updateOvertimeRequestAction(
+    @Param('requestId') requestId: string,
+    @CurrentUser() user: JwtPayload,
+    @Body() dto: UpdateOvertimeSchedulerActionDto,
+  ) {
+    return this.schedulerAssignmentsService.updateOvertimeRequestSchedulerAction(
+      requestId,
+      user.sub,
+      dto.action,
+    );
   }
 }

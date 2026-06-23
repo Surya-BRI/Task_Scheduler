@@ -17,6 +17,7 @@ import {
     lockSchedulerWeek,
     unlockSchedulerWeek,
     clearTaskFromSchedule,
+    updateOvertimeRequestSchedulerAction,
 } from "../services/scheduler-assignments.api";
 import {
     DEFAULT_SCHEDULER_REFERENCE_DATE,
@@ -35,6 +36,18 @@ import {
     parseWeekStartDate,
     writeSchedulerNavState,
 } from "../utils/schedulerNavigationState";
+// Only these backend events should trigger a scheduler reload for other HODs.
+// Chatter, leave, notifications, etc. are irrelevant to the grid.
+const SCHEDULER_RELOAD_EVENTS = new Set([
+    'task_created',
+    'task_reassigned',
+    'task_status_changed',
+    'overtime_scheduler_action',
+    'scheduler_week_saved',
+    'scheduler_week_locked',
+    'scheduler_week_unlocked',
+]);
+
 // Capacity constants
 const DAILY_CAPACITY = 8; // 8hrs per day = normal capacity (green/blue)
 const MAX_DAILY_HOURS = 12; // absolute max assignable per day
@@ -44,7 +57,21 @@ const WEEKDAY_INDICES = [0, 1, 2, 3, 4];
 const ALL_DAY_INDICES = [0, 1, 2, 3, 4, 5, 6];
 const isWeekdayIndex = (dayIndex) => WEEKDAY_INDICES.includes(dayIndex);
 const cloneState = (value) => JSON.parse(JSON.stringify(value));
-const sumTaskHours = (taskMap, taskIds) => taskIds.reduce((acc, taskId) => acc + (taskMap[taskId]?.estimatedHours || 0), 0);
+const toPositiveHours = (value) => {
+    const parsed = Number(value);
+    return Number.isFinite(parsed) && parsed > 0 ? parsed : 0;
+};
+const getRegularTaskHours = (task) => task?.isOvertime
+    ? 0
+    : toPositiveHours(task?.scheduledHours ?? task?.estimatedHours);
+const getOvertimeTaskHours = (task) => task?.isOvertime
+    ? toPositiveHours(task?.approvedOvertimeHours ?? task?.estimatedHours)
+    : toPositiveHours(task?.approvedOvertimeHours);
+const sumTaskHours = (taskMap, taskIds) => taskIds.reduce((acc, taskId) => acc + getRegularTaskHours(taskMap[taskId]), 0);
+const sumTaskTotalHours = (taskMap, taskIds) => taskIds.reduce((acc, taskId) => {
+    const task = taskMap[taskId];
+    return acc + getRegularTaskHours(task) + getOvertimeTaskHours(task);
+}, 0);
 
 const nextVisibleWeekdayAfter = (dayIndex, candidateDays) => candidateDays.find((idx) => idx > dayIndex);
 
@@ -437,6 +464,10 @@ function buildSchedulerStateFromErpAssignments(records, rows, designers) {
         const taskId = String(row.taskId ?? "").trim();
         if (!taskId)
             continue;
+        const scheduledHours = toPositiveHours(row.scheduledHours ?? row.assignedHours);
+        const approvedOvertimeHours = toPositiveHours(row.approvedOvertimeHours);
+        if (!scheduledHours && !approvedOvertimeHours)
+            continue;
 
         const seenCount = seenTaskCount.get(taskId) ?? 0;
         seenTaskCount.set(taskId, seenCount + 1);
@@ -447,9 +478,6 @@ function buildSchedulerStateFromErpAssignments(records, rows, designers) {
         // buildWeekSnapshotPayload can resolve the canonical taskId on save.
         const parentIdNorm = seenCount > 0 ? taskId : normalizeParentIdFromErp(row.parentId);
 
-        if (!schedulesObj[designerId][dayStr].includes(frontendId))
-            schedulesObj[designerId][dayStr].push(frontendId);
-        assignedIds.add(frontendId);
         assignedIds.add(taskId); // ensure original never re-appears in sidebar
 
         const baseRecord = recordById[taskId];
@@ -482,16 +510,45 @@ function buildSchedulerStateFromErpAssignments(records, rows, designers) {
                 baseName: "Design task",
                 colorClass: "bg-slate-100 border border-slate-200 text-slate-700",
             };
-        tasksObj[frontendId] = {
-            ...baseFromRecord,
-            estimatedHours: Number(row.assignedHours) || 0,
-            scheduledHours: Number(row.scheduledHours ?? row.assignedHours) || 0,
-            approvedOvertimeHours: Number(row.approvedOvertimeHours) || 0,
-            status: "assigned",
-            parentId: parentIdNorm,
-            splitIndex: splitTotal && row.splitIndex != null ? Number(row.splitIndex) : undefined,
-            totalParts: splitTotal ? totalPartsNum : undefined,
-        };
+        if (scheduledHours > 0) {
+            if (!schedulesObj[designerId][dayStr].includes(frontendId))
+                schedulesObj[designerId][dayStr].push(frontendId);
+            assignedIds.add(frontendId);
+            tasksObj[frontendId] = {
+                ...baseFromRecord,
+                estimatedHours: scheduledHours,
+                scheduledHours,
+                approvedOvertimeHours: 0,
+                status: "assigned",
+                parentId: parentIdNorm,
+                splitIndex: splitTotal && row.splitIndex != null ? Number(row.splitIndex) : undefined,
+                totalParts: splitTotal ? totalPartsNum : undefined,
+            };
+        }
+        if (approvedOvertimeHours > 0) {
+            const overtimeId = `${frontendId}-ot`;
+            const overtimeRequestIds = Array.isArray(row.overtimeRequestIds)
+                ? row.overtimeRequestIds.filter(Boolean)
+                : (String(row.id ?? "").startsWith("overtime-") ? [String(row.id).replace(/^overtime-/, "")] : []);
+            if (!schedulesObj[designerId][dayStr].includes(overtimeId))
+                schedulesObj[designerId][dayStr].push(overtimeId);
+            assignedIds.add(overtimeId);
+            tasksObj[overtimeId] = {
+                ...baseFromRecord,
+                id: overtimeId,
+                estimatedHours: approvedOvertimeHours,
+                scheduledHours: 0,
+                approvedOvertimeHours,
+                status: "assigned",
+                parentId: isUuid(taskId) ? taskId : parentIdNorm,
+                splitIndex: undefined,
+                totalParts: undefined,
+                isOvertime: true,
+                isLocked: true,
+                overtimeRequestIds,
+                colorClass: "bg-red-100 border border-red-300 text-red-800",
+            };
+        }
     }
     for (const id of Object.keys(tasksObj)) {
         if (!assignedIds.has(id)) {
@@ -536,6 +593,8 @@ export function DesignSchedulerScreen() {
     const persistInFlightRef      = useRef(false);
     const pendingPersistRef       = useRef(null);
     const flushPersistRef         = useRef(null);
+    const pendingReloadRef        = useRef(false);
+    const persistDebounceRef      = useRef(null);
     const persistWeekSnapshotRef  = useRef(null);
 
     const [searchQuery, setSearchQuery] = useState("");
@@ -664,9 +723,10 @@ export function DesignSchedulerScreen() {
             Object.entries(dayMap || {}).forEach(([dayStr, taskIds]) => {
                 const dayIndex = Number(dayStr);
                 if (!Number.isFinite(dayIndex) || dayIndex < 0 || dayIndex > 6) return;
-                (taskIds || []).forEach((taskId) => {
+                (taskIds || []).forEach((taskId, positionIndex) => {
                     const task = sourceTasks?.[taskId];
                     if (!task) return;
+                    if (task.isOvertime) return;
                     const canonicalTaskId = isUuid(task.id) ? task.id : (isUuid(task.parentId) ? task.parentId : null);
                     if (!canonicalTaskId) return;
                     assignments.push({
@@ -678,6 +738,7 @@ export function DesignSchedulerScreen() {
                         parentId: isUuid(task.parentId) ? task.parentId : null,
                         splitIndex: Number.isFinite(task.splitIndex) ? Number(task.splitIndex) : null,
                         totalParts: Number.isFinite(task.totalParts) ? Number(task.totalParts) : null,
+                        position: positionIndex,
                         notes: null,
                     });
                 });
@@ -777,9 +838,7 @@ export function DesignSchedulerScreen() {
                                 const firstAvailable = WEEKDAY_INDICES.find((d) => {
                                     const dayKey = d.toString();
                                     const tasksInDay = next[designerId][dayKey] ?? [];
-                                    const usedHours = tasksInDay.reduce(
-                                        (acc, tid) => acc + (allTasks[tid]?.estimatedHours ?? 0), 0
-                                    );
+                                    const usedHours = sumTaskHours(allTasks, tasksInDay);
                                     return usedHours < DAILY_CAPACITY;
                                 }) ?? 0; // fallback to Monday if all days are full
                                 const dayKey = firstAvailable.toString();
@@ -883,7 +942,12 @@ export function DesignSchedulerScreen() {
             console.warn('Unable to persist scheduler snapshot', error);
         } finally {
             persistInFlightRef.current = false;
-            flushPersistRef.current?.();
+            if (pendingReloadRef.current) {
+                pendingReloadRef.current = false;
+                reloadWeek();
+            } else {
+                flushPersistRef.current?.();
+            }
         }
     }, [currentDate, reloadWeek]);
     useEffect(() => {
@@ -893,7 +957,13 @@ export function DesignSchedulerScreen() {
     const persistWeekSnapshot = useCallback((nextSchedules, nextTasks) => {
         const weekStartStr = formatLocalYyyyMmDd(getWeekDays(currentDate)[0]);
         pendingPersistRef.current = { schedules: nextSchedules, tasks: nextTasks, weekStartStr };
-        flushPersist();
+        // Debounce: if another change arrives within 600ms, batch it into one save.
+        // Rapid sequential drops (moving multiple tasks quickly) → single PUT instead of many.
+        if (persistDebounceRef.current) clearTimeout(persistDebounceRef.current);
+        persistDebounceRef.current = setTimeout(() => {
+            persistDebounceRef.current = null;
+            flushPersist();
+        }, 600);
 
         // Carry split-overflow tasks to Monday of next week for the same designer.
         try {
@@ -976,9 +1046,48 @@ export function DesignSchedulerScreen() {
         };
     }, [currentDate, reloadWeek]);
 
+    // Flush any debounced pending save when the user hides the tab (switches away or closes).
+    // The page is still alive at this point so the async PUT completes — prevents losing
+    // changes that were queued inside the 600ms debounce window.
+    useEffect(() => {
+        const onHide = () => {
+            if (document.visibilityState !== 'hidden') return;
+            if (!pendingPersistRef.current) return;
+            if (persistDebounceRef.current) {
+                clearTimeout(persistDebounceRef.current);
+                persistDebounceRef.current = null;
+            }
+            flushPersist();
+        };
+        document.addEventListener('visibilitychange', onHide);
+        return () => document.removeEventListener('visibilitychange', onHide);
+    }, [flushPersist]);
+
     useEffect(() => {
         return connectDashboardRealtime({
-            onDashboardRefresh: () => reloadWeek(),
+            onDashboardRefresh: (payload) => {
+                // Ignore events that don't affect the scheduler grid (chatter, leave, notifications…)
+                if (payload?.event && !SCHEDULER_RELOAD_EVENTS.has(payload.event)) return;
+                // Lock/unlock: sync state immediately without a full reload
+                if (payload?.event === 'scheduler_week_locked') {
+                    setIsWeekLocked(true);
+                    isWeekLockedRef.current = true;
+                    return;
+                }
+                if (payload?.event === 'scheduler_week_unlocked') {
+                    setIsWeekLocked(false);
+                    isWeekLockedRef.current = false;
+                    return;
+                }
+                // Defer if a snapshot save is pending or in-flight — our optimistic state is
+                // more current than the backend right now. Fire the reload in the finally block
+                // once the save lands so we don't overwrite correct local state with stale DB data.
+                if (persistInFlightRef.current || pendingPersistRef.current) {
+                    pendingReloadRef.current = true;
+                    return;
+                }
+                reloadWeek();
+            },
         });
     }, [reloadWeek]);
 
@@ -1104,6 +1213,10 @@ export function DesignSchedulerScreen() {
         const droppedTask = tasks[taskId];
         if (!droppedTask)
             return;
+        if (droppedTask.isOvertime) {
+            toast.info("Approved overtime blocks are managed from overtime requests.");
+            return;
+        }
         // Always start from the first unfilled weekday so no day is left idle — applies to all drag sources
         const firstUnfilled = WEEKDAY_INDICES.find((d) => getDayHours(targetDesignerId, d) < DAILY_CAPACITY);
         const wasRedirected = firstUnfilled !== undefined && firstUnfilled < targetDayIndex;
@@ -1159,9 +1272,65 @@ export function DesignSchedulerScreen() {
             splitIdCounterAfterSplit: splitIdAfterSplit,
         });
     };
+    const LEGACY_STATUS_MAP = { PENDING: 'DESIGN_NEW', WIP: 'IN_PROGRESS', COMPLETED: 'DESIGN_COMPLETED', REVISION: 'REWORK', APPROVED: 'CLIENT_ACCEPTED' };
+    const normalizeBackendStatus = (s) => LEGACY_STATUS_MAP[s] ?? s ?? 'DESIGN_NEW';
+
+    const commitOvertimeRequestAction = async (taskId, sourceId, sourceDay, newStatus) => {
+        const taskBefore = tasks[taskId];
+        const requestId = taskBefore?.overtimeRequestIds?.[0];
+        if (!requestId) {
+            toast.error("Unable to find the overtime request for this scheduler block.");
+            return;
+        }
+        if (isWeekLocked) {
+            toast.error("This week is locked. Unlock it first to make changes.");
+            return;
+        }
+
+        const newSchedules = cloneState(schedules);
+        if (sourceId !== 'unassigned' && sourceId !== 'ON_HOLD' && newSchedules[sourceId]?.[sourceDay]) {
+            newSchedules[sourceId][sourceDay] = newSchedules[sourceId][sourceDay].filter(id => id !== taskId);
+        }
+
+        const nextTasks = { ...tasks };
+        delete nextTasks[taskId];
+        const parentId = taskBefore?.parentId;
+        if (newStatus === 'ON_HOLD' && parentId && nextTasks[parentId]) {
+            nextTasks[parentId] = {
+                ...nextTasks[parentId],
+                status: 'ON_HOLD',
+                holdStartedAt: new Date(),
+                holdPreviousStatus: nextTasks[parentId].status,
+            };
+        }
+
+        setLoadedFromErp(false);
+        setSchedules(newSchedules);
+        setTasks(nextTasks);
+
+        try {
+            await updateOvertimeRequestSchedulerAction(
+                requestId,
+                newStatus === 'ON_HOLD' ? 'ON_HOLD' : 'UNASSIGN',
+            );
+            toast.success(newStatus === 'ON_HOLD'
+                ? "Overtime request moved to on hold."
+                : "Overtime request unassigned.");
+            reloadWeek();
+        } catch (error) {
+            console.warn("Unable to update overtime request scheduler action", error);
+            toast.error("Failed to update overtime request. Please try again.");
+            reloadWeek();
+        }
+    };
+
     const commitPanelDrop = (taskId, sourceId, sourceDay, newStatus) => {
         setLoadedFromErp(false);
         const taskBefore = tasks[taskId];
+        if (taskBefore?.isOvertime) {
+            commitOvertimeRequestAction(taskId, sourceId, sourceDay, newStatus);
+            return;
+        }
         const parentId = taskBefore?.parentId;
         const siblingIds = parentId
             ? Object.keys(tasks).filter(id => id !== taskId && tasks[id]?.parentId === parentId)
@@ -1246,7 +1415,7 @@ export function DesignSchedulerScreen() {
 
         const backendStatus = newStatus === "ON_HOLD"
             ? "ON_HOLD"
-            : (taskBefore?.holdPreviousStatus ?? "PENDING");
+            : normalizeBackendStatus(taskBefore?.holdPreviousStatus ?? "DESIGN_NEW");
         setTasks(nextTasks);
         // For split consolidation, the canonical UUID is parentId (not the split fragment's temp ID)
         const apiTaskId = (isSplitPart && isUuid(parentId)) ? parentId : taskId;
@@ -1331,7 +1500,11 @@ export function DesignSchedulerScreen() {
                     const originalSourceLength = sourceTasks.length;
                     for (const tid of sourceTasks) {
                         const taskInfo = newTasks[tid];
-                        const taskH = taskInfo?.estimatedHours || 0;
+                        if (taskInfo?.isOvertime) {
+                            keptInSource.push(tid);
+                            continue;
+                        }
+                        const taskH = getRegularTaskHours(taskInfo);
                         const remaining = DAILY_CAPACITY - targetHours;
                         if (remaining <= 0) {
                             keptInSource.push(tid);
@@ -1411,11 +1584,15 @@ export function DesignSchedulerScreen() {
     }, [tasks, schedules]);
     // Get total hours for a specific day slot
     const getDayHours = (designerId, dayIndex) => sumTaskHours(tasks, (schedules[designerId] || {})[dayIndex.toString()] || []);
+    const getDayOvertimeHours = (designerId, dayIndex) => {
+        const dayTasks = (schedules[designerId] || {})[dayIndex.toString()] || [];
+        return dayTasks.reduce((acc, taskId) => acc + getOvertimeTaskHours(tasks[taskId]), 0);
+    };
     const getDesignerBookedHours = (designerId) => {
         const days = schedules[designerId] || {};
         return WEEKDAY_INDICES.reduce((acc, dayIdx) => {
             const dayTasks = days[dayIdx.toString()] || [];
-            return acc + sumTaskHours(tasks, dayTasks);
+            return acc + sumTaskTotalHours(tasks, dayTasks);
         }, 0);
     };
     const isDesignerOverloaded = (designerId) => {
@@ -1425,7 +1602,7 @@ export function DesignSchedulerScreen() {
         const days = schedules[designer.id] || {};
         const designerTotal = WEEKDAY_INDICES.reduce((dayAcc, dayIdx) => {
             const dayTasks = days[dayIdx.toString()] || [];
-            return dayAcc + sumTaskHours(tasks, dayTasks);
+            return dayAcc + sumTaskTotalHours(tasks, dayTasks);
         }, 0);
         return acc + designerTotal;
     }, 0), [schedules, tasks]);
@@ -1671,9 +1848,11 @@ export function DesignSchedulerScreen() {
                 }}>
                         {visibleDays.map(dayIndex => {
                     const rawTasksInDay = designerDays[dayIndex.toString()] || [];
-                    const tasksInDay = rawTasksInDay;
+                    const regularTaskIds = rawTasksInDay.filter((taskId) => !tasks[taskId]?.isOvertime);
+                    const overtimeTaskIds = rawTasksInDay.filter((taskId) => tasks[taskId]?.isOvertime);
                     const isWeekend = dayIndex >= 5;
                     const dayHours = getDayHours(designer.id, dayIndex);
+                    const overtimeHours = getDayOvertimeHours(designer.id, dayIndex);
                     const isDayOverloaded = dayHours > DAILY_CAPACITY;
                     const gravityPct = Math.min((dayHours / DAILY_CAPACITY) * 100, 100);
                     return (<div key={dayIndex} className={`border-r relative flex flex-col transition-colors overflow-hidden
@@ -1685,17 +1864,17 @@ export function DesignSchedulerScreen() {
                               `} onDragOver={isWeekend ? undefined : handleDragOver} onDrop={isWeekend ? undefined : (e) => handleDropToDay(e, designer.id, dayIndex)}>
                               {/* Gravity fill bar (background) — weekdays only */}
                               {!isWeekend && dayHours > 0 && (<div className={`absolute bottom-0 left-0 right-0 transition-all opacity-20 ${isDayOverloaded ? 'bg-red-400' : 'bg-blue-400'}`} style={{ height: `${gravityPct}%` }}/>)}
-                              {/* Tasks list (single horizontal lane; auto-fit within cell width) */}
+                              {/* Tasks list: regular assignments and approved overtime stay visually separate. */}
                               <div className="flex-1 min-h-0 p-1 relative z-10">
                                 {isWeekend ? (<div className="w-full h-full flex items-center justify-center">
                                     <span className="text-[8px] text-slate-400 font-medium select-none">—</span>
-                                  </div>) : (<div className="h-full overflow-hidden">
-                                    <div className="h-full w-full flex flex-nowrap items-center gap-1 pr-0.5">
-                                    {tasksInDay.map((taskId, idx) => {
+                                  </div>) : (<div className="h-full min-h-[42px] overflow-hidden flex flex-col justify-center gap-1">
+                                    <div className="min-h-[20px] w-full flex flex-nowrap items-center gap-1 pr-0.5">
+                                    {regularTaskIds.map((taskId, idx) => {
                                 const taskInfo = tasks[taskId];
                                 if (!taskInfo)
                                     return null;
-                                const taskWidth = `calc((100% - ${(Math.max(tasksInDay.length - 1, 0)) * 4}px) / ${Math.max(tasksInDay.length, 1)})`;
+                                const taskWidth = `calc((100% - ${(Math.max(regularTaskIds.length - 1, 0)) * 4}px) / ${Math.max(regularTaskIds.length, 1)})`;
                                 return (<div key={`${taskId}-${designer.id}-${dayIndex}-${idx}`} draggable onDragStart={(e) => {
                                         handleDragStart(e, taskId, designer.id, dayIndex.toString());
                                         setCurrentDay(dayIndex);
@@ -1721,11 +1900,44 @@ export function DesignSchedulerScreen() {
                                         </div>);
                             })}
                                     </div>
+                                    {overtimeTaskIds.length > 0 && (
+                                      <div className="min-h-[18px] w-full rounded border border-red-200 bg-red-50/80 px-1 py-0.5">
+                                        <div className="mb-0.5 text-[7px] font-bold uppercase tracking-wide text-red-500">Overtime</div>
+                                        <div className="flex flex-nowrap items-center gap-1">
+                                          {overtimeTaskIds.map((taskId, idx) => {
+                                            const taskInfo = tasks[taskId];
+                                            if (!taskInfo) return null;
+                                            const taskWidth = `calc((100% - ${(Math.max(overtimeTaskIds.length - 1, 0)) * 4}px) / ${Math.max(overtimeTaskIds.length, 1)})`;
+                                            return (
+                                              <div
+                                                key={`${taskId}-${designer.id}-${dayIndex}-ot-${idx}`}
+                                                draggable
+                                                onDragStart={(e) => {
+                                                  handleDragStart(e, taskId, designer.id, dayIndex.toString());
+                                                  setCurrentDay(dayIndex);
+                                                }}
+                                                onDragEnd={() => setDropIndicator(null)}
+                                                onClick={(e) => {
+                                                  e.stopPropagation();
+                                                  router.push(taskViewPathForRecord({ id: getDesignListRoutingTaskId(taskInfo), designType: taskInfo.designType }, { from: FROM_DESIGN_SCHEDULER }));
+                                                }}
+                                                className={`h-[18px] min-w-0 rounded flex items-center justify-between px-1.5 cursor-grab active:cursor-grabbing shadow-sm ${taskInfo.colorClass}`}
+                                                style={{ width: taskWidth, maxWidth: taskWidth }}
+                                                title={`${getTaskLabel(taskInfo)} approved overtime (${taskInfo.approvedOvertimeHours || taskInfo.estimatedHours}h)`}
+                                              >
+                                                <div className="text-[8px] font-semibold truncate leading-none mr-1 select-none">{getTaskLabel(taskInfo)}</div>
+                                                <div className="text-[7px] font-bold opacity-70 bg-black/5 rounded px-1 shrink-0">{taskInfo.approvedOvertimeHours || taskInfo.estimatedHours}h</div>
+                                              </div>
+                                            );
+                                          })}
+                                        </div>
+                                      </div>
+                                    )}
                                   </div>)}
                               </div>
                               {/* Day hours indicator — weekdays only */}
-                              {!isWeekend && dayHours > 0 && (<div className={`text-[8px] font-bold text-center pb-0.5 relative z-10 ${isDayOverloaded ? 'text-red-600' : 'text-blue-500/70'}`}>
-                                  {dayHours}/{DAILY_CAPACITY}h
+                              {!isWeekend && (dayHours > 0 || overtimeHours > 0) && (<div className={`text-[8px] font-bold text-center pb-0.5 relative z-10 ${isDayOverloaded ? 'text-red-600' : 'text-blue-500/70'}`}>
+                                  {dayHours}/{DAILY_CAPACITY}h{overtimeHours > 0 ? ` + ${overtimeHours}h OT` : ''}
                                 </div>)}
                             </div>);
                 })}

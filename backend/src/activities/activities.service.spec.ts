@@ -1,5 +1,6 @@
 import { ActivitiesService } from './activities.service';
 import { UserRole } from '../common/constants/roles.enum';
+import { ActivityAction } from './activity-events';
 
 describe('ActivitiesService', () => {
   const prisma = {
@@ -22,8 +23,10 @@ describe('ActivitiesService', () => {
     expect(prisma.activityLog.findMany).toHaveBeenCalledWith(
       expect.objectContaining({
         where: {
+          action: { not: ActivityAction.CHATTER_MENTION },
           OR: [
             { task: { assigneeId: '11111111-1111-4111-8111-111111111111' } },
+            { task: { taskDesigners: { some: { designerId: '11111111-1111-4111-8111-111111111111' } } } },
             { userId: '11111111-1111-4111-8111-111111111111' },
           ],
         },

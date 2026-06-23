@@ -5,7 +5,7 @@ export class UpdateTaskStatusDto {
   @IsIn([
     'DESIGN_NEW', 'DESIGN_PLANNED', 'IN_PROGRESS', 'DESIGN_COMPLETED',
     'HOD_REVIEW', 'SALES_REVIEW', 'REWORK', 'CLIENT_ACCEPTED', 'CLIENT_REJECTED',
-    'ON_HOLD', 'COMPLETED', 'REVISION', 'APPROVED',
+    'ON_HOLD',
   ])
   status: string;
 

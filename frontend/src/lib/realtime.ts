@@ -14,8 +14,13 @@ export type ChatterRefreshPayload = {
   at: string;
 };
 
+export type DashboardRefreshPayload = {
+  event: string;
+  at: string;
+};
+
 export type DashboardRealtimeHandlers = {
-  onDashboardRefresh?: () => void;
+  onDashboardRefresh?: (payload?: DashboardRefreshPayload) => void;
   onNotificationsRefresh?: () => void;
   onChatterRefresh?: (payload: ChatterRefreshPayload) => void;
 };
@@ -35,8 +40,8 @@ export function connectDashboardRealtime(handlers: DashboardRealtimeHandlers): (
       reconnectionAttempts: 10,
     });
 
-    socket.on('dashboard:refresh', () => {
-      handlers.onDashboardRefresh?.();
+    socket.on('dashboard:refresh', (payload: DashboardRefreshPayload) => {
+      handlers.onDashboardRefresh?.(payload);
     });
     socket.on('notifications:refresh', () => {
       handlers.onNotificationsRefresh?.();

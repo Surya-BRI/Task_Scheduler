@@ -14,10 +14,12 @@ import {
   UserRound,
 } from 'lucide-react';
 import { Navbar } from '@/components/Navbar';
+import { getSession } from '@/lib/mock-auth';
 import { getProjectsOverview } from '../services/projects-overview.api';
 import { reviewLeaveRequest } from '@/features/requests/services/requests.api';
 import { reviewOvertimeRequest } from '@/features/requests/services/overtime-requests.api';
 import { reviewRegularizationRequest } from '@/features/requests/services/regularization-requests.api';
+import { formatStatusLabel, statusBadgeClasses } from '@/lib/ui/status-badges';
 import DonutChart from '@/app/designer/[designerId]/components/DonutChart';
 import {
   dateInputToUtcReference,
@@ -87,11 +89,23 @@ function requestTypeBadge(type) {
   return null;
 }
 
-function InboxCard({ inbox, fmt, onNavigate, onRefresh, cardState, errorMessage }) {
+function requestTypeTitle(type) {
+  if (type === 'regularization') return 'Regularization request';
+  if (type === 'overtime') return 'Overtime request';
+  if (type === 'leave') return 'Leave request';
+  return 'Inbox item';
+}
+
+function isRequestItem(item) {
+  return item?.requestType === 'leave' || item?.requestType === 'overtime' || item?.requestType === 'regularization';
+}
+
+function InboxCard({ inbox, fmt, onNavigate, onRefresh, cardState, errorMessage, isHOD }) {
   const containerRef = useRef(null);
   const [page, setPage] = useState(0);
   const [pageSize, setPageSize] = useState(8);
   const [actingId, setActingId] = useState(null);
+  const [detailTarget, setDetailTarget] = useState(null);
   const [rejectTarget, setRejectTarget] = useState(null);
   const [rejectRemarks, setRejectRemarks] = useState('');
   const [actionError, setActionError] = useState('');
@@ -113,9 +127,14 @@ function InboxCard({ inbox, fmt, onNavigate, onRefresh, cardState, errorMessage 
 
   const totalPages = Math.max(1, Math.ceil(inbox.length / pageSize));
   const slice = inbox.slice(page * pageSize, page * pageSize + pageSize);
-  const actionCount = inbox.filter((item) => item.requiresAction).length;
+  const isHodActionable = useCallback(
+    (item) => Boolean(isHOD && isRequestItem(item) && item.requiresAction),
+    [isHOD],
+  );
+  const actionCount = inbox.filter(isHodActionable).length;
 
   const handleApprove = async (item) => {
+    if (!isHodActionable(item)) return;
     setActionError('');
     setActingId(item.id);
     try {
@@ -129,6 +148,7 @@ function InboxCard({ inbox, fmt, onNavigate, onRefresh, cardState, errorMessage 
       } else if (item.requestType === 'regularization') {
         await reviewRegularizationRequest(item.id, { status: 'Approved' });
       }
+      setDetailTarget(null);
       await onRefresh?.();
     } catch (err) {
       setActionError(err instanceof Error ? err.message : 'Could not approve request');
@@ -139,6 +159,7 @@ function InboxCard({ inbox, fmt, onNavigate, onRefresh, cardState, errorMessage 
 
   const handleReject = async () => {
     if (!rejectTarget) return;
+    if (!isHodActionable(rejectTarget)) return;
     if (!rejectRemarks.trim()) {
       setActionError('Remarks are required when rejecting');
       return;
@@ -161,6 +182,7 @@ function InboxCard({ inbox, fmt, onNavigate, onRefresh, cardState, errorMessage 
       }
       setRejectTarget(null);
       setRejectRemarks('');
+      setDetailTarget(null);
       await onRefresh?.();
     } catch (err) {
       setActionError(err instanceof Error ? err.message : 'Could not reject request');
@@ -175,6 +197,7 @@ function InboxCard({ inbox, fmt, onNavigate, onRefresh, cardState, errorMessage 
       : rejectTarget?.requestType === 'regularization'
         ? 'Reject regularization request'
         : 'Reject leave request';
+  const detailRows = detailTarget?.details?.filter((row) => String(row?.value ?? '').trim()) ?? [];
 
   return (
     <CompactCard title="Inbox" className="h-full min-h-[280px]" state={cardState}>
@@ -202,17 +225,30 @@ function InboxCard({ inbox, fmt, onNavigate, onRefresh, cardState, errorMessage 
             <ul className="divide-y divide-slate-100">
               {slice.map((item) => (
                 <li key={item.itemKey ?? `${item.requestType ?? 'activity'}-${item.id}`}>
+                  {(() => {
+                    const requestItem = isRequestItem(item);
+                    const actionable = isHodActionable(item);
+                    const statusLabel = formatStatusLabel(item.status);
+                    const statusClass = statusBadgeClasses(item.status);
+                    return (
                   <div
                     className={`flex w-full flex-col px-1 py-2.5 text-left ${
-                      item.requiresAction ? 'border-l-2 border-orange-400 pl-2' : ''
+                      actionable ? 'border-l-2 border-orange-400 pl-2' : ''
                     }`}
                   >
                     <button
                       type="button"
-                      onClick={() => item.linkUrl && onNavigate(item.linkUrl)}
-                      disabled={!item.linkUrl}
+                      onClick={() => {
+                        if (requestItem) {
+                          setDetailTarget(item);
+                          setActionError('');
+                        } else if (item.linkUrl) {
+                          onNavigate(item.linkUrl);
+                        }
+                      }}
+                      disabled={!requestItem && !item.linkUrl}
                       className={`w-full text-left transition-colors ${
-                        item.linkUrl ? 'cursor-pointer hover:bg-slate-50' : 'cursor-default'
+                        requestItem || item.linkUrl ? 'cursor-pointer hover:bg-slate-50' : 'cursor-default'
                       }`}
                     >
                       <div className="flex items-start justify-between gap-2">
@@ -229,14 +265,31 @@ function InboxCard({ inbox, fmt, onNavigate, onRefresh, cardState, errorMessage 
                         {item.requesterName ? <span>{item.requesterName}</span> : null}
                         {item.taskNo ? <span className="font-mono">{item.taskNo}</span> : null}
                         <span>{fmt(item.occurredAt)}</span>
-                        {item.requiresAction ? (
+                        {item.status ? (
+                          <span className={`rounded-full px-1.5 py-0.5 font-semibold ${statusClass}`}>
+                            {statusLabel}
+                          </span>
+                        ) : null}
+                        {actionable ? (
                           <span className="font-semibold text-orange-600">Action required</span>
                         ) : null}
                       </div>
                     </button>
 
                     <div className="mt-2 flex flex-wrap gap-2">
-                      {item.requiresAction ? (
+                      {requestItem ? (
+                        <Button
+                          type="button"
+                          variant="secondary"
+                          onClick={() => {
+                            setDetailTarget(item);
+                            setActionError('');
+                          }}
+                        >
+                          View details
+                        </Button>
+                      ) : null}
+                      {actionable ? (
                         <>
                           <Button
                             type="button"
@@ -253,6 +306,7 @@ function InboxCard({ inbox, fmt, onNavigate, onRefresh, cardState, errorMessage 
                             onClick={() => {
                               setActionError('');
                               setRejectTarget(item);
+                              setDetailTarget(null);
                               setRejectRemarks('');
                             }}
                           >
@@ -262,6 +316,8 @@ function InboxCard({ inbox, fmt, onNavigate, onRefresh, cardState, errorMessage 
                       ) : null}
                     </div>
                   </div>
+                    );
+                  })()}
                 </li>
               ))}
             </ul>
@@ -294,6 +350,77 @@ function InboxCard({ inbox, fmt, onNavigate, onRefresh, cardState, errorMessage 
           ) : null}
         </>
       )}
+
+      <Modal
+        open={Boolean(detailTarget)}
+        onClose={() => {
+          setDetailTarget(null);
+          setActionError('');
+        }}
+        title={requestTypeTitle(detailTarget?.requestType)}
+        subtitle={detailTarget?.summary}
+        size="sm"
+        footer={(
+          <>
+            <Button
+              type="button"
+              variant="cancel"
+              onClick={() => {
+                setDetailTarget(null);
+                setActionError('');
+              }}
+            >
+              Close
+            </Button>
+            {isHodActionable(detailTarget) ? (
+              <>
+                <Button
+                  type="button"
+                  variant="reject-outline"
+                  disabled={actingId === detailTarget?.id}
+                  onClick={() => {
+                    setActionError('');
+                    setRejectTarget(detailTarget);
+                    setDetailTarget(null);
+                    setRejectRemarks('');
+                  }}
+                >
+                  Reject
+                </Button>
+                <Button
+                  type="button"
+                  variant="approve"
+                  disabled={actingId === detailTarget?.id}
+                  onClick={() => handleApprove(detailTarget)}
+                >
+                  {actingId === detailTarget?.id ? 'Working…' : 'Approve'}
+                </Button>
+              </>
+            ) : null}
+          </>
+        )}
+      >
+        {detailTarget?.status ? (
+          <span className={`mb-3 inline-flex rounded-full px-2 py-1 text-xs font-semibold ${statusBadgeClasses(detailTarget.status)}`}>
+            {formatStatusLabel(detailTarget.status)}
+          </span>
+        ) : null}
+        {detailRows.length > 0 ? (
+          <dl className="space-y-2 text-sm">
+            {detailRows.map((row) => (
+              <div key={row.label} className="rounded-lg border border-slate-100 bg-slate-50 px-3 py-2">
+                <dt className="text-[10px] font-semibold uppercase tracking-wide text-slate-500">{row.label}</dt>
+                <dd className="mt-0.5 whitespace-pre-wrap text-slate-800">{row.value}</dd>
+              </div>
+            ))}
+          </dl>
+        ) : (
+          <p className="text-sm text-slate-500">No additional request details are available.</p>
+        )}
+        {actionError ? (
+          <p className="mt-3 text-xs font-medium text-red-600">{actionError}</p>
+        ) : null}
+      </Modal>
 
       <Modal
         open={Boolean(rejectTarget)}
@@ -344,6 +471,7 @@ function InboxCard({ inbox, fmt, onNavigate, onRefresh, cardState, errorMessage 
 
 export function ProjectsOverviewScreen() {
   const router = useRouter();
+  const [session, setSession] = useState(null);
   const [currentDate, setCurrentDate] = useState(() => new Date());
   const [overview, setOverview] = useState(null);
   const [loading, setLoading] = useState(true);
@@ -353,6 +481,11 @@ export function ProjectsOverviewScreen() {
 
   const weekStart = useMemo(() => getUtcMondayOfDate(currentDate), [currentDate]);
   const weekLabel = useMemo(() => formatUtcWeekLabel(weekStart), [weekStart]);
+  const isHOD = session?.role === 'HOD';
+
+  useEffect(() => {
+    setSession(getSession());
+  }, []);
 
   const loadOverview = useCallback(async (silent = false) => {
     if (!silent) setLoading(true);
@@ -398,7 +531,8 @@ export function ProjectsOverviewScreen() {
     const matchInbox = (item) =>
       item.summary?.toLowerCase().includes(q)
       || item.requesterName?.toLowerCase().includes(q)
-      || item.taskNo?.toLowerCase().includes(q);
+      || item.taskNo?.toLowerCase().includes(q)
+      || item.details?.some((row) => String(row?.value ?? '').toLowerCase().includes(q));
     return {
       ...overview,
       scheduledTasks: overview.scheduledTasks.filter(matchTask),
@@ -535,6 +669,7 @@ export function ProjectsOverviewScreen() {
               onRefresh={() => loadOverview(true)}
               cardState={cardState}
               errorMessage={tableError}
+              isHOD={isHOD}
             />
 
             <CompactCard title="On Hold Tasks" className="h-full min-h-[280px]" state={cardState}>

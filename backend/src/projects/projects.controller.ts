@@ -40,29 +40,30 @@ export class ProjectsController {
 
   /** GET /projects?status=ACTIVE&category=Retail&search=abc&page=1&limit=20 */
   @Get()
-  @Roles(UserRole.HOD, UserRole.DESIGNER, UserRole.SALESPERSON)
+  @Roles(UserRole.HOD, UserRole.DESIGNER, UserRole.SALESPERSON, UserRole.QS)
   findAll(
+    @CurrentUser() user: JwtPayload,
     @Query('status') status?: string,
     @Query('category') category?: string,
     @Query('search') search?: string,
     @Query('page', new DefaultValuePipe(1), ParseIntPipe) page = 1,
     @Query('limit', new DefaultValuePipe(50), ParseIntPipe) limit = 50,
   ) {
-    return this.projectsService.findAll({ status, category, search, page, limit });
+    return this.projectsService.findAll({ status, category, search, page, limit }, user.sub, user.role);
   }
 
   /** GET /projects/by-project-no/:projectNo */
   @Get('by-project-no/:projectNo')
-  @Roles(UserRole.HOD, UserRole.DESIGNER, UserRole.SALESPERSON)
-  findByProjectNo(@Param('projectNo') projectNo: string) {
-    return this.projectsService.findByProjectNo(projectNo);
+  @Roles(UserRole.HOD, UserRole.DESIGNER, UserRole.SALESPERSON, UserRole.QS)
+  findByProjectNo(@Param('projectNo') projectNo: string, @CurrentUser() user: JwtPayload) {
+    return this.projectsService.findByProjectNo(projectNo, user.sub, user.role);
   }
 
   /** GET /projects/:id — returns project with its tasks */
   @Get(':id')
-  @Roles(UserRole.HOD, UserRole.DESIGNER, UserRole.SALESPERSON)
-  findOne(@Param('id') id: string) {
-    return this.projectsService.findOne(id);
+  @Roles(UserRole.HOD, UserRole.DESIGNER, UserRole.SALESPERSON, UserRole.QS)
+  findOne(@Param('id') id: string, @CurrentUser() user: JwtPayload) {
+    return this.projectsService.findOne(id, user.sub, user.role);
   }
 
   @Post(':id/files')
@@ -92,9 +93,9 @@ export class ProjectsController {
   }
 
   @Get(':id/files')
-  @Roles(UserRole.HOD, UserRole.DESIGNER, UserRole.SALESPERSON)
-  getFiles(@Param('id') id: string) {
-    return this.projectsService.getProjectFiles(id);
+  @Roles(UserRole.HOD, UserRole.DESIGNER, UserRole.SALESPERSON, UserRole.QS)
+  getFiles(@Param('id') id: string, @CurrentUser() user: JwtPayload) {
+    return this.projectsService.getProjectFiles(id, user.sub, user.role);
   }
 
   @Delete(':id/files/:fileId')

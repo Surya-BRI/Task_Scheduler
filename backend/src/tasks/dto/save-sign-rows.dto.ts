@@ -1,19 +1,20 @@
 import { Type } from 'class-transformer';
-import { IsArray, IsInt, IsOptional, IsString, ValidateNested } from 'class-validator';
+import { IsArray, IsInt, IsNotEmpty, IsOptional, IsString, IsUUID, ValidateNested } from 'class-validator';
 
 export class ProjectSignRowDto {
-  @IsString() @IsOptional() tNo?: string;
-  @IsString() @IsOptional() no?: string;
-  @IsString() @IsOptional() signType?: string;
-  @IsString() @IsOptional() planCode?: string;
-  @IsInt() @IsOptional() estQty?: number;
-  @IsInt() @IsOptional() qsQty?: number;
-  @IsString() @IsOptional() areaZone?: string;
-  @IsString() @IsOptional() levelParcel?: string;
-  @IsString() @IsOptional() sequence?: string;
-  @IsString() @IsOptional() status?: string;
+  @IsUUID() @IsOptional() id?: string;
+  @IsString() @IsNotEmpty() tNo: string;
+  @IsString() @IsNotEmpty() no: string;
+  @IsString() @IsNotEmpty() signType: string;
+  @IsString() @IsNotEmpty() planCode: string;
+  @IsInt() estQty: number;
+  @IsInt() qsQty: number;
+  @IsString() @IsNotEmpty() areaZone: string;
+  @IsString() @IsNotEmpty() levelParcel: string;
+  @IsString() @IsNotEmpty() sequence: string;
+  @IsString() @IsNotEmpty() status: string;
   @IsString() @IsOptional() comment?: string;
-  @IsString() @IsOptional() contRef?: string;
+  @IsString() @IsNotEmpty() contRef: string;
 }
 
 export class SaveSignRowsDto {
