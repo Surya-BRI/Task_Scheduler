@@ -1159,6 +1159,9 @@ export function DesignSchedulerScreen() {
             splitIdCounterAfterSplit: splitIdAfterSplit,
         });
     };
+    const LEGACY_STATUS_MAP = { PENDING: 'DESIGN_NEW', WIP: 'IN_PROGRESS', COMPLETED: 'DESIGN_COMPLETED', REVISION: 'REWORK', APPROVED: 'CLIENT_ACCEPTED' };
+    const normalizeBackendStatus = (s) => LEGACY_STATUS_MAP[s] ?? s ?? 'DESIGN_NEW';
+
     const commitPanelDrop = (taskId, sourceId, sourceDay, newStatus) => {
         setLoadedFromErp(false);
         const taskBefore = tasks[taskId];
@@ -1246,7 +1249,7 @@ export function DesignSchedulerScreen() {
 
         const backendStatus = newStatus === "ON_HOLD"
             ? "ON_HOLD"
-            : (taskBefore?.holdPreviousStatus ?? "PENDING");
+            : normalizeBackendStatus(taskBefore?.holdPreviousStatus ?? "DESIGN_NEW");
         setTasks(nextTasks);
         // For split consolidation, the canonical UUID is parentId (not the split fragment's temp ID)
         const apiTaskId = (isSplitPart && isUuid(parentId)) ? parentId : taskId;

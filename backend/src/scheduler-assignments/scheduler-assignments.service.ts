@@ -562,7 +562,7 @@ export class SchedulerAssignmentsService {
           const assignedDesigner = designerSet.size === 1 ? [...designerSet][0] : null;
 
           const currentStatus = String(task.status ?? '').toUpperCase();
-          const isTerminal = ['COMPLETED', 'APPROVED', 'CLIENT_ACCEPTED', 'CLIENT_REJECTED'].includes(currentStatus);
+          const isTerminal = ['CLIENT_ACCEPTED', 'CLIENT_REJECTED'].includes(currentStatus);
 
           if (assignedDesigner) {
             // Promote DESIGN_NEW → DESIGN_PLANNED when given a scheduler slot; leave all other active statuses untouched.

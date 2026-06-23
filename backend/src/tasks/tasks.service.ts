@@ -196,18 +196,13 @@ export class TasksService {
   ) {}
 
   private toDbTaskStatus(status?: string | null) {
-    const value = String(status ?? '').trim().toUpperCase();
-    if (value === 'PENDING') return 'DESIGN_NEW';
-    if (value === 'WIP') return 'IN_PROGRESS';
-    return value;
+    return String(status ?? '').trim().toUpperCase();
   }
 
   private toApiTaskStatus(status?: string | null) {
     const value = String(status ?? '').trim().toUpperCase();
     if (!value) return value;
     if (value === 'ON-HOLD') return 'ON_HOLD';
-    if (value === 'PENDING') return 'DESIGN_NEW';
-    if (value === 'WIP') return 'IN_PROGRESS';
     return value;
   }
 
@@ -1026,7 +1021,7 @@ export class TasksService {
     if (!assignee) throw new NotFoundException('Assignee not found');
 
     const rawStatus = String(existing.status ?? '').toUpperCase();
-    const shouldPromote = rawStatus === 'DESIGN_NEW' || rawStatus === 'PENDING';
+    const shouldPromote = rawStatus === 'DESIGN_NEW';
     const updatedTask = await this.prisma.task.update({
       where: { id },
       data: { assigneeId: dto.assigneeId, ...(shouldPromote ? { status: 'DESIGN_PLANNED' } : {}) },
