@@ -7,7 +7,7 @@
   "license": "UNLICENSED",
   "scripts": {
     "clean": "node -e \"try{require('fs').rmSync('dist',{recursive:true,force:true});require('fs').rmSync('tsconfig.build.tsbuildinfo',{force:true})}catch(e){}\"",
-    "build": "nest build && node scripts/write-legacy-main-shim.js",
+    "build": "nest build",
     "start:pm2": "pm2 start ecosystem.config.cjs",
     "format": "prettier --write \"src/**/*.ts\" \"test/**/*.ts\"",
     "start": "nest start",
