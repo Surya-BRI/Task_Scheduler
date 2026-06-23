@@ -50,6 +50,10 @@ export interface InboxItem {
   requesterName?: string | null;
   status?: string | null;
   itemKey?: string;
+  details?: Array<{
+    label: string;
+    value: string | null;
+  }>;
 }
 
 export interface DonutSegment {

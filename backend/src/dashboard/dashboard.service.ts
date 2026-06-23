@@ -450,6 +450,7 @@ export class DashboardService {
     const regItems: InboxItem[] = regRows.map((row) => {
       const requester = row.designer?.fullName?.trim() || 'Designer';
       const taskLabel = row.task?.title?.trim() || row.task?.taskNo?.trim() || 'task';
+      const requestDate = row.date?.toISOString().split('T')[0] ?? null;
       const itemKey = `regularization-${row.id}`;
       return {
         id: row.id,
@@ -462,6 +463,13 @@ export class DashboardService {
         requesterName: requester,
         status: 'Pending',
         itemKey,
+        details: [
+          { label: 'Requester', value: requester },
+          { label: 'Date', value: requestDate },
+          { label: 'Duration', value: row.duration ?? null },
+          { label: 'Reason', value: row.reason ?? null },
+          { label: 'Notes', value: row.notes ?? null },
+        ],
       };
     });
 
@@ -469,6 +477,8 @@ export class DashboardService {
       const requester = row.designer?.fullName?.trim() || 'Designer';
       const taskLabel = row.task?.title?.trim() || row.task?.taskNo?.trim() || 'task';
       const projectName = row.task?.project?.name?.trim();
+      const requestDate = row.date?.toISOString().split('T')[0] ?? null;
+      const requestedHours = row.totalHours ?? row.requestedHours;
       const itemKey = `overtime-${row.id}`;
       return {
         id: row.id,
@@ -481,6 +491,15 @@ export class DashboardService {
         requesterName: requester,
         status: 'Pending Approval',
         itemKey,
+        details: [
+          { label: 'Requester', value: requester },
+          { label: 'Date', value: requestDate },
+          { label: 'Project', value: projectName ?? null },
+          { label: 'Task', value: taskLabel },
+          { label: 'Requested hours', value: requestedHours ? `${requestedHours.toString()} hours` : null },
+          { label: 'Estimated remaining', value: row.estimatedRemaining ?? null },
+          { label: 'Reason', value: row.reason ?? null },
+        ],
       };
     });
 
@@ -510,6 +529,15 @@ export class DashboardService {
         requesterName: requester,
         status: 'Pending',
         itemKey,
+        details: [
+          { label: 'Requester', value: requester },
+          { label: 'From', value: from },
+          { label: 'To', value: to },
+          { label: 'Type', value: leaveType },
+          { label: 'Session', value: halfDaySession },
+          { label: 'Duration', value: leaveDuration },
+          { label: 'Reason', value: row.reason ?? null },
+        ],
       };
     });
 
