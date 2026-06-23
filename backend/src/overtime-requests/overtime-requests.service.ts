@@ -331,6 +331,8 @@ export class OvertimeRequestsService {
     const normalized = (status ?? '').trim().toUpperCase();
     if (normalized === 'SUBMITTED') return 'Pending Approval';
     if (normalized === 'APPROVED' || normalized === 'APPROVED_BY_MANAGER') return 'Approved';
+    if (normalized === 'ON_HOLD') return 'On Hold';
+    if (normalized === 'UNASSIGNED') return 'Unassigned';
     if (normalized.startsWith('REJECTED')) return 'Rejected';
     if (normalized === 'DRAFT') return 'Draft';
     return status?.trim() || 'Pending';

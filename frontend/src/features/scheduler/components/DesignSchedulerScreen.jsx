@@ -17,6 +17,7 @@ import {
     lockSchedulerWeek,
     unlockSchedulerWeek,
     clearTaskFromSchedule,
+    updateOvertimeRequestSchedulerAction,
 } from "../services/scheduler-assignments.api";
 import {
     DEFAULT_SCHEDULER_REFERENCE_DATE,
@@ -514,6 +515,9 @@ function buildSchedulerStateFromErpAssignments(records, rows, designers) {
         }
         if (approvedOvertimeHours > 0) {
             const overtimeId = `${frontendId}-ot`;
+            const overtimeRequestIds = Array.isArray(row.overtimeRequestIds)
+                ? row.overtimeRequestIds.filter(Boolean)
+                : (String(row.id ?? "").startsWith("overtime-") ? [String(row.id).replace(/^overtime-/, "")] : []);
             if (!schedulesObj[designerId][dayStr].includes(overtimeId))
                 schedulesObj[designerId][dayStr].push(overtimeId);
             assignedIds.add(overtimeId);
@@ -529,6 +533,7 @@ function buildSchedulerStateFromErpAssignments(records, rows, designers) {
                 totalParts: undefined,
                 isOvertime: true,
                 isLocked: true,
+                overtimeRequestIds,
                 colorClass: "bg-red-100 border border-red-300 text-red-800",
             };
         }
@@ -1053,10 +1058,6 @@ export function DesignSchedulerScreen() {
         });
     };
     const handleDragStart = (e, taskId, sourceId, sourceDay) => {
-        if (tasks[taskId]?.isOvertime) {
-            e.preventDefault();
-            return;
-        }
         e.dataTransfer.setData("taskId", taskId);
         e.dataTransfer.setData("sourceId", sourceId);
         if (sourceDay)
@@ -1209,9 +1210,62 @@ export function DesignSchedulerScreen() {
     const LEGACY_STATUS_MAP = { PENDING: 'DESIGN_NEW', WIP: 'IN_PROGRESS', COMPLETED: 'DESIGN_COMPLETED', REVISION: 'REWORK', APPROVED: 'CLIENT_ACCEPTED' };
     const normalizeBackendStatus = (s) => LEGACY_STATUS_MAP[s] ?? s ?? 'DESIGN_NEW';
 
+    const commitOvertimeRequestAction = async (taskId, sourceId, sourceDay, newStatus) => {
+        const taskBefore = tasks[taskId];
+        const requestId = taskBefore?.overtimeRequestIds?.[0];
+        if (!requestId) {
+            toast.error("Unable to find the overtime request for this scheduler block.");
+            return;
+        }
+        if (isWeekLocked) {
+            toast.error("This week is locked. Unlock it first to make changes.");
+            return;
+        }
+
+        const newSchedules = cloneState(schedules);
+        if (sourceId !== 'unassigned' && sourceId !== 'ON_HOLD' && newSchedules[sourceId]?.[sourceDay]) {
+            newSchedules[sourceId][sourceDay] = newSchedules[sourceId][sourceDay].filter(id => id !== taskId);
+        }
+
+        const nextTasks = { ...tasks };
+        delete nextTasks[taskId];
+        const parentId = taskBefore?.parentId;
+        if (newStatus === 'ON_HOLD' && parentId && nextTasks[parentId]) {
+            nextTasks[parentId] = {
+                ...nextTasks[parentId],
+                status: 'ON_HOLD',
+                holdStartedAt: new Date(),
+                holdPreviousStatus: nextTasks[parentId].status,
+            };
+        }
+
+        setLoadedFromErp(false);
+        setSchedules(newSchedules);
+        setTasks(nextTasks);
+
+        try {
+            await updateOvertimeRequestSchedulerAction(
+                requestId,
+                newStatus === 'ON_HOLD' ? 'ON_HOLD' : 'UNASSIGN',
+            );
+            toast.success(newStatus === 'ON_HOLD'
+                ? "Overtime request moved to on hold."
+                : "Overtime request unassigned.");
+            reloadWeek();
+        } catch (error) {
+            console.warn("Unable to update overtime request scheduler action", error);
+            toast.error("Failed to update overtime request. Please try again.");
+            reloadWeek();
+        }
+    };
+
     const commitPanelDrop = (taskId, sourceId, sourceDay, newStatus) => {
         setLoadedFromErp(false);
         const taskBefore = tasks[taskId];
+        if (taskBefore?.isOvertime) {
+            commitOvertimeRequestAction(taskId, sourceId, sourceDay, newStatus);
+            return;
+        }
         const parentId = taskBefore?.parentId;
         const siblingIds = parentId
             ? Object.keys(tasks).filter(id => id !== taskId && tasks[id]?.parentId === parentId)
@@ -1792,11 +1846,17 @@ export function DesignSchedulerScreen() {
                                             return (
                                               <div
                                                 key={`${taskId}-${designer.id}-${dayIndex}-ot-${idx}`}
+                                                draggable
+                                                onDragStart={(e) => {
+                                                  handleDragStart(e, taskId, designer.id, dayIndex.toString());
+                                                  setCurrentDay(dayIndex);
+                                                }}
+                                                onDragEnd={() => setDropIndicator(null)}
                                                 onClick={(e) => {
                                                   e.stopPropagation();
                                                   router.push(taskViewPathForRecord({ id: getDesignListRoutingTaskId(taskInfo), designType: taskInfo.designType }, { from: FROM_DESIGN_SCHEDULER }));
                                                 }}
-                                                className={`h-[18px] min-w-0 rounded flex items-center justify-between px-1.5 shadow-sm ${taskInfo.colorClass}`}
+                                                className={`h-[18px] min-w-0 rounded flex items-center justify-between px-1.5 cursor-grab active:cursor-grabbing shadow-sm ${taskInfo.colorClass}`}
                                                 style={{ width: taskWidth, maxWidth: taskWidth }}
                                                 title={`${getTaskLabel(taskInfo)} approved overtime (${taskInfo.approvedOvertimeHours || taskInfo.estimatedHours}h)`}
                                               >

@@ -6,6 +6,7 @@ import {
   HttpStatus,
   Injectable,
   Logger,
+  NotFoundException,
   Optional,
 } from '@nestjs/common';
 import { ConfigService } from '@nestjs/config';
@@ -37,6 +38,7 @@ type RawAssignmentRow = {
   assignedBy: string | null;
   createdAt: Date;
   updatedAt: Date;
+  overtimeRequestIds?: string[];
 };
 
 export type SchedulerAssignmentDto = {
@@ -57,6 +59,7 @@ export type SchedulerAssignmentDto = {
   assignedBy: string | null;
   createdAt: string;
   updatedAt: string;
+  overtimeRequestIds: string[];
 };
 
 type SchedulerWeekMetaDto = {
@@ -113,6 +116,33 @@ export class SchedulerAssignmentsService {
     return Math.floor((dateUtc - weekUtc) / 86_400_000);
   }
 
+  private weekStartForDate(date: Date): Date {
+    const temp = new Date(Date.UTC(date.getUTCFullYear(), date.getUTCMonth(), date.getUTCDate()));
+    const day = temp.getUTCDay();
+    const diff = temp.getUTCDate() - day + (day === 0 ? -6 : 1);
+    const weekStart = new Date(Date.UTC(temp.getUTCFullYear(), temp.getUTCMonth(), diff));
+    weekStart.setUTCHours(0, 0, 0, 0);
+    return weekStart;
+  }
+
+  private async touchSchedulerWeek(weekStartDate: Date, userId: string): Promise<void> {
+    await this.prisma.schedulerWeek.upsert({
+      where: { weekStartDate },
+      create: {
+        weekStartDate,
+        version: 1,
+        isLocked: false,
+        updatedBy: userId,
+        lastPayloadHash: null,
+      },
+      update: {
+        version: { increment: 1 },
+        updatedBy: userId,
+        lastPayloadHash: null,
+      },
+    });
+  }
+
   private isUuid(value: string): boolean {
     return /^[0-9a-f]{8}-[0-9a-f]{4}-[1-5][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i.test(
       String(value ?? '').trim(),
@@ -157,6 +187,7 @@ export class SchedulerAssignmentsService {
       assignedBy,
       createdAt: this.toIso(row.createdAt ? new Date(row.createdAt) : null),
       updatedAt: this.toIso(row.updatedAt ? new Date(row.updatedAt) : null),
+      overtimeRequestIds: row.overtimeRequestIds ?? [],
     };
   }
 
@@ -240,7 +271,7 @@ export class SchedulerAssignmentsService {
         orderBy: { approvedAt: 'asc' },
       });
 
-      const approvedByAssignmentKey = new Map<string, number>();
+      const approvedByAssignmentKey = new Map<string, { hours: number; requestIds: string[] }>();
       for (const request of approvedRequests) {
         if (!request.designerId || !request.taskId || !request.date) continue;
         const dayIndex = this.dayIndexForDate(new Date(request.date), weekStartDate);
@@ -248,7 +279,11 @@ export class SchedulerAssignmentsService {
         const hours = this.toHours(request.approvedHours);
         if (!hours) continue;
         const key = `${request.designerId}|${request.taskId}|${dayIndex}`;
-        approvedByAssignmentKey.set(key, (approvedByAssignmentKey.get(key) ?? 0) + hours);
+        const existing = approvedByAssignmentKey.get(key) ?? { hours: 0, requestIds: [] };
+        approvedByAssignmentKey.set(key, {
+          hours: existing.hours + hours,
+          requestIds: [...existing.requestIds, request.id],
+        });
       }
 
       const mappedRows = rows.map((r) => {
@@ -256,7 +291,8 @@ export class SchedulerAssignmentsService {
         const taskKey = r.taskId ?? '';
         const dayKey = r.dayIndex ?? 0;
         const overtimeKey = `${designerKey}|${taskKey}|${dayKey}`;
-        const approvedOvertimeHours = approvedByAssignmentKey.get(overtimeKey) ?? 0;
+        const approvedOvertime = approvedByAssignmentKey.get(overtimeKey);
+        const approvedOvertimeHours = approvedOvertime?.hours ?? 0;
         approvedByAssignmentKey.delete(overtimeKey);
         const scheduledHours = this.toHours(r.assignedHours);
         return this.mapRow({
@@ -267,6 +303,7 @@ export class SchedulerAssignmentsService {
           scheduledHours,
           approvedOvertimeHours,
           assignedHours: scheduledHours + approvedOvertimeHours,
+          overtimeRequestIds: approvedOvertime?.requestIds ?? [],
         });
       });
 
@@ -276,7 +313,8 @@ export class SchedulerAssignmentsService {
           const dayIndex = this.dayIndexForDate(new Date(request.date), weekStartDate);
           if (dayIndex < 0 || dayIndex > 6) return null;
           const key = `${request.designerId}|${request.taskId}|${dayIndex}`;
-          const approvedOvertimeHours = approvedByAssignmentKey.get(key) ?? 0;
+          const approvedOvertime = approvedByAssignmentKey.get(key);
+          const approvedOvertimeHours = approvedOvertime?.hours ?? 0;
           if (!approvedOvertimeHours) return null;
           approvedByAssignmentKey.delete(key);
           return this.mapRow({
@@ -297,6 +335,7 @@ export class SchedulerAssignmentsService {
             assignedBy: null,
             createdAt: new Date(),
             updatedAt: new Date(),
+            overtimeRequestIds: approvedOvertime?.requestIds ?? [request.id],
           });
         })
         .filter((row): row is SchedulerAssignmentDto => row != null);
@@ -317,6 +356,104 @@ export class SchedulerAssignmentsService {
       updatedAt: (row?.updatedAt ?? new Date(0)).toISOString(),
       updatedBy: row?.updatedBy ?? null,
     };
+  }
+
+  async updateOvertimeRequestSchedulerAction(
+    requestId: string,
+    userId: string,
+    action: 'ON_HOLD' | 'UNASSIGN',
+  ) {
+    if (!this.isUuid(requestId)) {
+      throw new BadRequestException('Invalid overtime request id.');
+    }
+
+    const nextStatus = action === 'ON_HOLD' ? 'ON_HOLD' : 'UNASSIGNED';
+    const updated = await this.prisma.$transaction(async (tx) => {
+      const request = await tx.overtimeRequest.findUnique({
+        where: { id: requestId },
+        include: {
+          task: { select: { id: true, status: true } },
+        },
+      });
+
+      if (!request) {
+        throw new NotFoundException('Overtime request not found.');
+      }
+      if (String(request.status ?? '').toUpperCase() !== 'APPROVED') {
+        throw new BadRequestException('Only approved overtime requests can be changed from the scheduler.');
+      }
+      if (request.date) {
+        const weekStartDate = this.weekStartForDate(new Date(request.date));
+        const week = await tx.schedulerWeek.findUnique({ where: { weekStartDate } });
+        if (week?.isLocked) {
+          throw new ForbiddenException('This scheduler week is locked.');
+        }
+      }
+
+      const savedRequest = await tx.overtimeRequest.update({
+        where: { id: requestId },
+        data: { status: nextStatus },
+        include: {
+          task: { select: { id: true, taskNo: true, title: true, status: true } },
+          designer: { select: { id: true, fullName: true } },
+        },
+      });
+
+      if (action === 'ON_HOLD' && request.taskId) {
+        await tx.task.update({
+          where: { id: request.taskId },
+          data: {
+            status: 'ON_HOLD',
+            holdPreviousStatus: request.task?.status ?? null,
+          },
+        });
+
+        const todayMidnight = new Date();
+        todayMidnight.setHours(0, 0, 0, 0);
+        await tx.schedulerAssignment.deleteMany({
+          where: { taskId: request.taskId, weekStartDate: { gte: todayMidnight } },
+        });
+      }
+
+      return savedRequest;
+    });
+
+    if (updated.date) {
+      await this.touchSchedulerWeek(this.weekStartForDate(new Date(updated.date)), userId);
+    }
+
+    await this.activityLogger.log({
+      action: ActivityAction.OVERTIME_REQUEST_STATUS_CHANGED,
+      userId,
+      taskId: updated.taskId ?? null,
+      details: {
+        event: ActivityAction.OVERTIME_REQUEST_STATUS_CHANGED,
+        messageKey: action === 'ON_HOLD'
+          ? 'overtime_scheduler_moved_on_hold'
+          : 'overtime_scheduler_unassigned',
+        taskSnapshot: updated.task
+          ? {
+              id: updated.task.id,
+              taskNo: updated.task.taskNo,
+              title: updated.task.title ?? undefined,
+              status: action === 'ON_HOLD' ? 'ON_HOLD' : updated.task.status,
+            }
+          : undefined,
+        changes: { oldStatus: 'APPROVED', newStatus: nextStatus, schedulerAction: action },
+        context: {
+          source: 'scheduler.overtimeAction',
+          overtimeRequestId: requestId,
+          designerId: updated.designerId ?? null,
+        },
+      },
+    });
+
+    this.dashboardRealtime?.notifyOverviewRefresh('overtime_scheduler_action');
+    if (updated.designerId) {
+      this.dashboardRealtime?.notifyUserNotificationRefresh(updated.designerId);
+    }
+
+    return updated;
   }
 
   async setWeekLock(weekStart: string, userId: string, locked: boolean): Promise<SchedulerWeekMetaDto> {

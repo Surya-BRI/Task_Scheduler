@@ -10,6 +10,7 @@ export type DashboardRealtimeEvent =
   | 'leave_rejected'
   | 'overtime_approved'
   | 'overtime_rejected'
+  | 'overtime_scheduler_action'
   | 'regularization_approved'
   | 'regularization_rejected'
   | 'chatter_post_created'
