@@ -20,6 +20,10 @@ export default function DesignSchedulerPage() {
       router.replace('/designer/dashboard')
       return
     }
+    if (session.role === 'QS') {
+      router.replace('/qs/projects')
+      return
+    }
     setAllowed(true)
   }, [router])
 

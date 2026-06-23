@@ -13,7 +13,7 @@ export class ActivitiesController {
   constructor(private readonly activitiesService: ActivitiesService) {}
 
   @Get()
-  @Roles(UserRole.HOD, UserRole.DESIGNER, UserRole.SALESPERSON)
+  @Roles(UserRole.HOD, UserRole.DESIGNER, UserRole.SALESPERSON, UserRole.QS)
   findAll(
     @Query('limit') limit?: string,
     @Query('userId') userId?: string,
@@ -29,30 +29,36 @@ export class ActivitiesController {
   }
 
   @Get('task/:taskId')
-  @Roles(UserRole.HOD, UserRole.DESIGNER, UserRole.SALESPERSON)
+  @Roles(UserRole.HOD, UserRole.DESIGNER, UserRole.SALESPERSON, UserRole.QS)
   findByTask(
     @Param('taskId') taskId: string,
     @Query('limit') limit?: string,
     @Query('cursor') cursor?: string,
+    @CurrentUser() currentUser?: JwtPayload,
   ) {
     return this.activitiesService.findByTask({
       taskId,
       limit: limit ? parseInt(limit, 10) : 30,
       cursor,
+      requestingUserId: currentUser?.sub,
+      requestingUserRole: currentUser?.role,
     });
   }
 
   @Get('project/:projectId')
-  @Roles(UserRole.HOD, UserRole.DESIGNER, UserRole.SALESPERSON)
+  @Roles(UserRole.HOD, UserRole.DESIGNER, UserRole.SALESPERSON, UserRole.QS)
   findByProject(
     @Param('projectId') projectId: string,
     @Query('limit') limit?: string,
     @Query('cursor') cursor?: string,
+    @CurrentUser() currentUser?: JwtPayload,
   ) {
     return this.activitiesService.findByProject({
       projectId,
       limit: limit ? parseInt(limit, 10) : 30,
       cursor,
+      requestingUserId: currentUser?.sub,
+      requestingUserRole: currentUser?.role,
     });
   }
 }

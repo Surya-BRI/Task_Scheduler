@@ -113,6 +113,8 @@ function ProfileDropdown({ session }) {
   // Colour badge per role
   const roleBadgeClass = session?.role === 'HOD'
     ? 'bg-violet-100 text-violet-700'
+    : session?.role === 'QS'
+      ? 'bg-amber-100 text-amber-700'
     : 'bg-blue-100 text-blue-700'
 
   return (
@@ -405,7 +407,9 @@ export function Navbar({ currentDate, onCalendarChange, dateRangeText }) {
 
   const isDesigner = session?.role === 'DESIGNER'
   const isSalesperson = session?.role === 'SALESPERSON'
+  const isQs = session?.role === 'QS'
   const canViewOverview = session?.role === 'HOD'
+  const bottomNavItems = isQs ? [] : NAV_ITEMS
 
   const utilityIconClass = 'ui-icon-button'
   const onTeamActivity =
@@ -421,6 +425,8 @@ export function Navbar({ currentDate, onCalendarChange, dateRangeText }) {
       router.push('/design-list/tasks')
     } else if (isSalesperson) {
       router.push('/sales/tasks')
+    } else if (isQs) {
+      router.push('/qs/projects')
     } else {
       router.push('/design-list')
     }
@@ -430,6 +436,8 @@ export function Navbar({ currentDate, onCalendarChange, dateRangeText }) {
   const handleSchedulerClick = () => {
     if (isDesigner) {
       router.push('/designer/dashboard')
+    } else if (isQs) {
+      router.push('/qs/projects')
     } else {
       // HOD / guest → master scheduler
       router.push('/design-scheduler')
@@ -440,6 +448,7 @@ export function Navbar({ currentDate, onCalendarChange, dateRangeText }) {
   const handleHomeClick = () => {
     if (isDesigner) return
     if (isSalesperson) { router.push('/sales/tasks'); return }
+    if (isQs) { router.push('/qs/projects'); return }
     router.push('/projects-list')
   }
 
@@ -476,7 +485,7 @@ export function Navbar({ currentDate, onCalendarChange, dateRangeText }) {
             </span>
 
             {/* Scheduler / Calendar icon — hidden for Salesperson */}
-            {!isSalesperson && (
+            {!isSalesperson && !isQs && (
               currentDate ? (
                 /* HOD Master Scheduler — date display only, no picker */
                 <button
@@ -527,8 +536,8 @@ export function Navbar({ currentDate, onCalendarChange, dateRangeText }) {
               <MessageSquareText className="h-5 w-5" strokeWidth={1.75} aria-hidden />
             </button>
 
-            {/* Team Activity — hidden for Salesperson */}
-            {!isSalesperson && (
+            {/* Team Activity — hidden for Salesperson and QS */}
+            {!isSalesperson && !isQs && (
               <button
                 type="button"
                 onClick={() => {
@@ -557,6 +566,7 @@ export function Navbar({ currentDate, onCalendarChange, dateRangeText }) {
       </div>
 
       {/* Bottom nav bar */}
+      {!isQs && (
       <div className="bg-slate-200/80 border-t border-slate-200">
         <div className="w-full flex items-center px-4 py-1.5 sm:px-6">
           <div className="flex w-full items-center gap-1">
@@ -573,20 +583,33 @@ export function Navbar({ currentDate, onCalendarChange, dateRangeText }) {
 
             <nav className="min-w-0 flex-1">
               <div className="flex w-full items-center justify-evenly">
-                {NAV_ITEMS.map((item) => (
-                  <button
-                    key={item}
-                    type="button"
-                    className="rounded-lg px-3 py-1.5 text-sm font-semibold text-slate-700 transition-colors hover:bg-white/50"
-                  >
-                    {item}
-                  </button>
-                ))}
+                {bottomNavItems.map((item) => {
+                  const label = typeof item === 'string' ? item : item.label
+                  const href = typeof item === 'string' ? null : item.href
+                  const active = href
+                    ? pathname === href.split('#')[0]
+                    : false
+                  return (
+                    <button
+                      key={label}
+                      type="button"
+                      onClick={() => {
+                        if (href) router.push(href)
+                      }}
+                      className={`rounded-lg px-3 py-1.5 text-sm font-semibold transition-colors hover:bg-white/50 ${
+                        active ? 'bg-white text-slate-900 shadow-sm' : 'text-slate-700'
+                      }`}
+                    >
+                      {label}
+                    </button>
+                  )
+                })}
               </div>
             </nav>
           </div>
         </div>
       </div>
+      )}
     </header>
   )
 }
