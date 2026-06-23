@@ -46,6 +46,7 @@ export class ChatterPostsController {
 
   @Get()
   findAll(
+    @CurrentUser() user: { sub: string; role: string },
     @Query('limit') limit?: string,
     @Query('taskId') taskId?: string,
     @Query('projectId') projectId?: string,
@@ -64,6 +65,8 @@ export class ChatterPostsController {
       postType,
       weekStart,
       cursor,
+      user.sub,
+      user.role,
     );
   }
 

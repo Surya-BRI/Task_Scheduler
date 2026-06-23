@@ -26,6 +26,7 @@
     "prisma:migrate": "prisma migrate dev",
     "prisma:seed": "tsx prisma/seed.ts",
     "prisma:ensure-tables": "tsx prisma/ensure-activity-log-table.ts",
+    "prisma:ensure-project-qs-assignments": "tsx prisma/ensure-project-qs-assignments.ts",
     "prisma:ensure-foreign-keys": "tsx prisma/ensure-foreign-keys.ts",
     "prisma:audit-schema": "tsx prisma/scripts/audit-erp-ts-schema.ts",
     "typecheck": "tsc --noEmit"

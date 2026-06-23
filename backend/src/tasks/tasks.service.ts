@@ -13,6 +13,7 @@ import { ActivityAction } from '../activities/activity-events';
 import { SaveSignRowsDto } from './dto/save-sign-rows.dto';
 import { SubmitWorkDto } from './dto/submit-work.dto';
 import { SaveTimerStateDto } from './dto/save-timer-state.dto';
+import { QsStatusValue, UpdateQsStatusDto } from './dto/update-qs-status.dto';
 import { DashboardRealtimeService } from '../dashboard/dashboard-realtime.service';
 import { COMPLETED_STATUS_FILTER } from '../dashboard/task-status-buckets.util';
 import { NotificationsService } from '../notifications/notifications.service';
@@ -146,6 +147,25 @@ const TASK_LIST_SELECT = {
   createdAt: true,
   updatedAt: true,
 };
+
+const QS_STATUS_PENDING: QsStatusValue = 'Pending';
+const QS_STATUS_IN_PROGRESS: QsStatusValue = 'In Progress';
+const QS_STATUS_COMPLETED: QsStatusValue = 'Completed';
+const QS_STATUS_VALUES = new Set<string>([QS_STATUS_PENDING, QS_STATUS_IN_PROGRESS, QS_STATUS_COMPLETED]);
+
+const SIGN_ROW_REQUIRED_FIELDS = [
+  ['tNo', 'T.No'],
+  ['no', 'No'],
+  ['signType', 'Sign Type'],
+  ['planCode', 'Plan Code'],
+  ['estQty', 'Est QTY'],
+  ['qsQty', 'QS QTY'],
+  ['areaZone', 'Area/Zone'],
+  ['levelParcel', 'Level/Parcel'],
+  ['sequence', 'Sequence'],
+  ['status', 'Status'],
+  ['contRef', 'Cont.Ref'],
+] as const;
 
 export type TaskFilters = {
   projectId?: string;
@@ -519,6 +539,10 @@ export class TasksService {
     }
 
     const project = await this.resolveOrCreateProjectForExtended(dto.task, dto.designType);
+    await this.assignProjectToQsTeam(project.id, userId, {
+      name: project.name,
+      projectNo: project.projectNo,
+    });
 
     if (dto.task.assigneeId) {
       const assignee = await this.prisma.user.findUnique({ where: { id: dto.task.assigneeId } });
@@ -901,6 +925,20 @@ export class TasksService {
       ];
     }
 
+    if (role === UserRole.QS) {
+      const assignedProjectIds = await this.getAssignedProjectIdsForQsUser(userId);
+      if (assignedProjectIds.length === 0) {
+        return {
+          data: [],
+          total: 0,
+          page,
+          limit,
+          totalPages: 0,
+        };
+      }
+      baseWhere.projectId = { in: assignedProjectIds };
+    }
+
     if (projectId) baseWhere.projectId = projectId;
     if (status) baseWhere.status = this.toDbTaskStatus(status);
     if (priority) baseWhere.priority = priority;
@@ -938,12 +976,13 @@ export class TasksService {
     };
   }
 
-  async findOne(id: string) {
+  async findOne(id: string, userId?: string, role?: UserRole) {
     if (!this.isUuid(id)) {
       throw new BadRequestException('Invalid task id');
     }
     const task = await this.prisma.task.findUnique({ where: { id }, select: TASK_SELECT });
     if (!task) throw new NotFoundException('Task not found');
+    await this.assertQsTaskAccess(id, userId, role);
     const withUrls = await this.withSignedAttachmentUrls(task);
     return this.normalizeTaskForApi(withUrls);
   }
@@ -1262,7 +1301,7 @@ export class TasksService {
     }
 
     const withUrls = await this.withSignedAttachmentUrls(updatedTask as any);
-    const normalized = this.normalizeTaskForApi(withUrls as any);
+    const normalized = this.normalizeTaskForApi(withUrls);
     return {
       ...normalized,
       ...(reworkResult ? { newRevisionTaskId: reworkResult.id, newRevisionTaskNo: reworkResult.taskNo } : {}),
@@ -1536,11 +1575,178 @@ export class TasksService {
     return this.prisma.task.delete({ where: { id } });
   }
 
-  async getSignRows(taskId: string) {
+  async getSignRows(taskId: string, userId?: string, role?: UserRole) {
     if (!this.isUuid(taskId)) throw new BadRequestException('Invalid task id');
+    await this.assertQsTaskAccess(taskId, userId, role);
     return this.prisma.projectSignRow.findMany({
       where: { taskId },
       orderBy: { createdAt: 'asc' },
+    });
+  }
+
+  private normalizeQsStatus(value?: string | null): QsStatusValue {
+    const text = String(value ?? '').trim().toLowerCase();
+    if (text === 'completed') return QS_STATUS_COMPLETED;
+    if (text === 'in progress' || text === 'in_progress' || text === 'inprogress') return QS_STATUS_IN_PROGRESS;
+    return QS_STATUS_PENDING;
+  }
+
+  private async ensureQsStatusTable() {
+    await this.prisma.$executeRawUnsafe(`
+IF OBJECT_ID('dbo.ErpTSProjectQsStatus', 'U') IS NULL
+BEGIN
+  CREATE TABLE [dbo].[ErpTSProjectQsStatus] (
+    [projectId] UNIQUEIDENTIFIER NOT NULL,
+    [status] NVARCHAR(20) NOT NULL CONSTRAINT [DF_ErpTSProjectQsStatus_status] DEFAULT ('Pending'),
+    [updatedById] UNIQUEIDENTIFIER NULL,
+    [submittedById] UNIQUEIDENTIFIER NULL,
+    [submittedAt] DATETIME2 NULL,
+    [createdAt] DATETIME2 NOT NULL CONSTRAINT [DF_ErpTSProjectQsStatus_createdAt] DEFAULT SYSUTCDATETIME(),
+    [updatedAt] DATETIME2 NOT NULL CONSTRAINT [DF_ErpTSProjectQsStatus_updatedAt] DEFAULT SYSUTCDATETIME(),
+    CONSTRAINT [PK_ErpTSProjectQsStatus] PRIMARY KEY ([projectId]),
+    CONSTRAINT [CK_ErpTSProjectQsStatus_status] CHECK ([status] IN ('Pending', 'In Progress', 'Completed')),
+    CONSTRAINT [FK_ErpTSProjectQsStatus_Project] FOREIGN KEY ([projectId])
+      REFERENCES [dbo].[ErpTSProject]([id]) ON DELETE CASCADE,
+    CONSTRAINT [FK_ErpTSProjectQsStatus_UpdatedBy] FOREIGN KEY ([updatedById])
+      REFERENCES [dbo].[ErpTSUser]([id]),
+    CONSTRAINT [FK_ErpTSProjectQsStatus_SubmittedBy] FOREIGN KEY ([submittedById])
+      REFERENCES [dbo].[ErpTSUser]([id])
+  );
+END;
+    `);
+  }
+
+  private async getProjectQsStatus(projectId: string) {
+    await this.ensureQsStatusTable();
+    const rows = await this.prisma.$queryRaw<Array<{
+      projectId: string;
+      status: string;
+      updatedById: string | null;
+      submittedById: string | null;
+      submittedAt: Date | null;
+      createdAt: Date;
+      updatedAt: Date;
+    }>>(Prisma.sql`
+      SELECT TOP 1 [projectId], [status], [updatedById], [submittedById], [submittedAt], [createdAt], [updatedAt]
+      FROM [dbo].[ErpTSProjectQsStatus]
+      WHERE [projectId] = ${projectId}
+    `);
+    const row = rows[0];
+    if (!row) {
+      return {
+        projectId,
+        status: QS_STATUS_PENDING,
+        updatedById: null,
+        submittedById: null,
+        submittedAt: null,
+        createdAt: null,
+        updatedAt: null,
+      };
+    }
+    return { ...row, status: this.normalizeQsStatus(row.status) };
+  }
+
+  private async setProjectQsStatus(
+    projectId: string,
+    status: QsStatusValue,
+    userId?: string,
+  ) {
+    await this.ensureQsStatusTable();
+    await this.prisma.$executeRaw(Prisma.sql`
+      MERGE [dbo].[ErpTSProjectQsStatus] WITH (HOLDLOCK) AS [target]
+      USING (SELECT ${projectId} AS [projectId]) AS [source]
+      ON [target].[projectId] = [source].[projectId]
+      WHEN MATCHED THEN UPDATE SET
+        [status] = ${status},
+        [updatedById] = ${userId ?? null},
+        [submittedById] = CASE WHEN ${status} = 'Completed' THEN ${userId ?? null} ELSE NULL END,
+        [submittedAt] = CASE WHEN ${status} = 'Completed' THEN COALESCE([target].[submittedAt], SYSUTCDATETIME()) ELSE NULL END,
+        [updatedAt] = SYSUTCDATETIME()
+      WHEN NOT MATCHED THEN INSERT ([projectId], [status], [updatedById], [submittedById], [submittedAt])
+        VALUES (
+          ${projectId},
+          ${status},
+          ${userId ?? null},
+          CASE WHEN ${status} = 'Completed' THEN ${userId ?? null} ELSE NULL END,
+          CASE WHEN ${status} = 'Completed' THEN SYSUTCDATETIME() ELSE NULL END
+        );
+    `);
+    return this.getProjectQsStatus(projectId);
+  }
+
+  async getQsStatusForTask(taskId: string, userId?: string, role?: UserRole) {
+    if (!this.isUuid(taskId)) throw new BadRequestException('Invalid task id');
+    const task = await this.prisma.task.findUnique({
+      where: { id: taskId },
+      select: { id: true, projectId: true },
+    });
+    if (!task) throw new NotFoundException('Task not found');
+    await this.assertQsTaskAccess(taskId, userId, role);
+    return this.getProjectQsStatus(task.projectId);
+  }
+
+  async updateQsStatusForTask(taskId: string, dto: UpdateQsStatusDto, userId?: string, role?: UserRole) {
+    if (!this.isUuid(taskId)) throw new BadRequestException('Invalid task id');
+    const task = await this.prisma.task.findUnique({
+      where: { id: taskId },
+      select: { id: true, taskNo: true, title: true, projectId: true, project: { select: { id: true, projectNo: true, name: true } } },
+    });
+    if (!task) throw new NotFoundException('Task not found');
+    await this.assertQsTaskAccess(taskId, userId, role);
+    const previous = await this.getProjectQsStatus(task.projectId);
+    const nextStatus = this.normalizeQsStatus(dto.status);
+    const next = await this.setProjectQsStatus(task.projectId, nextStatus, userId);
+    if (userId && previous.status !== next.status) {
+      await this.activityLogger.log({
+        action: ActivityAction.QS_STATUS_CHANGED,
+        userId,
+        taskId,
+        details: {
+          event: ActivityAction.QS_STATUS_CHANGED,
+          messageKey: 'qs_status_changed',
+          taskSnapshot: { id: task.id, taskNo: task.taskNo, title: task.title ?? undefined },
+          projectSnapshot: { id: task.project?.id, projectNo: task.project?.projectNo, name: task.project?.name },
+          changes: { oldStatus: previous.status, newStatus: next.status },
+          context: { source: 'tasks.updateQsStatusForTask', note: dto.note ?? null },
+        },
+      });
+    }
+    return next;
+  }
+
+  private normalizeSignRows(dto: SaveSignRowsDto) {
+    if (!Array.isArray(dto.rows)) throw new BadRequestException('Sign rows payload is required');
+
+    return dto.rows.map((row, index) => {
+      const normalized = {
+        id: row.id?.trim() || undefined,
+        tNo: row.tNo?.trim() || '',
+        no: row.no?.trim() || '',
+        signType: row.signType?.trim() || '',
+        planCode: row.planCode?.trim() || '',
+        estQty: row.estQty,
+        qsQty: row.qsQty,
+        areaZone: row.areaZone?.trim() || '',
+        levelParcel: row.levelParcel?.trim() || '',
+        sequence: row.sequence?.trim() || '',
+        status: row.status?.trim() || '',
+        comment: row.comment?.trim() || null,
+        contRef: row.contRef?.trim() || '',
+      };
+
+      for (const [field, label] of SIGN_ROW_REQUIRED_FIELDS) {
+        const value = normalized[field];
+        if (value === undefined || value === null || String(value).trim() === '') {
+          throw new BadRequestException(`${label} is required in row ${index + 1}`);
+        }
+      }
+      if (!Number.isInteger(normalized.estQty)) {
+        throw new BadRequestException(`Est QTY must be a whole number in row ${index + 1}`);
+      }
+      if (!Number.isInteger(normalized.qsQty)) {
+        throw new BadRequestException(`QS QTY must be a whole number in row ${index + 1}`);
+      }
+      return normalized;
     });
   }
 
@@ -1780,35 +1986,290 @@ export class TasksService {
     return { sessionId: created.id };
   }
 
-  async saveSignRows(taskId: string, dto: SaveSignRowsDto) {
+  private hasRowChanges(before: any, after: Record<string, unknown>) {
+    return ['tNo', 'no', 'signType', 'planCode', 'estQty', 'qsQty', 'areaZone', 'levelParcel', 'sequence', 'status', 'comment', 'contRef']
+      .some((field) => (before?.[field] ?? null) !== (after[field] ?? null));
+  }
+
+  private rowLabel(row: any) {
+    return row?.no || row?.tNo || row?.signType || 'Sign row';
+  }
+
+  private async persistSignRows(taskId: string, dto: SaveSignRowsDto, userId?: string, role?: UserRole, allowCompleted = false) {
     if (!this.isUuid(taskId)) throw new BadRequestException('Invalid task id');
-    const existing = await this.prisma.task.findUnique({ where: { id: taskId } });
+    const existing = await this.prisma.task.findUnique({
+      where: { id: taskId },
+      select: { id: true, taskNo: true, title: true, projectId: true, project: { select: { id: true, projectNo: true, name: true } } },
+    });
     if (!existing) throw new NotFoundException('Task not found');
-    await this.prisma.$transaction(async (tx) => {
-      await tx.projectSignRow.deleteMany({ where: { taskId } });
-      if (dto.rows.length > 0) {
-        await tx.projectSignRow.createMany({
-          data: dto.rows.map((row) => ({
-            taskId,
-            tNo: row.tNo?.trim() || null,
-            no: row.no?.trim() || null,
-            signType: row.signType?.trim() || null,
-            planCode: row.planCode?.trim() || null,
-            estQty: row.estQty ?? null,
-            qsQty: row.qsQty ?? null,
-            areaZone: row.areaZone?.trim() || null,
-            levelParcel: row.levelParcel?.trim() || null,
-            sequence: row.sequence?.trim() || null,
-            status: row.status?.trim() || null,
-            comment: row.comment?.trim() || null,
-            contRef: row.contRef?.trim() || null,
-          })),
+    await this.assertQsTaskAccess(taskId, userId, role);
+    const currentStatus = await this.getProjectQsStatus(existing.projectId);
+    if (!allowCompleted && currentStatus.status === QS_STATUS_COMPLETED) {
+      throw new BadRequestException('Completed QS projects are read-only. Reopen the QS status before editing sign rows.');
+    }
+    const rowsToPersist = this.normalizeSignRows(dto);
+    const existingRows = await this.prisma.projectSignRow.findMany({ where: { taskId }, orderBy: { createdAt: 'asc' } });
+    const existingById = new Map(existingRows.map((row) => [row.id, row]));
+    const incomingIds = new Set(rowsToPersist.map((row) => row.id).filter(Boolean));
+    const auditEvents: Array<{ action: typeof ActivityAction[keyof typeof ActivityAction]; before?: any; after?: any }> = [];
+
+    const savedRows = await this.prisma.$transaction(async (tx) => {
+      for (const row of rowsToPersist) {
+        const { id, ...data } = row;
+        if (id && existingById.has(id)) {
+          const before = existingById.get(id);
+          if (this.hasRowChanges(before, data)) {
+            await tx.projectSignRow.update({ where: { id }, data });
+            auditEvents.push({ action: ActivityAction.QS_SIGN_ROW_UPDATED, before, after: { id, ...data } });
+          }
+        } else {
+          const created = await tx.projectSignRow.create({ data: { taskId, ...data } });
+          auditEvents.push({ action: ActivityAction.QS_SIGN_ROW_ADDED, after: created });
+        }
+      }
+      for (const row of existingRows) {
+        if (!incomingIds.has(row.id)) {
+          await tx.projectSignRow.delete({ where: { id: row.id } });
+          auditEvents.push({ action: ActivityAction.QS_SIGN_ROW_DELETED, before: row });
+        }
+      }
+      return tx.projectSignRow.findMany({
+        where: { taskId },
+        orderBy: { createdAt: 'asc' },
+      });
+    });
+    if (savedRows.length !== rowsToPersist.length) {
+      throw new BadRequestException('Sign rows were not persisted correctly');
+    }
+    if (userId) {
+      for (const event of auditEvents) {
+        const row = event.after ?? event.before;
+        await this.activityLogger.log({
+          action: event.action,
+          userId,
+          taskId,
+          details: {
+            event: event.action,
+            messageKey:
+              event.action === ActivityAction.QS_SIGN_ROW_ADDED
+                ? 'qs_sign_row_added'
+                : event.action === ActivityAction.QS_SIGN_ROW_UPDATED
+                  ? 'qs_sign_row_updated'
+                  : 'qs_sign_row_deleted',
+            taskSnapshot: {
+              id: existing.id,
+              taskNo: existing.taskNo,
+              title: existing.title ?? undefined,
+            },
+            projectSnapshot: {
+              id: existing.project?.id,
+              projectNo: existing.project?.projectNo,
+              name: existing.project?.name,
+            },
+            changes: {
+              rowId: row?.id ?? null,
+              rowLabel: this.rowLabel(row),
+              before: event.before ?? null,
+              after: event.after ?? null,
+            },
+            context: { source: 'tasks.persistSignRows', updatedByRole: role ?? null },
+          },
         });
       }
+      await this.activityLogger.log({
+        action: ActivityAction.SIGN_FAMILY_UPDATED,
+        userId,
+        taskId,
+        details: {
+          event: ActivityAction.SIGN_FAMILY_UPDATED,
+          messageKey: 'sign_family_updated',
+          taskSnapshot: {
+            id: existing.id,
+            taskNo: existing.taskNo,
+            title: existing.title ?? undefined,
+          },
+          projectSnapshot: {
+            id: existing.project?.id,
+            projectNo: existing.project?.projectNo,
+            name: existing.project?.name,
+          },
+          context: {
+            source: 'tasks.saveSignRows',
+            rowCount: savedRows.length,
+            updatedByRole: role ?? null,
+          },
+        },
+      });
+    }
+    if (currentStatus.status !== QS_STATUS_COMPLETED) {
+      const nextStatus = savedRows.length > 0 ? QS_STATUS_IN_PROGRESS : QS_STATUS_PENDING;
+      if (currentStatus.status !== nextStatus) {
+        await this.setProjectQsStatus(existing.projectId, nextStatus, userId);
+        if (userId) {
+          await this.activityLogger.log({
+            action: ActivityAction.QS_STATUS_CHANGED,
+            userId,
+            taskId,
+            details: {
+              event: ActivityAction.QS_STATUS_CHANGED,
+              messageKey: 'qs_status_changed',
+              taskSnapshot: { id: existing.id, taskNo: existing.taskNo, title: existing.title ?? undefined },
+              projectSnapshot: { id: existing.project?.id, projectNo: existing.project?.projectNo, name: existing.project?.name },
+              changes: { oldStatus: currentStatus.status, newStatus: nextStatus },
+              context: { source: 'tasks.persistSignRows' },
+            },
+          });
+        }
+      }
+    }
+    return savedRows;
+  }
+
+  async saveSignRows(taskId: string, dto: SaveSignRowsDto, userId?: string, role?: UserRole) {
+    return this.persistSignRows(taskId, dto, userId, role);
+  }
+
+  async submitQsUpdate(taskId: string, dto: SaveSignRowsDto, userId?: string, role?: UserRole) {
+    if (!userId) throw new ForbiddenException('QS submission requires an authenticated user');
+    if (!Array.isArray(dto.rows) || dto.rows.length === 0) {
+      throw new BadRequestException('Add at least one complete sign row before submitting the QS update.');
+    }
+    const task = await this.prisma.task.findUnique({
+      where: { id: taskId },
+      select: { id: true, taskNo: true, title: true, projectId: true, project: { select: { id: true, projectNo: true, name: true } } },
     });
-    return this.prisma.projectSignRow.findMany({
-      where: { taskId },
-      orderBy: { createdAt: 'asc' },
+    if (!task) throw new NotFoundException('Task not found');
+    await this.assertQsTaskAccess(taskId, userId, role);
+    const previousStatus = await this.getProjectQsStatus(task.projectId);
+    if (previousStatus.status === QS_STATUS_COMPLETED) {
+      throw new BadRequestException('This QS project has already been submitted and is read-only.');
+    }
+
+    const rows = await this.persistSignRows(taskId, dto, userId, role, true);
+    const nextStatus = await this.setProjectQsStatus(task.projectId, QS_STATUS_COMPLETED, userId);
+    await this.activityLogger.log({
+      action: ActivityAction.QS_UPDATE_SUBMITTED,
+      userId,
+      taskId,
+      details: {
+        event: ActivityAction.QS_UPDATE_SUBMITTED,
+        messageKey: 'qs_update_submitted',
+        taskSnapshot: { id: task.id, taskNo: task.taskNo, title: task.title ?? undefined },
+        projectSnapshot: { id: task.project?.id, projectNo: task.project?.projectNo, name: task.project?.name },
+        changes: { rowCount: rows.length, oldStatus: previousStatus.status, newStatus: nextStatus.status },
+        context: { source: 'tasks.submitQsUpdate', submittedByRole: role ?? null },
+      },
     });
+    if (previousStatus.status !== QS_STATUS_COMPLETED) {
+      await this.activityLogger.log({
+        action: ActivityAction.QS_STATUS_CHANGED,
+        userId,
+        taskId,
+        details: {
+          event: ActivityAction.QS_STATUS_CHANGED,
+          messageKey: 'qs_status_changed',
+          taskSnapshot: { id: task.id, taskNo: task.taskNo, title: task.title ?? undefined },
+          projectSnapshot: { id: task.project?.id, projectNo: task.project?.projectNo, name: task.project?.name },
+          changes: { oldStatus: previousStatus.status, newStatus: nextStatus.status },
+          context: { source: 'tasks.submitQsUpdate' },
+        },
+      });
+    }
+
+    const hodUsers = await this.prisma.user.findMany({
+      where: { role: { name: { in: ['HOD', 'ADMIN'] } } },
+      select: { id: true },
+    });
+    const taskLink = `/project-task-view/${taskId}?from=qs`;
+    const message = `${task.project?.projectNo ? `${task.project.projectNo} — ` : ''}${task.project?.name ?? 'Project'} QS update submitted with ${rows.length} sign row(s).`;
+    for (const hod of hodUsers) {
+      this.notificationsService
+        .create({ userId: hod.id, title: 'QS Update Submitted', message, linkUrl: taskLink })
+        .catch((err) => this.logger.error('Failed to send QS submission notification', err));
+      this.dashboardRealtime?.notifyUserNotificationRefresh(hod.id);
+    }
+
+    return { status: nextStatus.status, qsStatus: nextStatus, rows };
+  }
+
+  private async getAssignedProjectIdsForQsUser(userId: string) {
+    const rows = await this.prisma.$queryRaw<Array<{ projectId: string }>>(Prisma.sql`
+      SELECT [projectId] AS [projectId]
+      FROM [ErpTSProjectQsAssignment]
+      WHERE [qsUserId] = ${userId}
+    `);
+    return rows.map((row) => row.projectId);
+  }
+
+  private async assignProjectToQsTeam(
+    projectId: string,
+    actingUserId: string | null,
+    project: { name: string; projectNo?: string | null },
+  ) {
+    const qsUsers = await this.prisma.user.findMany({
+      where: { role: { name: UserRole.QS } },
+      select: { id: true },
+    });
+    if (qsUsers.length === 0) return;
+
+    const assignedCount = await this.prisma.$executeRaw(Prisma.sql`
+      INSERT INTO [ErpTSProjectQsAssignment] ([projectId], [qsUserId])
+      SELECT ${projectId}, [incoming].[qsUserId]
+      FROM (VALUES ${Prisma.join(qsUsers.map((user) => Prisma.sql`(${user.id})`))}) AS [incoming]([qsUserId])
+      WHERE NOT EXISTS (
+        SELECT 1
+        FROM [ErpTSProjectQsAssignment] [existing]
+        WHERE [existing].[projectId] = ${projectId}
+          AND [existing].[qsUserId] = [incoming].[qsUserId]
+      )
+    `);
+    if (assignedCount === 0) return;
+
+    const linkUrl = `/project-task-view/${projectId}`;
+    const message = `${project.projectNo ? `${project.projectNo} — ` : ''}${project.name} has been assigned to QS for Sign Family review.`;
+    for (const qsUser of qsUsers) {
+      await this.notificationsService.create({
+        userId: qsUser.id,
+        title: 'New Project Assigned to QS',
+        message,
+        linkUrl,
+      });
+      this.dashboardRealtime?.notifyUserNotificationRefresh(qsUser.id);
+    }
+
+    if (actingUserId) {
+      await this.activityLogger.log({
+        action: ActivityAction.QS_PROJECT_ASSIGNED,
+        userId: actingUserId,
+        details: {
+          event: ActivityAction.QS_PROJECT_ASSIGNED,
+          messageKey: 'qs_project_assigned',
+          projectSnapshot: {
+            id: projectId,
+            projectNo: project.projectNo ?? null,
+            name: project.name,
+          },
+          context: {
+            assignedUserIds: qsUsers.map((user) => user.id),
+            source: 'tasks.assignProjectToQsTeam',
+          },
+        },
+      });
+    }
+  }
+
+  private async assertQsTaskAccess(taskId: string, userId?: string, role?: UserRole) {
+    if (role !== UserRole.QS) return;
+    if (!userId) throw new ForbiddenException('QS access requires an authenticated user');
+    const rows = await this.prisma.$queryRaw<Array<{ id: string }>>(Prisma.sql`
+      SELECT TOP 1 [assignment].[id] AS [id]
+      FROM [ErpTSProjectQsAssignment] [assignment]
+      INNER JOIN [ErpTSTask] [task] ON [task].[projectId] = [assignment].[projectId]
+      WHERE [task].[id] = ${taskId}
+        AND [assignment].[qsUserId] = ${userId}
+    `);
+    if (rows.length === 0) {
+      throw new ForbiddenException('QS users can only access tasks for assigned projects');
+    }
   }
 }

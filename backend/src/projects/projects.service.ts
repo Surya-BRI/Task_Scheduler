@@ -1,4 +1,5 @@
-import { Injectable, NotFoundException } from '@nestjs/common';
+import { ForbiddenException, Injectable, NotFoundException, Optional } from '@nestjs/common';
+import { Prisma } from '@prisma/client';
 import { PrismaService } from '../prisma/prisma.service';
 import { CreateProjectDto } from './dto/create-project.dto';
 import { UpdateProjectDto } from './dto/update-project.dto';
@@ -6,6 +7,9 @@ import { CreateProjectFileLinkDto } from './dto/create-project-file-link.dto';
 import { TaskFilesService } from '../tasks/task-files.service';
 import { ActivityLoggerService } from '../activities/activity-logger.service';
 import { ActivityAction } from '../activities/activity-events';
+import { UserRole } from '../common/constants/roles.enum';
+import { NotificationsService } from '../notifications/notifications.service';
+import { DashboardRealtimeService } from '../dashboard/dashboard-realtime.service';
 
 const PROJECT_SELECT = {
   id: true,
@@ -26,6 +30,9 @@ const PROJECT_SELECT = {
   updatedAt: true,
 };
 
+const QS_STATUS_PENDING = 'Pending';
+const QS_STATUS_VALUES = new Set(['Pending', 'In Progress', 'Completed']);
+
 export type ProjectFilters = {
   status?: string;
   category?: string;
@@ -40,14 +47,76 @@ export class ProjectsService {
     private readonly prisma: PrismaService,
     private readonly taskFilesService: TaskFilesService,
     private readonly activityLogger: ActivityLoggerService,
+    private readonly notificationsService: NotificationsService,
+    @Optional() private readonly dashboardRealtime?: DashboardRealtimeService,
   ) {}
 
   private isAbsoluteHttpUrl(value: string) {
     return /^https?:\/\//i.test(String(value ?? '').trim());
   }
 
-  create(createdById: string, dto: CreateProjectDto) {
-    return this.prisma.project.create({
+  private normalizeQsStatus(value?: string | null) {
+    const text = String(value ?? '').trim();
+    return QS_STATUS_VALUES.has(text) ? text : QS_STATUS_PENDING;
+  }
+
+  private async ensureQsStatusTable() {
+    await this.prisma.$executeRawUnsafe(`
+IF OBJECT_ID('dbo.ErpTSProjectQsStatus', 'U') IS NULL
+BEGIN
+  CREATE TABLE [dbo].[ErpTSProjectQsStatus] (
+    [projectId] UNIQUEIDENTIFIER NOT NULL,
+    [status] NVARCHAR(20) NOT NULL CONSTRAINT [DF_ErpTSProjectQsStatus_status] DEFAULT ('Pending'),
+    [updatedById] UNIQUEIDENTIFIER NULL,
+    [submittedById] UNIQUEIDENTIFIER NULL,
+    [submittedAt] DATETIME2 NULL,
+    [createdAt] DATETIME2 NOT NULL CONSTRAINT [DF_ErpTSProjectQsStatus_createdAt] DEFAULT SYSUTCDATETIME(),
+    [updatedAt] DATETIME2 NOT NULL CONSTRAINT [DF_ErpTSProjectQsStatus_updatedAt] DEFAULT SYSUTCDATETIME(),
+    CONSTRAINT [PK_ErpTSProjectQsStatus] PRIMARY KEY ([projectId]),
+    CONSTRAINT [CK_ErpTSProjectQsStatus_status] CHECK ([status] IN ('Pending', 'In Progress', 'Completed')),
+    CONSTRAINT [FK_ErpTSProjectQsStatus_Project] FOREIGN KEY ([projectId])
+      REFERENCES [dbo].[ErpTSProject]([id]) ON DELETE CASCADE,
+    CONSTRAINT [FK_ErpTSProjectQsStatus_UpdatedBy] FOREIGN KEY ([updatedById])
+      REFERENCES [dbo].[ErpTSUser]([id]),
+    CONSTRAINT [FK_ErpTSProjectQsStatus_SubmittedBy] FOREIGN KEY ([submittedById])
+      REFERENCES [dbo].[ErpTSUser]([id])
+  );
+END;
+    `);
+  }
+
+  private async withQsStatuses<T extends { id: string }>(projects: T[]): Promise<Array<T & { qsStatus: any }>> {
+    if (projects.length === 0) return [];
+    await this.ensureQsStatusTable();
+    const rows = await this.prisma.$queryRaw<Array<{
+      projectId: string;
+      status: string;
+      submittedById: string | null;
+      submittedAt: Date | null;
+      updatedAt: Date;
+    }>>(Prisma.sql`
+      SELECT [projectId], [status], [submittedById], [submittedAt], [updatedAt]
+      FROM [dbo].[ErpTSProjectQsStatus]
+      WHERE [projectId] IN (${Prisma.join(projects.map((project) => project.id))})
+    `);
+    const byProject = new Map(rows.map((row) => [row.projectId, row]));
+    return projects.map((project) => {
+      const row = byProject.get(project.id);
+      return {
+        ...project,
+        qsStatus: {
+          projectId: project.id,
+          status: this.normalizeQsStatus(row?.status),
+          submittedById: row?.submittedById ?? null,
+          submittedAt: row?.submittedAt ?? null,
+          updatedAt: row?.updatedAt ?? null,
+        },
+      };
+    });
+  }
+
+  async create(createdById: string, dto: CreateProjectDto) {
+    const project = await this.prisma.project.create({
       data: {
         name: dto.name,
         projectNo: dto.projectNo,
@@ -60,13 +129,31 @@ export class ProjectsService {
       },
       select: PROJECT_SELECT,
     });
+    await this.assignProjectToQsTeam(project.id, createdById, {
+      name: project.name,
+      projectNo: project.projectNo,
+    });
+    return project;
   }
 
-  async findAll(filters: ProjectFilters = {}) {
+  async findAll(filters: ProjectFilters = {}, currentUserId?: string, currentUserRole?: string) {
     const { status, category, search, page = 1, limit = 50 } = filters;
     const skip = (page - 1) * limit;
 
     const where: Record<string, unknown> = {};
+    if (currentUserRole === UserRole.QS && currentUserId) {
+      const assignedProjectIds = await this.getAssignedProjectIdsForQsUser(currentUserId);
+      if (assignedProjectIds.length === 0) {
+        return {
+          data: [],
+          total: 0,
+          page,
+          limit,
+          totalPages: 0,
+        };
+      }
+      where.id = { in: assignedProjectIds };
+    }
     if (status) where.status = status;
     if (category) where.category = category;
     if (search) {
@@ -89,7 +176,7 @@ export class ProjectsService {
     ]);
 
     return {
-      data,
+      data: await this.withQsStatuses(data),
       total,
       page,
       limit,
@@ -97,7 +184,8 @@ export class ProjectsService {
     };
   }
 
-  async findOne(id: string) {
+  async findOne(id: string, currentUserId?: string, currentUserRole?: string) {
+    await this.assertProjectAccess(id, currentUserId, currentUserRole);
     const project = await this.prisma.project.findUnique({
       where: { id },
       select: {
@@ -118,10 +206,11 @@ export class ProjectsService {
     });
     if (!project) throw new NotFoundException('Project not found');
     const attachments = await this.getProjectFiles(id);
-    return { ...project, attachments };
+    const [withStatus] = await this.withQsStatuses([project]);
+    return { ...withStatus, attachments };
   }
 
-  async findByProjectNo(projectNo: string) {
+  async findByProjectNo(projectNo: string, currentUserId?: string, currentUserRole?: string) {
     const value = (projectNo ?? '').trim();
     if (!value) throw new NotFoundException('Project not found');
 
@@ -129,7 +218,11 @@ export class ProjectsService {
       where: { projectNo: value },
       select: PROJECT_SELECT,
     });
-    if (exact) return exact;
+    if (exact) {
+      await this.assertProjectAccess(exact.id, currentUserId, currentUserRole);
+      const [withStatus] = await this.withQsStatuses([exact]);
+      return withStatus;
+    }
 
     const normalized = value.toLowerCase().replace(/[\s-]/g, '');
     const candidates = await this.prisma.project.findMany({
@@ -144,7 +237,10 @@ export class ProjectsService {
             .toLowerCase()
             .replace(/[\s-]/g, '') === normalized,
       ) ?? null;
-    if (normalizedMatch) return normalizedMatch;
+    if (normalizedMatch) {
+      const [withStatus] = await this.withQsStatuses([normalizedMatch]);
+      return withStatus;
+    }
 
     // Fallback: if project exists in ERP master tables but not yet hydrated
     // into ErpTSProject, create it on-demand so details page can resolve.
@@ -192,13 +288,23 @@ export class ProjectsService {
           },
           select: PROJECT_SELECT,
         });
-        return created;
+        await this.assignProjectToQsTeam(created.id, null, {
+          name: created.name,
+          projectNo: created.projectNo,
+        });
+        await this.assertProjectAccess(created.id, currentUserId, currentUserRole);
+        const [withStatus] = await this.withQsStatuses([created]);
+        return withStatus;
       } catch {
         const existingAfterRace = await this.prisma.project.findFirst({
           where: { projectNo: erp.projectCode },
           select: PROJECT_SELECT,
         });
-        if (existingAfterRace) return existingAfterRace;
+        if (existingAfterRace) {
+          await this.assertProjectAccess(existingAfterRace.id, currentUserId, currentUserRole);
+          const [withStatus] = await this.withQsStatuses([existingAfterRace]);
+          return withStatus;
+        }
       }
     }
 
@@ -311,7 +417,8 @@ export class ProjectsService {
     };
   }
 
-  async getProjectFiles(projectId: string) {
+  async getProjectFiles(projectId: string, currentUserId?: string, currentUserRole?: string) {
+    await this.assertProjectAccess(projectId, currentUserId, currentUserRole);
     const project = await this.prisma.project.findUnique({ where: { id: projectId }, select: { id: true } });
     if (!project) throw new NotFoundException('Project not found');
 
@@ -395,5 +502,84 @@ export class ProjectsService {
     const existing = await this.prisma.project.findUnique({ where: { id } });
     if (!existing) throw new NotFoundException('Project not found');
     return this.prisma.project.delete({ where: { id } });
+  }
+
+  private async assignProjectToQsTeam(
+    projectId: string,
+    actingUserId: string | null,
+    project: { name: string; projectNo?: string | null },
+  ) {
+    const qsUsers = await this.prisma.user.findMany({
+      where: { role: { name: UserRole.QS } },
+      select: { id: true },
+    });
+    if (qsUsers.length === 0) return;
+
+    await this.prisma.$executeRaw(Prisma.sql`
+      INSERT INTO [ErpTSProjectQsAssignment] ([projectId], [qsUserId])
+      SELECT ${projectId}, [incoming].[qsUserId]
+      FROM (VALUES ${Prisma.join(qsUsers.map((user) => Prisma.sql`(${user.id})`))}) AS [incoming]([qsUserId])
+      WHERE NOT EXISTS (
+        SELECT 1
+        FROM [ErpTSProjectQsAssignment] [existing]
+        WHERE [existing].[projectId] = ${projectId}
+          AND [existing].[qsUserId] = [incoming].[qsUserId]
+      )
+    `);
+
+    const linkUrl = `/project-task-view/${projectId}`;
+    const message = `${project.projectNo ? `${project.projectNo} — ` : ''}${project.name} has been assigned to QS for Sign Family review.`;
+    for (const qsUser of qsUsers) {
+      await this.notificationsService.create({
+        userId: qsUser.id,
+        title: 'New Project Assigned to QS',
+        message,
+        linkUrl,
+      });
+      this.dashboardRealtime?.notifyUserNotificationRefresh(qsUser.id);
+    }
+
+    if (actingUserId) {
+      await this.activityLogger.log({
+        action: ActivityAction.QS_PROJECT_ASSIGNED,
+        userId: actingUserId,
+        details: {
+          event: ActivityAction.QS_PROJECT_ASSIGNED,
+          messageKey: 'qs_project_assigned',
+          projectSnapshot: {
+            id: projectId,
+            projectNo: project.projectNo ?? null,
+            name: project.name,
+          },
+          context: {
+            assignedUserIds: qsUsers.map((user) => user.id),
+            source: 'projects.assignProjectToQsTeam',
+          },
+        },
+      });
+    }
+  }
+
+  private async getAssignedProjectIdsForQsUser(userId: string) {
+    const rows = await this.prisma.$queryRaw<Array<{ projectId: string }>>(Prisma.sql`
+      SELECT [projectId] AS [projectId]
+      FROM [ErpTSProjectQsAssignment]
+      WHERE [qsUserId] = ${userId}
+    `);
+    return rows.map((row) => row.projectId);
+  }
+
+  private async assertProjectAccess(projectId: string, currentUserId?: string, currentUserRole?: string) {
+    if (currentUserRole !== UserRole.QS) return;
+    if (!currentUserId) throw new ForbiddenException('QS access requires an authenticated user');
+    const rows = await this.prisma.$queryRaw<Array<{ id: string }>>(Prisma.sql`
+      SELECT TOP 1 [id] AS [id]
+      FROM [ErpTSProjectQsAssignment]
+      WHERE [projectId] = ${projectId}
+        AND [qsUserId] = ${currentUserId}
+    `);
+    if (rows.length === 0) {
+      throw new ForbiddenException('QS users can only access assigned projects');
+    }
   }
 }

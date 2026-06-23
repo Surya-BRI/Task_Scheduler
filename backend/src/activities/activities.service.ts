@@ -1,4 +1,5 @@
-import { Injectable } from '@nestjs/common';
+import { ForbiddenException, Injectable } from '@nestjs/common';
+import { Prisma } from '@prisma/client';
 import { PrismaService } from '../prisma/prisma.service';
 import { ActivityAction } from './activity-events';
 import { UserRole } from '../common/constants/roles.enum';
@@ -145,6 +146,18 @@ export class ActivitiesService {
     if (msg === 'project_file_uploaded') return `${actorName} uploaded ${details?.fileMeta?.fileName ?? 'a file'}`;
     if (msg === 'project_file_deleted') return `${actorName} deleted ${details?.fileMeta?.fileName ?? 'a file'}`;
     if (msg === 'task_file_uploaded') return `${actorName} uploaded ${details?.fileMeta?.fileName ?? 'a file'} to task files`;
+    if (msg === 'qs_sign_row_added') return `${actorName} added QS sign row ${details?.changes?.rowLabel ?? ''}`.trim();
+    if (msg === 'qs_sign_row_updated') return `${actorName} updated QS sign row ${details?.changes?.rowLabel ?? ''}`.trim();
+    if (msg === 'qs_sign_row_deleted') return `${actorName} deleted QS sign row ${details?.changes?.rowLabel ?? ''}`.trim();
+    if (msg === 'qs_status_changed') {
+      const oldStatus = details?.changes?.oldStatus ?? '-';
+      const newStatus = details?.changes?.newStatus ?? '-';
+      return `${actorName} changed QS status ${oldStatus} → ${newStatus}`;
+    }
+    if (msg === 'qs_update_submitted') {
+      const rowCount = details?.changes?.rowCount ?? 0;
+      return `${actorName} submitted QS update (${rowCount} sign row${rowCount === 1 ? '' : 's'})`;
+    }
     if (msg === 'chatter_post_created') {
       const title = details?.changes?.title?.trim();
       const taskName = taskTitle ?? details?.taskSnapshot?.title ?? details?.taskSnapshot?.taskNo;
@@ -282,6 +295,17 @@ export class ActivitiesService {
         { task: { taskDesigners: { some: { designerId: input.requestingUserId } } } },
         { userId: input.requestingUserId },
       ];
+    } else if (input.requestingUserRole === UserRole.QS && input.requestingUserId) {
+      const assignedProjectIds = await this.getAssignedProjectIdsForQsUser(input.requestingUserId);
+      where.OR = [
+        { userId: input.requestingUserId },
+        ...(assignedProjectIds.length > 0
+          ? [
+              { task: { projectId: { in: assignedProjectIds } } },
+              ...assignedProjectIds.map((projectId) => ({ details: { contains: projectId } })),
+            ]
+          : []),
+      ];
     }
 
     const rows = await this.prisma.activityLog.findMany({
@@ -302,6 +326,15 @@ export class ActivitiesService {
         nextCursor: hasMore ? sliced[sliced.length - 1]?.createdAt?.toISOString() ?? null : null,
       },
     };
+  }
+
+  private async getAssignedProjectIdsForQsUser(userId: string) {
+    const rows = await this.prisma.$queryRaw<Array<{ projectId: string }>>(Prisma.sql`
+      SELECT [projectId] AS [projectId]
+      FROM [ErpTSProjectQsAssignment]
+      WHERE [qsUserId] = ${userId}
+    `);
+    return rows.map((row) => row.projectId);
   }
 
   private mapRow(row: any) {
@@ -426,15 +459,46 @@ export class ActivitiesService {
     }));
   }
 
-  async findByTask(input: { taskId: string; limit?: number; cursor?: string }) {
+  async findByTask(input: { taskId: string; limit?: number; cursor?: string; requestingUserId?: string; requestingUserRole?: string }) {
+    await this.assertQsTaskAccess(input.taskId, input.requestingUserId, input.requestingUserRole);
     return this.queryActivities({ taskId: input.taskId, limit: input.limit, cursor: input.cursor });
   }
 
-  async findByProject(input: { projectId: string; limit?: number; cursor?: string }) {
+  async findByProject(input: { projectId: string; limit?: number; cursor?: string; requestingUserId?: string; requestingUserRole?: string }) {
+    await this.assertQsProjectAccess(input.projectId, input.requestingUserId, input.requestingUserRole);
     return this.queryActivities({
       projectId: input.projectId,
       limit: input.limit,
       cursor: input.cursor,
     });
+  }
+
+  private async assertQsProjectAccess(projectId: string, userId?: string, role?: string) {
+    if (role !== UserRole.QS) return;
+    if (!userId) throw new ForbiddenException('QS access requires an authenticated user');
+    const rows = await this.prisma.$queryRaw<Array<{ id: string }>>(Prisma.sql`
+      SELECT TOP 1 [id] AS [id]
+      FROM [ErpTSProjectQsAssignment]
+      WHERE [projectId] = ${projectId}
+        AND [qsUserId] = ${userId}
+    `);
+    if (rows.length === 0) {
+      throw new ForbiddenException('QS users can only access activity for assigned projects');
+    }
+  }
+
+  private async assertQsTaskAccess(taskId: string, userId?: string, role?: string) {
+    if (role !== UserRole.QS) return;
+    if (!userId) throw new ForbiddenException('QS access requires an authenticated user');
+    const rows = await this.prisma.$queryRaw<Array<{ id: string }>>(Prisma.sql`
+      SELECT TOP 1 [assignment].[id] AS [id]
+      FROM [ErpTSProjectQsAssignment] [assignment]
+      INNER JOIN [ErpTSTask] [task] ON [task].[projectId] = [assignment].[projectId]
+      WHERE [task].[id] = ${taskId}
+        AND [assignment].[qsUserId] = ${userId}
+    `);
+    if (rows.length === 0) {
+      throw new ForbiddenException('QS users can only access activity for assigned project tasks');
+    }
   }
 }

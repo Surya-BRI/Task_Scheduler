@@ -73,6 +73,59 @@ function deriveFileNameFromUrl(value) {
   }
 }
 
+function normalizeOptionalInteger(value, label, rowNumber) {
+  const text = String(value ?? '').trim()
+  if (!text) return undefined
+  const number = Number(text)
+  if (!Number.isInteger(number)) {
+    throw new Error(`${label} must be a whole number in row ${rowNumber}.`)
+  }
+  return number
+}
+
+const SIGN_ROW_REQUIRED_FIELDS = [
+  ['tNo', 'T.No'],
+  ['no', 'No'],
+  ['signType', 'Sign Type'],
+  ['planCode', 'Plan Code'],
+  ['estQty', 'Est QTY'],
+  ['qsQty', 'QS QTY'],
+  ['areaZone', 'Area/Zone'],
+  ['levelParcel', 'Level/Parcel'],
+  ['sequence', 'Sequence'],
+  ['status', 'Status'],
+  ['contRef', 'Cont.Ref'],
+]
+
+function normalizeSignRowsForSave(rows) {
+  if (!Array.isArray(rows) || rows.length === 0) {
+    throw new Error('Add at least one complete sign row before saving.')
+  }
+  return rows.map((row, index) => {
+    for (const [field, label] of SIGN_ROW_REQUIRED_FIELDS) {
+      const value = row[field]
+      if (value === null || value === undefined || String(value).trim() === '') {
+        throw new Error(`${label} is required in row ${index + 1}.`)
+      }
+    }
+    return {
+      id: row.id || undefined,
+      tNo: String(row.tNo ?? '').trim(),
+      no: String(row.no ?? '').trim(),
+      signType: String(row.signType ?? '').trim(),
+      planCode: String(row.planCode ?? '').trim(),
+      estQty: normalizeOptionalInteger(row.estQty, 'Est QTY', index + 1),
+      qsQty: normalizeOptionalInteger(row.qsQty, 'QS QTY', index + 1),
+      areaZone: String(row.areaZone ?? '').trim(),
+      levelParcel: String(row.levelParcel ?? '').trim(),
+      sequence: String(row.sequence ?? '').trim(),
+      status: String(row.status ?? '').trim(),
+      comment: String(row.comment ?? '').trim() || undefined,
+      contRef: String(row.contRef ?? '').trim(),
+    }
+  })
+}
+
 const STAGE_ITEMS = [
   { id: 'new',       label: 'Design Task New',   hint: 'Awaiting project allocation',   icon: Flag,         status: 'DESIGN_NEW' },
   { id: 'planned',   label: 'Design Planned',    hint: 'Task scheduled for production', icon: Clock3,       status: 'DESIGN_PLANNED' },
@@ -922,6 +975,8 @@ export function TaskDetailsPage() {
   const [hodUsers, setHodUsers] = useState([])
   const [signRows, setSignRows] = useState([])
   const [signRowsSaving, setSignRowsSaving] = useState(false)
+  const [qsStatus, setQsStatus] = useState(null)
+  const [qsSubmitting, setQsSubmitting] = useState(false)
   const [projectId, setProjectId] = useState('')
   const [taskId, setTaskId] = useState('')
   const [projectFiles, setProjectFiles] = useState([])
@@ -963,7 +1018,25 @@ export function TaskDetailsPage() {
         const lookupOpNo = isProjectsListFlow ? rawOpNo : rawOpNo
         let task = null
         if (!isProjectsListFlow && rawId && isUuid(rawId)) {
-          task = await apiClient.get(`/tasks/${encodeURIComponent(rawId)}`)
+          try {
+            task = await apiClient.get(`/tasks/${encodeURIComponent(rawId)}`)
+          } catch {
+            const project = await apiClient.get(`/projects/${encodeURIComponent(rawId)}`)
+            const projectTasks = Array.isArray(project?.tasks) ? project.tasks : []
+            const reviewTask = projectTasks[0] ?? null
+            if (reviewTask?.id) {
+              task = await apiClient.get(`/tasks/${encodeURIComponent(reviewTask.id)}`)
+            } else if (project?.id) {
+              if (!alive) return
+              setRecord(mapProjectListRowToRecord({
+                ...project,
+                projectCode: project.projectNo,
+                projectName: project.name,
+                category: project.category,
+              }))
+              return
+            }
+          }
         } else if (!isProjectsListFlow && rawId) {
           const result = await apiClient.get(`/tasks?search=${encodeURIComponent(rawId)}&limit=20`)
           const rows = result?.data ?? []
@@ -1106,6 +1179,8 @@ export function TaskDetailsPage() {
       ? '/project-design'
       : from === 'projects-list'
         ? '/projects-list'
+        : from === 'qs'
+          ? '/qs/projects'
         : from === 'design-scheduler'
           ? '/design-scheduler'
           : from === 'designer-queue' || from === 'designer-design-list'
@@ -1128,6 +1203,9 @@ export function TaskDetailsPage() {
   const isHod = ['HOD', 'ADMIN', 'PROJECT_MANAGER'].includes(_session?.role ?? '')
   const isSales = _session?.role === 'SALESPERSON'
   const isDesigner = _session?.role === 'DESIGNER'
+  const normalizedQsStatus = String(qsStatus?.status ?? '').trim().toLowerCase()
+  const isQsCompleted = normalizedQsStatus === 'completed'
+  const isQsReadOnly = isQsCompleted
   const hasReworkInstructions = Boolean(record?.previousRevisionTaskId)
   const baseTabs = isCreationRoute && !isRetail ? [...TABS, PROJECT_TAB] : TABS
   const tabs = hasReworkInstructions ? [...baseTabs, REWORK_TAB] : baseTabs
@@ -1227,8 +1305,23 @@ export function TaskDetailsPage() {
   }, [record, isCreationRoute])
 
   useEffect(() => {
-    if (!taskId) { setSignRows([]); return }
-    apiClient.get(`/tasks/${taskId}/sign-rows`).then((rows) => setSignRows(Array.isArray(rows) ? rows : [])).catch(() => setSignRows([]))
+    if (!taskId) {
+      setSignRows([])
+      setQsStatus(null)
+      return
+    }
+    let alive = true
+    Promise.all([
+      apiClient.get(`/tasks/${taskId}/sign-rows`).catch(() => []),
+      apiClient.get(`/tasks/${taskId}/qs-status`).catch(() => null),
+    ]).then(([rows, status]) => {
+      if (!alive) return
+      setSignRows(Array.isArray(rows) ? rows : [])
+      setQsStatus(status)
+    })
+    return () => {
+      alive = false
+    }
   }, [taskId])
 
   const PROJECT_FILE_ACTIONS = new Set(['PROJECT_FILE_UPLOADED', 'PROJECT_FILE_DELETED'])
@@ -1355,6 +1448,7 @@ export function TaskDetailsPage() {
   }, [projectId])
 
   const chatterRefreshPendingRef = useRef(false)
+  const recordOpNo = record?.opNo ?? null
 
   const fetchChatterPosts = useCallback(async ({ silent = false } = {}) => {
     const queryTaskId = taskId && isUuid(taskId) ? taskId : null
@@ -1371,7 +1465,7 @@ export function TaskDetailsPage() {
         posts = await listChatterPostsForTask({
           taskId: queryTaskId,
           projectId,
-          taskOpNo: record?.opNo ?? null,
+          taskOpNo: recordOpNo,
           limit: 200,
         })
       } else {
@@ -1388,7 +1482,7 @@ export function TaskDetailsPage() {
     } finally {
       if (!silent) setChatterLoading(false)
     }
-  }, [projectId, taskId, record?.opNo])
+  }, [projectId, taskId, recordOpNo])
 
   useEffect(() => {
     if (activeTab !== 'chatter') return
@@ -1691,27 +1785,52 @@ export function TaskDetailsPage() {
 
   async function handleSaveSignRows() {
     if (!taskId) return
+    if (isQsReadOnly) {
+      toast.error('Completed QS projects are read-only.')
+      return
+    }
     setSignRowsSaving(true)
     try {
+      const rows = normalizeSignRowsForSave(signRows)
       const saved = await apiClient.put(`/tasks/${taskId}/sign-rows`, {
-        rows: signRows.map(({ tNo, no, signType, planCode, estQty, qsQty, areaZone, levelParcel, sequence, status, comment, contRef }) => ({
-          tNo: tNo || undefined,
-          no: no || undefined,
-          signType: signType || undefined,
-          planCode: planCode || undefined,
-          estQty: estQty !== '' && estQty != null ? Number(estQty) : undefined,
-          qsQty: qsQty !== '' && qsQty != null ? Number(qsQty) : undefined,
-          areaZone: areaZone || undefined,
-          levelParcel: levelParcel || undefined,
-          sequence: sequence || undefined,
-          status: status || undefined,
-          comment: comment || undefined,
-          contRef: contRef || undefined,
-        })),
+        rows,
       })
-      setSignRows(Array.isArray(saved) ? saved : [])
+      const verified = await apiClient.get(`/tasks/${taskId}/sign-rows`)
+      const status = await apiClient.get(`/tasks/${taskId}/qs-status`).catch(() => null)
+      const nextRows = Array.isArray(verified) ? verified : (Array.isArray(saved) ? saved : [])
+      setSignRows(nextRows)
+      if (status) setQsStatus(status)
+      if (nextRows.length !== rows.length) {
+        throw new Error('Sign Family rows were saved but could not be verified. Please refresh and check again.')
+      }
+      toast.success(`Sign Family rows saved (${nextRows.length}).`)
+      await fetchActivities({ append: false, cursor: null })
+    } catch (error) {
+      toast.error(error instanceof Error ? error.message : 'Failed to save Sign Family rows')
     } finally {
       setSignRowsSaving(false)
+    }
+  }
+
+  async function handleSubmitQsUpdate() {
+    if (!taskId) return
+    if (isQsReadOnly) {
+      toast.error('This QS update has already been submitted.')
+      return
+    }
+    setQsSubmitting(true)
+    try {
+      const rows = normalizeSignRowsForSave(signRows)
+      const response = await apiClient.post(`/tasks/${taskId}/qs-submit`, { rows })
+      const nextRows = Array.isArray(response?.rows) ? response.rows : await apiClient.get(`/tasks/${taskId}/sign-rows`)
+      setSignRows(Array.isArray(nextRows) ? nextRows : [])
+      setQsStatus(response?.qsStatus ?? { status: response?.status ?? 'Completed' })
+      toast.success('QS update submitted. Project is now read-only.')
+      await fetchActivities({ append: false, cursor: null })
+    } catch (error) {
+      toast.error(error instanceof Error ? error.message : 'Failed to submit QS update')
+    } finally {
+      setQsSubmitting(false)
     }
   }
 
@@ -2043,24 +2162,45 @@ export function TaskDetailsPage() {
                       {!isRetail ? (
                         <div className="mt-4 border-t border-slate-200 pt-3">
                           <div className="mb-2 flex items-center justify-between">
-                            <p className="text-xs font-semibold text-slate-700">Sign Rows</p>
-                            <div className="flex gap-2">
-                              <button
-                                type="button"
-                                onClick={() => setSignRows((prev) => [...prev, { tNo: '', no: '', signType: '', planCode: '', estQty: '', qsQty: '', areaZone: '', levelParcel: '', sequence: '', status: '', comment: '', contRef: '' }])}
-                                className="rounded border border-slate-300 bg-white px-2 py-1 text-[11px] font-medium text-slate-700 hover:bg-slate-50"
-                              >
-                                + Add Row
-                              </button>
-                              <button
-                                type="button"
-                                onClick={handleSaveSignRows}
-                                disabled={signRowsSaving}
-                                className="rounded-md bg-[#10a6e3] px-3 py-1 text-[11px] font-semibold text-white transition hover:bg-[#0f96cd] disabled:opacity-60"
-                              >
-                                {signRowsSaving ? 'Saving…' : 'Save Rows'}
-                              </button>
+                            <div className="flex items-center gap-2">
+                              <p className="text-xs font-semibold text-slate-700">Sign Rows</p>
+                              {isQsReadOnly ? (
+                                <span className="rounded-full border border-emerald-200 bg-emerald-50 px-2 py-0.5 text-[10px] font-semibold text-emerald-700">
+                                  Completed - Read Only
+                                </span>
+                              ) : qsStatus?.status ? (
+                                <span className="rounded-full border border-blue-200 bg-blue-50 px-2 py-0.5 text-[10px] font-semibold text-blue-700">
+                                  QS {qsStatus.status}
+                                </span>
+                              ) : null}
                             </div>
+                            {!isQsReadOnly ? (
+                              <div className="flex gap-2">
+                                <button
+                                  type="button"
+                                  onClick={() => setSignRows((prev) => [...prev, { tNo: '', no: '', signType: '', planCode: '', estQty: '', qsQty: '', areaZone: '', levelParcel: '', sequence: '', status: '', comment: '', contRef: '' }])}
+                                  className="rounded border border-slate-300 bg-white px-2 py-1 text-[11px] font-medium text-slate-700 hover:bg-slate-50"
+                                >
+                                  + Add Row
+                                </button>
+                                <button
+                                  type="button"
+                                  onClick={handleSaveSignRows}
+                                  disabled={signRowsSaving || qsSubmitting}
+                                  className="rounded-md bg-[#10a6e3] px-3 py-1 text-[11px] font-semibold text-white transition hover:bg-[#0f96cd] disabled:opacity-60"
+                                >
+                                  {signRowsSaving ? 'Saving…' : 'Save Rows'}
+                                </button>
+                                <button
+                                  type="button"
+                                  onClick={handleSubmitQsUpdate}
+                                  disabled={signRowsSaving || qsSubmitting}
+                                  className="rounded-md bg-emerald-600 px-3 py-1 text-[11px] font-semibold text-white transition hover:bg-emerald-700 disabled:opacity-60"
+                                >
+                                  {qsSubmitting ? 'Submitting…' : 'Submit QS Update'}
+                                </button>
+                              </div>
+                            ) : null}
                           </div>
                           <div className="overflow-auto rounded-md border border-slate-200">
                             <table className="w-full text-[11px]">
@@ -2082,18 +2222,21 @@ export function TaskDetailsPage() {
                                         <input
                                           value={row[field] ?? ''}
                                           onChange={(e) => setSignRows((prev) => prev.map((r, i) => i === idx ? { ...r, [field]: e.target.value } : r))}
+                                          disabled={isQsReadOnly}
                                           className="h-6 w-full min-w-[60px] rounded border border-slate-200 px-1.5 text-[11px] text-slate-900 focus:border-blue-400 focus:outline-none"
                                         />
                                       </td>
                                     ))}
                                     <td className="px-1 py-0.5">
-                                      <button
-                                        type="button"
-                                        onClick={() => setSignRows((prev) => prev.filter((_, i) => i !== idx))}
-                                        className="text-slate-400 hover:text-red-500"
-                                      >
-                                        ✕
-                                      </button>
+                                      {!isQsReadOnly ? (
+                                        <button
+                                          type="button"
+                                          onClick={() => setSignRows((prev) => prev.filter((_, i) => i !== idx))}
+                                          className="text-slate-400 hover:text-red-500"
+                                        >
+                                          ✕
+                                        </button>
+                                      ) : null}
                                     </td>
                                   </tr>
                                 ))}
