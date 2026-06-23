@@ -666,8 +666,6 @@ export class ChatterPostsService implements OnModuleInit {
       projectId: params.projectId,
     });
 
-    const verb = params.isComment ? 'commented and mentioned you' : 'mentioned you';
-
     for (const userId of uniqueUuids(params.mentionedUserIds)) {
       if (userId === params.authorId) continue;
       try {
@@ -681,25 +679,6 @@ export class ChatterPostsService implements OnModuleInit {
           },
         });
         this.dashboardRealtime?.notifyUserNotificationRefresh(userId);
-        await this.activityLogger.log({
-          action: ActivityAction.CHATTER_MENTION,
-          userId: params.authorId,
-          taskId: params.taskId ?? null,
-          details: {
-            event: ActivityAction.CHATTER_MENTION,
-            messageKey: 'chatter_mention',
-            changes: {
-              mentionedUserId: userId,
-              postId: params.postId,
-              commentId: params.commentId ?? null,
-            },
-            context: {
-              projectId: params.projectId ?? null,
-              postId: params.postId,
-              commentId: params.commentId ?? null,
-            },
-          },
-        });
       } catch (err) {
         this.logger.warn(`Mention notification failed for ${userId}: ${err}`);
       }
