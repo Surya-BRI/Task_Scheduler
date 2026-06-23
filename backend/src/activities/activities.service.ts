@@ -275,7 +275,9 @@ export class ActivitiesService {
   private async queryActivities(input: FindInput) {
     const limit = Math.min(Math.max(input.limit ?? 30, 1), 100);
     const cursorDate = input.cursor ? new Date(input.cursor) : null;
-    const where: Record<string, unknown> = {};
+    const where: Record<string, unknown> = {
+      action: { not: ActivityAction.CHATTER_MENTION },
+    };
     if (cursorDate && !Number.isNaN(cursorDate.getTime())) {
       where.createdAt = { lt: cursorDate };
     }
