@@ -1,21 +1,11 @@
 import { useCallback, useEffect, useRef, useState } from 'react'
-import { CalendarCheck2, CheckCircle2, ChevronLeft, Clock3, FileText, Hourglass, Link, Pencil, ShieldCheck, ShieldX } from 'lucide-react'
+import { CheckCircle2, ChevronLeft, Clock3, FileText, Link, Pencil } from 'lucide-react'
 import { useParams, usePathname, useRouter, useSearchParams } from 'next/navigation'
 import { Navbar } from '../components/Navbar'
 import { ProjectTaskTimer } from '../components/ProjectTaskTimer'
 import { useDesignListStore } from '../state/DesignListContext'
 import { isAlexSessionActive } from '@/lib/alex-session'
 import { apiClient } from '@/lib/api-client'
-
-const STAGE_ITEMS = [
-  { id: 'new', label: 'Design Task New', hint: 'Awaiting project allocation', icon: FileText },
-  { id: 'planned', label: 'Design Planned', hint: 'Task scheduled for production', icon: CalendarCheck2 },
-  { id: 'progress', label: 'In Progress', hint: 'Active design and drafting', icon: Hourglass },
-  { id: 'completed', label: 'Design Completed', hint: 'Submitted for internal review', icon: ShieldCheck },
-  { id: 'review', label: 'HOD Review', hint: 'Verified and approved by HOD', icon: ShieldCheck },
-  { id: 'sales', label: 'Sales Review', hint: 'Final sales and client check', icon: ShieldCheck },
-  { id: 'rework', label: 'Rework / Error', hint: 'Corrections needed', icon: ShieldX },
-]
 
 const ACTIVITY_TIMELINE = [
   {
@@ -49,23 +39,6 @@ const FIELD_HISTORY = [
   { id: 'f2', date: '2026-01-28', text: 'Total Opportunity Value updated by Lara Thompson' },
   { id: 'f3', date: '2025-12-05', text: 'Stage changed to Estimation/BOQ by Ahmed Khalil' },
 ]
-
-function StageChip({ item }) {
-  const Icon = item.icon
-  return (
-    <div className="min-w-[145px] rounded border border-slate-200 bg-white px-2 py-1.5">
-      <div className="flex items-start gap-1.5">
-        <div className="mt-0.5 grid h-5 w-5 place-items-center rounded bg-black text-white">
-          <Icon className="h-3 w-3" />
-        </div>
-        <div>
-          <p className="text-[11px] font-semibold text-slate-900">{item.label}</p>
-          <p className="text-[10px] leading-tight text-slate-500">{item.hint}</p>
-        </div>
-      </div>
-    </div>
-  )
-}
 
 function RowField({ label, value }) {
   return (
@@ -190,12 +163,6 @@ export function DesignListRecordPage() {
           </div>
 
           <h1 className="text-[34px] font-semibold text-slate-900">{pageTitle}</h1>
-
-          <div className="flex gap-2 overflow-x-auto pb-0.5">
-            {STAGE_ITEMS.map((item) => (
-              <StageChip key={item.id} item={item} />
-            ))}
-          </div>
 
           <div className="grid gap-3 lg:grid-cols-[1fr_250px]">
             <section className="rounded-lg border border-slate-200 bg-white p-3">

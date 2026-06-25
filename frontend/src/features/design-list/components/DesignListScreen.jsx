@@ -18,7 +18,7 @@ import {
 } from "lucide-react";
 import { Navbar } from "@/components/Navbar";
 import { apiClient } from "@/lib/api-client";
-import { taskSummaryPath, taskViewPathForRecord } from "@/lib/design-list-routes";
+import { FROM_DESIGN_LIST, taskSummaryPath, taskViewPathForRecord } from "@/lib/design-list-routes";
 import { getStatusLabel, mapTaskToDesignRow, matchDateRange, toBackendStatus } from "../task-view-model";
 
 const getStatusColor = (status) => {
@@ -64,11 +64,11 @@ function isOverdue(row) {
 }
 
 function recordDetailPath(record) {
-  return taskViewPathForRecord(record);
+  return taskViewPathForRecord(record, { from: FROM_DESIGN_LIST });
 }
 
 function recordTabPath(record, tab) {
-  return taskSummaryPath(record?.id, { tab });
+  return taskSummaryPath(record?.id, { from: FROM_DESIGN_LIST, tab });
 }
 
 function truncateText(value, max = 20) {

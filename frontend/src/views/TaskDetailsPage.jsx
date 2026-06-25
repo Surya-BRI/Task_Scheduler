@@ -38,7 +38,12 @@ import {
   resolveTaskIdForChatter,
 } from '@/features/chatter/utils/resolve-chatter-task-id'
 import { normalizeStatusCode, getStatusLabel } from '@/features/design-list/task-view-model'
-import { taskViewPathForRecord } from '@/lib/design-list-routes'
+import {
+  FROM_DESIGN_LIST,
+  FROM_DESIGNER_QUEUE,
+  FROM_DESIGN_SCHEDULER,
+  taskViewPathForRecord,
+} from '@/lib/design-list-routes'
 import { getSession } from '@/lib/mock-auth'
 
 function isValidHttpUrl(value) {
@@ -929,6 +934,12 @@ function ProjectTaskList({ tasks, loading, onView }) {
 }
 
 const TASK_TAB_IDS = ['details', 'activity', 'chatter', 'team', 'rework']
+const DESIGN_WORKFLOW_SOURCES = new Set([
+  FROM_DESIGN_LIST,
+  FROM_DESIGNER_QUEUE,
+  FROM_DESIGN_SCHEDULER,
+  'designer-design-list',
+])
 export function TaskDetailsPage() {
   const router = useRouter()
   const pathname = usePathname()
@@ -1207,6 +1218,8 @@ export function TaskDetailsPage() {
   const isQsCompleted = normalizedQsStatus === 'completed'
   const isQsReadOnly = isQsCompleted
   const hasReworkInstructions = Boolean(record?.previousRevisionTaskId)
+  const showWorkflowStatusBlocks =
+    DESIGN_WORKFLOW_SOURCES.has(from) || Boolean(pathname?.startsWith('/task-summary/'))
   const baseTabs = isCreationRoute && !isRetail ? [...TABS, PROJECT_TAB] : TABS
   const tabs = hasReworkInstructions ? [...baseTabs, REWORK_TAB] : baseTabs
   useEffect(() => {
@@ -1858,16 +1871,18 @@ export function TaskDetailsPage() {
             {pageTitle}
           </h1>
 
-          <div className="flex items-start gap-2 pb-0.5">
-            <div className="flex flex-1 gap-2 overflow-x-auto">
-              {STAGE_ITEMS.map((item) => (
-                <StagePill key={item.id} item={item} active={!isCreationRoute && record?.status === item.status} />
-              ))}
+          {showWorkflowStatusBlocks ? (
+            <div className="flex items-start gap-2 pb-0.5">
+              <div className="flex flex-1 gap-2 overflow-x-auto">
+                {STAGE_ITEMS.map((item) => (
+                  <StagePill key={item.id} item={item} active={record?.status === item.status} />
+                ))}
+              </div>
+              {SPECIAL_STATUS[record?.status] ? (
+                <SpecialStatusPill config={SPECIAL_STATUS[record.status]} />
+              ) : null}
             </div>
-            {SPECIAL_STATUS[record?.status] ? (
-              <SpecialStatusPill config={SPECIAL_STATUS[record.status]} />
-            ) : null}
-          </div>
+          ) : null}
 
 
           <div className="grid gap-2.5 lg:grid-cols-[1fr_265px]">
