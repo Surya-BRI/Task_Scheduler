@@ -9,6 +9,7 @@ import { UpdateOvertimeRequestDto } from './dto/update-overtime-request.dto';
 import { ReviewOvertimeRequestDto } from './dto/review-overtime-request.dto';
 import { UserRole } from '../common/constants/roles.enum';
 import { assertOvertimeDateIsToday } from '../common/utils/date-window.util';
+import { LEAVE_TYPE_HALF_DAY, normalizeLeaveType } from '../requests/leave-request.validation';
 import { Decimal } from '@prisma/client/runtime/library';
 import { DashboardRealtimeService } from '../dashboard/dashboard-realtime.service';
 
@@ -54,6 +55,43 @@ export class OvertimeRequestsService {
     return end;
   }
 
+  private getDayWindow(date: Date): { dayStart: Date; dayEnd: Date } {
+    const dayStart = new Date(Date.UTC(date.getUTCFullYear(), date.getUTCMonth(), date.getUTCDate()));
+    const dayEnd = new Date(dayStart);
+    dayEnd.setUTCHours(23, 59, 59, 999);
+    return { dayStart, dayEnd };
+  }
+
+  private async assertNoApprovedFullDayLeave(designerId: string, date: Date): Promise<void> {
+    const { dayStart, dayEnd } = this.getDayWindow(date);
+    const leaves = await this.prisma.leaveRequest.findMany({
+      where: {
+        userId: designerId,
+        status: { in: ['Approved', 'APPROVED', 'approved'] },
+        revokedAt: null,
+        startDate: { lte: dayEnd },
+        OR: [{ endDate: null }, { endDate: { gte: dayStart } }],
+      },
+      select: {
+        id: true,
+        type: true,
+        startDate: true,
+        endDate: true,
+      },
+    });
+
+    const hasFullDayLeave = leaves.some((leave) => {
+      const type = normalizeLeaveType(leave.type ?? '') ?? 'Full Day';
+      return type !== LEAVE_TYPE_HALF_DAY;
+    });
+
+    if (hasFullDayLeave) {
+      throw new BadRequestException(
+        'Cannot allocate overtime because the designer has approved full-day leave for this date.',
+      );
+    }
+  }
+
   private async touchSchedulerWeekForOvertime(
     request: { date?: Date | null },
     userId: string,
@@ -97,6 +135,8 @@ export class OvertimeRequestsService {
     const requestDate = new Date(dateStr);
     const startMinutes = this.timeToMinutes(startTime);
     const endMinutes = this.timeToMinutes(endTime);
+
+    await this.assertNoApprovedFullDayLeave(designerId, requestDate);
 
     // 1. Start/End Time Validation
     if (endMinutes <= startMinutes) {
@@ -690,6 +730,9 @@ export class OvertimeRequestsService {
     if (!request) throw new NotFoundException('Overtime request not found');
     if (request.designerId !== userId) throw new ForbiddenException('Access denied');
     if (request.status !== 'DRAFT') throw new BadRequestException('Request is already submitted');
+    if (request.designerId && request.date) {
+      await this.assertNoApprovedFullDayLeave(request.designerId, new Date(request.date));
+    }
 
     const updated = await this.prisma.overtimeRequest.update({
       where: { id },
@@ -879,6 +922,9 @@ export class OvertimeRequestsService {
       }
       if (request.status !== 'SUBMITTED') {
         throw new BadRequestException('Request is not in a submittable state for review');
+      }
+      if (dto.status === 'APPROVED_BY_MANAGER' && request.designerId && request.date) {
+        await this.assertNoApprovedFullDayLeave(request.designerId, new Date(request.date));
       }
 
       const updateData: any = {

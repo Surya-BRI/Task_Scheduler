@@ -8,6 +8,7 @@ export type DashboardRealtimeEvent =
   | 'task_status_changed'
   | 'leave_approved'
   | 'leave_rejected'
+  | 'leave_revoked'
   | 'overtime_approved'
   | 'overtime_rejected'
   | 'overtime_scheduler_action'
