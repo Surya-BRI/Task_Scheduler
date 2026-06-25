@@ -3,7 +3,7 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import { toast } from 'sonner'
 import { useParams, usePathname, useRouter, useSearchParams } from 'next/navigation'
-import { ChevronLeft, CircleCheck, Clock3, FileText, Flag, Hourglass, Info, Pencil, Shield, Trash2, Upload } from 'lucide-react'
+import { ChevronLeft, FileText, Pencil, Trash2, Upload } from 'lucide-react'
 import { CreateTaskModal } from '../components/CreateTaskModal'
 import { Navbar } from '../components/Navbar'
 import { dummyProjects } from '../features/projects/data/dummy-projects'
@@ -76,38 +76,11 @@ function deriveFileNameFromUrl(value) {
   }
 }
 
-const STAGE_ITEMS = [
-  { id: 'new', label: 'Design Task New', hint: 'Awaiting project allocation', icon: Flag },
-  { id: 'planned', label: 'Design Planned', hint: 'Task scheduled for production', icon: Clock3 },
-  { id: 'progress', label: 'In Progress', hint: 'Active design and drafting', icon: Hourglass },
-  { id: 'completed', label: 'Design Completed', hint: 'Submitted for internal review', icon: CircleCheck },
-  { id: 'review', label: 'HOD Review', hint: 'Verified and approved by HOD', icon: Shield },
-  { id: 'sales', label: 'Sales Review', hint: 'Final sales and client check', icon: Pencil },
-  { id: 'rework', label: 'Rework / Error', hint: 'Corrections needed', icon: Info },
-]
-
 const TABS = [
   { id: 'details', label: 'Details' },
   { id: 'activity', label: 'Activity' },
   { id: 'chatter', label: 'Chatter' },
 ]
-
-function StagePill({ item }) {
-  const Icon = item.icon
-  return (
-    <div className="min-w-[148px] rounded-lg border border-slate-200 bg-white px-2 py-1.5">
-      <div className="flex items-start gap-1.5">
-        <div className="mt-0.5 grid h-[18px] w-[18px] place-items-center rounded-full bg-slate-900 text-white">
-          <Icon className="h-2.5 w-2.5" />
-        </div>
-        <div>
-          <p className="text-[11px] font-semibold text-slate-900">{item.label}</p>
-          <p className="text-[10px] leading-tight text-slate-500">{item.hint}</p>
-        </div>
-      </div>
-    </div>
-  )
-}
 
 function DetailRow({ label, value }) {
   return (
@@ -647,6 +620,7 @@ export function RetailProjectPage() {
   }, [projectId])
 
   const chatterRefreshPendingRef = useRef(false)
+  const taskOpNo = m?.opNo ?? null
 
   const fetchChatterPosts = useCallback(async ({ silent = false } = {}) => {
     const queryTaskId = taskId && isUuid(taskId) ? taskId : null
@@ -662,7 +636,7 @@ export function RetailProjectPage() {
         posts = await listChatterPostsForTask({
           taskId: queryTaskId,
           projectId,
-          taskOpNo: m?.opNo ?? null,
+          taskOpNo,
           limit: 200,
         })
       } else {
@@ -679,7 +653,7 @@ export function RetailProjectPage() {
     } finally {
       if (!silent) setChatterLoading(false)
     }
-  }, [projectId, taskId, m?.opNo])
+  }, [projectId, taskId, taskOpNo])
 
   useEffect(() => {
     if (activeTab !== 'chatter') return
@@ -995,12 +969,6 @@ export function RetailProjectPage() {
           <h1 className="text-base font-semibold leading-tight tracking-tight text-slate-900 sm:text-lg">
             {m.pageTitle}
           </h1>
-
-          <div className="flex gap-2 overflow-x-auto pb-0.5">
-            {STAGE_ITEMS.map((item) => (
-              <StagePill key={item.id} item={item} />
-            ))}
-          </div>
 
           <div className="grid gap-2.5 lg:grid-cols-[1fr_265px]">
             <section className="rounded-lg border border-slate-200 bg-white p-2.5 shadow-sm">
