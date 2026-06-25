@@ -88,6 +88,40 @@ export class RegularizationRequestsService implements RegularizationRequestsCont
     return `${yyyy}-${mm}-${dd}`;
   }
 
+  private getStartOfWeek(date: Date): Date {
+    const d = new Date(Date.UTC(date.getUTCFullYear(), date.getUTCMonth(), date.getUTCDate()));
+    const day = d.getUTCDay();
+    const diff = d.getUTCDate() - day + (day === 0 ? -6 : 1);
+    d.setUTCDate(diff);
+    d.setUTCHours(0, 0, 0, 0);
+    return d;
+  }
+
+  private async touchSchedulerWeekForRegularization(
+    request: { date?: Date | string | null },
+    userId: string,
+  ): Promise<void> {
+    if (!request.date) return;
+    const date = request.date instanceof Date ? request.date : new Date(request.date);
+    if (Number.isNaN(date.getTime())) return;
+    const weekStartDate = this.getStartOfWeek(date);
+    await this.prisma.schedulerWeek.upsert({
+      where: { weekStartDate },
+      create: {
+        weekStartDate,
+        version: 1,
+        isLocked: false,
+        updatedBy: userId,
+        lastPayloadHash: null,
+      },
+      update: {
+        version: { increment: 1 },
+        updatedBy: userId,
+        lastPayloadHash: null,
+      },
+    });
+  }
+
   private mapStatus(db: string | null | undefined): RegularizationRequestView['status'] {
     const t = (db ?? '').trim().toLowerCase();
     if (t === 'approved') return 'Approved';
@@ -551,6 +585,7 @@ export class RegularizationRequestsService implements RegularizationRequestsCont
       await this.notifyDesigner(request, 'Approved', approverRemarks).catch((err) => {
         this.logger.warn(`Failed to notify designer: ${err instanceof Error ? err.message : err}`);
       });
+      await this.touchSchedulerWeekForRegularization(newRow, submitterId);
       this.dashboardRealtime?.notifyOverviewRefresh('regularization_approved');
       if (dto.designerId) {
         this.dashboardRealtime?.notifyUserNotificationRefresh(dto.designerId);
@@ -640,6 +675,9 @@ export class RegularizationRequestsService implements RegularizationRequestsCont
       this.logger.warn(`Failed to notify designer: ${err instanceof Error ? err.message : err}`);
     });
 
+    if (dto.status === 'Approved') {
+      await this.touchSchedulerWeekForRegularization(updatedRow, reviewerId);
+    }
     this.dashboardRealtime?.notifyOverviewRefresh(
       dto.status === 'Approved' ? 'regularization_approved' : 'regularization_rejected',
     );

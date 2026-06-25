@@ -25,6 +25,9 @@ describe('OvertimeRequestsService', () => {
       delete: jest.fn(),
       count: jest.fn(),
     },
+    leaveRequest: {
+      findMany: jest.fn(),
+    },
     overtimeApprovalHistory: {
       create: jest.fn(),
     },
@@ -78,6 +81,7 @@ describe('OvertimeRequestsService', () => {
       project: { name: 'Retail Revamp', projectNo: 'PRJ-01' },
     });
     mockPrismaService.overtimeRequest.findMany.mockResolvedValue([]);
+    mockPrismaService.leaveRequest.findMany.mockResolvedValue([]);
   });
 
   it('should be defined', () => {
@@ -225,6 +229,23 @@ describe('OvertimeRequestsService', () => {
       await expect(service.create('d1', UserRole.DESIGNER, baseDto)).rejects.toThrow(
         BadRequestException,
       );
+    });
+
+    it('should reject overtime on approved full-day leave', async () => {
+      mockPrismaService.overtimeRequest.findFirst.mockResolvedValue(null);
+      mockPrismaService.leaveRequest.findMany.mockResolvedValue([
+        {
+          id: 'leave-1',
+          type: 'Full Day',
+          startDate: new Date(`${todayOtDate()}T00:00:00.000Z`),
+          endDate: new Date(`${todayOtDate()}T00:00:00.000Z`),
+        },
+      ]);
+
+      await expect(service.create('d1', UserRole.DESIGNER, baseDto)).rejects.toThrow(
+        'Cannot allocate overtime because the designer has approved full-day leave for this date.',
+      );
+      expect(mockPrismaService.overtimeRequest.create).not.toHaveBeenCalled();
     });
 
     it('should create overtime draft request successfully', async () => {
@@ -821,6 +842,34 @@ describe('OvertimeRequestsService', () => {
           }),
         }),
       );
+    });
+
+    it('should reject approval when designer has approved full-day leave', async () => {
+      const mockRequest = {
+        id: 'r1',
+        status: 'SUBMITTED',
+        designerId: 'd1',
+        totalHours: new Decimal(2.0),
+        date: new Date(`${todayOtDate()}T00:00:00.000Z`),
+        designer: { id: 'd1', fullName: 'Designer 1', departmentId: 'dept1' },
+      };
+      mockPrismaService.overtimeRequest.findUnique.mockResolvedValue(mockRequest);
+      mockPrismaService.leaveRequest.findMany.mockResolvedValue([
+        {
+          id: 'leave-1',
+          type: 'Full Day',
+          startDate: new Date(`${todayOtDate()}T00:00:00.000Z`),
+          endDate: new Date(`${todayOtDate()}T00:00:00.000Z`),
+        },
+      ]);
+
+      await expect(
+        service.review('r1', 'h1', UserRole.HOD, {
+          status: 'APPROVED_BY_MANAGER',
+          comments: 'Looks good',
+        }),
+      ).rejects.toThrow('Cannot allocate overtime because the designer has approved full-day leave for this date.');
+      expect(mockPrismaService.overtimeRequest.update).not.toHaveBeenCalled();
     });
 
     it('should allow HOD to reject submitted request', async () => {

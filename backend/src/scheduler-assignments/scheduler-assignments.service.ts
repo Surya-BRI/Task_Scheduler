@@ -19,6 +19,11 @@ import { SaveSchedulerWeekDto } from './dto/save-scheduler-week.dto';
 import { UserRole } from '../common/constants/roles.enum';
 import { NotificationsService } from '../notifications/notifications.service';
 import { DashboardRealtimeService } from '../dashboard/dashboard-realtime.service';
+import {
+  LEAVE_TYPE_HALF_DAY,
+  normalizeHalfDaySession,
+  normalizeLeaveType,
+} from '../requests/leave-request.validation';
 
 type RawAssignmentRow = {
   id: string;
@@ -39,6 +44,15 @@ type RawAssignmentRow = {
   createdAt: Date;
   updatedAt: Date;
   overtimeRequestIds?: string[];
+  requestType?: 'LEAVE' | 'REGULARIZATION' | 'OVERTIME' | null;
+  isSystemBlock?: boolean;
+  leaveRequestIds?: string[];
+  leaveHours?: string | number | null;
+  leaveSession?: string | null;
+  regularizationRequestIds?: string[];
+  regularizationHours?: string | number | null;
+  requestStatus?: string | null;
+  requestLabel?: string | null;
 };
 
 export type SchedulerAssignmentDto = {
@@ -60,6 +74,15 @@ export type SchedulerAssignmentDto = {
   createdAt: string;
   updatedAt: string;
   overtimeRequestIds: string[];
+  requestType: 'LEAVE' | 'REGULARIZATION' | 'OVERTIME' | null;
+  isSystemBlock: boolean;
+  leaveRequestIds: string[];
+  leaveHours: number;
+  leaveSession: string | null;
+  regularizationRequestIds: string[];
+  regularizationHours: number;
+  requestStatus: string | null;
+  requestLabel: string | null;
 };
 
 type SchedulerWeekMetaDto = {
@@ -116,6 +139,46 @@ export class SchedulerAssignmentsService {
     return Math.floor((dateUtc - weekUtc) / 86_400_000);
   }
 
+  private dateForDayIndex(weekStartDate: Date, dayIndex: number): Date {
+    const d = new Date(weekStartDate);
+    d.setUTCDate(d.getUTCDate() + dayIndex);
+    d.setUTCHours(0, 0, 0, 0);
+    return d;
+  }
+
+  private sameUtcDate(a: Date, b: Date): boolean {
+    return (
+      a.getUTCFullYear() === b.getUTCFullYear() &&
+      a.getUTCMonth() === b.getUTCMonth() &&
+      a.getUTCDate() === b.getUTCDate()
+    );
+  }
+
+  private dateInUtcRange(date: Date, start: Date, end: Date): boolean {
+    const d = Date.UTC(date.getUTCFullYear(), date.getUTCMonth(), date.getUTCDate());
+    const s = Date.UTC(start.getUTCFullYear(), start.getUTCMonth(), start.getUTCDate());
+    const e = Date.UTC(end.getUTCFullYear(), end.getUTCMonth(), end.getUTCDate());
+    return d >= s && d <= e;
+  }
+
+  private parseDurationHours(value: string | null | undefined): number {
+    if (!value) return 0;
+    const text = String(value).trim().toLowerCase();
+    if (!text) return 0;
+
+    const hhmm = text.match(/^(\d{1,2}):(\d{2})$/);
+    if (hhmm) {
+      const hours = Number(hhmm[1]);
+      const minutes = Number(hhmm[2]);
+      return Number.isFinite(hours) && Number.isFinite(minutes) ? hours + minutes / 60 : 0;
+    }
+
+    const numberMatch = text.match(/(\d+(?:\.\d+)?)/);
+    if (!numberMatch) return 0;
+    const parsed = Number(numberMatch[1]);
+    return Number.isFinite(parsed) ? parsed : 0;
+  }
+
   private weekStartForDate(date: Date): Date {
     const temp = new Date(Date.UTC(date.getUTCFullYear(), date.getUTCMonth(), date.getUTCDate()));
     const day = temp.getUTCDay();
@@ -169,6 +232,7 @@ export class SchedulerAssignmentsService {
     const assignedHours = this.toHours(row.assignedHours);
     const scheduledHours = row.scheduledHours == null ? assignedHours : this.toHours(row.scheduledHours);
     const approvedOvertimeHours = this.toHours(row.approvedOvertimeHours);
+    const requestType = row.requestType ?? null;
     return {
       id: row.id,
       designerId: String(row.designerId ?? '').trim(),
@@ -188,7 +252,128 @@ export class SchedulerAssignmentsService {
       createdAt: this.toIso(row.createdAt ? new Date(row.createdAt) : null),
       updatedAt: this.toIso(row.updatedAt ? new Date(row.updatedAt) : null),
       overtimeRequestIds: row.overtimeRequestIds ?? [],
+      requestType,
+      isSystemBlock: Boolean(row.isSystemBlock ?? requestType != null),
+      leaveRequestIds: row.leaveRequestIds ?? [],
+      leaveHours: this.toHours(row.leaveHours),
+      leaveSession: row.leaveSession ?? null,
+      regularizationRequestIds: row.regularizationRequestIds ?? [],
+      regularizationHours: this.toHours(row.regularizationHours),
+      requestStatus: row.requestStatus ?? null,
+      requestLabel: row.requestLabel ?? null,
     };
+  }
+
+  private buildLeaveSystemRows(
+    leaves: Array<{
+      id: string;
+      userId: string;
+      type: string | null;
+      startDate: Date;
+      endDate: Date | null;
+      halfDaySession: string | null;
+      status: string | null;
+      user?: { fullName?: string | null } | null;
+    }>,
+    weekStartDate: Date,
+    weekEndDate: Date,
+  ): SchedulerAssignmentDto[] {
+    const rows: SchedulerAssignmentDto[] = [];
+    for (const leave of leaves) {
+      const leaveEnd = leave.endDate ?? leave.startDate;
+      for (let dayIndex = 0; dayIndex <= 6; dayIndex += 1) {
+        const date = this.dateForDayIndex(weekStartDate, dayIndex);
+        if (!this.dateInUtcRange(date, leave.startDate, leaveEnd)) continue;
+        if (!this.dateInUtcRange(date, weekStartDate, weekEndDate)) continue;
+
+        const type = normalizeLeaveType(leave.type ?? '') ?? 'Full Day';
+        const session = type === LEAVE_TYPE_HALF_DAY ? normalizeHalfDaySession(leave.halfDaySession) : null;
+        const hours = type === LEAVE_TYPE_HALF_DAY && this.sameUtcDate(leave.startDate, leaveEnd) ? 4 : DAILY_CAPACITY;
+        const labelParts = ['Approved leave'];
+        if (type) labelParts.push(type);
+        if (session) labelParts.push(session);
+
+        rows.push(this.mapRow({
+          id: `leave-${leave.id}-${dayIndex}`,
+          designerId: leave.userId,
+          taskId: `leave-${leave.id}`,
+          dayIndex,
+          assignedHours: hours,
+          scheduledHours: hours,
+          approvedOvertimeHours: 0,
+          parentId: null,
+          splitIndex: null,
+          totalParts: null,
+          weekStartDate,
+          weekEndDate,
+          notes: labelParts.join(' - '),
+          isLocked: true,
+          assignedBy: null,
+          createdAt: new Date(),
+          updatedAt: new Date(),
+          requestType: 'LEAVE',
+          isSystemBlock: true,
+          leaveRequestIds: [leave.id],
+          leaveHours: hours,
+          leaveSession: session,
+          requestStatus: leave.status ?? 'Approved',
+          requestLabel: labelParts.join(' - '),
+        }));
+      }
+    }
+    return rows;
+  }
+
+  private buildRegularizationSystemRows(
+    requests: Array<{
+      id: string;
+      designerId: string | null;
+      taskId: string | null;
+      date: Date | null;
+      duration: string | null;
+      reason: string | null;
+      status: string | null;
+      task?: { taskNo?: string | null; title?: string | null; opNo?: string | null } | null;
+    }>,
+    weekStartDate: Date,
+    weekEndDate: Date,
+  ): SchedulerAssignmentDto[] {
+    const rows: SchedulerAssignmentDto[] = [];
+    for (const request of requests) {
+      if (!request.designerId || !request.date) continue;
+      const dayIndex = this.dayIndexForDate(new Date(request.date), weekStartDate);
+      if (dayIndex < 0 || dayIndex > 6) continue;
+      const hours = this.parseDurationHours(request.duration);
+      if (!hours) continue;
+      const taskLabel = request.task?.taskNo ?? request.task?.opNo ?? request.task?.title ?? null;
+      const label = `Approved regularization${taskLabel ? ` - ${taskLabel}` : ''}`;
+      rows.push(this.mapRow({
+        id: `regularization-${request.id}`,
+        designerId: request.designerId,
+        taskId: request.taskId ?? `regularization-${request.id}`,
+        dayIndex,
+        assignedHours: hours,
+        scheduledHours: hours,
+        approvedOvertimeHours: 0,
+        parentId: null,
+        splitIndex: null,
+        totalParts: null,
+        weekStartDate,
+        weekEndDate,
+        notes: request.reason ?? label,
+        isLocked: true,
+        assignedBy: null,
+        createdAt: new Date(),
+        updatedAt: new Date(),
+        requestType: 'REGULARIZATION',
+        isSystemBlock: true,
+        regularizationRequestIds: [request.id],
+        regularizationHours: hours,
+        requestStatus: request.status ?? 'Approved',
+        requestLabel: label,
+      }));
+    }
+    return rows;
   }
 
   private validateAssignments(dto: SaveSchedulerWeekDto) {
@@ -224,6 +409,36 @@ export class SchedulerAssignmentsService {
     }
   }
 
+  private assertNoApprovedFullDayLeaveConflicts(
+    assignments: SaveSchedulerWeekDto['assignments'],
+    approvedLeaves: Array<{
+      id: string;
+      userId: string;
+      type: string | null;
+      startDate: Date;
+      endDate: Date | null;
+      user?: { fullName?: string | null } | null;
+    }>,
+    weekStartDate: Date,
+  ): void {
+    for (const assignment of assignments) {
+      const assignmentDate = this.dateForDayIndex(weekStartDate, assignment.dayIndex);
+      const conflictingLeave = approvedLeaves.find((leave) => {
+        if (leave.userId !== assignment.designerId) return false;
+        const type = normalizeLeaveType(leave.type ?? '') ?? 'Full Day';
+        if (type === LEAVE_TYPE_HALF_DAY) return false;
+        return this.dateInUtcRange(assignmentDate, leave.startDate, leave.endDate ?? leave.startDate);
+      });
+
+      if (conflictingLeave) {
+        const designerLabel = conflictingLeave.user?.fullName?.trim() || assignment.designerId;
+        throw new BadRequestException(
+          `Cannot schedule task ${assignment.taskId} for ${designerLabel} on approved full-day leave.`,
+        );
+      }
+    }
+  }
+
   private stablePayloadHash(assignments: SaveSchedulerWeekDto['assignments']): string {
     const normalized = assignments
       .map((a) => ({
@@ -250,26 +465,71 @@ export class SchedulerAssignmentsService {
     try {
       const rows = await this.prisma.schedulerAssignment.findMany({
         where: { weekStartDate, ...(designerId ? { designerId } : {}) },
-        orderBy: [{ designerId: 'asc' }, { dayIndex: 'asc' }, { position: 'asc' }, { id: 'asc' }],
+        orderBy: [
+          { designerId: 'asc' },
+          { dayIndex: 'asc' },
+          { position: 'asc' } as unknown as Prisma.SchedulerAssignmentOrderByWithRelationInput,
+          { id: 'asc' },
+        ],
       });
 
       const weekEndDate = new Date(weekStartDate);
       weekEndDate.setUTCDate(weekEndDate.getUTCDate() + 6);
-      const approvedRequests = await this.prisma.overtimeRequest.findMany({
-        where: {
-          status: 'APPROVED',
-          date: { gte: weekStartDate, lte: weekEndDate },
-          ...(designerId ? { designerId } : {}),
-        },
-        select: {
-          id: true,
-          designerId: true,
-          taskId: true,
-          date: true,
-          approvedHours: true,
-        },
-        orderBy: { approvedAt: 'asc' },
-      });
+      const [approvedRequests, approvedLeaves, approvedRegularizations] = await Promise.all([
+        this.prisma.overtimeRequest.findMany({
+          where: {
+            status: 'APPROVED',
+            date: { gte: weekStartDate, lte: weekEndDate },
+            ...(designerId ? { designerId } : {}),
+          },
+          select: {
+            id: true,
+            designerId: true,
+            taskId: true,
+            date: true,
+            approvedHours: true,
+          },
+          orderBy: { approvedAt: 'asc' },
+        }),
+        this.prisma.leaveRequest.findMany({
+          where: {
+            status: { in: ['Approved', 'APPROVED', 'approved'] },
+            revokedAt: null,
+            startDate: { lte: weekEndDate },
+            OR: [{ endDate: null }, { endDate: { gte: weekStartDate } }],
+            ...(designerId ? { userId: designerId } : {}),
+          },
+          select: {
+            id: true,
+            userId: true,
+            type: true,
+            startDate: true,
+            endDate: true,
+            halfDaySession: true,
+            status: true,
+            user: { select: { fullName: true } },
+          },
+          orderBy: { startDate: 'asc' },
+        }),
+        this.prisma.regularizationRequest.findMany({
+          where: {
+            status: { in: ['Approved', 'APPROVED', 'approved'] },
+            date: { gte: weekStartDate, lte: weekEndDate },
+            ...(designerId ? { designerId } : {}),
+          },
+          select: {
+            id: true,
+            designerId: true,
+            taskId: true,
+            date: true,
+            duration: true,
+            reason: true,
+            status: true,
+            task: { select: { taskNo: true, title: true, opNo: true } },
+          },
+          orderBy: { reviewedAt: 'asc' },
+        }),
+      ]);
 
       const approvedByAssignmentKey = new Map<string, { hours: number; requestIds: string[] }>();
       for (const request of approvedRequests) {
@@ -340,7 +600,12 @@ export class SchedulerAssignmentsService {
         })
         .filter((row): row is SchedulerAssignmentDto => row != null);
 
-      return [...mappedRows, ...virtualRows];
+      return [
+        ...mappedRows,
+        ...virtualRows,
+        ...this.buildLeaveSystemRows(approvedLeaves, weekStartDate, weekEndDate),
+        ...this.buildRegularizationSystemRows(approvedRegularizations, weekStartDate, weekEndDate),
+      ];
     } catch (err) {
       this.fail('Scheduler assignments query failed', err);
     }
@@ -509,7 +774,7 @@ export class SchedulerAssignmentsService {
       const designerIds = Array.from(new Set(dto.assignments.map((a) => a.designerId)));
       const taskIds = Array.from(new Set(dto.assignments.map((a) => a.taskId)));
 
-      const [schedulableUsers, tasks, previousRows, weekRows] = await Promise.all([
+      const [schedulableUsers, tasks, previousRows, weekRows, approvedLeaves] = await Promise.all([
         tx.user.findMany({
           where: { id: { in: designerIds }, role: { name: { in: [UserRole.DESIGNER, UserRole.HOD] } } },
           select: { id: true },
@@ -528,6 +793,23 @@ export class SchedulerAssignmentsService {
         }>>`SELECT id, version, isLocked, lastPayloadHash, updatedAt, updatedBy
             FROM ErpTSSchedulerWeek WITH (UPDLOCK, ROWLOCK)
             WHERE weekStartDate = ${weekStartDate}`,
+        tx.leaveRequest.findMany({
+          where: {
+            userId: { in: designerIds },
+            status: { in: ['Approved', 'APPROVED', 'approved'] },
+            revokedAt: null,
+            startDate: { lte: weekEndDate },
+            OR: [{ endDate: null }, { endDate: { gte: weekStartDate } }],
+          },
+          select: {
+            id: true,
+            userId: true,
+            type: true,
+            startDate: true,
+            endDate: true,
+            user: { select: { fullName: true } },
+          },
+        }),
       ]);
       const week = weekRows[0] ?? null;
 
@@ -554,6 +836,8 @@ export class SchedulerAssignmentsService {
       if (dto.version !== existing.version) {
         throw new ConflictException('Scheduler week has changed. Refresh and retry.');
       }
+
+      this.assertNoApprovedFullDayLeaveConflicts(dto.assignments, approvedLeaves, weekStartDate);
 
       if (existing.lastPayloadHash && existing.lastPayloadHash === payloadHash) {
         return {
@@ -808,7 +1092,12 @@ export class SchedulerAssignmentsService {
 
       const newRows = await tx.schedulerAssignment.findMany({
         where: { weekStartDate },
-        orderBy: [{ designerId: 'asc' }, { dayIndex: 'asc' }, { position: 'asc' }, { id: 'asc' }],
+        orderBy: [
+          { designerId: 'asc' },
+          { dayIndex: 'asc' },
+          { position: 'asc' } as unknown as Prisma.SchedulerAssignmentOrderByWithRelationInput,
+          { id: 'asc' },
+        ],
       });
 
       return {

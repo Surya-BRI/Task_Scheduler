@@ -42,6 +42,13 @@ const SCHEDULER_RELOAD_EVENTS = new Set([
     'task_created',
     'task_reassigned',
     'task_status_changed',
+    'leave_approved',
+    'leave_rejected',
+    'leave_revoked',
+    'regularization_approved',
+    'regularization_rejected',
+    'overtime_approved',
+    'overtime_rejected',
     'overtime_scheduler_action',
     'scheduler_week_saved',
     'scheduler_week_locked',
@@ -74,6 +81,26 @@ const sumTaskTotalHours = (taskMap, taskIds) => taskIds.reduce((acc, taskId) => 
 }, 0);
 
 const nextVisibleWeekdayAfter = (dayIndex, candidateDays) => candidateDays.find((idx) => idx > dayIndex);
+
+const isRequestSystemBlock = (task) => Boolean(task?.isSystemBlock || task?.requestType === "LEAVE" || task?.requestType === "REGULARIZATION");
+
+const isFullDayLeaveBlock = (task) => task?.requestType === "LEAVE" &&
+    toPositiveHours(task.leaveHours ?? task.scheduledHours ?? task.estimatedHours) >= DAILY_CAPACITY;
+
+const hasFullDayLeaveBlock = (taskMap, taskIds = []) => taskIds.some((taskId) => isFullDayLeaveBlock(taskMap?.[taskId]));
+
+const getRequestBlockHours = (row) => {
+    if (row?.requestType === "LEAVE") return toPositiveHours(row.leaveHours ?? row.scheduledHours ?? row.assignedHours);
+    if (row?.requestType === "REGULARIZATION") return toPositiveHours(row.regularizationHours ?? row.scheduledHours ?? row.assignedHours);
+    return 0;
+};
+
+const getRequestBlockLabel = (row) => {
+    if (row?.requestLabel) return row.requestLabel;
+    if (row?.requestType === "LEAVE") return row.leaveSession ? `Leave - ${row.leaveSession}` : "Leave";
+    if (row?.requestType === "REGULARIZATION") return "Regularization";
+    return "Request";
+};
 
 /**
  * Computes schedule/task updates after a drop onto a designer day.
@@ -122,6 +149,10 @@ function buildPreparedDropAssignment({
         const dayKey = currentDayIndex.toString();
         if (!updatedSchedules[targetDesignerId][dayKey]) {
             updatedSchedules[targetDesignerId][dayKey] = [];
+        }
+        if (hasFullDayLeaveBlock(updatedTasks, updatedSchedules[targetDesignerId][dayKey] || [])) {
+            currentDayIndex = nextVisibleWeekdayAfter(currentDayIndex, visibleWeekdays) ?? 7;
+            continue;
         }
         const usedHours = sumTaskHours(updatedTasks, updatedSchedules[targetDesignerId][dayKey] || []);
         const availableHours = Math.max(0, MAX_DAILY_HOURS - usedHours);
@@ -461,6 +492,35 @@ function buildSchedulerStateFromErpAssignments(records, rows, designers) {
         const dayStr = String(dayIdx);
         if (!schedulesObj[designerId][dayStr])
             schedulesObj[designerId][dayStr] = [];
+        if (row.requestType === "LEAVE" || row.requestType === "REGULARIZATION") {
+            const hours = getRequestBlockHours(row);
+            if (!hours) continue;
+            const requestId = row.requestType === "LEAVE"
+                ? row.leaveRequestIds?.[0] ?? row.id
+                : row.regularizationRequestIds?.[0] ?? row.id;
+            const blockId = `${String(row.requestType).toLowerCase()}-${requestId}-${dayIdx}`;
+            if (!schedulesObj[designerId][dayStr].includes(blockId))
+                schedulesObj[designerId][dayStr].push(blockId);
+            assignedIds.add(blockId);
+            tasksObj[blockId] = {
+                id: blockId,
+                name: getRequestBlockLabel(row),
+                baseName: getRequestBlockLabel(row),
+                estimatedHours: hours,
+                scheduledHours: hours,
+                approvedOvertimeHours: 0,
+                status: "assigned",
+                isLocked: true,
+                isSystemBlock: true,
+                requestType: row.requestType,
+                leaveRequestIds: row.leaveRequestIds ?? [],
+                regularizationRequestIds: row.regularizationRequestIds ?? [],
+                colorClass: row.requestType === "LEAVE"
+                    ? "bg-sky-100 border border-sky-300 text-sky-800"
+                    : "bg-violet-100 border border-violet-300 text-violet-800",
+            };
+            continue;
+        }
         const taskId = String(row.taskId ?? "").trim();
         if (!taskId)
             continue;
@@ -726,7 +786,7 @@ export function DesignSchedulerScreen() {
                 (taskIds || []).forEach((taskId, positionIndex) => {
                     const task = sourceTasks?.[taskId];
                     if (!task) return;
-                    if (task.isOvertime) return;
+                    if (task.isOvertime || isRequestSystemBlock(task)) return;
                     const canonicalTaskId = isUuid(task.id) ? task.id : (isUuid(task.parentId) ? task.parentId : null);
                     if (!canonicalTaskId) return;
                     assignments.push({
@@ -936,6 +996,9 @@ export function DesignSchedulerScreen() {
                 // Week was locked externally — sync lock state silently
                 setIsWeekLocked(true);
                 isWeekLockedRef.current = true;
+            } else if (msg.toLowerCase().includes('approved full-day leave')) {
+                toast.error(msg);
+                reloadWeek();
             } else {
                 toast.error('Unable to save scheduler changes. Please try again.');
             }
@@ -1217,6 +1280,14 @@ export function DesignSchedulerScreen() {
             toast.info("Approved overtime blocks are managed from overtime requests.");
             return;
         }
+        if (isRequestSystemBlock(droppedTask)) {
+            toast.info("Approved request blocks are managed from their request records.");
+            return;
+        }
+        if (hasFullDayLeaveBlock(tasks, schedules[targetDesignerId]?.[targetDayStr] ?? [])) {
+            toast.error("Cannot schedule tasks on approved full-day leave.");
+            return;
+        }
         // Always start from the first unfilled weekday so no day is left idle — applies to all drag sources
         const firstUnfilled = WEEKDAY_INDICES.find((d) => getDayHours(targetDesignerId, d) < DAILY_CAPACITY);
         const wasRedirected = firstUnfilled !== undefined && firstUnfilled < targetDayIndex;
@@ -1225,6 +1296,10 @@ export function DesignSchedulerScreen() {
             toast.info(`Placed on ${dayNames[firstUnfilled]} — fill earlier days first`);
             targetDayIndex = firstUnfilled;
             targetDayStr = targetDayIndex.toString();
+            if (hasFullDayLeaveBlock(tasks, schedules[targetDesignerId]?.[targetDayStr] ?? [])) {
+                toast.error("Cannot schedule tasks on approved full-day leave.");
+                return;
+            }
         }
         const targetList = schedules[targetDesignerId]?.[targetDayStr] ?? [];
         // When redirected, always append — the original targetTaskIndex is from a different day
@@ -1875,19 +1950,24 @@ export function DesignSchedulerScreen() {
                                 if (!taskInfo)
                                     return null;
                                 const taskWidth = `calc((100% - ${(Math.max(regularTaskIds.length - 1, 0)) * 4}px) / ${Math.max(regularTaskIds.length, 1)})`;
-                                return (<div key={`${taskId}-${designer.id}-${dayIndex}-${idx}`} draggable onDragStart={(e) => {
+                                const isSystemBlock = isRequestSystemBlock(taskInfo);
+                                return (<div key={`${taskId}-${designer.id}-${dayIndex}-${idx}`} draggable={!isSystemBlock} onDragStart={(e) => {
+                                        if (isSystemBlock) return;
                                         handleDragStart(e, taskId, designer.id, dayIndex.toString());
                                         setCurrentDay(dayIndex);
                                     }} onDragEnd={() => setDropIndicator(null)} onDragOver={(e) => {
+                                        if (isSystemBlock) return;
                                         e.stopPropagation();
                                         handleTaskDragOver(e, designer.id, dayIndex, idx);
                                     }} onDrop={(e) => {
+                                        if (isSystemBlock) return;
                                         e.stopPropagation();
                                         handleDropToDay(e, designer.id, dayIndex, idx, getDropPosition(e, e.currentTarget));
                                     }} onClick={(e) => {
                                         e.stopPropagation();
+                                        if (isSystemBlock) return;
                                         router.push(taskViewPathForRecord({ id: getDesignListRoutingTaskId(taskInfo), designType: taskInfo.designType }, { from: FROM_DESIGN_SCHEDULER }));
-                                    }} className={`h-[24px] min-w-0 rounded flex items-center justify-between px-1.5 cursor-grab active:cursor-grabbing shadow-sm hover:shadow transition-shadow ${dropIndicator &&
+                                    }} className={`h-[24px] min-w-0 rounded flex items-center justify-between px-1.5 shadow-sm transition-shadow ${isSystemBlock ? "cursor-default" : "cursor-grab active:cursor-grabbing hover:shadow"} ${dropIndicator &&
                                         dropIndicator.designerId === designer.id &&
                                         dropIndicator.dayIndex === dayIndex &&
                                         dropIndicator.taskIndex === idx

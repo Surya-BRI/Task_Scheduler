@@ -226,6 +226,30 @@ const DASH_COLORS = [
   "bg-orange-100 border border-orange-300 text-orange-800",
 ];
 
+const toPositiveHours = (value) => {
+  const parsed = Number(value);
+  return Number.isFinite(parsed) && parsed > 0 ? parsed : 0;
+};
+
+function isRequestRow(row) {
+  return row?.requestType === "LEAVE" || row?.requestType === "REGULARIZATION";
+}
+
+function getRequestRowHours(row) {
+  if (row?.requestType === "LEAVE") return toPositiveHours(row.leaveHours ?? row.scheduledHours ?? row.assignedHours);
+  if (row?.requestType === "REGULARIZATION") {
+    return toPositiveHours(row.regularizationHours ?? row.scheduledHours ?? row.assignedHours);
+  }
+  return 0;
+}
+
+function getRequestRowLabel(row) {
+  if (row?.requestLabel) return row.requestLabel;
+  if (row?.requestType === "LEAVE") return row.leaveSession ? `Leave - ${row.leaveSession}` : "Leave";
+  if (row?.requestType === "REGULARIZATION") return "Regularization";
+  return "Request";
+}
+
 function buildLiveScheduleData(assignments, tasksArr) {
   const taskById = Object.fromEntries((tasksArr || []).map((t) => [t.id, t]));
   const tasksMap = {};
@@ -234,6 +258,33 @@ function buildLiveScheduleData(assignments, tasksArr) {
   const colorMap = {};
 
   (assignments || []).forEach((a) => {
+    if (isRequestRow(a)) {
+      const hours = getRequestRowHours(a);
+      if (!hours) return;
+      const requestId = a.requestType === "LEAVE"
+        ? a.leaveRequestIds?.[0] ?? a.id
+        : a.regularizationRequestIds?.[0] ?? a.id;
+      const key = `${String(a.requestType).toLowerCase()}-${requestId}-${a.dayIndex}`;
+      tasksMap[key] = {
+        id: key,
+        name: getRequestRowLabel(a),
+        baseName: getRequestRowLabel(a),
+        estimatedHours: hours,
+        scheduledHours: hours,
+        approvedOvertimeHours: 0,
+        colorClass: a.requestType === "LEAVE"
+          ? "bg-sky-100 border border-sky-300 text-sky-800"
+          : "bg-violet-100 border border-violet-300 text-violet-800",
+        isLocked: true,
+        isSystemBlock: true,
+        requestType: a.requestType,
+      };
+      const dayStr = String(a.dayIndex);
+      if (!scheduleByDayIndex[dayStr]) scheduleByDayIndex[dayStr] = [];
+      scheduleByDayIndex[dayStr].push(key);
+      return;
+    }
+
     const key = a.splitIndex != null ? `${a.taskId}_s${a.splitIndex}` : a.taskId;
     const apiTask = taskById[a.taskId];
     const approvedOvertimeHours = Number(a.approvedOvertimeHours) || 0;
@@ -355,6 +406,13 @@ export default function DesignerDashboard({ designer: designerProp } = {}) {
   const erpId = designer.erpDesignerId || (UUID_RE.test(designer.id) ? designer.id : null);
   const allTasksRef = useRef([]);
 
+  const fetchRegularizationCount = useCallback(async () => {
+    if (!erpId) return 0;
+    const res = await apiClient.get(`/regularization-requests?designerId=${erpId}`);
+    const rows = Array.isArray(res) ? res : Array.isArray(res?.data) ? res.data : [];
+    return rows.filter((r) => r.status === "Pending").length;
+  }, [erpId]);
+
   // Fetch tasks once per designer — tasks are not week-scoped
   useEffect(() => {
     if (!erpId) return;
@@ -414,7 +472,7 @@ export default function DesignerDashboard({ designer: designerProp } = {}) {
       //   1. New task assigned to this designer (unknown ID) — append it
       //   2. Task status changed e.g. ON_HOLD, COMPLETED — update existing entry
       //   3. Old task re-assigned (beyond limit=200 in assigneeId query) — still found by ID
-      const weekTaskIds = [...new Set(rows.map((r) => r.taskId))];
+      const weekTaskIds = [...new Set(rows.filter((r) => !isRequestRow(r) && UUID_RE.test(String(r.taskId ?? ""))).map((r) => r.taskId))];
       const freshTasks = await Promise.all(
         weekTaskIds.map((id) => apiClient.get(`/tasks/${id}`).catch(() => null))
       );
@@ -457,27 +515,31 @@ export default function DesignerDashboard({ designer: designerProp } = {}) {
   useEffect(() => {
     if (!erpId) return undefined;
     return connectDashboardRealtime({
-      onDashboardRefresh: () => void fetchWeekAssignments(false),
-      onNotificationsRefresh: () => void fetchWeekAssignments(false),
+      onDashboardRefresh: () => {
+        void fetchWeekAssignments(false);
+        void fetchRegularizationCount().then(setPendingRegCount).catch(() => {});
+      },
+      onNotificationsRefresh: () => {
+        void fetchWeekAssignments(false);
+        void fetchRegularizationCount().then(setPendingRegCount).catch(() => {});
+      },
     });
-  }, [erpId, fetchWeekAssignments]);
+  }, [erpId, fetchWeekAssignments, fetchRegularizationCount]);
 
   // Fetch pending regularization count
   useEffect(() => {
     if (!erpId) return;
     let cancelled = false;
-    apiClient
-      .get(`/regularization-requests?designerId=${erpId}`)
-      .then((res) => {
+    fetchRegularizationCount()
+      .then((count) => {
         if (cancelled) return;
-        const rows = Array.isArray(res) ? res : Array.isArray(res?.data) ? res.data : [];
-        setPendingRegCount(rows.filter((r) => r.status === "Pending").length);
+        setPendingRegCount(count);
       })
       .catch(() => {});
     return () => {
       cancelled = true;
     };
-  }, [erpId]);
+  }, [erpId, fetchRegularizationCount]);
 
   // Cross-tab sync from scheduler screen (same-browser, instant via localStorage)
   useEffect(() => {

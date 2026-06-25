@@ -28,6 +28,7 @@ describe('RequestsService', () => {
       findMany: jest.fn(),
     },
     notification: { create: jest.fn() },
+    schedulerWeek: { upsert: jest.fn() },
     $executeRawUnsafe: jest.fn(),
   };
 
@@ -69,6 +70,7 @@ describe('RequestsService', () => {
     mockPrisma.leaveRequest.findMany.mockResolvedValue([]);
     mockPrisma.user.findMany.mockResolvedValue([]);
     mockPrisma.notification.create.mockResolvedValue({});
+    mockPrisma.schedulerWeek.upsert.mockResolvedValue({});
   });
 
   describe('create', () => {

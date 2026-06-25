@@ -22,13 +22,14 @@ const TASK_BG = {
 
 function TaskBlock({ task, onOtClick }) {
   const bgClass = task.colorClass || TASK_BG[task.color] || "bg-slate-100 border border-slate-300 text-slate-800";
+  const canRequestOvertime = onOtClick && !task.isSystemBlock;
   return (
     <div className="h-full flex items-center w-full relative z-10 px-0.5 group/task">
       <div className={`h-[24px] w-full min-w-0 rounded flex items-center justify-between px-1 shadow-sm transition-shadow truncate ${bgClass}`}>
         <div className="text-[9px] font-semibold truncate leading-none mr-1 select-none pointer-events-none">{task.label}</div>
         <div className="flex items-center gap-0.5 shrink-0">
           <span className="text-[8px] font-bold opacity-70">{task.estimatedHours || (task.endHr - task.startHr)}h</span>
-          {onOtClick && (
+          {canRequestOvertime && (
             <button
               type="button"
               onClick={(e) => { e.stopPropagation(); onOtClick(task); }}
