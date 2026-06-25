@@ -3,6 +3,7 @@ import { Test, TestingModule } from '@nestjs/testing';
 import { ActivityLoggerService } from '../activities/activity-logger.service';
 import { UserRole } from '../common/constants/roles.enum';
 import { PrismaService } from '../prisma/prisma.service';
+import { SchedulerAssignmentsService } from '../scheduler-assignments/scheduler-assignments.service';
 import { DUPLICATE_LEAVE_ERROR_MESSAGE } from './leave-request.validation';
 import { RequestsService } from './requests.service';
 
@@ -14,6 +15,10 @@ describe('RequestsService', () => {
   const leaveId = '33333333-3333-4333-8333-333333333333';
 
   const mockActivityLogger = { log: jest.fn() };
+  const mockSchedulerAssignments = {
+    rescheduleForApprovedLeave: jest.fn(),
+    rescheduleAfterLeaveRevocation: jest.fn(),
+  };
 
   const mockPrisma: any = {
     leaveRequest: {
@@ -62,6 +67,7 @@ describe('RequestsService', () => {
         RequestsService,
         { provide: PrismaService, useValue: mockPrisma },
         { provide: ActivityLoggerService, useValue: mockActivityLogger },
+        { provide: SchedulerAssignmentsService, useValue: mockSchedulerAssignments },
       ],
     }).compile();
 
@@ -71,6 +77,8 @@ describe('RequestsService', () => {
     mockPrisma.user.findMany.mockResolvedValue([]);
     mockPrisma.notification.create.mockResolvedValue({});
     mockPrisma.schedulerWeek.upsert.mockResolvedValue({});
+    mockSchedulerAssignments.rescheduleForApprovedLeave.mockResolvedValue({ movedCount: 0, affectedWeeks: [] });
+    mockSchedulerAssignments.rescheduleAfterLeaveRevocation.mockResolvedValue({ movedCount: 0, affectedWeeks: [] });
   });
 
   describe('create', () => {
@@ -267,6 +275,38 @@ describe('RequestsService', () => {
       expect(result.leaveDurationLabel).toBe('0.5 day');
     });
 
+    it('reschedules tasks when HOD-created leave is auto-approved', async () => {
+      const start = futureStart();
+      mockPrisma.user.findUnique
+        .mockResolvedValueOnce({
+          ...designerUser,
+          role: { name: UserRole.DESIGNER },
+        })
+        .mockResolvedValueOnce({ fullName: 'HOD User' });
+      mockPrisma.leaveRequest.create.mockResolvedValue({
+        ...pendingLeave,
+        status: 'Approved',
+        approverId: hodId,
+        approver: { fullName: 'HOD User' },
+        reviewedAt: new Date(),
+        startDate: new Date(`${start}T00:00:00.000Z`),
+        endDate: new Date(`${start}T00:00:00.000Z`),
+      });
+
+      await service.create(hodId, UserRole.HOD, {
+        userId: designerId,
+        type: 'Full Day',
+        startDate: start,
+        endDate: start,
+        reasonCategory: 'Vacation',
+      });
+
+      expect(mockSchedulerAssignments.rescheduleForApprovedLeave).toHaveBeenCalledWith(
+        expect.objectContaining({ id: leaveId, userId: designerId, status: 'Approved' }),
+        hodId,
+      );
+    });
+
     it('rejects half-day leave without a session', async () => {
       const start = futureStart();
       mockPrisma.user.findUnique.mockResolvedValue({ role: { name: UserRole.DESIGNER } });
@@ -361,6 +401,27 @@ describe('RequestsService', () => {
   });
 
   describe('review', () => {
+    it('reschedules tasks when a leave request is approved', async () => {
+      const approvedLeave = {
+        ...pendingLeave,
+        status: 'APPROVED',
+        approverId: hodId,
+        approver: { fullName: 'HOD User' },
+        reviewedAt: new Date(),
+      };
+      mockPrisma.leaveRequest.findUnique.mockResolvedValue(pendingLeave);
+      mockPrisma.user.findUnique.mockResolvedValue({
+        fullName: 'HOD User',
+        departmentId: 'dept-1',
+      });
+      mockPrisma.leaveRequest.update.mockResolvedValue(approvedLeave);
+
+      await service.review(leaveId, hodId, UserRole.HOD, { status: 'APPROVED' });
+
+      expect(mockSchedulerAssignments.rescheduleForApprovedLeave).toHaveBeenCalledWith(approvedLeave, hodId);
+      expect(mockPrisma.schedulerWeek.upsert).toHaveBeenCalled();
+    });
+
     it('blocks HOD self-approval and self-rejection', async () => {
       mockPrisma.leaveRequest.findUnique.mockResolvedValue({
         ...pendingLeave,
@@ -436,6 +497,14 @@ describe('RequestsService', () => {
       expect(mockPrisma.notification.create).toHaveBeenCalled();
       expect(mockActivityLogger.log).toHaveBeenCalledWith(
         expect.objectContaining({ action: 'LEAVE_REQUEST_REVOKED' }),
+      );
+      expect(mockSchedulerAssignments.rescheduleAfterLeaveRevocation).toHaveBeenCalledWith(
+        expect.objectContaining({
+          id: leaveId,
+          userId: designerId,
+          status: 'REVOKED',
+        }),
+        hodId,
       );
     });
 

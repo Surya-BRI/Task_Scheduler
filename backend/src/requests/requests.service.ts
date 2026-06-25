@@ -19,6 +19,7 @@ import { ReviewLeaveRequestDto } from './dto/review-leave-request.dto';
 import { UpdateLeaveRequestDto } from './dto/update-leave-request.dto';
 import { UpdateRequestStatusDto } from './dto/update-request-status.dto';
 import { RevokeLeaveRequestDto } from './dto/revoke-leave-request.dto';
+import { SchedulerAssignmentsService } from '../scheduler-assignments/scheduler-assignments.service';
 import {
   calculateLeaveDurationDays,
   dateToDateOnlyIso,
@@ -70,6 +71,7 @@ export class RequestsService implements OnModuleInit {
   constructor(
     private readonly prisma: PrismaService,
     private readonly activityLogger: ActivityLoggerService,
+    @Optional() private readonly schedulerAssignments?: SchedulerAssignmentsService,
     @Optional() private readonly dashboardRealtime?: DashboardRealtimeService,
   ) {}
 
@@ -777,6 +779,7 @@ export class RequestsService implements OnModuleInit {
           reviewedAt!,
         );
       }
+      await this.schedulerAssignments?.rescheduleForApprovedLeave(req, submitterId);
       await this.touchSchedulerWeeksForLeave(req, submitterId);
       this.dashboardRealtime?.notifyOverviewRefresh('leave_approved');
       if (resolvedId) {
@@ -1018,6 +1021,7 @@ export class RequestsService implements OnModuleInit {
     );
 
     if (status === 'APPROVED') {
+      await this.schedulerAssignments?.rescheduleForApprovedLeave(req, reviewerId);
       await this.touchSchedulerWeeksForLeave(req, reviewerId);
     }
     this.dashboardRealtime?.notifyOverviewRefresh(
@@ -1121,6 +1125,7 @@ export class RequestsService implements OnModuleInit {
       revokedAt,
     );
 
+    await this.schedulerAssignments?.rescheduleAfterLeaveRevocation?.(req, reviewerId);
     await this.touchSchedulerWeeksForLeave(existing, reviewerId);
     this.dashboardRealtime?.notifyOverviewRefresh('leave_revoked');
     this.dashboardRealtime?.notifyUserNotificationRefresh(existing.userId);
