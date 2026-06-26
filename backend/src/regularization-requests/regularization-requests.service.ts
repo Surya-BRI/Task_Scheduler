@@ -97,6 +97,55 @@ export class RegularizationRequestsService implements RegularizationRequestsCont
     return d;
   }
 
+  private dayIndexForDate(date: Date, weekStartDate: Date): number {
+    const dateUtc = Date.UTC(date.getUTCFullYear(), date.getUTCMonth(), date.getUTCDate());
+    const weekUtc = Date.UTC(
+      weekStartDate.getUTCFullYear(),
+      weekStartDate.getUTCMonth(),
+      weekStartDate.getUTCDate(),
+    );
+    return Math.floor((dateUtc - weekUtc) / 86_400_000);
+  }
+
+  private parseDateOnly(dateStr: string, fieldName: string): Date {
+    const trimmed = String(dateStr ?? '').trim();
+    if (!/^\d{4}-\d{2}-\d{2}$/.test(trimmed)) {
+      throw new BadRequestException(`${fieldName} must be YYYY-MM-DD.`);
+    }
+    const date = new Date(`${trimmed}T00:00:00.000Z`);
+    if (Number.isNaN(date.getTime())) {
+      throw new BadRequestException(`Invalid ${fieldName}.`);
+    }
+    return date;
+  }
+
+  private async assertTaskScheduledForDate(
+    designerId: string,
+    taskId: string,
+    dateStr: string,
+  ): Promise<void> {
+    const requestDate = new Date(`${dateStr}T00:00:00.000Z`);
+    if (Number.isNaN(requestDate.getTime())) {
+      throw new BadRequestException('Invalid regularization date.');
+    }
+    const weekStartDate = this.getStartOfWeek(requestDate);
+    const dayIndex = this.dayIndexForDate(requestDate, weekStartDate);
+    const assignment = await this.prisma.schedulerAssignment.findFirst({
+      where: {
+        designerId,
+        taskId,
+        weekStartDate,
+        dayIndex,
+      },
+      select: { id: true },
+    });
+    if (!assignment) {
+      throw new ForbiddenException(
+        'You can only submit regularization for tasks assigned to you on the selected date.',
+      );
+    }
+  }
+
   private async touchSchedulerWeekForRegularization(
     request: { date?: Date | string | null },
     userId: string,
@@ -294,41 +343,37 @@ export class RegularizationRequestsService implements RegularizationRequestsCont
     }
   }
 
-  async listTaskOptions(designerId: string): Promise<RegularizationTaskOption[]> {
+  async listTaskOptions(designerId: string, dateStr: string): Promise<RegularizationTaskOption[]> {
     if (!isUuidString(designerId)) {
       throw new BadRequestException(
         'designerId must be a UUID matching ErpTSRegularizationRequest.designerId (uniqueidentifier).',
       );
     }
 
-    let historicalTaskIds: string[] = [];
-    try {
-      const historicalRequests = await this.prisma.regularizationRequest.findMany({
-        where: { designerId, taskId: { not: null } },
-        select: { taskId: true },
-        distinct: ['taskId'],
-      });
-      historicalTaskIds = historicalRequests.map((r) => r.taskId!).filter(Boolean);
-    } catch (err) {
-      this.logger.warn(
-        `Regularization historical task ids: ${err instanceof Error ? err.message : err}`,
-      );
-    }
+    const requestDate = this.parseDateOnly(dateStr, 'date');
+    const weekStartDate = this.getStartOfWeek(requestDate);
+    const dayIndex = this.dayIndexForDate(requestDate, weekStartDate);
 
-    const tasks = await this.prisma.task.findMany({
+    const rows = await this.prisma.schedulerAssignment.findMany({
       where: {
-        OR: [
-          { assigneeId: designerId },
-          ...(historicalTaskIds.length > 0 ? [{ id: { in: historicalTaskIds } }] : []),
-        ],
+        designerId,
+        weekStartDate,
+        dayIndex,
+        taskId: { not: null },
       },
-      select: { id: true, title: true, taskNo: true, opNo: true },
-      orderBy: { updatedAt: 'desc' },
-      take: 500,
+      include: {
+        task: { select: { id: true, title: true, taskNo: true, opNo: true } },
+      },
+      orderBy: [
+        { position: 'asc' },
+        { id: 'asc' },
+      ],
     });
 
     const byId = new Map<string, RegularizationTaskOption>();
-    for (const task of tasks) {
+    for (const row of rows) {
+      const task = row.task;
+      if (!task || byId.has(task.id)) continue;
       byId.set(task.id, {
         id: task.id,
         name: this.formatTaskDisplay({
@@ -509,6 +554,7 @@ export class RegularizationRequestsService implements RegularizationRequestsCont
         select: { id: true, taskNo: true, title: true },
       });
       if (!task) throw new BadRequestException('Task not found');
+      await this.assertTaskScheduledForDate(dto.designerId, dto.taskId, dto.date);
     }
 
     const hods = await this.findDepartmentHods(designer.departmentId);

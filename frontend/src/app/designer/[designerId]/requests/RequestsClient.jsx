@@ -22,9 +22,9 @@ import { apiClient } from "@/lib/api-client";
 import {
   createRegularizationRequest,
   getRegularizationRequest,
+  listRegularizationTaskOptions,
   listRegularizationPendingApprovals,
   listRegularizationRequests,
-  listRegularizationTaskOptions,
   reviewRegularizationRequest,
 } from "@/features/requests/services/regularization-requests.api";
 import {
@@ -462,23 +462,30 @@ export default function RequestsClient() {
     }
   };
 
-  const loadAssignedTasks = async (designerId = activeDesignerId) => {
-    if (!isUuidString(String(designerId ?? "").trim())) {
+  const loadAssignedTaskRows = async (designerId, dateStr) => {
+    const res = await listAssignedTasksForOvertime(designerId, dateStr);
+    return Array.isArray(res) ? res : Array.isArray(res?.data) ? res.data : [];
+  };
+
+  const loadAssignedTasks = async (designerId = activeDesignerId, dateStr = utcDateOnlyString()) => {
+    const normalizedDesignerId = String(designerId ?? "").trim();
+    if (!isUuidString(normalizedDesignerId)) {
       setAssignedTasks([]);
+      setProjects([]);
+      setProjectTasks([]);
       return;
     }
     setAssignedTasksLoading(true);
     setAssignedTasksError(null);
     try {
-      const res = await listAssignedTasksForOvertime(designerId);
-      const rows = Array.isArray(res) ? res : Array.isArray(res?.data) ? res.data : [];
+      const rows = await loadAssignedTaskRows(normalizedDesignerId, dateStr);
       const normalized = rows
         .map((t) => ({
           id: String(t.id),
           projectId: String(t.projectId ?? t.project?.id ?? "").trim(),
           projectName:
-            String(t.project?.name ?? t.project?.projectNo ?? "").trim() || "Unnamed project",
-          label: formatTaskOptionLabel(t),
+            String(t.projectName ?? t.project?.name ?? t.project?.projectNo ?? "").trim() || "Unnamed project",
+          label: String(t.label ?? "").trim() || formatTaskOptionLabel(t),
         }))
         .filter((t) => isUuidString(t.id));
       setAssignedTasks(normalized);
@@ -493,18 +500,19 @@ export default function RequestsClient() {
         [...projectsMap.entries()].map(([id, name]) => ({ id, name })).sort((a, b) => a.name.localeCompare(b.name)),
       );
 
-      if (normalized.length >= 1) {
+      setOtForm((prev) => {
+        if (normalized.some((task) => task.id === prev.taskId)) return prev;
         const first = normalized[0];
-        setOtForm({
-          ...EMPTY_OT_FORM,
-          projectId: first.projectId,
-          taskId: first.id,
-        });
-      } else {
-        setOtForm(EMPTY_OT_FORM);
-      }
+        return {
+          ...prev,
+          projectId: first?.projectId ?? "",
+          taskId: first?.id ?? "",
+        };
+      });
     } catch (e) {
       setAssignedTasks([]);
+      setProjects([]);
+      setProjectTasks([]);
       setAssignedTasksError(e?.message || "Could not load your assigned tasks.");
     } finally {
       setAssignedTasksLoading(false);
@@ -529,35 +537,31 @@ export default function RequestsClient() {
     }
   };
 
-  const loadRegTaskOptions = async () => {
-    if (activeDesignerId == null) {
+  const loadRegTaskOptions = async (dateStr = regForm.date) => {
+    if (activeDesignerId == null || !dateStr) {
       setRegTaskOptions([]);
+      setRegForm((prev) => (prev.taskId ? { ...prev, taskId: "" } : prev));
       return;
     }
     setRegTasksLoading(true);
     try {
-      let rows = await listRegularizationTaskOptions(activeDesignerId);
-      let list = Array.isArray(rows) ? rows : [];
-      if (list.length === 0) {
-        const tasksRes = await apiClient.get(`/tasks?limit=200&assigneeId=${encodeURIComponent(activeDesignerId)}`);
-        const taskRows = Array.isArray(tasksRes)
-          ? tasksRes
-          : Array.isArray(tasksRes?.data)
-            ? tasksRes.data
-            : [];
-        list = taskRows.map((t) => ({
-          id: t.id,
-          name: formatTaskOptionLabel(t),
-        }));
-      }
-      setRegTaskOptions(
-        list.map((t) => ({
-          id: t.id,
-          label: String(t.name ?? "").trim() || formatTaskOptionLabel(t),
-        })),
-      );
+      const taskRows = await listRegularizationTaskOptions(activeDesignerId, dateStr);
+      const options = (Array.isArray(taskRows) ? taskRows : [])
+        .map((t) => ({
+          id: String(t.id ?? "").trim(),
+          label: String(t.name ?? t.label ?? "").trim() || formatTaskOptionLabel(t),
+        }))
+        .filter((t) => isUuidString(t.id))
+        .sort((a, b) => a.label.localeCompare(b.label));
+      setRegTaskOptions(options);
+      setRegForm((prev) => (
+        !prev.taskId || options.some((task) => task.id === prev.taskId)
+          ? prev
+          : { ...prev, taskId: "" }
+      ));
     } catch {
       setRegTaskOptions([]);
+      setRegForm((prev) => (prev.taskId ? { ...prev, taskId: "" } : prev));
     } finally {
       setRegTasksLoading(false);
     }
@@ -625,7 +629,6 @@ export default function RequestsClient() {
     }
     void loadRegularization();
     void loadOvertime();
-    void loadRegTaskOptions();
     void loadRegProjectOptions();
     void loadAssignedTasks(activeDesignerId);
     void loadDesignerStats(activeDesignerId);
@@ -635,6 +638,12 @@ export default function RequestsClient() {
     }
     // eslint-disable-next-line react-hooks/exhaustive-deps -- reload when active designer changes
   }, [activeDesignerId, isHOD]);
+
+  useEffect(() => {
+    if (activeDesignerId == null) return;
+    void loadRegTaskOptions(regForm.date);
+    // eslint-disable-next-line react-hooks/exhaustive-deps -- reload when selected request date changes
+  }, [activeDesignerId, regForm.date]);
 
   useEffect(() => {
     if (!isHOD) return;
@@ -823,6 +832,12 @@ export default function RequestsClient() {
         .map((task) => ({ id: task.id, label: task.label })),
     );
   }, [otForm.projectId, assignedTasks]);
+
+  useEffect(() => {
+    if (!otForm.taskId) return;
+    if (assignedTasks.some((task) => task.id === otForm.taskId)) return;
+    setOtForm((prev) => ({ ...prev, projectId: "", taskId: "" }));
+  }, [assignedTasks, otForm.taskId]);
 
   useEffect(() => {
     const overtimeId = searchParams.get("overtimeId")?.trim();
@@ -1180,9 +1195,9 @@ export default function RequestsClient() {
                   Select a designer profile above to submit regularization on their behalf.
                 </div>
               ) : null}
-              {!isHOD && regTaskOptions.length === 0 && !regTasksLoading && regForm.regularizationType === "task" ? (
+              {!isHOD && regForm.date && regTaskOptions.length === 0 && !regTasksLoading && regForm.regularizationType === "task" ? (
                 <div className="rounded-lg border border-dashed border-slate-300 bg-slate-50 px-4 py-3 text-sm text-slate-600">
-                  No tasks are currently assigned to you. Switch to Non-Task Regularization or contact your HOD.
+                  No tasks are assigned to you for the selected date. Switch to Non-Task Regularization or contact your HOD.
                 </div>
               ) : null}
               {regForm.regularizationType === "task" && selectedRegTask ? (
@@ -1242,13 +1257,15 @@ export default function RequestsClient() {
                         onChange={(e) => setRegForm({ ...regForm, taskId: e.target.value })}
                         className={inputClass}
                         required
-                        disabled={activeDesignerId == null || regTasksLoading}
+                        disabled={activeDesignerId == null || !regForm.date || regTasksLoading}
                       >
                         <option value="" disabled>
-                          {regTasksLoading
+                          {!regForm.date
+                            ? "Select a date first"
+                            : regTasksLoading
                             ? "Loading tasks…"
                             : regTaskOptions.length === 0
-                              ? "No tasks assigned"
+                              ? "No tasks assigned for selected date"
                               : "Select a task"}
                         </option>
                         {regTaskOptions.map((task) => (
@@ -1463,7 +1480,7 @@ export default function RequestsClient() {
                         {assignedTasksLoading
                           ? "Loading assigned tasks…"
                           : projects.length === 0
-                            ? "No assigned projects"
+                            ? "No tasks assigned for today"
                             : "Select a project"}
                       </option>
                       {projects.map((project) => (

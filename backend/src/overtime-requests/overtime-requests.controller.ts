@@ -3,6 +3,7 @@ import {
   Body,
   Controller,
   Delete,
+  ForbiddenException,
   Get,
   Param,
   Post,
@@ -186,6 +187,21 @@ export class OvertimeRequestsController {
   }
 
   // --- Common APIs ---
+
+  @Get('task-options')
+  @Roles(UserRole.DESIGNER, UserRole.HOD)
+  listTaskOptions(
+    @Query('designerId') designerIdParam: string | undefined,
+    @Query('date') date: string | undefined,
+    @CurrentUser() user: JwtPayload,
+  ) {
+    const designerId = (designerIdParam ?? user.sub ?? '').trim();
+    if (!designerId) return [];
+    if (user.role !== UserRole.HOD && designerId !== user.sub) {
+      throw new ForbiddenException('You can only view your own overtime task options.');
+    }
+    return this.service.listTaskOptions(designerId, date ?? '');
+  }
 
   /** GET /overtime-requests?designerId= — list for designer requests page */
   @Get()

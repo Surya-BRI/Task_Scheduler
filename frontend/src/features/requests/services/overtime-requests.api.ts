@@ -49,9 +49,7 @@ export function reviewOvertimeRequest(
   return apiClient.post(`/overtime-requests/${encodeURIComponent(id)}/review`, data);
 }
 
-export function listAssignedTasksForOvertime(assigneeId?: string) {
-  const qs = assigneeId ? `?limit=200&assigneeId=${encodeURIComponent(assigneeId)}` : '?limit=200';
-  return apiClient.get<{ data?: Array<Record<string, unknown>> } | Array<Record<string, unknown>>>(
-    `/tasks${qs}`,
-  );
+export function listAssignedTasksForOvertime(assigneeId: string, date: string) {
+  const qs = `?designerId=${encodeURIComponent(assigneeId)}&date=${encodeURIComponent(date)}`;
+  return apiClient.get<Array<Record<string, unknown>>>(`/overtime-requests/task-options${qs}`);
 }

@@ -58,8 +58,8 @@ export function reviewRegularizationRequest(
   );
 }
 
-export function listRegularizationTaskOptions(designerId: string) {
+export function listRegularizationTaskOptions(designerId: string, date: string) {
   return apiClient.get<Array<{ id: string; name: string }>>(
-    `/regularization-requests/task-options?designerId=${encodeURIComponent(designerId)}`,
+    `/regularization-requests/task-options?designerId=${encodeURIComponent(designerId)}&date=${encodeURIComponent(date)}`,
   );
 }
