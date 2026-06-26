@@ -13,6 +13,13 @@ import { LEAVE_TYPE_HALF_DAY, normalizeLeaveType } from '../requests/leave-reque
 import { Decimal } from '@prisma/client/runtime/library';
 import { DashboardRealtimeService } from '../dashboard/dashboard-realtime.service';
 
+export type OvertimeTaskOption = {
+  id: string;
+  projectId: string;
+  projectName: string;
+  label: string;
+};
+
 @Injectable()
 export class OvertimeRequestsService {
   private readonly logger = new Logger(OvertimeRequestsService.name);
@@ -55,6 +62,33 @@ export class OvertimeRequestsService {
     return end;
   }
 
+  private dayIndexForDate(date: Date, weekStartDate: Date): number {
+    const dateUtc = Date.UTC(date.getUTCFullYear(), date.getUTCMonth(), date.getUTCDate());
+    const weekUtc = Date.UTC(
+      weekStartDate.getUTCFullYear(),
+      weekStartDate.getUTCMonth(),
+      weekStartDate.getUTCDate(),
+    );
+    return Math.floor((dateUtc - weekUtc) / 86_400_000);
+  }
+
+  private isUuidString(value: string | undefined | null): boolean {
+    if (value == null) return false;
+    return /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i.test(value.trim());
+  }
+
+  private parseDateOnly(dateStr: string, fieldName: string): Date {
+    const trimmed = String(dateStr ?? '').trim();
+    if (!/^\d{4}-\d{2}-\d{2}$/.test(trimmed)) {
+      throw new BadRequestException(`${fieldName} must be YYYY-MM-DD.`);
+    }
+    const date = new Date(`${trimmed}T00:00:00.000Z`);
+    if (Number.isNaN(date.getTime())) {
+      throw new BadRequestException(`Invalid ${fieldName}.`);
+    }
+    return date;
+  }
+
   private getDayWindow(date: Date): { dayStart: Date; dayEnd: Date } {
     const dayStart = new Date(Date.UTC(date.getUTCFullYear(), date.getUTCMonth(), date.getUTCDate()));
     const dayEnd = new Date(dayStart);
@@ -89,6 +123,31 @@ export class OvertimeRequestsService {
       throw new BadRequestException(
         'Cannot allocate overtime because the designer has approved full-day leave for this date.',
       );
+    }
+  }
+
+  private async assertTaskScheduledForDate(
+    designerId: string,
+    taskId: string,
+    dateStr: string,
+  ): Promise<void> {
+    const requestDate = new Date(`${dateStr}T00:00:00.000Z`);
+    if (Number.isNaN(requestDate.getTime())) {
+      throw new BadRequestException('Invalid overtime date.');
+    }
+    const weekStartDate = this.getStartOfWeek(requestDate);
+    const dayIndex = this.dayIndexForDate(requestDate, weekStartDate);
+    const assignment = await this.prisma.schedulerAssignment.findFirst({
+      where: {
+        designerId,
+        taskId,
+        weekStartDate,
+        dayIndex,
+      },
+      select: { id: true },
+    });
+    if (!assignment) {
+      throw new ForbiddenException('You can only submit overtime for tasks assigned to you on the selected date.');
     }
   }
 
@@ -275,6 +334,69 @@ export class OvertimeRequestsService {
     opNo: true,
     project: { select: { name: true, projectNo: true } },
   } as const;
+
+  private formatTaskOptionLabel(task: { title?: string | null; taskNo?: string | null; opNo?: string | null }): string {
+    const title = String(task.title ?? '').trim();
+    const taskNo = String(task.taskNo ?? '').trim();
+    const opNo = String(task.opNo ?? '').trim();
+    if (title && taskNo) return `${title} (${taskNo})`;
+    if (title) return title;
+    if (taskNo) return taskNo;
+    if (opNo) return opNo;
+    return 'Task';
+  }
+
+  async listTaskOptions(designerId: string, dateStr: string): Promise<OvertimeTaskOption[]> {
+    const normalizedDesignerId = String(designerId ?? '').trim();
+    if (!this.isUuidString(normalizedDesignerId)) {
+      throw new BadRequestException('designerId must be a UUID.');
+    }
+
+    const requestDate = this.parseDateOnly(dateStr, 'date');
+    const weekStartDate = this.getStartOfWeek(requestDate);
+    const dayIndex = this.dayIndexForDate(requestDate, weekStartDate);
+
+    const rows = await this.prisma.schedulerAssignment.findMany({
+      where: {
+        designerId: normalizedDesignerId,
+        weekStartDate,
+        dayIndex,
+        taskId: { not: null },
+      },
+      include: {
+        task: {
+          select: {
+            id: true,
+            title: true,
+            taskNo: true,
+            opNo: true,
+            projectId: true,
+            project: { select: { id: true, name: true, projectNo: true } },
+          },
+        },
+      },
+      orderBy: [
+        { position: 'asc' },
+        { id: 'asc' },
+      ],
+    });
+
+    const byId = new Map<string, OvertimeTaskOption>();
+    for (const row of rows) {
+      const task = row.task;
+      if (!task || byId.has(task.id)) continue;
+      const projectId = String(task.projectId ?? task.project?.id ?? '').trim();
+      byId.set(task.id, {
+        id: task.id,
+        projectId,
+        projectName:
+          String(task.project?.name ?? task.project?.projectNo ?? '').trim() || 'Unnamed project',
+        label: this.formatTaskOptionLabel(task),
+      });
+    }
+
+    return [...byId.values()].sort((a, b) => a.label.localeCompare(b.label));
+  }
 
   private buildOvertimeActivityDetails(
     request: {
@@ -486,20 +608,14 @@ export class OvertimeRequestsService {
 
     const task = await this.prisma.task.findUnique({
       where: { id: dto.taskId },
-      select: { ...this.overtimeActivityTaskSelect, assigneeId: true },
+      select: this.overtimeActivityTaskSelect,
     });
     if (!task) {
       throw new BadRequestException('Task not found. Select a valid assigned task.');
     }
-    if (
-      creatorRole === UserRole.DESIGNER &&
-      task.assigneeId &&
-      task.assigneeId !== designerId
-    ) {
-      throw new ForbiddenException('You can only submit overtime for tasks assigned to you');
-    }
 
     assertOvertimeDateIsToday(dto.date);
+    await this.assertTaskScheduledForDate(designerId, dto.taskId, dto.date);
 
     const schedule = this.resolveSchedule(dto);
 

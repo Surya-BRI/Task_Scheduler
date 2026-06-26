@@ -9,7 +9,7 @@ import type {
 
 /** Public API used by RegularizationRequestsController */
 export interface RegularizationRequestsContract {
-  listTaskOptions(designerId: string): Promise<RegularizationTaskOption[]>;
+  listTaskOptions(designerId: string, date: string): Promise<RegularizationTaskOption[]>;
   findByDesigner(designerId: string): Promise<RegularizationRequestView[]>;
   findOne(id: string, userId: string, role: UserRole): Promise<RegularizationRequestView>;
   findPendingApprovals(managerId: string, role: UserRole): Promise<RegularizationRequestView[]>;

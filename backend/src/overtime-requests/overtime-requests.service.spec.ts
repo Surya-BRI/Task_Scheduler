@@ -44,6 +44,10 @@ describe('OvertimeRequestsService', () => {
     task: {
       findUnique: jest.fn(),
     },
+    schedulerAssignment: {
+      findFirst: jest.fn(),
+      findMany: jest.fn(),
+    },
     schedulerWeek: {
       upsert: jest.fn(),
     },
@@ -82,10 +86,81 @@ describe('OvertimeRequestsService', () => {
     });
     mockPrismaService.overtimeRequest.findMany.mockResolvedValue([]);
     mockPrismaService.leaveRequest.findMany.mockResolvedValue([]);
+    mockPrismaService.schedulerAssignment.findFirst.mockResolvedValue({ id: 'sa1' });
+    mockPrismaService.schedulerAssignment.findMany.mockResolvedValue([]);
   });
 
   it('should be defined', () => {
     expect(service).toBeDefined();
+  });
+
+  describe('listTaskOptions', () => {
+    const designerId = '11111111-1111-1111-1111-111111111111';
+    const taskId = '22222222-2222-2222-2222-222222222222';
+
+    it('returns scheduler-backed task options for the selected date', async () => {
+      mockPrismaService.schedulerAssignment.findMany.mockResolvedValue([
+        {
+          id: 'sa1',
+          task: {
+            id: taskId,
+            title: 'Scheduled Task',
+            taskNo: 'T-001',
+            opNo: 'OP-1',
+            projectId: '33333333-3333-3333-3333-333333333333',
+            project: {
+              id: '33333333-3333-3333-3333-333333333333',
+              name: 'Retail Revamp',
+              projectNo: 'PRJ-01',
+            },
+          },
+        },
+      ]);
+
+      const result = await service.listTaskOptions(designerId, '2026-06-26');
+
+      expect(result).toEqual([
+        {
+          id: taskId,
+          projectId: '33333333-3333-3333-3333-333333333333',
+          projectName: 'Retail Revamp',
+          label: 'Scheduled Task (T-001)',
+        },
+      ]);
+      expect(mockPrismaService.schedulerAssignment.findMany).toHaveBeenCalledWith(
+        expect.objectContaining({
+          where: expect.objectContaining({
+            designerId,
+            dayIndex: 4,
+          }),
+        }),
+      );
+    });
+
+    it('de-duplicates split scheduler rows for the same task', async () => {
+      const task = {
+        id: taskId,
+        title: 'Split Task',
+        taskNo: 'T-002',
+        opNo: null,
+        projectId: '33333333-3333-3333-3333-333333333333',
+        project: { id: '33333333-3333-3333-3333-333333333333', name: 'Project', projectNo: null },
+      };
+      mockPrismaService.schedulerAssignment.findMany.mockResolvedValue([
+        { id: 'sa1', task },
+        { id: 'sa2', task },
+      ]);
+
+      const result = await service.listTaskOptions(designerId, '2026-06-26');
+
+      expect(result).toHaveLength(1);
+      expect(result[0].id).toBe(taskId);
+    });
+
+    it('rejects invalid option input', async () => {
+      await expect(service.listTaskOptions('not-a-uuid', '2026-06-26')).rejects.toThrow(BadRequestException);
+      await expect(service.listTaskOptions(designerId, '26-06-2026')).rejects.toThrow(BadRequestException);
+    });
   });
 
   // ────────────────────────────────────────────────────────────────────────
@@ -120,6 +195,13 @@ describe('OvertimeRequestsService', () => {
     it('should throw ForbiddenException if user tries to create request for another user without HOD/Admin role', async () => {
       const dto = { ...baseDto, designerId: 'd2' };
       await expect(service.create('d1', UserRole.DESIGNER, dto)).rejects.toThrow(ForbiddenException);
+    });
+
+    it('should throw ForbiddenException if task is not scheduled for the designer on the request date', async () => {
+      mockPrismaService.schedulerAssignment.findFirst.mockResolvedValue(null);
+
+      await expect(service.create('d1', UserRole.DESIGNER, baseDto)).rejects.toThrow(ForbiddenException);
+      expect(mockPrismaService.overtimeRequest.create).not.toHaveBeenCalled();
     });
 
     it('should allow HOD to create request on behalf of another user', async () => {
