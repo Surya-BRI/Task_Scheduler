@@ -16,6 +16,7 @@ describe('SchedulerAssignmentsService', () => {
     },
     schedulerAssignmentHistory: { create: jest.fn() },
     $queryRaw: jest.fn(),
+    $executeRaw: jest.fn(),
     $transaction: jest.fn((cb: (tx: any) => Promise<unknown>) => cb(prisma)),
   };
   const activityLogger: any = { log: jest.fn() };
@@ -42,6 +43,7 @@ describe('SchedulerAssignmentsService', () => {
     prisma.schedulerAssignment.update.mockResolvedValue({});
     prisma.schedulerAssignmentHistory.create.mockResolvedValue({});
     prisma.$queryRaw.mockResolvedValue([]);
+    prisma.$executeRaw.mockResolvedValue(1);
     prisma.$transaction.mockImplementation((cb: (tx: any) => Promise<unknown>) => cb(prisma));
   });
 
@@ -268,7 +270,7 @@ describe('SchedulerAssignmentsService', () => {
     );
   });
 
-  it('restores revoked leave displacement into the earliest ordered working slots', async () => {
+  it('restores revoked leave displacement from the approval snapshot', async () => {
     const makeRow = (id: string, weekStartDate: string, dayIndex: number, taskId: string) => ({
       id,
       designerId: 'designer-1',
@@ -291,20 +293,25 @@ describe('SchedulerAssignmentsService', () => {
       makeRow('assignment-1', '2026-06-15', 0, 'task-1'),
       makeRow('assignment-2', '2026-06-15', 1, 'task-2'),
     ];
+    const originalRows = [
+      { ...makeRow('assignment-1', '2026-06-08', 4, 'task-1'), weekEndDate: new Date('2026-06-14T00:00:00.000Z') },
+      makeRow('assignment-2', '2026-06-15', 0, 'task-2'),
+    ];
 
     prisma.schedulerAssignment.findMany
       .mockResolvedValueOnce(rows)
       .mockResolvedValueOnce(rows)
       .mockResolvedValueOnce(rows);
-    prisma.leaveRequest.findMany.mockResolvedValue([
+    prisma.$queryRaw.mockResolvedValueOnce([
       {
-        id: 'leave-2',
-        type: 'Full Day',
-        startDate: new Date('2026-06-15T00:00:00.000Z'),
-        endDate: new Date('2026-06-15T00:00:00.000Z'),
+        assignmentId: 'assignment-1',
+        originalJson: JSON.stringify(originalRows[0]),
+      },
+      {
+        assignmentId: 'assignment-2',
+        originalJson: JSON.stringify(originalRows[1]),
       },
     ]);
-    prisma.$queryRaw.mockResolvedValue([{ date: new Date('2026-06-16T00:00:00.000Z') }]);
 
     const result = await service.rescheduleAfterLeaveRevocation(
       {
@@ -325,7 +332,7 @@ describe('SchedulerAssignmentsService', () => {
         data: expect.objectContaining({
           weekStartDate: new Date('2026-06-08T00:00:00.000Z'),
           dayIndex: 4,
-          assignedBy: 'hod-1',
+          assignedBy: 'hod-old',
         }),
       }),
     );
@@ -335,8 +342,8 @@ describe('SchedulerAssignmentsService', () => {
         where: { id: 'assignment-2' },
         data: expect.objectContaining({
           weekStartDate: new Date('2026-06-15T00:00:00.000Z'),
-          dayIndex: 2,
-          assignedBy: 'hod-1',
+          dayIndex: 0,
+          assignedBy: 'hod-old',
         }),
       }),
     );

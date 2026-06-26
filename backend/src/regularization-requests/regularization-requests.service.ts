@@ -559,11 +559,14 @@ export class RegularizationRequestsService implements RegularizationRequestsCont
 
     const hods = await this.findDepartmentHods(designer.departmentId);
     const assignedHodId = hods[0]?.id ?? null;
-    const hodOnBehalf = role === UserRole.HOD && submitterId !== dto.designerId;
-    const status = hodOnBehalf ? 'Approved' : dto.status?.trim() || 'Pending';
-    const reviewedAt = hodOnBehalf ? new Date() : undefined;
-    const approverRemarks = hodOnBehalf
-      ? 'Auto-approved by system (HOD submission on behalf of designer)'
+    const hodAutoApprove = role === UserRole.HOD;
+    const hodOnBehalf = hodAutoApprove && submitterId !== dto.designerId;
+    const status = hodAutoApprove ? 'Approved' : dto.status?.trim() || 'Pending';
+    const reviewedAt = hodAutoApprove ? new Date() : undefined;
+    const approverRemarks = hodAutoApprove
+      ? hodOnBehalf
+        ? 'Auto-approved by system (HOD submission on behalf of designer)'
+        : 'Auto-approved by system (HOD submission)'
       : undefined;
 
     const newRow = await this.prisma.regularizationRequest.create({
@@ -575,7 +578,7 @@ export class RegularizationRequestsService implements RegularizationRequestsCont
         reason: dto.reason,
         notes: storedNotes,
         status,
-        approverId: hodOnBehalf ? submitterId : assignedHodId,
+        approverId: hodAutoApprove ? submitterId : assignedHodId,
         approverRemarks: approverRemarks ?? null,
         reviewedAt,
       },
@@ -584,10 +587,10 @@ export class RegularizationRequestsService implements RegularizationRequestsCont
 
     const request = this.mapRow(newRow);
 
-    const submitAction = hodOnBehalf
+    const submitAction = hodAutoApprove
       ? ActivityAction.REGULARIZATION_AUTO_APPROVED
       : ActivityAction.REGULARIZATION_SUBMITTED;
-    const submitMessageKey = hodOnBehalf
+    const submitMessageKey = hodAutoApprove
       ? 'regularization_auto_approved'
       : 'regularization_submitted';
 
@@ -604,9 +607,10 @@ export class RegularizationRequestsService implements RegularizationRequestsCont
           reason: dto.reason,
           status,
           regularizationType: regType,
-          autoApproved: hodOnBehalf,
-          submittedByHod: hodOnBehalf,
+          autoApproved: hodAutoApprove,
+          submittedByHod: hodAutoApprove,
           beneficiaryDesignerId: dto.designerId,
+          submittedOnBehalf: hodOnBehalf,
         },
         taskSnapshot: task
           ? { id: task.id, taskNo: task.taskNo ?? undefined, title: task.title ?? undefined }
@@ -619,18 +623,20 @@ export class RegularizationRequestsService implements RegularizationRequestsCont
           departmentId: designer.departmentId ?? null,
           designerName: designer.fullName,
           requesterName: designer.fullName,
-          recipientName: hodOnBehalf ? designer.fullName : hods[0]?.fullName ?? 'HOD',
-          approverName: hodOnBehalf ? undefined : hods[0]?.fullName ?? undefined,
+          recipientName: hodAutoApprove ? designer.fullName : hods[0]?.fullName ?? 'HOD',
+          approverName: hodAutoApprove ? undefined : hods[0]?.fullName ?? undefined,
           submitterId,
           submitterRole: role,
         },
       },
     });
 
-    if (hodOnBehalf) {
-      await this.notifyDesigner(request, 'Approved', approverRemarks).catch((err) => {
-        this.logger.warn(`Failed to notify designer: ${err instanceof Error ? err.message : err}`);
-      });
+    if (hodAutoApprove) {
+      if (hodOnBehalf) {
+        await this.notifyDesigner(request, 'Approved', approverRemarks).catch((err) => {
+          this.logger.warn(`Failed to notify designer: ${err instanceof Error ? err.message : err}`);
+        });
+      }
       await this.touchSchedulerWeekForRegularization(newRow, submitterId);
       this.dashboardRealtime?.notifyOverviewRefresh('regularization_approved');
       if (dto.designerId) {

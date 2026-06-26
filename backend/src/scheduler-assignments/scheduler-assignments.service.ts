@@ -97,6 +97,11 @@ type SchedulerWeekMetaDto = {
 const DAILY_CAPACITY = 8;
 const MAX_DAILY_HOURS = 12;
 
+type LeaveRescheduleSnapshotRow = {
+  assignmentId: string;
+  originalJson: string;
+};
+
 @Injectable()
 export class SchedulerAssignmentsService implements OnModuleInit {
   private readonly logger = new Logger(SchedulerAssignmentsService.name);
@@ -126,6 +131,27 @@ export class SchedulerAssignmentsService implements OnModuleInit {
     } catch (err) {
       const detail = err instanceof Error ? err.message : String(err);
       this.logger.warn(`Could not ensure holiday calendar table: ${detail}`);
+    }
+
+    try {
+      await this.prisma.$executeRawUnsafe(`
+        IF OBJECT_ID('dbo.ErpTSLeaveRescheduleSnapshot', 'U') IS NULL
+        BEGIN
+          CREATE TABLE dbo.ErpTSLeaveRescheduleSnapshot (
+            id UNIQUEIDENTIFIER NOT NULL CONSTRAINT PK_ErpTSLeaveRescheduleSnapshot PRIMARY KEY DEFAULT (newid()),
+            leaveRequestId UNIQUEIDENTIFIER NOT NULL,
+            assignmentId UNIQUEIDENTIFIER NOT NULL,
+            originalJson NVARCHAR(MAX) NOT NULL,
+            createdAt DATETIME2 NOT NULL CONSTRAINT DF_ErpTSLeaveRescheduleSnapshot_createdAt DEFAULT (sysutcdatetime()),
+            restoredAt DATETIME2 NULL
+          );
+          CREATE UNIQUE INDEX UX_ErpTSLeaveRescheduleSnapshot_leave_assignment
+            ON dbo.ErpTSLeaveRescheduleSnapshot (leaveRequestId, assignmentId);
+        END
+      `);
+    } catch (err) {
+      const detail = err instanceof Error ? err.message : String(err);
+      this.logger.warn(`Could not ensure leave reschedule snapshot table: ${detail}`);
     }
   }
 
@@ -517,6 +543,59 @@ export class SchedulerAssignmentsService implements OnModuleInit {
     }
   }
 
+  private async recordLeaveRescheduleSnapshots(
+    tx: {
+      $executeRaw(query: TemplateStringsArray, ...values: unknown[]): Promise<unknown>;
+    },
+    leaveRequestId: string | undefined,
+    rows: Array<{ row: unknown; id: string }>,
+  ): Promise<void> {
+    if (!leaveRequestId || rows.length === 0) return;
+
+    for (const entry of rows) {
+      await tx.$executeRaw`
+        MERGE dbo.ErpTSLeaveRescheduleSnapshot AS target
+        USING (SELECT ${leaveRequestId} AS leaveRequestId, ${entry.id} AS assignmentId) AS source
+          ON target.leaveRequestId = source.leaveRequestId
+          AND target.assignmentId = source.assignmentId
+        WHEN NOT MATCHED THEN
+          INSERT (leaveRequestId, assignmentId, originalJson)
+          VALUES (source.leaveRequestId, source.assignmentId, ${JSON.stringify(entry.row)});
+      `;
+    }
+  }
+
+  private async loadLeaveRescheduleSnapshots(
+    tx: {
+      $queryRaw<T = unknown>(query: TemplateStringsArray, ...values: unknown[]): Promise<T>;
+    },
+    leaveRequestId: string | undefined,
+  ): Promise<LeaveRescheduleSnapshotRow[]> {
+    if (!leaveRequestId) return [];
+    return tx.$queryRaw<LeaveRescheduleSnapshotRow[]>`
+      SELECT assignmentId, originalJson
+      FROM dbo.ErpTSLeaveRescheduleSnapshot
+      WHERE leaveRequestId = ${leaveRequestId}
+        AND restoredAt IS NULL
+      ORDER BY createdAt ASC
+    `;
+  }
+
+  private async markLeaveRescheduleSnapshotsRestored(
+    tx: {
+      $executeRaw(query: TemplateStringsArray, ...values: unknown[]): Promise<unknown>;
+    },
+    leaveRequestId: string | undefined,
+  ): Promise<void> {
+    if (!leaveRequestId) return;
+    await tx.$executeRaw`
+      UPDATE dbo.ErpTSLeaveRescheduleSnapshot
+      SET restoredAt = sysutcdatetime()
+      WHERE leaveRequestId = ${leaveRequestId}
+        AND restoredAt IS NULL
+    `;
+  }
+
   async rescheduleForApprovedLeave(
     leave: {
       id?: string;
@@ -607,7 +686,7 @@ export class SchedulerAssignmentsService implements OnModuleInit {
         if (this.isWeekend(date) || holidayKeys.has(key)) return 0;
         const leaveHours = leaveHoursByDate.get(key) ?? 0;
         if (leaveHours >= DAILY_CAPACITY) return 0;
-        return Math.max(0, MAX_DAILY_HOURS - leaveHours);
+        return Math.max(0, DAILY_CAPACITY - leaveHours);
       };
 
       const originalUsage = new Map<string, number>();
@@ -636,22 +715,29 @@ export class SchedulerAssignmentsService implements OnModuleInit {
         fixedUsage.set(key, (fixedUsage.get(key) ?? 0) + this.toHours(entry.row.assignedHours));
       }
 
-      const movedRows: Array<{
+      const changedRows: Array<{
         id: string;
+        row: (typeof schedulerRows)[number];
         fromWeekStartDate: Date;
         toWeekStartDate: Date;
         toWeekEndDate: Date;
         toDayIndex: number;
+        toPosition: number;
         fromDate: string;
         toDate: string;
       }> = [];
       const plannedUsage = new Map(fixedUsage);
+      const plannedPositions = new Map<string, number>();
+      for (const entry of datedRows.slice(0, firstDisplacedIndex)) {
+        const key = this.dateKey(entry.date);
+        plannedPositions.set(key, Math.max(plannedPositions.get(key) ?? 0, Number(entry.row.position ?? 0) + 1));
+      }
       let cursorDate = datedRows[firstDisplacedIndex].date;
 
       for (const entry of datedRows.slice(firstDisplacedIndex)) {
         const assignedHours = this.toHours(entry.row.assignedHours);
-        if (assignedHours > MAX_DAILY_HOURS) {
-          throw new BadRequestException(`Assignment ${entry.row.id} exceeds maximum daily capacity.`);
+        if (assignedHours > DAILY_CAPACITY) {
+          throw new BadRequestException(`Assignment ${entry.row.id} exceeds normal daily capacity.`);
         }
 
         let targetDate = this.maxUtcDate(cursorDate, entry.date);
@@ -665,27 +751,31 @@ export class SchedulerAssignmentsService implements OnModuleInit {
         const targetKey = this.dateKey(targetDate);
         plannedUsage.set(targetKey, (plannedUsage.get(targetKey) ?? 0) + assignedHours);
         cursorDate = targetDate;
+        const toPosition = plannedPositions.get(targetKey) ?? 0;
+        plannedPositions.set(targetKey, toPosition + 1);
 
-        if (this.sameUtcDate(targetDate, entry.date)) continue;
+        if (this.sameUtcDate(targetDate, entry.date) && Number(entry.row.position ?? 0) === toPosition) continue;
 
         const toWeekStartDate = this.weekStartForDate(targetDate);
-        movedRows.push({
+        changedRows.push({
           id: entry.row.id,
+          row: entry.row,
           fromWeekStartDate: this.weekStartForDate(entry.date),
           toWeekStartDate,
           toWeekEndDate: this.weekEndForWeekStart(toWeekStartDate),
           toDayIndex: this.dayIndexForDate(targetDate, toWeekStartDate),
+          toPosition,
           fromDate: this.dateKey(entry.date),
           toDate: targetKey,
         });
       }
 
-      if (movedRows.length === 0) {
+      if (changedRows.length === 0) {
         return { movedCount: 0, affectedWeeks: [] as string[] };
       }
 
       const affectedWeekByKey = new Map<string, Date>();
-      for (const row of movedRows) {
+      for (const row of changedRows) {
         affectedWeekByKey.set(this.dateKey(row.fromWeekStartDate), row.fromWeekStartDate);
         affectedWeekByKey.set(this.dateKey(row.toWeekStartDate), row.toWeekStartDate);
       }
@@ -709,13 +799,20 @@ export class SchedulerAssignmentsService implements OnModuleInit {
         beforeRowsByWeek.set(key, rows);
       }
 
-      for (const row of movedRows) {
+      await this.recordLeaveRescheduleSnapshots(
+        tx,
+        leave.id,
+        changedRows.map((row) => ({ id: row.id, row: row.row })),
+      );
+
+      for (const row of changedRows) {
         await tx.schedulerAssignment.update({
           where: { id: row.id },
           data: {
             weekStartDate: row.toWeekStartDate,
             weekEndDate: row.toWeekEndDate,
             dayIndex: row.toDayIndex,
+            position: row.toPosition,
             assignedBy: actorUserId,
           },
         });
@@ -778,7 +875,7 @@ export class SchedulerAssignmentsService implements OnModuleInit {
       }
 
       return {
-        movedCount: movedRows.length,
+        movedCount: changedRows.length,
         affectedWeeks: affectedWeeks.map((date) => this.dateKey(date)),
       };
     });
@@ -827,6 +924,166 @@ export class SchedulerAssignmentsService implements OnModuleInit {
     }
 
     const result = await this.prisma.$transaction(async (tx) => {
+      const snapshots = await this.loadLeaveRescheduleSnapshots(tx, leave.id);
+      const originals = snapshots
+        .map((snapshot) => {
+          try {
+            return {
+              assignmentId: snapshot.assignmentId,
+              row: JSON.parse(snapshot.originalJson) as {
+                designerId: string | null;
+                taskId: string | null;
+                dayIndex: number | null;
+                assignedHours: string | number | null;
+                parentId: string | null;
+                splitIndex: number | null;
+                totalParts: number | null;
+                weekStartDate: string | Date | null;
+                weekEndDate: string | Date | null;
+                notes: string | null;
+                position?: number | null;
+                isLocked: boolean | null;
+                assignedBy: string | null;
+                updatedAt?: string | Date | null;
+              },
+            };
+          } catch {
+            return null;
+          }
+        })
+        .filter((entry): entry is NonNullable<typeof entry> => entry != null);
+
+      if (originals.length > 0) {
+        const currentRows = await tx.schedulerAssignment.findMany({
+          where: { id: { in: originals.map((entry) => entry.assignmentId) } },
+        });
+        const currentById = new Map(currentRows.map((row) => [row.id, row]));
+        const affectedWeekByKey = new Map<string, Date>();
+        for (const entry of originals) {
+          const current = currentById.get(entry.assignmentId);
+          if (current?.weekStartDate) {
+            const currentWeek = new Date(current.weekStartDate);
+            affectedWeekByKey.set(this.dateKey(currentWeek), currentWeek);
+          }
+          if (entry.row.weekStartDate) {
+            const originalWeek = this.startOfUtcDay(new Date(entry.row.weekStartDate));
+            affectedWeekByKey.set(this.dateKey(originalWeek), originalWeek);
+          }
+        }
+        const affectedWeeks = [...affectedWeekByKey.values()].sort((a, b) => a.getTime() - b.getTime());
+
+        const beforeRows = affectedWeeks.length
+          ? await tx.schedulerAssignment.findMany({
+              where: { weekStartDate: { in: affectedWeeks } },
+              orderBy: [
+                { designerId: 'asc' },
+                { dayIndex: 'asc' },
+                { position: 'asc' } as unknown as Prisma.SchedulerAssignmentOrderByWithRelationInput,
+                { id: 'asc' },
+              ],
+            })
+          : [];
+        const beforeRowsByWeek = new Map<string, unknown[]>();
+        for (const row of beforeRows) {
+          const key = row.weekStartDate ? this.dateKey(new Date(row.weekStartDate)) : '';
+          if (!key) continue;
+          const rows = beforeRowsByWeek.get(key) ?? [];
+          rows.push(row);
+          beforeRowsByWeek.set(key, rows);
+        }
+
+        let restoredCount = 0;
+        for (const entry of originals) {
+          if (!currentById.has(entry.assignmentId)) continue;
+          const originalWeekStart = entry.row.weekStartDate ? this.startOfUtcDay(new Date(entry.row.weekStartDate)) : null;
+          const originalWeekEnd = entry.row.weekEndDate ? this.startOfUtcDay(new Date(entry.row.weekEndDate)) : null;
+          await tx.schedulerAssignment.update({
+            where: { id: entry.assignmentId },
+            data: {
+              designerId: entry.row.designerId,
+              taskId: entry.row.taskId,
+              dayIndex: entry.row.dayIndex,
+              assignedHours: entry.row.assignedHours as any,
+              parentId: entry.row.parentId,
+              splitIndex: entry.row.splitIndex,
+              totalParts: entry.row.totalParts,
+              weekStartDate: originalWeekStart,
+              weekEndDate: originalWeekEnd,
+              notes: entry.row.notes,
+              position: entry.row.position ?? 0,
+              isLocked: entry.row.isLocked ?? false,
+              assignedBy: entry.row.assignedBy,
+              updatedAt: entry.row.updatedAt ? new Date(entry.row.updatedAt) : undefined,
+            } as Prisma.SchedulerAssignmentUncheckedUpdateInput,
+          });
+          restoredCount += 1;
+        }
+
+        const afterRows = affectedWeeks.length
+          ? await tx.schedulerAssignment.findMany({
+              where: { weekStartDate: { in: affectedWeeks } },
+              orderBy: [
+                { designerId: 'asc' },
+                { dayIndex: 'asc' },
+                { position: 'asc' } as unknown as Prisma.SchedulerAssignmentOrderByWithRelationInput,
+                { id: 'asc' },
+              ],
+            })
+          : [];
+        const afterRowsByWeek = new Map<string, unknown[]>();
+        for (const row of afterRows) {
+          const key = row.weekStartDate ? this.dateKey(new Date(row.weekStartDate)) : '';
+          if (!key) continue;
+          const rows = afterRowsByWeek.get(key) ?? [];
+          rows.push(row);
+          afterRowsByWeek.set(key, rows);
+        }
+
+        for (const weekStartDate of affectedWeeks) {
+          const key = this.dateKey(weekStartDate);
+          const existingWeek = await tx.schedulerWeek.findUnique({ where: { weekStartDate } });
+          const versionFrom = existingWeek?.version ?? 0;
+          const versionTo = versionFrom + 1;
+          if (existingWeek) {
+            await tx.schedulerWeek.update({
+              where: { weekStartDate },
+              data: {
+                version: { increment: 1 },
+                updatedBy: actorUserId,
+                lastPayloadHash: null,
+              },
+            });
+          } else {
+            await tx.schedulerWeek.create({
+              data: {
+                weekStartDate,
+                version: versionTo,
+                isLocked: false,
+                updatedBy: actorUserId,
+                lastPayloadHash: null,
+              },
+            });
+          }
+
+          await tx.schedulerAssignmentHistory.create({
+            data: {
+              weekStartDate,
+              versionFrom,
+              versionTo,
+              changedBy: actorUserId,
+              beforeJson: JSON.stringify(beforeRowsByWeek.get(key) ?? []),
+              afterJson: JSON.stringify(afterRowsByWeek.get(key) ?? []),
+            },
+          });
+        }
+
+        await this.markLeaveRescheduleSnapshotsRestored(tx, leave.id);
+        return {
+          movedCount: restoredCount,
+          affectedWeeks: affectedWeeks.map((date) => this.dateKey(date)),
+        };
+      }
+
       const schedulerRows = await tx.schedulerAssignment.findMany({
         where: {
           designerId: leave.userId,
@@ -900,7 +1157,7 @@ export class SchedulerAssignmentsService implements OnModuleInit {
         if (this.isWeekend(date) || holidayKeys.has(key)) return 0;
         const leaveHours = leaveHoursByDate.get(key) ?? 0;
         if (leaveHours >= DAILY_CAPACITY) return 0;
-        return Math.max(0, MAX_DAILY_HOURS - leaveHours);
+        return Math.max(0, DAILY_CAPACITY - leaveHours);
       };
 
       const movedRows: Array<{
@@ -917,8 +1174,8 @@ export class SchedulerAssignmentsService implements OnModuleInit {
 
       for (const entry of datedRows) {
         const assignedHours = this.toHours(entry.row.assignedHours);
-        if (assignedHours > MAX_DAILY_HOURS) {
-          throw new BadRequestException(`Assignment ${entry.row.id} exceeds maximum daily capacity.`);
+        if (assignedHours > DAILY_CAPACITY) {
+          throw new BadRequestException(`Assignment ${entry.row.id} exceeds normal daily capacity.`);
         }
 
         let targetDate = new Date(cursorDate);
