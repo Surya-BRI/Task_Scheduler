@@ -19,6 +19,7 @@ import { ReviewLeaveRequestDto } from './dto/review-leave-request.dto';
 import { UpdateLeaveRequestDto } from './dto/update-leave-request.dto';
 import { UpdateRequestStatusDto } from './dto/update-request-status.dto';
 import { RevokeLeaveRequestDto } from './dto/revoke-leave-request.dto';
+import { SchedulerAssignmentsService } from '../scheduler-assignments/scheduler-assignments.service';
 import {
   calculateLeaveDurationDays,
   dateToDateOnlyIso,
@@ -70,6 +71,7 @@ export class RequestsService implements OnModuleInit {
   constructor(
     private readonly prisma: PrismaService,
     private readonly activityLogger: ActivityLoggerService,
+    @Optional() private readonly schedulerAssignments?: SchedulerAssignmentsService,
     @Optional() private readonly dashboardRealtime?: DashboardRealtimeService,
   ) {}
 
@@ -146,6 +148,40 @@ export class RequestsService implements OnModuleInit {
 
   private toDateLabel(d: Date): string {
     return dateToDateOnlyIso(d);
+  }
+
+  private getStartOfWeek(date: Date): Date {
+    const d = new Date(Date.UTC(date.getUTCFullYear(), date.getUTCMonth(), date.getUTCDate()));
+    const day = d.getUTCDay();
+    const diff = d.getUTCDate() - day + (day === 0 ? -6 : 1);
+    d.setUTCDate(diff);
+    d.setUTCHours(0, 0, 0, 0);
+    return d;
+  }
+
+  private async touchSchedulerWeeksForLeave(
+    leave: { startDate: Date; endDate?: Date | null },
+    userId: string,
+  ): Promise<void> {
+    const start = this.getStartOfWeek(new Date(leave.startDate));
+    const end = this.getStartOfWeek(new Date(leave.endDate ?? leave.startDate));
+    for (const weekStartDate = new Date(start); weekStartDate <= end; weekStartDate.setUTCDate(weekStartDate.getUTCDate() + 7)) {
+      await this.prisma.schedulerWeek.upsert({
+        where: { weekStartDate: new Date(weekStartDate) },
+        create: {
+          weekStartDate: new Date(weekStartDate),
+          version: 1,
+          isLocked: false,
+          updatedBy: userId,
+          lastPayloadHash: null,
+        },
+        update: {
+          version: { increment: 1 },
+          updatedBy: userId,
+          lastPayloadHash: null,
+        },
+      });
+    }
   }
 
   private normalizeStatus(status: string): string {
@@ -743,6 +779,8 @@ export class RequestsService implements OnModuleInit {
           reviewedAt!,
         );
       }
+      await this.schedulerAssignments?.rescheduleForApprovedLeave(req, submitterId);
+      await this.touchSchedulerWeeksForLeave(req, submitterId);
       this.dashboardRealtime?.notifyOverviewRefresh('leave_approved');
       if (resolvedId) {
         this.dashboardRealtime?.notifyUserNotificationRefresh(resolvedId);
@@ -982,6 +1020,10 @@ export class RequestsService implements OnModuleInit {
       reviewedAt,
     );
 
+    if (status === 'APPROVED') {
+      await this.schedulerAssignments?.rescheduleForApprovedLeave(req, reviewerId);
+      await this.touchSchedulerWeeksForLeave(req, reviewerId);
+    }
     this.dashboardRealtime?.notifyOverviewRefresh(
       status === 'APPROVED' ? 'leave_approved' : 'leave_rejected',
     );
@@ -1082,6 +1124,11 @@ export class RequestsService implements OnModuleInit {
       revoker?.fullName ?? 'HOD',
       revokedAt,
     );
+
+    await this.schedulerAssignments?.rescheduleAfterLeaveRevocation?.(req, reviewerId);
+    await this.touchSchedulerWeeksForLeave(existing, reviewerId);
+    this.dashboardRealtime?.notifyOverviewRefresh('leave_revoked');
+    this.dashboardRealtime?.notifyUserNotificationRefresh(existing.userId);
 
     return view;
   }

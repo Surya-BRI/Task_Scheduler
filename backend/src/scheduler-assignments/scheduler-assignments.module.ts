@@ -10,5 +10,6 @@ import { SchedulerAssignmentsService } from './scheduler-assignments.service';
   imports: [PrismaModule, ActivitiesModule, NotificationsModule, DashboardModule],
   controllers: [SchedulerAssignmentsController],
   providers: [SchedulerAssignmentsService],
+  exports: [SchedulerAssignmentsService],
 })
 export class SchedulerAssignmentsModule {}

@@ -43,7 +43,9 @@ const buildDaySlot = (taskIds, tasksMap) => {
     const overtimeHours = getOvertimeHours(task);
     if (!regularHours && !overtimeHours) continue;
     rawTaskIds.push(task.id);
-    rawRecordIds.push(task.parentId ?? task.id);
+    if (!task.isSystemBlock) {
+      rawRecordIds.push(task.parentId ?? task.id);
+    }
 
     if (regularHours > 0) {
       const startHr = regularCursor;
@@ -58,6 +60,8 @@ const buildDaySlot = (taskIds, tasksMap) => {
         startHr,
         endHr,
         isOvertime: false,
+        isSystemBlock: Boolean(task.isSystemBlock),
+        requestType: task.requestType,
       });
     }
 
@@ -120,6 +124,7 @@ export const buildDesignerSnapshot = (tasksMap, designerScheduleByDayIndex = {})
     for (const taskId of taskIds) {
       const task = tasksMap[taskId];
       if (!task) continue;
+      if (task.isSystemBlock) continue;
       const recordId = task.parentId ?? task.id;
       if (!recordId || seenRecordIdsForDay.has(recordId)) continue;
       seenRecordIdsForDay.add(recordId);

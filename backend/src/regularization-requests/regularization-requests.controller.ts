@@ -1,4 +1,15 @@
-import { BadRequestException, Body, Controller, Get, Param, Patch, Post, Query, UseGuards } from '@nestjs/common';
+import {
+  BadRequestException,
+  Body,
+  Controller,
+  ForbiddenException,
+  Get,
+  Param,
+  Patch,
+  Post,
+  Query,
+  UseGuards,
+} from '@nestjs/common';
 import { CreateRegularizationRequestDto } from './dto/create-regularization-request.dto';
 import { ReviewRegularizationRequestDto } from './dto/review-regularization-request.dto';
 import { UpdateRegularizationStatusDto } from './dto/update-regularization-status.dto';
@@ -18,13 +29,20 @@ export class RegularizationRequestsController {
 
   @Get('task-options')
   @Roles(UserRole.DESIGNER, UserRole.HOD)
-  listTaskOptions(@Query('designerId') designerIdParam?: string, @CurrentUser() user?: JwtPayload) {
+  listTaskOptions(
+    @Query('designerId') designerIdParam: string | undefined,
+    @Query('date') date: string | undefined,
+    @CurrentUser() user: JwtPayload,
+  ) {
     const designerId = (designerIdParam ?? user?.sub ?? '').trim();
     if (!designerId) return [];
     if (!isUuidString(designerId)) {
       throw new BadRequestException('Query designerId must be a UUID.');
     }
-    return this.regularizationRequestsService.listTaskOptions(designerId);
+    if (user.role !== UserRole.HOD && designerId !== user.sub) {
+      throw new ForbiddenException('You can only view your own regularization task options.');
+    }
+    return this.regularizationRequestsService.listTaskOptions(designerId, date ?? '');
   }
 
   @Get('pending-approvals')

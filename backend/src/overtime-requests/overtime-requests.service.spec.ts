@@ -25,6 +25,9 @@ describe('OvertimeRequestsService', () => {
       delete: jest.fn(),
       count: jest.fn(),
     },
+    leaveRequest: {
+      findMany: jest.fn(),
+    },
     overtimeApprovalHistory: {
       create: jest.fn(),
     },
@@ -40,6 +43,10 @@ describe('OvertimeRequestsService', () => {
     },
     task: {
       findUnique: jest.fn(),
+    },
+    schedulerAssignment: {
+      findFirst: jest.fn(),
+      findMany: jest.fn(),
     },
     schedulerWeek: {
       upsert: jest.fn(),
@@ -78,10 +85,82 @@ describe('OvertimeRequestsService', () => {
       project: { name: 'Retail Revamp', projectNo: 'PRJ-01' },
     });
     mockPrismaService.overtimeRequest.findMany.mockResolvedValue([]);
+    mockPrismaService.leaveRequest.findMany.mockResolvedValue([]);
+    mockPrismaService.schedulerAssignment.findFirst.mockResolvedValue({ id: 'sa1' });
+    mockPrismaService.schedulerAssignment.findMany.mockResolvedValue([]);
   });
 
   it('should be defined', () => {
     expect(service).toBeDefined();
+  });
+
+  describe('listTaskOptions', () => {
+    const designerId = '11111111-1111-1111-1111-111111111111';
+    const taskId = '22222222-2222-2222-2222-222222222222';
+
+    it('returns scheduler-backed task options for the selected date', async () => {
+      mockPrismaService.schedulerAssignment.findMany.mockResolvedValue([
+        {
+          id: 'sa1',
+          task: {
+            id: taskId,
+            title: 'Scheduled Task',
+            taskNo: 'T-001',
+            opNo: 'OP-1',
+            projectId: '33333333-3333-3333-3333-333333333333',
+            project: {
+              id: '33333333-3333-3333-3333-333333333333',
+              name: 'Retail Revamp',
+              projectNo: 'PRJ-01',
+            },
+          },
+        },
+      ]);
+
+      const result = await service.listTaskOptions(designerId, '2026-06-26');
+
+      expect(result).toEqual([
+        {
+          id: taskId,
+          projectId: '33333333-3333-3333-3333-333333333333',
+          projectName: 'Retail Revamp',
+          label: 'Scheduled Task (T-001)',
+        },
+      ]);
+      expect(mockPrismaService.schedulerAssignment.findMany).toHaveBeenCalledWith(
+        expect.objectContaining({
+          where: expect.objectContaining({
+            designerId,
+            dayIndex: 4,
+          }),
+        }),
+      );
+    });
+
+    it('de-duplicates split scheduler rows for the same task', async () => {
+      const task = {
+        id: taskId,
+        title: 'Split Task',
+        taskNo: 'T-002',
+        opNo: null,
+        projectId: '33333333-3333-3333-3333-333333333333',
+        project: { id: '33333333-3333-3333-3333-333333333333', name: 'Project', projectNo: null },
+      };
+      mockPrismaService.schedulerAssignment.findMany.mockResolvedValue([
+        { id: 'sa1', task },
+        { id: 'sa2', task },
+      ]);
+
+      const result = await service.listTaskOptions(designerId, '2026-06-26');
+
+      expect(result).toHaveLength(1);
+      expect(result[0].id).toBe(taskId);
+    });
+
+    it('rejects invalid option input', async () => {
+      await expect(service.listTaskOptions('not-a-uuid', '2026-06-26')).rejects.toThrow(BadRequestException);
+      await expect(service.listTaskOptions(designerId, '26-06-2026')).rejects.toThrow(BadRequestException);
+    });
   });
 
   // ────────────────────────────────────────────────────────────────────────
@@ -118,6 +197,13 @@ describe('OvertimeRequestsService', () => {
       await expect(service.create('d1', UserRole.DESIGNER, dto)).rejects.toThrow(ForbiddenException);
     });
 
+    it('should throw ForbiddenException if task is not scheduled for the designer on the request date', async () => {
+      mockPrismaService.schedulerAssignment.findFirst.mockResolvedValue(null);
+
+      await expect(service.create('d1', UserRole.DESIGNER, baseDto)).rejects.toThrow(ForbiddenException);
+      expect(mockPrismaService.overtimeRequest.create).not.toHaveBeenCalled();
+    });
+
     it('should allow HOD to create request on behalf of another user', async () => {
       const dto = { ...baseDto, designerId: 'd2' };
 
@@ -143,7 +229,7 @@ describe('OvertimeRequestsService', () => {
       expect(result.designerId).toBe('d2');
     });
 
-    it('should submit HOD self-overtime through the normal approval workflow', async () => {
+    it('should auto-approve HOD self-overtime', async () => {
       const dto = { ...baseDto, designerId: 'hod1', status: 'Pending' as const };
 
       mockPrismaService.task.findUnique.mockResolvedValue({
@@ -163,7 +249,7 @@ describe('OvertimeRequestsService', () => {
         date: new Date(`${todayOtDate()}T00:00:00.000Z`),
         requestedHours: new Decimal(2.0),
         totalHours: new Decimal(2.0),
-        status: 'SUBMITTED',
+        status: 'APPROVED',
         designer: { id: 'hod1', fullName: 'HOD User', departmentId: 'dept1' },
         task: {
           id: 't1',
@@ -178,30 +264,25 @@ describe('OvertimeRequestsService', () => {
 
       const result = await service.create('hod1', UserRole.HOD, dto);
 
-      expect(result.status).toBe('SUBMITTED');
+      expect(result.status).toBe('APPROVED');
       expect(mockPrismaService.overtimeRequest.create).toHaveBeenCalledWith(
         expect.objectContaining({
           data: expect.objectContaining({
             designerId: 'hod1',
-            status: 'SUBMITTED',
-          }),
-        }),
-      );
-      expect(mockPrismaService.overtimeRequest.create).not.toHaveBeenCalledWith(
-        expect.objectContaining({
-          data: expect.objectContaining({
+            status: 'APPROVED',
             approvedById: 'hod1',
+            managerComments: 'Auto-approved by system (HOD submission)',
           }),
         }),
       );
       expect(mockActivityLogger.log).toHaveBeenCalledWith(
         expect.objectContaining({
-          action: 'OVERTIME_REQUEST_SUBMITTED',
+          action: 'OVERTIME_AUTO_APPROVED',
           userId: 'hod1',
           taskId: 't1',
         }),
       );
-      expect(mockPrismaService.notification.create).toHaveBeenCalled();
+      expect(mockPrismaService.notification.create).not.toHaveBeenCalled();
     });
 
     it('should throw BadRequestException on duplicate task+date', async () => {
@@ -225,6 +306,23 @@ describe('OvertimeRequestsService', () => {
       await expect(service.create('d1', UserRole.DESIGNER, baseDto)).rejects.toThrow(
         BadRequestException,
       );
+    });
+
+    it('should reject overtime on approved full-day leave', async () => {
+      mockPrismaService.overtimeRequest.findFirst.mockResolvedValue(null);
+      mockPrismaService.leaveRequest.findMany.mockResolvedValue([
+        {
+          id: 'leave-1',
+          type: 'Full Day',
+          startDate: new Date(`${todayOtDate()}T00:00:00.000Z`),
+          endDate: new Date(`${todayOtDate()}T00:00:00.000Z`),
+        },
+      ]);
+
+      await expect(service.create('d1', UserRole.DESIGNER, baseDto)).rejects.toThrow(
+        'Cannot allocate overtime because the designer has approved full-day or second-half leave for this date.',
+      );
+      expect(mockPrismaService.overtimeRequest.create).not.toHaveBeenCalled();
     });
 
     it('should create overtime draft request successfully', async () => {
@@ -821,6 +919,36 @@ describe('OvertimeRequestsService', () => {
           }),
         }),
       );
+    });
+
+    it('should reject approval when designer has approved full-day leave', async () => {
+      const mockRequest = {
+        id: 'r1',
+        status: 'SUBMITTED',
+        designerId: 'd1',
+        totalHours: new Decimal(2.0),
+        date: new Date(`${todayOtDate()}T00:00:00.000Z`),
+        designer: { id: 'd1', fullName: 'Designer 1', departmentId: 'dept1' },
+      };
+      mockPrismaService.overtimeRequest.findUnique.mockResolvedValue(mockRequest);
+      mockPrismaService.leaveRequest.findMany.mockResolvedValue([
+        {
+          id: 'leave-1',
+          type: 'Full Day',
+          startDate: new Date(`${todayOtDate()}T00:00:00.000Z`),
+          endDate: new Date(`${todayOtDate()}T00:00:00.000Z`),
+        },
+      ]);
+
+      await expect(
+        service.review('r1', 'h1', UserRole.HOD, {
+          status: 'APPROVED_BY_MANAGER',
+          comments: 'Looks good',
+        }),
+      ).rejects.toThrow(
+        'Cannot allocate overtime because the designer has approved full-day or second-half leave for this date.',
+      );
+      expect(mockPrismaService.overtimeRequest.update).not.toHaveBeenCalled();
     });
 
     it('should allow HOD to reject submitted request', async () => {

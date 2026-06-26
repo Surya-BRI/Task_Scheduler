@@ -19,6 +19,15 @@ export type SchedulerAssignmentRow = {
   createdAt: Date;
   updatedAt: Date;
   overtimeRequestIds?: string[];
+  requestType?: 'LEAVE' | 'REGULARIZATION' | 'OVERTIME' | null;
+  isSystemBlock?: boolean;
+  leaveRequestIds?: string[];
+  leaveHours?: number;
+  leaveSession?: string | null;
+  regularizationRequestIds?: string[];
+  regularizationHours?: number;
+  requestStatus?: string | null;
+  requestLabel?: string | null;
 };
 
 export type SchedulerWeekMeta = {

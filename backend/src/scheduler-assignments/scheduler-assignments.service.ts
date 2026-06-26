@@ -7,6 +7,7 @@ import {
   Injectable,
   Logger,
   NotFoundException,
+  OnModuleInit,
   Optional,
 } from '@nestjs/common';
 import { ConfigService } from '@nestjs/config';
@@ -19,6 +20,11 @@ import { SaveSchedulerWeekDto } from './dto/save-scheduler-week.dto';
 import { UserRole } from '../common/constants/roles.enum';
 import { NotificationsService } from '../notifications/notifications.service';
 import { DashboardRealtimeService } from '../dashboard/dashboard-realtime.service';
+import {
+  LEAVE_TYPE_HALF_DAY,
+  normalizeHalfDaySession,
+  normalizeLeaveType,
+} from '../requests/leave-request.validation';
 
 type RawAssignmentRow = {
   id: string;
@@ -39,6 +45,15 @@ type RawAssignmentRow = {
   createdAt: Date;
   updatedAt: Date;
   overtimeRequestIds?: string[];
+  requestType?: 'LEAVE' | 'REGULARIZATION' | 'OVERTIME' | null;
+  isSystemBlock?: boolean;
+  leaveRequestIds?: string[];
+  leaveHours?: string | number | null;
+  leaveSession?: string | null;
+  regularizationRequestIds?: string[];
+  regularizationHours?: string | number | null;
+  requestStatus?: string | null;
+  requestLabel?: string | null;
 };
 
 export type SchedulerAssignmentDto = {
@@ -60,6 +75,15 @@ export type SchedulerAssignmentDto = {
   createdAt: string;
   updatedAt: string;
   overtimeRequestIds: string[];
+  requestType: 'LEAVE' | 'REGULARIZATION' | 'OVERTIME' | null;
+  isSystemBlock: boolean;
+  leaveRequestIds: string[];
+  leaveHours: number;
+  leaveSession: string | null;
+  regularizationRequestIds: string[];
+  regularizationHours: number;
+  requestStatus: string | null;
+  requestLabel: string | null;
 };
 
 type SchedulerWeekMetaDto = {
@@ -73,8 +97,13 @@ type SchedulerWeekMetaDto = {
 const DAILY_CAPACITY = 8;
 const MAX_DAILY_HOURS = 12;
 
+type LeaveRescheduleSnapshotRow = {
+  assignmentId: string;
+  originalJson: string;
+};
+
 @Injectable()
-export class SchedulerAssignmentsService {
+export class SchedulerAssignmentsService implements OnModuleInit {
   private readonly logger = new Logger(SchedulerAssignmentsService.name);
   constructor(
     private readonly prisma: PrismaService,
@@ -83,6 +112,48 @@ export class SchedulerAssignmentsService {
     private readonly notificationsService: NotificationsService,
     @Optional() private readonly dashboardRealtime?: DashboardRealtimeService,
   ) {}
+
+  async onModuleInit(): Promise<void> {
+    try {
+      await this.prisma.$executeRawUnsafe(`
+        IF OBJECT_ID('dbo.ErpTSHoliday', 'U') IS NULL
+        BEGIN
+          CREATE TABLE dbo.ErpTSHoliday (
+            id UNIQUEIDENTIFIER NOT NULL CONSTRAINT PK_ErpTSHoliday PRIMARY KEY DEFAULT (newid()),
+            [date] DATE NOT NULL,
+            [name] NVARCHAR(255) NULL,
+            createdAt DATETIME2 NOT NULL CONSTRAINT DF_ErpTSHoliday_createdAt DEFAULT (sysutcdatetime()),
+            updatedAt DATETIME2 NOT NULL CONSTRAINT DF_ErpTSHoliday_updatedAt DEFAULT (sysutcdatetime()),
+            CONSTRAINT UQ_ErpTSHoliday_date UNIQUE ([date])
+          );
+        END
+      `);
+    } catch (err) {
+      const detail = err instanceof Error ? err.message : String(err);
+      this.logger.warn(`Could not ensure holiday calendar table: ${detail}`);
+    }
+
+    try {
+      await this.prisma.$executeRawUnsafe(`
+        IF OBJECT_ID('dbo.ErpTSLeaveRescheduleSnapshot', 'U') IS NULL
+        BEGIN
+          CREATE TABLE dbo.ErpTSLeaveRescheduleSnapshot (
+            id UNIQUEIDENTIFIER NOT NULL CONSTRAINT PK_ErpTSLeaveRescheduleSnapshot PRIMARY KEY DEFAULT (newid()),
+            leaveRequestId UNIQUEIDENTIFIER NOT NULL,
+            assignmentId UNIQUEIDENTIFIER NOT NULL,
+            originalJson NVARCHAR(MAX) NOT NULL,
+            createdAt DATETIME2 NOT NULL CONSTRAINT DF_ErpTSLeaveRescheduleSnapshot_createdAt DEFAULT (sysutcdatetime()),
+            restoredAt DATETIME2 NULL
+          );
+          CREATE UNIQUE INDEX UX_ErpTSLeaveRescheduleSnapshot_leave_assignment
+            ON dbo.ErpTSLeaveRescheduleSnapshot (leaveRequestId, assignmentId);
+        END
+      `);
+    } catch (err) {
+      const detail = err instanceof Error ? err.message : String(err);
+      this.logger.warn(`Could not ensure leave reschedule snapshot table: ${detail}`);
+    }
+  }
 
   private fail(context: string, err: unknown): never {
     const msg = err instanceof Error ? err.message : String(err);
@@ -116,6 +187,46 @@ export class SchedulerAssignmentsService {
     return Math.floor((dateUtc - weekUtc) / 86_400_000);
   }
 
+  private dateForDayIndex(weekStartDate: Date, dayIndex: number): Date {
+    const d = new Date(weekStartDate);
+    d.setUTCDate(d.getUTCDate() + dayIndex);
+    d.setUTCHours(0, 0, 0, 0);
+    return d;
+  }
+
+  private sameUtcDate(a: Date, b: Date): boolean {
+    return (
+      a.getUTCFullYear() === b.getUTCFullYear() &&
+      a.getUTCMonth() === b.getUTCMonth() &&
+      a.getUTCDate() === b.getUTCDate()
+    );
+  }
+
+  private dateInUtcRange(date: Date, start: Date, end: Date): boolean {
+    const d = Date.UTC(date.getUTCFullYear(), date.getUTCMonth(), date.getUTCDate());
+    const s = Date.UTC(start.getUTCFullYear(), start.getUTCMonth(), start.getUTCDate());
+    const e = Date.UTC(end.getUTCFullYear(), end.getUTCMonth(), end.getUTCDate());
+    return d >= s && d <= e;
+  }
+
+  private parseDurationHours(value: string | null | undefined): number {
+    if (!value) return 0;
+    const text = String(value).trim().toLowerCase();
+    if (!text) return 0;
+
+    const hhmm = text.match(/^(\d{1,2}):(\d{2})$/);
+    if (hhmm) {
+      const hours = Number(hhmm[1]);
+      const minutes = Number(hhmm[2]);
+      return Number.isFinite(hours) && Number.isFinite(minutes) ? hours + minutes / 60 : 0;
+    }
+
+    const numberMatch = text.match(/(\d+(?:\.\d+)?)/);
+    if (!numberMatch) return 0;
+    const parsed = Number(numberMatch[1]);
+    return Number.isFinite(parsed) ? parsed : 0;
+  }
+
   private weekStartForDate(date: Date): Date {
     const temp = new Date(Date.UTC(date.getUTCFullYear(), date.getUTCMonth(), date.getUTCDate()));
     const day = temp.getUTCDay();
@@ -123,6 +234,62 @@ export class SchedulerAssignmentsService {
     const weekStart = new Date(Date.UTC(temp.getUTCFullYear(), temp.getUTCMonth(), diff));
     weekStart.setUTCHours(0, 0, 0, 0);
     return weekStart;
+  }
+
+  private startOfUtcDay(date: Date): Date {
+    return new Date(Date.UTC(date.getUTCFullYear(), date.getUTCMonth(), date.getUTCDate()));
+  }
+
+  private dateKey(date: Date): string {
+    return this.startOfUtcDay(date).toISOString().slice(0, 10);
+  }
+
+  private addUtcDays(date: Date, days: number): Date {
+    const next = this.startOfUtcDay(date);
+    next.setUTCDate(next.getUTCDate() + days);
+    return next;
+  }
+
+  private maxUtcDate(a: Date, b: Date): Date {
+    return a.getTime() >= b.getTime() ? new Date(a) : new Date(b);
+  }
+
+  private weekEndForWeekStart(weekStartDate: Date): Date {
+    return this.addUtcDays(weekStartDate, 6);
+  }
+
+  private isWeekend(date: Date): boolean {
+    const day = date.getUTCDay();
+    return day === 0 || day === 6;
+  }
+
+  private assignmentDate(row: { weekStartDate: Date | null; dayIndex: number | null }): Date | null {
+    if (!row.weekStartDate || row.dayIndex == null) return null;
+    return this.dateForDayIndex(new Date(row.weekStartDate), Number(row.dayIndex));
+  }
+
+  private leaveHoursForDate(
+    leave: { type: string | null; startDate: Date; endDate: Date | null },
+    date: Date,
+  ): number {
+    if (!this.dateInUtcRange(date, leave.startDate, leave.endDate ?? leave.startDate)) return 0;
+    const type = normalizeLeaveType(leave.type ?? '') ?? 'Full Day';
+    return type === LEAVE_TYPE_HALF_DAY && this.sameUtcDate(leave.startDate, leave.endDate ?? leave.startDate)
+      ? 4
+      : DAILY_CAPACITY;
+  }
+
+  private async loadHolidayKeys(
+    tx: { $queryRaw<T = unknown>(query: TemplateStringsArray, ...values: unknown[]): Promise<T> },
+    start: Date,
+    end: Date,
+  ): Promise<Set<string>> {
+    const rows = await tx.$queryRaw<Array<{ date: Date | string }>>`
+      SELECT [date] AS [date]
+      FROM dbo.ErpTSHoliday
+      WHERE [date] >= ${start} AND [date] <= ${end}
+    `;
+    return new Set(rows.map((row) => this.dateKey(new Date(row.date))));
   }
 
   private async touchSchedulerWeek(weekStartDate: Date, userId: string): Promise<void> {
@@ -169,6 +336,7 @@ export class SchedulerAssignmentsService {
     const assignedHours = this.toHours(row.assignedHours);
     const scheduledHours = row.scheduledHours == null ? assignedHours : this.toHours(row.scheduledHours);
     const approvedOvertimeHours = this.toHours(row.approvedOvertimeHours);
+    const requestType = row.requestType ?? null;
     return {
       id: row.id,
       designerId: String(row.designerId ?? '').trim(),
@@ -188,7 +356,128 @@ export class SchedulerAssignmentsService {
       createdAt: this.toIso(row.createdAt ? new Date(row.createdAt) : null),
       updatedAt: this.toIso(row.updatedAt ? new Date(row.updatedAt) : null),
       overtimeRequestIds: row.overtimeRequestIds ?? [],
+      requestType,
+      isSystemBlock: Boolean(row.isSystemBlock ?? requestType != null),
+      leaveRequestIds: row.leaveRequestIds ?? [],
+      leaveHours: this.toHours(row.leaveHours),
+      leaveSession: row.leaveSession ?? null,
+      regularizationRequestIds: row.regularizationRequestIds ?? [],
+      regularizationHours: this.toHours(row.regularizationHours),
+      requestStatus: row.requestStatus ?? null,
+      requestLabel: row.requestLabel ?? null,
     };
+  }
+
+  private buildLeaveSystemRows(
+    leaves: Array<{
+      id: string;
+      userId: string;
+      type: string | null;
+      startDate: Date;
+      endDate: Date | null;
+      halfDaySession: string | null;
+      status: string | null;
+      user?: { fullName?: string | null } | null;
+    }>,
+    weekStartDate: Date,
+    weekEndDate: Date,
+  ): SchedulerAssignmentDto[] {
+    const rows: SchedulerAssignmentDto[] = [];
+    for (const leave of leaves) {
+      const leaveEnd = leave.endDate ?? leave.startDate;
+      for (let dayIndex = 0; dayIndex <= 6; dayIndex += 1) {
+        const date = this.dateForDayIndex(weekStartDate, dayIndex);
+        if (!this.dateInUtcRange(date, leave.startDate, leaveEnd)) continue;
+        if (!this.dateInUtcRange(date, weekStartDate, weekEndDate)) continue;
+
+        const type = normalizeLeaveType(leave.type ?? '') ?? 'Full Day';
+        const session = type === LEAVE_TYPE_HALF_DAY ? normalizeHalfDaySession(leave.halfDaySession) : null;
+        const hours = type === LEAVE_TYPE_HALF_DAY && this.sameUtcDate(leave.startDate, leaveEnd) ? 4 : DAILY_CAPACITY;
+        const labelParts = ['Approved leave'];
+        if (type) labelParts.push(type);
+        if (session) labelParts.push(session);
+
+        rows.push(this.mapRow({
+          id: `leave-${leave.id}-${dayIndex}`,
+          designerId: leave.userId,
+          taskId: `leave-${leave.id}`,
+          dayIndex,
+          assignedHours: hours,
+          scheduledHours: hours,
+          approvedOvertimeHours: 0,
+          parentId: null,
+          splitIndex: null,
+          totalParts: null,
+          weekStartDate,
+          weekEndDate,
+          notes: labelParts.join(' - '),
+          isLocked: true,
+          assignedBy: null,
+          createdAt: new Date(),
+          updatedAt: new Date(),
+          requestType: 'LEAVE',
+          isSystemBlock: true,
+          leaveRequestIds: [leave.id],
+          leaveHours: hours,
+          leaveSession: session,
+          requestStatus: leave.status ?? 'Approved',
+          requestLabel: labelParts.join(' - '),
+        }));
+      }
+    }
+    return rows;
+  }
+
+  private buildRegularizationSystemRows(
+    requests: Array<{
+      id: string;
+      designerId: string | null;
+      taskId: string | null;
+      date: Date | null;
+      duration: string | null;
+      reason: string | null;
+      status: string | null;
+      task?: { taskNo?: string | null; title?: string | null; opNo?: string | null } | null;
+    }>,
+    weekStartDate: Date,
+    weekEndDate: Date,
+  ): SchedulerAssignmentDto[] {
+    const rows: SchedulerAssignmentDto[] = [];
+    for (const request of requests) {
+      if (!request.designerId || !request.date) continue;
+      const dayIndex = this.dayIndexForDate(new Date(request.date), weekStartDate);
+      if (dayIndex < 0 || dayIndex > 6) continue;
+      const hours = this.parseDurationHours(request.duration);
+      if (!hours) continue;
+      const taskLabel = request.task?.taskNo ?? request.task?.opNo ?? request.task?.title ?? null;
+      const label = `Approved regularization${taskLabel ? ` - ${taskLabel}` : ''}`;
+      rows.push(this.mapRow({
+        id: `regularization-${request.id}`,
+        designerId: request.designerId,
+        taskId: request.taskId ?? `regularization-${request.id}`,
+        dayIndex,
+        assignedHours: hours,
+        scheduledHours: hours,
+        approvedOvertimeHours: 0,
+        parentId: null,
+        splitIndex: null,
+        totalParts: null,
+        weekStartDate,
+        weekEndDate,
+        notes: request.reason ?? label,
+        isLocked: true,
+        assignedBy: null,
+        createdAt: new Date(),
+        updatedAt: new Date(),
+        requestType: 'REGULARIZATION',
+        isSystemBlock: true,
+        regularizationRequestIds: [request.id],
+        regularizationHours: hours,
+        requestStatus: request.status ?? 'Approved',
+        requestLabel: label,
+      }));
+    }
+    return rows;
   }
 
   private validateAssignments(dto: SaveSchedulerWeekDto) {
@@ -224,6 +513,827 @@ export class SchedulerAssignmentsService {
     }
   }
 
+  private assertNoApprovedFullDayLeaveConflicts(
+    assignments: SaveSchedulerWeekDto['assignments'],
+    approvedLeaves: Array<{
+      id: string;
+      userId: string;
+      type: string | null;
+      startDate: Date;
+      endDate: Date | null;
+      user?: { fullName?: string | null } | null;
+    }>,
+    weekStartDate: Date,
+  ): void {
+    for (const assignment of assignments) {
+      const assignmentDate = this.dateForDayIndex(weekStartDate, assignment.dayIndex);
+      const conflictingLeave = approvedLeaves.find((leave) => {
+        if (leave.userId !== assignment.designerId) return false;
+        const type = normalizeLeaveType(leave.type ?? '') ?? 'Full Day';
+        if (type === LEAVE_TYPE_HALF_DAY) return false;
+        return this.dateInUtcRange(assignmentDate, leave.startDate, leave.endDate ?? leave.startDate);
+      });
+
+      if (conflictingLeave) {
+        const designerLabel = conflictingLeave.user?.fullName?.trim() || assignment.designerId;
+        throw new BadRequestException(
+          `Cannot schedule task ${assignment.taskId} for ${designerLabel} on approved full-day leave.`,
+        );
+      }
+    }
+  }
+
+  private async recordLeaveRescheduleSnapshots(
+    tx: {
+      $executeRaw(query: TemplateStringsArray, ...values: unknown[]): Promise<unknown>;
+    },
+    leaveRequestId: string | undefined,
+    rows: Array<{ row: unknown; id: string }>,
+  ): Promise<void> {
+    if (!leaveRequestId || rows.length === 0) return;
+
+    for (const entry of rows) {
+      await tx.$executeRaw`
+        MERGE dbo.ErpTSLeaveRescheduleSnapshot AS target
+        USING (SELECT ${leaveRequestId} AS leaveRequestId, ${entry.id} AS assignmentId) AS source
+          ON target.leaveRequestId = source.leaveRequestId
+          AND target.assignmentId = source.assignmentId
+        WHEN NOT MATCHED THEN
+          INSERT (leaveRequestId, assignmentId, originalJson)
+          VALUES (source.leaveRequestId, source.assignmentId, ${JSON.stringify(entry.row)});
+      `;
+    }
+  }
+
+  private async loadLeaveRescheduleSnapshots(
+    tx: {
+      $queryRaw<T = unknown>(query: TemplateStringsArray, ...values: unknown[]): Promise<T>;
+    },
+    leaveRequestId: string | undefined,
+  ): Promise<LeaveRescheduleSnapshotRow[]> {
+    if (!leaveRequestId) return [];
+    return tx.$queryRaw<LeaveRescheduleSnapshotRow[]>`
+      SELECT assignmentId, originalJson
+      FROM dbo.ErpTSLeaveRescheduleSnapshot
+      WHERE leaveRequestId = ${leaveRequestId}
+        AND restoredAt IS NULL
+      ORDER BY createdAt ASC
+    `;
+  }
+
+  private async markLeaveRescheduleSnapshotsRestored(
+    tx: {
+      $executeRaw(query: TemplateStringsArray, ...values: unknown[]): Promise<unknown>;
+    },
+    leaveRequestId: string | undefined,
+  ): Promise<void> {
+    if (!leaveRequestId) return;
+    await tx.$executeRaw`
+      UPDATE dbo.ErpTSLeaveRescheduleSnapshot
+      SET restoredAt = sysutcdatetime()
+      WHERE leaveRequestId = ${leaveRequestId}
+        AND restoredAt IS NULL
+    `;
+  }
+
+  async rescheduleForApprovedLeave(
+    leave: {
+      id?: string;
+      userId: string;
+      type: string | null;
+      startDate: Date;
+      endDate?: Date | null;
+    },
+    actorUserId: string,
+  ): Promise<{ movedCount: number; affectedWeeks: string[] }> {
+    const leaveStart = this.startOfUtcDay(new Date(leave.startDate));
+    const leaveEnd = this.startOfUtcDay(new Date(leave.endDate ?? leave.startDate));
+    if (!leave.userId || Number.isNaN(leaveStart.getTime()) || Number.isNaN(leaveEnd.getTime())) {
+      return { movedCount: 0, affectedWeeks: [] };
+    }
+
+    const result = await this.prisma.$transaction(async (tx) => {
+      const schedulerRows = await tx.schedulerAssignment.findMany({
+        where: {
+          designerId: leave.userId,
+          weekStartDate: { gte: this.weekStartForDate(leaveStart) },
+        },
+        orderBy: [
+          { weekStartDate: 'asc' },
+          { dayIndex: 'asc' },
+          { position: 'asc' } as unknown as Prisma.SchedulerAssignmentOrderByWithRelationInput,
+          { createdAt: 'asc' },
+          { id: 'asc' },
+        ],
+      });
+
+      const datedRows = schedulerRows
+        .map((row) => ({ row, date: this.assignmentDate(row) }))
+        .filter((entry): entry is { row: (typeof schedulerRows)[number]; date: Date } => {
+          return entry.date != null && entry.date >= leaveStart;
+        });
+
+      if (datedRows.length === 0) {
+        return { movedCount: 0, affectedWeeks: [] as string[] };
+      }
+
+      const latestAssignmentDate = datedRows.reduce(
+        (latest, entry) => this.maxUtcDate(latest, entry.date),
+        leaveEnd,
+      );
+      const horizonDays = Math.max(370, datedRows.length * 7 + 30);
+      const horizonEnd = this.addUtcDays(this.maxUtcDate(latestAssignmentDate, leaveEnd), horizonDays);
+
+      const [approvedLeaves, holidayKeys] = await Promise.all([
+        tx.leaveRequest.findMany({
+          where: {
+            userId: leave.userId,
+            status: { in: ['Approved', 'APPROVED', 'approved'] },
+            revokedAt: null,
+            startDate: { lte: horizonEnd },
+            OR: [{ endDate: null }, { endDate: { gte: leaveStart } }],
+          },
+          select: {
+            id: true,
+            type: true,
+            startDate: true,
+            endDate: true,
+          },
+        }),
+        this.loadHolidayKeys(tx, leaveStart, horizonEnd),
+      ]);
+
+      const leaveHoursByDate = new Map<string, number>();
+      for (const approvedLeave of approvedLeaves) {
+        const start = this.startOfUtcDay(new Date(approvedLeave.startDate));
+        const end = this.startOfUtcDay(new Date(approvedLeave.endDate ?? approvedLeave.startDate));
+        for (let date = start; date <= end; date = this.addUtcDays(date, 1)) {
+          const key = this.dateKey(date);
+          const blockedHours = this.leaveHoursForDate(
+            {
+              type: approvedLeave.type,
+              startDate: start,
+              endDate: end,
+            },
+            date,
+          );
+          leaveHoursByDate.set(key, Math.min(DAILY_CAPACITY, (leaveHoursByDate.get(key) ?? 0) + blockedHours));
+        }
+      }
+
+      const availableCapacity = (date: Date): number => {
+        const key = this.dateKey(date);
+        if (this.isWeekend(date) || holidayKeys.has(key)) return 0;
+        const leaveHours = leaveHoursByDate.get(key) ?? 0;
+        if (leaveHours >= DAILY_CAPACITY) return 0;
+        return Math.max(0, DAILY_CAPACITY - leaveHours);
+      };
+
+      const originalUsage = new Map<string, number>();
+      let firstDisplacedIndex = -1;
+      for (let index = 0; index < datedRows.length; index += 1) {
+        const { row, date } = datedRows[index];
+        if (!this.dateInUtcRange(date, leaveStart, leaveEnd)) continue;
+
+        const key = this.dateKey(date);
+        const assignedHours = this.toHours(row.assignedHours);
+        const nextUsage = (originalUsage.get(key) ?? 0) + assignedHours;
+        if (nextUsage > availableCapacity(date)) {
+          firstDisplacedIndex = index;
+          break;
+        }
+        originalUsage.set(key, nextUsage);
+      }
+
+      if (firstDisplacedIndex < 0) {
+        return { movedCount: 0, affectedWeeks: [] as string[] };
+      }
+
+      const fixedUsage = new Map<string, number>();
+      for (const entry of datedRows.slice(0, firstDisplacedIndex)) {
+        const key = this.dateKey(entry.date);
+        fixedUsage.set(key, (fixedUsage.get(key) ?? 0) + this.toHours(entry.row.assignedHours));
+      }
+
+      const changedRows: Array<{
+        id: string;
+        row: (typeof schedulerRows)[number];
+        fromWeekStartDate: Date;
+        toWeekStartDate: Date;
+        toWeekEndDate: Date;
+        toDayIndex: number;
+        toPosition: number;
+        fromDate: string;
+        toDate: string;
+      }> = [];
+      const plannedUsage = new Map(fixedUsage);
+      const plannedPositions = new Map<string, number>();
+      for (const entry of datedRows.slice(0, firstDisplacedIndex)) {
+        const key = this.dateKey(entry.date);
+        plannedPositions.set(key, Math.max(plannedPositions.get(key) ?? 0, Number(entry.row.position ?? 0) + 1));
+      }
+      let cursorDate = datedRows[firstDisplacedIndex].date;
+
+      for (const entry of datedRows.slice(firstDisplacedIndex)) {
+        const assignedHours = this.toHours(entry.row.assignedHours);
+        if (assignedHours > DAILY_CAPACITY) {
+          throw new BadRequestException(`Assignment ${entry.row.id} exceeds normal daily capacity.`);
+        }
+
+        let targetDate = this.maxUtcDate(cursorDate, entry.date);
+        while ((plannedUsage.get(this.dateKey(targetDate)) ?? 0) + assignedHours > availableCapacity(targetDate)) {
+          targetDate = this.addUtcDays(targetDate, 1);
+          if (targetDate > horizonEnd) {
+            throw new BadRequestException('Could not find an available working day for leave rescheduling.');
+          }
+        }
+
+        const targetKey = this.dateKey(targetDate);
+        plannedUsage.set(targetKey, (plannedUsage.get(targetKey) ?? 0) + assignedHours);
+        cursorDate = targetDate;
+        const toPosition = plannedPositions.get(targetKey) ?? 0;
+        plannedPositions.set(targetKey, toPosition + 1);
+
+        if (this.sameUtcDate(targetDate, entry.date) && Number(entry.row.position ?? 0) === toPosition) continue;
+
+        const toWeekStartDate = this.weekStartForDate(targetDate);
+        changedRows.push({
+          id: entry.row.id,
+          row: entry.row,
+          fromWeekStartDate: this.weekStartForDate(entry.date),
+          toWeekStartDate,
+          toWeekEndDate: this.weekEndForWeekStart(toWeekStartDate),
+          toDayIndex: this.dayIndexForDate(targetDate, toWeekStartDate),
+          toPosition,
+          fromDate: this.dateKey(entry.date),
+          toDate: targetKey,
+        });
+      }
+
+      if (changedRows.length === 0) {
+        return { movedCount: 0, affectedWeeks: [] as string[] };
+      }
+
+      const affectedWeekByKey = new Map<string, Date>();
+      for (const row of changedRows) {
+        affectedWeekByKey.set(this.dateKey(row.fromWeekStartDate), row.fromWeekStartDate);
+        affectedWeekByKey.set(this.dateKey(row.toWeekStartDate), row.toWeekStartDate);
+      }
+      const affectedWeeks = [...affectedWeekByKey.values()].sort((a, b) => a.getTime() - b.getTime());
+
+      const beforeRows = await tx.schedulerAssignment.findMany({
+        where: { weekStartDate: { in: affectedWeeks } },
+        orderBy: [
+          { designerId: 'asc' },
+          { dayIndex: 'asc' },
+          { position: 'asc' } as unknown as Prisma.SchedulerAssignmentOrderByWithRelationInput,
+          { id: 'asc' },
+        ],
+      });
+      const beforeRowsByWeek = new Map<string, unknown[]>();
+      for (const row of beforeRows) {
+        const key = row.weekStartDate ? this.dateKey(new Date(row.weekStartDate)) : '';
+        if (!key) continue;
+        const rows = beforeRowsByWeek.get(key) ?? [];
+        rows.push(row);
+        beforeRowsByWeek.set(key, rows);
+      }
+
+      await this.recordLeaveRescheduleSnapshots(
+        tx,
+        leave.id,
+        changedRows.map((row) => ({ id: row.id, row: row.row })),
+      );
+
+      for (const row of changedRows) {
+        await tx.schedulerAssignment.update({
+          where: { id: row.id },
+          data: {
+            weekStartDate: row.toWeekStartDate,
+            weekEndDate: row.toWeekEndDate,
+            dayIndex: row.toDayIndex,
+            position: row.toPosition,
+            assignedBy: actorUserId,
+          },
+        });
+      }
+
+      const afterRows = await tx.schedulerAssignment.findMany({
+        where: { weekStartDate: { in: affectedWeeks } },
+        orderBy: [
+          { designerId: 'asc' },
+          { dayIndex: 'asc' },
+          { position: 'asc' } as unknown as Prisma.SchedulerAssignmentOrderByWithRelationInput,
+          { id: 'asc' },
+        ],
+      });
+      const afterRowsByWeek = new Map<string, unknown[]>();
+      for (const row of afterRows) {
+        const key = row.weekStartDate ? this.dateKey(new Date(row.weekStartDate)) : '';
+        if (!key) continue;
+        const rows = afterRowsByWeek.get(key) ?? [];
+        rows.push(row);
+        afterRowsByWeek.set(key, rows);
+      }
+
+      for (const weekStartDate of affectedWeeks) {
+        const key = this.dateKey(weekStartDate);
+        const existingWeek = await tx.schedulerWeek.findUnique({ where: { weekStartDate } });
+        const versionFrom = existingWeek?.version ?? 0;
+        const versionTo = versionFrom + 1;
+        if (existingWeek) {
+          await tx.schedulerWeek.update({
+            where: { weekStartDate },
+            data: {
+              version: { increment: 1 },
+              updatedBy: actorUserId,
+              lastPayloadHash: null,
+            },
+          });
+        } else {
+          await tx.schedulerWeek.create({
+            data: {
+              weekStartDate,
+              version: versionTo,
+              isLocked: false,
+              updatedBy: actorUserId,
+              lastPayloadHash: null,
+            },
+          });
+        }
+
+        await tx.schedulerAssignmentHistory.create({
+          data: {
+            weekStartDate,
+            versionFrom,
+            versionTo,
+            changedBy: actorUserId,
+            beforeJson: JSON.stringify(beforeRowsByWeek.get(key) ?? []),
+            afterJson: JSON.stringify(afterRowsByWeek.get(key) ?? []),
+          },
+        });
+      }
+
+      return {
+        movedCount: changedRows.length,
+        affectedWeeks: affectedWeeks.map((date) => this.dateKey(date)),
+      };
+    });
+
+    if (result.movedCount > 0) {
+      await this.activityLogger.log({
+        action: ActivityAction.SCHEDULER_LEAVE_RESCHEDULED,
+        userId: actorUserId,
+        details: {
+          event: ActivityAction.SCHEDULER_LEAVE_RESCHEDULED,
+          messageKey: 'scheduler_leave_rescheduled',
+          changes: {
+            movedAssignments: result.movedCount,
+            affectedWeeks: result.affectedWeeks,
+          },
+          context: {
+            source: 'leave.approval',
+            leaveRequestId: leave.id ?? null,
+            designerId: leave.userId,
+            startDate: this.dateKey(leaveStart),
+            endDate: this.dateKey(leaveEnd),
+          },
+        },
+      });
+      this.dashboardRealtime?.notifyOverviewRefresh('scheduler_leave_rescheduled');
+      this.dashboardRealtime?.notifyUserNotificationRefresh(leave.userId);
+    }
+
+    return result;
+  }
+
+  async rescheduleAfterLeaveRevocation(
+    leave: {
+      id?: string;
+      userId: string;
+      type: string | null;
+      startDate: Date;
+      endDate?: Date | null;
+    },
+    actorUserId: string,
+  ): Promise<{ movedCount: number; affectedWeeks: string[] }> {
+    const leaveStart = this.startOfUtcDay(new Date(leave.startDate));
+    const leaveEnd = this.startOfUtcDay(new Date(leave.endDate ?? leave.startDate));
+    if (!leave.userId || Number.isNaN(leaveStart.getTime()) || Number.isNaN(leaveEnd.getTime())) {
+      return { movedCount: 0, affectedWeeks: [] };
+    }
+
+    const result = await this.prisma.$transaction(async (tx) => {
+      const snapshots = await this.loadLeaveRescheduleSnapshots(tx, leave.id);
+      const originals = snapshots
+        .map((snapshot) => {
+          try {
+            return {
+              assignmentId: snapshot.assignmentId,
+              row: JSON.parse(snapshot.originalJson) as {
+                designerId: string | null;
+                taskId: string | null;
+                dayIndex: number | null;
+                assignedHours: string | number | null;
+                parentId: string | null;
+                splitIndex: number | null;
+                totalParts: number | null;
+                weekStartDate: string | Date | null;
+                weekEndDate: string | Date | null;
+                notes: string | null;
+                position?: number | null;
+                isLocked: boolean | null;
+                assignedBy: string | null;
+                updatedAt?: string | Date | null;
+              },
+            };
+          } catch {
+            return null;
+          }
+        })
+        .filter((entry): entry is NonNullable<typeof entry> => entry != null);
+
+      if (originals.length > 0) {
+        const currentRows = await tx.schedulerAssignment.findMany({
+          where: { id: { in: originals.map((entry) => entry.assignmentId) } },
+        });
+        const currentById = new Map(currentRows.map((row) => [row.id, row]));
+        const affectedWeekByKey = new Map<string, Date>();
+        for (const entry of originals) {
+          const current = currentById.get(entry.assignmentId);
+          if (current?.weekStartDate) {
+            const currentWeek = new Date(current.weekStartDate);
+            affectedWeekByKey.set(this.dateKey(currentWeek), currentWeek);
+          }
+          if (entry.row.weekStartDate) {
+            const originalWeek = this.startOfUtcDay(new Date(entry.row.weekStartDate));
+            affectedWeekByKey.set(this.dateKey(originalWeek), originalWeek);
+          }
+        }
+        const affectedWeeks = [...affectedWeekByKey.values()].sort((a, b) => a.getTime() - b.getTime());
+
+        const beforeRows = affectedWeeks.length
+          ? await tx.schedulerAssignment.findMany({
+              where: { weekStartDate: { in: affectedWeeks } },
+              orderBy: [
+                { designerId: 'asc' },
+                { dayIndex: 'asc' },
+                { position: 'asc' } as unknown as Prisma.SchedulerAssignmentOrderByWithRelationInput,
+                { id: 'asc' },
+              ],
+            })
+          : [];
+        const beforeRowsByWeek = new Map<string, unknown[]>();
+        for (const row of beforeRows) {
+          const key = row.weekStartDate ? this.dateKey(new Date(row.weekStartDate)) : '';
+          if (!key) continue;
+          const rows = beforeRowsByWeek.get(key) ?? [];
+          rows.push(row);
+          beforeRowsByWeek.set(key, rows);
+        }
+
+        let restoredCount = 0;
+        for (const entry of originals) {
+          if (!currentById.has(entry.assignmentId)) continue;
+          const originalWeekStart = entry.row.weekStartDate ? this.startOfUtcDay(new Date(entry.row.weekStartDate)) : null;
+          const originalWeekEnd = entry.row.weekEndDate ? this.startOfUtcDay(new Date(entry.row.weekEndDate)) : null;
+          await tx.schedulerAssignment.update({
+            where: { id: entry.assignmentId },
+            data: {
+              designerId: entry.row.designerId,
+              taskId: entry.row.taskId,
+              dayIndex: entry.row.dayIndex,
+              assignedHours: entry.row.assignedHours as any,
+              parentId: entry.row.parentId,
+              splitIndex: entry.row.splitIndex,
+              totalParts: entry.row.totalParts,
+              weekStartDate: originalWeekStart,
+              weekEndDate: originalWeekEnd,
+              notes: entry.row.notes,
+              position: entry.row.position ?? 0,
+              isLocked: entry.row.isLocked ?? false,
+              assignedBy: entry.row.assignedBy,
+              updatedAt: entry.row.updatedAt ? new Date(entry.row.updatedAt) : undefined,
+            } as Prisma.SchedulerAssignmentUncheckedUpdateInput,
+          });
+          restoredCount += 1;
+        }
+
+        const afterRows = affectedWeeks.length
+          ? await tx.schedulerAssignment.findMany({
+              where: { weekStartDate: { in: affectedWeeks } },
+              orderBy: [
+                { designerId: 'asc' },
+                { dayIndex: 'asc' },
+                { position: 'asc' } as unknown as Prisma.SchedulerAssignmentOrderByWithRelationInput,
+                { id: 'asc' },
+              ],
+            })
+          : [];
+        const afterRowsByWeek = new Map<string, unknown[]>();
+        for (const row of afterRows) {
+          const key = row.weekStartDate ? this.dateKey(new Date(row.weekStartDate)) : '';
+          if (!key) continue;
+          const rows = afterRowsByWeek.get(key) ?? [];
+          rows.push(row);
+          afterRowsByWeek.set(key, rows);
+        }
+
+        for (const weekStartDate of affectedWeeks) {
+          const key = this.dateKey(weekStartDate);
+          const existingWeek = await tx.schedulerWeek.findUnique({ where: { weekStartDate } });
+          const versionFrom = existingWeek?.version ?? 0;
+          const versionTo = versionFrom + 1;
+          if (existingWeek) {
+            await tx.schedulerWeek.update({
+              where: { weekStartDate },
+              data: {
+                version: { increment: 1 },
+                updatedBy: actorUserId,
+                lastPayloadHash: null,
+              },
+            });
+          } else {
+            await tx.schedulerWeek.create({
+              data: {
+                weekStartDate,
+                version: versionTo,
+                isLocked: false,
+                updatedBy: actorUserId,
+                lastPayloadHash: null,
+              },
+            });
+          }
+
+          await tx.schedulerAssignmentHistory.create({
+            data: {
+              weekStartDate,
+              versionFrom,
+              versionTo,
+              changedBy: actorUserId,
+              beforeJson: JSON.stringify(beforeRowsByWeek.get(key) ?? []),
+              afterJson: JSON.stringify(afterRowsByWeek.get(key) ?? []),
+            },
+          });
+        }
+
+        await this.markLeaveRescheduleSnapshotsRestored(tx, leave.id);
+        return {
+          movedCount: restoredCount,
+          affectedWeeks: affectedWeeks.map((date) => this.dateKey(date)),
+        };
+      }
+
+      const schedulerRows = await tx.schedulerAssignment.findMany({
+        where: {
+          designerId: leave.userId,
+          weekStartDate: { gte: this.weekStartForDate(leaveStart) },
+        },
+        orderBy: [
+          { weekStartDate: 'asc' },
+          { dayIndex: 'asc' },
+          { position: 'asc' } as unknown as Prisma.SchedulerAssignmentOrderByWithRelationInput,
+          { createdAt: 'asc' },
+          { id: 'asc' },
+        ],
+      });
+
+      const datedRows = schedulerRows
+        .map((row) => ({ row, date: this.assignmentDate(row) }))
+        .filter((entry): entry is { row: (typeof schedulerRows)[number]; date: Date } => {
+          return entry.date != null && entry.date >= leaveStart;
+        });
+
+      if (datedRows.length === 0) {
+        return { movedCount: 0, affectedWeeks: [] as string[] };
+      }
+
+      const latestAssignmentDate = datedRows.reduce(
+        (latest, entry) => this.maxUtcDate(latest, entry.date),
+        leaveEnd,
+      );
+      const horizonDays = Math.max(370, datedRows.length * 7 + 30);
+      const horizonEnd = this.addUtcDays(this.maxUtcDate(latestAssignmentDate, leaveEnd), horizonDays);
+
+      const [approvedLeaves, holidayKeys] = await Promise.all([
+        tx.leaveRequest.findMany({
+          where: {
+            userId: leave.userId,
+            status: { in: ['Approved', 'APPROVED', 'approved'] },
+            revokedAt: null,
+            startDate: { lte: horizonEnd },
+            OR: [{ endDate: null }, { endDate: { gte: leaveStart } }],
+          },
+          select: {
+            id: true,
+            type: true,
+            startDate: true,
+            endDate: true,
+          },
+        }),
+        this.loadHolidayKeys(tx, leaveStart, horizonEnd),
+      ]);
+
+      const leaveHoursByDate = new Map<string, number>();
+      for (const approvedLeave of approvedLeaves) {
+        const start = this.startOfUtcDay(new Date(approvedLeave.startDate));
+        const end = this.startOfUtcDay(new Date(approvedLeave.endDate ?? approvedLeave.startDate));
+        for (let date = start; date <= end; date = this.addUtcDays(date, 1)) {
+          const key = this.dateKey(date);
+          const blockedHours = this.leaveHoursForDate(
+            {
+              type: approvedLeave.type,
+              startDate: start,
+              endDate: end,
+            },
+            date,
+          );
+          leaveHoursByDate.set(key, Math.min(DAILY_CAPACITY, (leaveHoursByDate.get(key) ?? 0) + blockedHours));
+        }
+      }
+
+      const availableCapacity = (date: Date): number => {
+        const key = this.dateKey(date);
+        if (this.isWeekend(date) || holidayKeys.has(key)) return 0;
+        const leaveHours = leaveHoursByDate.get(key) ?? 0;
+        if (leaveHours >= DAILY_CAPACITY) return 0;
+        return Math.max(0, DAILY_CAPACITY - leaveHours);
+      };
+
+      const movedRows: Array<{
+        id: string;
+        fromWeekStartDate: Date;
+        toWeekStartDate: Date;
+        toWeekEndDate: Date;
+        toDayIndex: number;
+        fromDate: string;
+        toDate: string;
+      }> = [];
+      const plannedUsage = new Map<string, number>();
+      let cursorDate = new Date(leaveStart);
+
+      for (const entry of datedRows) {
+        const assignedHours = this.toHours(entry.row.assignedHours);
+        if (assignedHours > DAILY_CAPACITY) {
+          throw new BadRequestException(`Assignment ${entry.row.id} exceeds normal daily capacity.`);
+        }
+
+        let targetDate = new Date(cursorDate);
+        while ((plannedUsage.get(this.dateKey(targetDate)) ?? 0) + assignedHours > availableCapacity(targetDate)) {
+          targetDate = this.addUtcDays(targetDate, 1);
+          if (targetDate > horizonEnd) {
+            throw new BadRequestException('Could not find an available working day for leave revocation rescheduling.');
+          }
+        }
+
+        const targetKey = this.dateKey(targetDate);
+        plannedUsage.set(targetKey, (plannedUsage.get(targetKey) ?? 0) + assignedHours);
+        cursorDate = targetDate;
+
+        if (this.sameUtcDate(targetDate, entry.date)) continue;
+
+        const toWeekStartDate = this.weekStartForDate(targetDate);
+        movedRows.push({
+          id: entry.row.id,
+          fromWeekStartDate: this.weekStartForDate(entry.date),
+          toWeekStartDate,
+          toWeekEndDate: this.weekEndForWeekStart(toWeekStartDate),
+          toDayIndex: this.dayIndexForDate(targetDate, toWeekStartDate),
+          fromDate: this.dateKey(entry.date),
+          toDate: targetKey,
+        });
+      }
+
+      if (movedRows.length === 0) {
+        return { movedCount: 0, affectedWeeks: [] as string[] };
+      }
+
+      const affectedWeekByKey = new Map<string, Date>();
+      for (const row of movedRows) {
+        affectedWeekByKey.set(this.dateKey(row.fromWeekStartDate), row.fromWeekStartDate);
+        affectedWeekByKey.set(this.dateKey(row.toWeekStartDate), row.toWeekStartDate);
+      }
+      const affectedWeeks = [...affectedWeekByKey.values()].sort((a, b) => a.getTime() - b.getTime());
+
+      const beforeRows = await tx.schedulerAssignment.findMany({
+        where: { weekStartDate: { in: affectedWeeks } },
+        orderBy: [
+          { designerId: 'asc' },
+          { dayIndex: 'asc' },
+          { position: 'asc' } as unknown as Prisma.SchedulerAssignmentOrderByWithRelationInput,
+          { id: 'asc' },
+        ],
+      });
+      const beforeRowsByWeek = new Map<string, unknown[]>();
+      for (const row of beforeRows) {
+        const key = row.weekStartDate ? this.dateKey(new Date(row.weekStartDate)) : '';
+        if (!key) continue;
+        const rows = beforeRowsByWeek.get(key) ?? [];
+        rows.push(row);
+        beforeRowsByWeek.set(key, rows);
+      }
+
+      for (const row of movedRows) {
+        await tx.schedulerAssignment.update({
+          where: { id: row.id },
+          data: {
+            weekStartDate: row.toWeekStartDate,
+            weekEndDate: row.toWeekEndDate,
+            dayIndex: row.toDayIndex,
+            assignedBy: actorUserId,
+          },
+        });
+      }
+
+      const afterRows = await tx.schedulerAssignment.findMany({
+        where: { weekStartDate: { in: affectedWeeks } },
+        orderBy: [
+          { designerId: 'asc' },
+          { dayIndex: 'asc' },
+          { position: 'asc' } as unknown as Prisma.SchedulerAssignmentOrderByWithRelationInput,
+          { id: 'asc' },
+        ],
+      });
+      const afterRowsByWeek = new Map<string, unknown[]>();
+      for (const row of afterRows) {
+        const key = row.weekStartDate ? this.dateKey(new Date(row.weekStartDate)) : '';
+        if (!key) continue;
+        const rows = afterRowsByWeek.get(key) ?? [];
+        rows.push(row);
+        afterRowsByWeek.set(key, rows);
+      }
+
+      for (const weekStartDate of affectedWeeks) {
+        const key = this.dateKey(weekStartDate);
+        const existingWeek = await tx.schedulerWeek.findUnique({ where: { weekStartDate } });
+        const versionFrom = existingWeek?.version ?? 0;
+        const versionTo = versionFrom + 1;
+        if (existingWeek) {
+          await tx.schedulerWeek.update({
+            where: { weekStartDate },
+            data: {
+              version: { increment: 1 },
+              updatedBy: actorUserId,
+              lastPayloadHash: null,
+            },
+          });
+        } else {
+          await tx.schedulerWeek.create({
+            data: {
+              weekStartDate,
+              version: versionTo,
+              isLocked: false,
+              updatedBy: actorUserId,
+              lastPayloadHash: null,
+            },
+          });
+        }
+
+        await tx.schedulerAssignmentHistory.create({
+          data: {
+            weekStartDate,
+            versionFrom,
+            versionTo,
+            changedBy: actorUserId,
+            beforeJson: JSON.stringify(beforeRowsByWeek.get(key) ?? []),
+            afterJson: JSON.stringify(afterRowsByWeek.get(key) ?? []),
+          },
+        });
+      }
+
+      return {
+        movedCount: movedRows.length,
+        affectedWeeks: affectedWeeks.map((date) => this.dateKey(date)),
+      };
+    });
+
+    if (result.movedCount > 0) {
+      await this.activityLogger.log({
+        action: ActivityAction.SCHEDULER_LEAVE_RESCHEDULED,
+        userId: actorUserId,
+        details: {
+          event: ActivityAction.SCHEDULER_LEAVE_RESCHEDULED,
+          messageKey: 'scheduler_leave_rescheduled',
+          changes: {
+            movedAssignments: result.movedCount,
+            affectedWeeks: result.affectedWeeks,
+          },
+          context: {
+            source: 'leave.revocation',
+            leaveRequestId: leave.id ?? null,
+            designerId: leave.userId,
+            startDate: this.dateKey(leaveStart),
+            endDate: this.dateKey(leaveEnd),
+          },
+        },
+      });
+      this.dashboardRealtime?.notifyOverviewRefresh('scheduler_leave_rescheduled');
+      this.dashboardRealtime?.notifyUserNotificationRefresh(leave.userId);
+    }
+
+    return result;
+  }
+
   private stablePayloadHash(assignments: SaveSchedulerWeekDto['assignments']): string {
     const normalized = assignments
       .map((a) => ({
@@ -250,26 +1360,71 @@ export class SchedulerAssignmentsService {
     try {
       const rows = await this.prisma.schedulerAssignment.findMany({
         where: { weekStartDate, ...(designerId ? { designerId } : {}) },
-        orderBy: [{ designerId: 'asc' }, { dayIndex: 'asc' }, { position: 'asc' }, { id: 'asc' }],
+        orderBy: [
+          { designerId: 'asc' },
+          { dayIndex: 'asc' },
+          { position: 'asc' } as unknown as Prisma.SchedulerAssignmentOrderByWithRelationInput,
+          { id: 'asc' },
+        ],
       });
 
       const weekEndDate = new Date(weekStartDate);
       weekEndDate.setUTCDate(weekEndDate.getUTCDate() + 6);
-      const approvedRequests = await this.prisma.overtimeRequest.findMany({
-        where: {
-          status: 'APPROVED',
-          date: { gte: weekStartDate, lte: weekEndDate },
-          ...(designerId ? { designerId } : {}),
-        },
-        select: {
-          id: true,
-          designerId: true,
-          taskId: true,
-          date: true,
-          approvedHours: true,
-        },
-        orderBy: { approvedAt: 'asc' },
-      });
+      const [approvedRequests, approvedLeaves, approvedRegularizations] = await Promise.all([
+        this.prisma.overtimeRequest.findMany({
+          where: {
+            status: 'APPROVED',
+            date: { gte: weekStartDate, lte: weekEndDate },
+            ...(designerId ? { designerId } : {}),
+          },
+          select: {
+            id: true,
+            designerId: true,
+            taskId: true,
+            date: true,
+            approvedHours: true,
+          },
+          orderBy: { approvedAt: 'asc' },
+        }),
+        this.prisma.leaveRequest.findMany({
+          where: {
+            status: { in: ['Approved', 'APPROVED', 'approved'] },
+            revokedAt: null,
+            startDate: { lte: weekEndDate },
+            OR: [{ endDate: null }, { endDate: { gte: weekStartDate } }],
+            ...(designerId ? { userId: designerId } : {}),
+          },
+          select: {
+            id: true,
+            userId: true,
+            type: true,
+            startDate: true,
+            endDate: true,
+            halfDaySession: true,
+            status: true,
+            user: { select: { fullName: true } },
+          },
+          orderBy: { startDate: 'asc' },
+        }),
+        this.prisma.regularizationRequest.findMany({
+          where: {
+            status: { in: ['Approved', 'APPROVED', 'approved'] },
+            date: { gte: weekStartDate, lte: weekEndDate },
+            ...(designerId ? { designerId } : {}),
+          },
+          select: {
+            id: true,
+            designerId: true,
+            taskId: true,
+            date: true,
+            duration: true,
+            reason: true,
+            status: true,
+            task: { select: { taskNo: true, title: true, opNo: true } },
+          },
+          orderBy: { reviewedAt: 'asc' },
+        }),
+      ]);
 
       const approvedByAssignmentKey = new Map<string, { hours: number; requestIds: string[] }>();
       for (const request of approvedRequests) {
@@ -340,7 +1495,12 @@ export class SchedulerAssignmentsService {
         })
         .filter((row): row is SchedulerAssignmentDto => row != null);
 
-      return [...mappedRows, ...virtualRows];
+      return [
+        ...mappedRows,
+        ...virtualRows,
+        ...this.buildLeaveSystemRows(approvedLeaves, weekStartDate, weekEndDate),
+        ...this.buildRegularizationSystemRows(approvedRegularizations, weekStartDate, weekEndDate),
+      ];
     } catch (err) {
       this.fail('Scheduler assignments query failed', err);
     }
@@ -509,7 +1669,7 @@ export class SchedulerAssignmentsService {
       const designerIds = Array.from(new Set(dto.assignments.map((a) => a.designerId)));
       const taskIds = Array.from(new Set(dto.assignments.map((a) => a.taskId)));
 
-      const [schedulableUsers, tasks, previousRows, weekRows] = await Promise.all([
+      const [schedulableUsers, tasks, previousRows, weekRows, approvedLeaves] = await Promise.all([
         tx.user.findMany({
           where: { id: { in: designerIds }, role: { name: { in: [UserRole.DESIGNER, UserRole.HOD] } } },
           select: { id: true },
@@ -528,6 +1688,23 @@ export class SchedulerAssignmentsService {
         }>>`SELECT id, version, isLocked, lastPayloadHash, updatedAt, updatedBy
             FROM ErpTSSchedulerWeek WITH (UPDLOCK, ROWLOCK)
             WHERE weekStartDate = ${weekStartDate}`,
+        tx.leaveRequest.findMany({
+          where: {
+            userId: { in: designerIds },
+            status: { in: ['Approved', 'APPROVED', 'approved'] },
+            revokedAt: null,
+            startDate: { lte: weekEndDate },
+            OR: [{ endDate: null }, { endDate: { gte: weekStartDate } }],
+          },
+          select: {
+            id: true,
+            userId: true,
+            type: true,
+            startDate: true,
+            endDate: true,
+            user: { select: { fullName: true } },
+          },
+        }),
       ]);
       const week = weekRows[0] ?? null;
 
@@ -554,6 +1731,8 @@ export class SchedulerAssignmentsService {
       if (dto.version !== existing.version) {
         throw new ConflictException('Scheduler week has changed. Refresh and retry.');
       }
+
+      this.assertNoApprovedFullDayLeaveConflicts(dto.assignments, approvedLeaves, weekStartDate);
 
       if (existing.lastPayloadHash && existing.lastPayloadHash === payloadHash) {
         return {
@@ -808,7 +1987,12 @@ export class SchedulerAssignmentsService {
 
       const newRows = await tx.schedulerAssignment.findMany({
         where: { weekStartDate },
-        orderBy: [{ designerId: 'asc' }, { dayIndex: 'asc' }, { position: 'asc' }, { id: 'asc' }],
+        orderBy: [
+          { designerId: 'asc' },
+          { dayIndex: 'asc' },
+          { position: 'asc' } as unknown as Prisma.SchedulerAssignmentOrderByWithRelationInput,
+          { id: 'asc' },
+        ],
       });
 
       return {

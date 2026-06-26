@@ -88,6 +88,89 @@ export class RegularizationRequestsService implements RegularizationRequestsCont
     return `${yyyy}-${mm}-${dd}`;
   }
 
+  private getStartOfWeek(date: Date): Date {
+    const d = new Date(Date.UTC(date.getUTCFullYear(), date.getUTCMonth(), date.getUTCDate()));
+    const day = d.getUTCDay();
+    const diff = d.getUTCDate() - day + (day === 0 ? -6 : 1);
+    d.setUTCDate(diff);
+    d.setUTCHours(0, 0, 0, 0);
+    return d;
+  }
+
+  private dayIndexForDate(date: Date, weekStartDate: Date): number {
+    const dateUtc = Date.UTC(date.getUTCFullYear(), date.getUTCMonth(), date.getUTCDate());
+    const weekUtc = Date.UTC(
+      weekStartDate.getUTCFullYear(),
+      weekStartDate.getUTCMonth(),
+      weekStartDate.getUTCDate(),
+    );
+    return Math.floor((dateUtc - weekUtc) / 86_400_000);
+  }
+
+  private parseDateOnly(dateStr: string, fieldName: string): Date {
+    const trimmed = String(dateStr ?? '').trim();
+    if (!/^\d{4}-\d{2}-\d{2}$/.test(trimmed)) {
+      throw new BadRequestException(`${fieldName} must be YYYY-MM-DD.`);
+    }
+    const date = new Date(`${trimmed}T00:00:00.000Z`);
+    if (Number.isNaN(date.getTime())) {
+      throw new BadRequestException(`Invalid ${fieldName}.`);
+    }
+    return date;
+  }
+
+  private async assertTaskScheduledForDate(
+    designerId: string,
+    taskId: string,
+    dateStr: string,
+  ): Promise<void> {
+    const requestDate = new Date(`${dateStr}T00:00:00.000Z`);
+    if (Number.isNaN(requestDate.getTime())) {
+      throw new BadRequestException('Invalid regularization date.');
+    }
+    const weekStartDate = this.getStartOfWeek(requestDate);
+    const dayIndex = this.dayIndexForDate(requestDate, weekStartDate);
+    const assignment = await this.prisma.schedulerAssignment.findFirst({
+      where: {
+        designerId,
+        taskId,
+        weekStartDate,
+        dayIndex,
+      },
+      select: { id: true },
+    });
+    if (!assignment) {
+      throw new ForbiddenException(
+        'You can only submit regularization for tasks assigned to you on the selected date.',
+      );
+    }
+  }
+
+  private async touchSchedulerWeekForRegularization(
+    request: { date?: Date | string | null },
+    userId: string,
+  ): Promise<void> {
+    if (!request.date) return;
+    const date = request.date instanceof Date ? request.date : new Date(request.date);
+    if (Number.isNaN(date.getTime())) return;
+    const weekStartDate = this.getStartOfWeek(date);
+    await this.prisma.schedulerWeek.upsert({
+      where: { weekStartDate },
+      create: {
+        weekStartDate,
+        version: 1,
+        isLocked: false,
+        updatedBy: userId,
+        lastPayloadHash: null,
+      },
+      update: {
+        version: { increment: 1 },
+        updatedBy: userId,
+        lastPayloadHash: null,
+      },
+    });
+  }
+
   private mapStatus(db: string | null | undefined): RegularizationRequestView['status'] {
     const t = (db ?? '').trim().toLowerCase();
     if (t === 'approved') return 'Approved';
@@ -260,41 +343,37 @@ export class RegularizationRequestsService implements RegularizationRequestsCont
     }
   }
 
-  async listTaskOptions(designerId: string): Promise<RegularizationTaskOption[]> {
+  async listTaskOptions(designerId: string, dateStr: string): Promise<RegularizationTaskOption[]> {
     if (!isUuidString(designerId)) {
       throw new BadRequestException(
         'designerId must be a UUID matching ErpTSRegularizationRequest.designerId (uniqueidentifier).',
       );
     }
 
-    let historicalTaskIds: string[] = [];
-    try {
-      const historicalRequests = await this.prisma.regularizationRequest.findMany({
-        where: { designerId, taskId: { not: null } },
-        select: { taskId: true },
-        distinct: ['taskId'],
-      });
-      historicalTaskIds = historicalRequests.map((r) => r.taskId!).filter(Boolean);
-    } catch (err) {
-      this.logger.warn(
-        `Regularization historical task ids: ${err instanceof Error ? err.message : err}`,
-      );
-    }
+    const requestDate = this.parseDateOnly(dateStr, 'date');
+    const weekStartDate = this.getStartOfWeek(requestDate);
+    const dayIndex = this.dayIndexForDate(requestDate, weekStartDate);
 
-    const tasks = await this.prisma.task.findMany({
+    const rows = await this.prisma.schedulerAssignment.findMany({
       where: {
-        OR: [
-          { assigneeId: designerId },
-          ...(historicalTaskIds.length > 0 ? [{ id: { in: historicalTaskIds } }] : []),
-        ],
+        designerId,
+        weekStartDate,
+        dayIndex,
+        taskId: { not: null },
       },
-      select: { id: true, title: true, taskNo: true, opNo: true },
-      orderBy: { updatedAt: 'desc' },
-      take: 500,
+      include: {
+        task: { select: { id: true, title: true, taskNo: true, opNo: true } },
+      },
+      orderBy: [
+        { position: 'asc' },
+        { id: 'asc' },
+      ],
     });
 
     const byId = new Map<string, RegularizationTaskOption>();
-    for (const task of tasks) {
+    for (const row of rows) {
+      const task = row.task;
+      if (!task || byId.has(task.id)) continue;
       byId.set(task.id, {
         id: task.id,
         name: this.formatTaskDisplay({
@@ -475,15 +554,19 @@ export class RegularizationRequestsService implements RegularizationRequestsCont
         select: { id: true, taskNo: true, title: true },
       });
       if (!task) throw new BadRequestException('Task not found');
+      await this.assertTaskScheduledForDate(dto.designerId, dto.taskId, dto.date);
     }
 
     const hods = await this.findDepartmentHods(designer.departmentId);
     const assignedHodId = hods[0]?.id ?? null;
-    const hodOnBehalf = role === UserRole.HOD && submitterId !== dto.designerId;
-    const status = hodOnBehalf ? 'Approved' : dto.status?.trim() || 'Pending';
-    const reviewedAt = hodOnBehalf ? new Date() : undefined;
-    const approverRemarks = hodOnBehalf
-      ? 'Auto-approved by system (HOD submission on behalf of designer)'
+    const hodAutoApprove = role === UserRole.HOD;
+    const hodOnBehalf = hodAutoApprove && submitterId !== dto.designerId;
+    const status = hodAutoApprove ? 'Approved' : dto.status?.trim() || 'Pending';
+    const reviewedAt = hodAutoApprove ? new Date() : undefined;
+    const approverRemarks = hodAutoApprove
+      ? hodOnBehalf
+        ? 'Auto-approved by system (HOD submission on behalf of designer)'
+        : 'Auto-approved by system (HOD submission)'
       : undefined;
 
     const newRow = await this.prisma.regularizationRequest.create({
@@ -495,7 +578,7 @@ export class RegularizationRequestsService implements RegularizationRequestsCont
         reason: dto.reason,
         notes: storedNotes,
         status,
-        approverId: hodOnBehalf ? submitterId : assignedHodId,
+        approverId: hodAutoApprove ? submitterId : assignedHodId,
         approverRemarks: approverRemarks ?? null,
         reviewedAt,
       },
@@ -504,10 +587,10 @@ export class RegularizationRequestsService implements RegularizationRequestsCont
 
     const request = this.mapRow(newRow);
 
-    const submitAction = hodOnBehalf
+    const submitAction = hodAutoApprove
       ? ActivityAction.REGULARIZATION_AUTO_APPROVED
       : ActivityAction.REGULARIZATION_SUBMITTED;
-    const submitMessageKey = hodOnBehalf
+    const submitMessageKey = hodAutoApprove
       ? 'regularization_auto_approved'
       : 'regularization_submitted';
 
@@ -524,9 +607,10 @@ export class RegularizationRequestsService implements RegularizationRequestsCont
           reason: dto.reason,
           status,
           regularizationType: regType,
-          autoApproved: hodOnBehalf,
-          submittedByHod: hodOnBehalf,
+          autoApproved: hodAutoApprove,
+          submittedByHod: hodAutoApprove,
           beneficiaryDesignerId: dto.designerId,
+          submittedOnBehalf: hodOnBehalf,
         },
         taskSnapshot: task
           ? { id: task.id, taskNo: task.taskNo ?? undefined, title: task.title ?? undefined }
@@ -539,18 +623,21 @@ export class RegularizationRequestsService implements RegularizationRequestsCont
           departmentId: designer.departmentId ?? null,
           designerName: designer.fullName,
           requesterName: designer.fullName,
-          recipientName: hodOnBehalf ? designer.fullName : hods[0]?.fullName ?? 'HOD',
-          approverName: hodOnBehalf ? undefined : hods[0]?.fullName ?? undefined,
+          recipientName: hodAutoApprove ? designer.fullName : hods[0]?.fullName ?? 'HOD',
+          approverName: hodAutoApprove ? undefined : hods[0]?.fullName ?? undefined,
           submitterId,
           submitterRole: role,
         },
       },
     });
 
-    if (hodOnBehalf) {
-      await this.notifyDesigner(request, 'Approved', approverRemarks).catch((err) => {
-        this.logger.warn(`Failed to notify designer: ${err instanceof Error ? err.message : err}`);
-      });
+    if (hodAutoApprove) {
+      if (hodOnBehalf) {
+        await this.notifyDesigner(request, 'Approved', approverRemarks).catch((err) => {
+          this.logger.warn(`Failed to notify designer: ${err instanceof Error ? err.message : err}`);
+        });
+      }
+      await this.touchSchedulerWeekForRegularization(newRow, submitterId);
       this.dashboardRealtime?.notifyOverviewRefresh('regularization_approved');
       if (dto.designerId) {
         this.dashboardRealtime?.notifyUserNotificationRefresh(dto.designerId);
@@ -640,6 +727,9 @@ export class RegularizationRequestsService implements RegularizationRequestsCont
       this.logger.warn(`Failed to notify designer: ${err instanceof Error ? err.message : err}`);
     });
 
+    if (dto.status === 'Approved') {
+      await this.touchSchedulerWeekForRegularization(updatedRow, reviewerId);
+    }
     this.dashboardRealtime?.notifyOverviewRefresh(
       dto.status === 'Approved' ? 'regularization_approved' : 'regularization_rejected',
     );

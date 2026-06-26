@@ -907,17 +907,18 @@ export class TasksService {
 
     // Role-based base filters
     const baseWhere: Record<string, unknown> = role === UserRole.SALESPERSON ? { status: 'SALES_REVIEW' } : {};
+    const addAndFilter = (condition: Record<string, unknown>) => {
+      baseWhere.AND = [...((baseWhere.AND as Record<string, unknown>[] | undefined) ?? []), condition];
+    };
 
     if (role === UserRole.DESIGNER) {
       // Include tasks assigned directly OR via the junction table (split tasks)
-      baseWhere.AND = [
-        {
-          OR: [
-            { assigneeId: userId },
-            { taskDesigners: { some: { designerId: userId } } },
-          ],
-        },
-      ];
+      addAndFilter({
+        OR: [
+          { assigneeId: userId },
+          { taskDesigners: { some: { designerId: userId } } },
+        ],
+      });
     }
 
     if (role === UserRole.QS) {
@@ -937,18 +938,21 @@ export class TasksService {
     if (projectId) baseWhere.projectId = projectId;
     if (status) baseWhere.status = this.toDbTaskStatus(status);
     if (priority) baseWhere.priority = priority;
-    if (assigneeId) baseWhere.assigneeId = assigneeId;
+    if (assigneeId) {
+      addAndFilter({
+        OR: [
+          { assigneeId },
+          { taskDesigners: { some: { designerId: assigneeId } } },
+        ],
+      });
+    }
     if (search) {
       const searchOr = [
         { title: { contains: search } },
         { opNo: { contains: search } },
         { description: { contains: search } },
       ];
-      if (baseWhere.AND) {
-        (baseWhere.AND as any[]).push({ OR: searchOr });
-      } else {
-        baseWhere.OR = searchOr;
-      }
+      addAndFilter({ OR: searchOr });
     }
 
     const [data, total] = await Promise.all([

@@ -609,6 +609,16 @@ model SchedulerAssignmentHistory {
   @@map("ErpTSSchedulerAssignmentHistory")
 }
 
+model Holiday {
+  id        String   @id @default(dbgenerated("newid()")) @db.UniqueIdentifier
+  date      DateTime @unique @db.Date
+  name      String?  @db.NVarChar(255)
+  createdAt DateTime @default(dbgenerated("sysutcdatetime()"))
+  updatedAt DateTime @default(dbgenerated("sysutcdatetime()")) @updatedAt
+
+  @@map("ErpTSHoliday")
+}
+
 // ---------------------------------------------------------
 // ACTIVITY & NOTIFICATIONS
 // ---------------------------------------------------------
