@@ -9,7 +9,12 @@ import { UpdateOvertimeRequestDto } from './dto/update-overtime-request.dto';
 import { ReviewOvertimeRequestDto } from './dto/review-overtime-request.dto';
 import { UserRole } from '../common/constants/roles.enum';
 import { assertOvertimeDateIsToday } from '../common/utils/date-window.util';
-import { LEAVE_TYPE_HALF_DAY, normalizeLeaveType } from '../requests/leave-request.validation';
+import {
+  HALF_DAY_SESSION_SECOND,
+  LEAVE_TYPE_HALF_DAY,
+  normalizeHalfDaySession,
+  normalizeLeaveType,
+} from '../requests/leave-request.validation';
 import { Decimal } from '@prisma/client/runtime/library';
 import { DashboardRealtimeService } from '../dashboard/dashboard-realtime.service';
 
@@ -96,7 +101,7 @@ export class OvertimeRequestsService {
     return { dayStart, dayEnd };
   }
 
-  private async assertNoApprovedFullDayLeave(designerId: string, date: Date): Promise<void> {
+  private async assertNoApprovedLeaveBlockingOvertime(designerId: string, date: Date): Promise<void> {
     const { dayStart, dayEnd } = this.getDayWindow(date);
     const leaves = await this.prisma.leaveRequest.findMany({
       where: {
@@ -109,19 +114,21 @@ export class OvertimeRequestsService {
       select: {
         id: true,
         type: true,
+        halfDaySession: true,
         startDate: true,
         endDate: true,
       },
     });
 
-    const hasFullDayLeave = leaves.some((leave) => {
+    const hasBlockingLeave = leaves.some((leave) => {
       const type = normalizeLeaveType(leave.type ?? '') ?? 'Full Day';
-      return type !== LEAVE_TYPE_HALF_DAY;
+      if (type !== LEAVE_TYPE_HALF_DAY) return true;
+      return normalizeHalfDaySession(leave.halfDaySession) === HALF_DAY_SESSION_SECOND;
     });
 
-    if (hasFullDayLeave) {
+    if (hasBlockingLeave) {
       throw new BadRequestException(
-        'Cannot allocate overtime because the designer has approved full-day leave for this date.',
+        'Cannot allocate overtime because the designer has approved full-day or second-half leave for this date.',
       );
     }
   }
@@ -195,7 +202,7 @@ export class OvertimeRequestsService {
     const startMinutes = this.timeToMinutes(startTime);
     const endMinutes = this.timeToMinutes(endTime);
 
-    await this.assertNoApprovedFullDayLeave(designerId, requestDate);
+    await this.assertNoApprovedLeaveBlockingOvertime(designerId, requestDate);
 
     // 1. Start/End Time Validation
     if (endMinutes <= startMinutes) {
@@ -630,8 +637,9 @@ export class OvertimeRequestsService {
     const totalHours = new Decimal(
       (this.timeToMinutes(schedule.endTime) - this.timeToMinutes(schedule.startTime)) / 60,
     );
-    const hodOnBehalf = creatorRole === UserRole.HOD && creatorId !== designerId;
-    const status = hodOnBehalf ? 'APPROVED' : this.normalizeCreateStatus(dto.status);
+    const hodAutoApprove = creatorRole === UserRole.HOD;
+    const hodOnBehalf = hodAutoApprove && creatorId !== designerId;
+    const status = hodAutoApprove ? 'APPROVED' : this.normalizeCreateStatus(dto.status);
     const now = new Date();
 
     const request = await this.prisma.overtimeRequest.create({
@@ -646,12 +654,14 @@ export class OvertimeRequestsService {
         estimatedRemaining: dto.estimatedRemaining?.trim() || null,
         reason: dto.reason,
         status,
-        ...(hodOnBehalf
+        ...(hodAutoApprove
           ? {
               approvedById: creatorId,
               approvedAt: now,
               approvedHours: totalHours,
-              managerComments: 'Auto-approved by system (HOD submission on behalf of designer)',
+              managerComments: hodOnBehalf
+                ? 'Auto-approved by system (HOD submission on behalf of designer)'
+                : 'Auto-approved by system (HOD submission)',
             }
           : {}),
       },
@@ -678,14 +688,16 @@ export class OvertimeRequestsService {
       );
     }
 
-    if (hodOnBehalf) {
+    if (hodAutoApprove) {
       try {
         await this.prisma.overtimeApprovalHistory.create({
           data: {
             requestId: request.id,
             action: 'APPROVED',
             actionById: creatorId,
-            comments: 'Auto-approved by system (HOD submission on behalf of designer)',
+            comments: hodOnBehalf
+              ? 'Auto-approved by system (HOD submission on behalf of designer)'
+              : 'Auto-approved by system (HOD submission)',
           },
         });
       } catch (err) {
@@ -700,15 +712,18 @@ export class OvertimeRequestsService {
           autoApproved: true,
           submittedByHod: true,
           beneficiaryDesignerId: designerId,
+          submittedOnBehalf: hodOnBehalf,
         },
       });
-      await this.notifyDesignerOfReview(
-        request,
-        'APPROVED',
-        'Auto-approved by system (HOD submission on behalf of designer)',
-      ).catch((err) => {
-        this.logger.warn(`Designer OT notification failed: ${err instanceof Error ? err.message : err}`);
-      });
+      if (hodOnBehalf) {
+        await this.notifyDesignerOfReview(
+          request,
+          'APPROVED',
+          'Auto-approved by system (HOD submission on behalf of designer)',
+        ).catch((err) => {
+          this.logger.warn(`Designer OT notification failed: ${err instanceof Error ? err.message : err}`);
+        });
+      }
       await this.touchSchedulerWeekForOvertime(request, creatorId);
       this.dashboardRealtime?.notifyOverviewRefresh('overtime_approved');
       if (designerId) {
@@ -847,7 +862,7 @@ export class OvertimeRequestsService {
     if (request.designerId !== userId) throw new ForbiddenException('Access denied');
     if (request.status !== 'DRAFT') throw new BadRequestException('Request is already submitted');
     if (request.designerId && request.date) {
-      await this.assertNoApprovedFullDayLeave(request.designerId, new Date(request.date));
+      await this.assertNoApprovedLeaveBlockingOvertime(request.designerId, new Date(request.date));
     }
 
     const updated = await this.prisma.overtimeRequest.update({
@@ -1040,7 +1055,7 @@ export class OvertimeRequestsService {
         throw new BadRequestException('Request is not in a submittable state for review');
       }
       if (dto.status === 'APPROVED_BY_MANAGER' && request.designerId && request.date) {
-        await this.assertNoApprovedFullDayLeave(request.designerId, new Date(request.date));
+        await this.assertNoApprovedLeaveBlockingOvertime(request.designerId, new Date(request.date));
       }
 
       const updateData: any = {
