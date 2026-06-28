@@ -80,10 +80,10 @@ async function main(): Promise<void> {
       },
     });
   })();
-  await prisma.projectSignRow.deleteMany({ where: { taskId: completedTask.id } });
+  await prisma.projectSignRow.deleteMany({ where: { projectId: completedProject.id } });
   await prisma.projectSignRow.create({
     data: {
-      taskId: completedTask.id,
+      projectId: completedProject.id,
       tNo: 'QS-001',
       no: '1',
       signType: 'Completed Test Sign',
