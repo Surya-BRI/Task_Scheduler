@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
+import React, { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import { toast } from 'sonner'
 import { Ban, Calendar, CheckCircle2, ChevronLeft, CircleCheck, Clock3, ExternalLink, FileText, Flag, Hourglass, Info, Link, Pause, Pencil, RotateCcw, Shield, Trash2, Upload } from 'lucide-react'
 import { useParams, usePathname, useRouter, useSearchParams } from 'next/navigation'
@@ -78,6 +78,14 @@ function deriveFileNameFromUrl(value) {
   }
 }
 
+function friendlyError(error, fallback) {
+  const msg = error instanceof Error ? error.message : String(error ?? '')
+  if (msg.includes('should not be empty') || msg.includes('must be an integer') || msg.includes('must be a number')) {
+    return 'Please fill all required fields in each row before saving.'
+  }
+  return msg || fallback
+}
+
 function normalizeOptionalInteger(value, label, rowNumber) {
   const text = String(value ?? '').trim()
   if (!text) return undefined
@@ -88,7 +96,7 @@ function normalizeOptionalInteger(value, label, rowNumber) {
   return number
 }
 
-const SIGN_ROW_REQUIRED_FIELDS = [
+const SIGN_ROW_SUBMIT_REQUIRED = [
   ['tNo', 'T.No'],
   ['no', 'No'],
   ['signType', 'Sign Type'],
@@ -102,32 +110,44 @@ const SIGN_ROW_REQUIRED_FIELDS = [
   ['contRef', 'Cont.Ref'],
 ]
 
+function normalizeSignRow(row, index) {
+  return {
+    id: row.id || undefined,
+    tNo: String(row.tNo ?? '').trim(),
+    no: String(row.no ?? '').trim(),
+    signType: String(row.signType ?? '').trim(),
+    planCode: String(row.planCode ?? '').trim(),
+    estQty: normalizeOptionalInteger(row.estQty, 'Est QTY', index + 1),
+    qsQty: normalizeOptionalInteger(row.qsQty, 'QS QTY', index + 1),
+    areaZone: String(row.areaZone ?? '').trim(),
+    levelParcel: String(row.levelParcel ?? '').trim(),
+    sequence: String(row.sequence ?? '').trim(),
+    status: String(row.status ?? '').trim(),
+    comment: String(row.comment ?? '').trim() || undefined,
+    contRef: String(row.contRef ?? '').trim(),
+    signFamily: String(row.signFamily ?? '').trim() || undefined,
+  }
+}
+
 function normalizeSignRowsForSave(rows) {
   if (!Array.isArray(rows) || rows.length === 0) {
-    throw new Error('Add at least one complete sign row before saving.')
+    throw new Error('Add at least one sign row before saving.')
+  }
+  return rows.map((row, index) => normalizeSignRow(row, index))
+}
+
+function normalizeSignRowsForSubmit(rows) {
+  if (!Array.isArray(rows) || rows.length === 0) {
+    throw new Error('Add at least one complete sign row before submitting.')
   }
   return rows.map((row, index) => {
-    for (const [field, label] of SIGN_ROW_REQUIRED_FIELDS) {
+    for (const [field, label] of SIGN_ROW_SUBMIT_REQUIRED) {
       const value = row[field]
       if (value === null || value === undefined || String(value).trim() === '') {
         throw new Error(`${label} is required in row ${index + 1}.`)
       }
     }
-    return {
-      id: row.id || undefined,
-      tNo: String(row.tNo ?? '').trim(),
-      no: String(row.no ?? '').trim(),
-      signType: String(row.signType ?? '').trim(),
-      planCode: String(row.planCode ?? '').trim(),
-      estQty: normalizeOptionalInteger(row.estQty, 'Est QTY', index + 1),
-      qsQty: normalizeOptionalInteger(row.qsQty, 'QS QTY', index + 1),
-      areaZone: String(row.areaZone ?? '').trim(),
-      levelParcel: String(row.levelParcel ?? '').trim(),
-      sequence: String(row.sequence ?? '').trim(),
-      status: String(row.status ?? '').trim(),
-      comment: String(row.comment ?? '').trim() || undefined,
-      contRef: String(row.contRef ?? '').trim(),
-    }
+    return normalizeSignRow(row, index)
   })
 }
 
@@ -470,84 +490,6 @@ function FilesPanel({ projectId, files, uploading, resolvingProjectId, onPick, o
   )
 }
 
-function ProjectDetailsTable({ opNo }) {
-  const [rows, setRows] = useState([])
-  const [loading, setLoading] = useState(false)
-  const [error, setError] = useState('')
-
-  useEffect(() => {
-    if (!opNo) return
-    let alive = true
-    setLoading(true)
-    setError('')
-    apiClient
-      .get(`/design-list/project-sign-types?salesForceCode=${encodeURIComponent(opNo)}`)
-      .then((groups) => {
-        if (!alive) return
-        const flat = []
-        let idx = 1
-        for (const group of (Array.isArray(groups) ? groups : [])) {
-          for (const st of group.signTypes ?? []) {
-            flat.push({
-              no: idx++,
-              signfamily: group.signfamily,
-              signType: st.signCode,
-              estQty: st.quantity,
-              area: st.area,
-              description: st.description,
-              estimationStatus: st.estimationStatus,
-            })
-          }
-        }
-        setRows(flat)
-        if (flat.length === 0) setError('No approved sign types found in ERP for this project.')
-      })
-      .catch((err) => {
-        if (!alive) return
-        setError(err instanceof Error ? err.message : 'Failed to load sign types.')
-      })
-      .finally(() => { if (alive) setLoading(false) })
-    return () => { alive = false }
-  }, [opNo])
-
-  return (
-    <div className="mt-3 overflow-hidden rounded-md border border-slate-200">
-      <div className="grid grid-cols-[0.3fr_1fr_1.6fr_0.5fr_0.5fr_1fr_1fr] bg-slate-100 px-2 py-1 text-[11px] font-semibold text-slate-700">
-        <div>No</div>
-        <div>Sign Family</div>
-        <div>Sign Type</div>
-        <div>Est QTY</div>
-        <div>Area</div>
-        <div>Description</div>
-        <div>Status</div>
-      </div>
-      <div className="max-h-[260px] overflow-auto">
-        {loading ? (
-          <div className="px-3 py-6 text-center text-xs text-slate-400">Loading sign types from ERP…</div>
-        ) : error ? (
-          <div className="px-3 py-6 text-center text-xs text-red-500">{error}</div>
-        ) : rows.length === 0 ? (
-          <div className="px-3 py-6 text-center text-xs text-slate-400">No sign types available.</div>
-        ) : rows.map((row) => (
-          <div key={row.no} className="grid grid-cols-[0.3fr_1fr_1.6fr_0.5fr_0.5fr_1fr_1fr] items-center border-t border-slate-100 px-2 py-1 text-[11px] text-slate-800">
-            <div>{row.no}</div>
-            <div className="truncate text-slate-600">{row.signfamily}</div>
-            <div className="truncate font-medium">{row.signType}</div>
-            <div>{row.estQty}</div>
-            <div>{row.area > 0 ? row.area : '-'}</div>
-            <div className="truncate text-slate-600">{row.description || '-'}</div>
-            <div>
-              <span className="inline-flex rounded bg-teal-100 px-2 py-0.5 text-[10px] font-semibold text-teal-700">
-                {row.estimationStatus || '-'}
-              </span>
-            </div>
-          </div>
-        ))}
-      </div>
-    </div>
-  )
-}
-
 function ActivityTimelinePane({
   mode,
   onModeChange,
@@ -810,7 +752,7 @@ function mapProjectListRowToRecord(row) {
     id: String(row?.id ?? ''),
     taskId: row?.taskId ?? null,
     fromTaskApi: false,
-    opNo: row?.salesForceCode ?? row?.opNo ?? '-',
+    opNo: row?.salesForceCode ?? row?.opNo ?? row?.projectCode ?? row?.projectNo ?? '-',
     projectNo: row?.projectCode ?? row?.projectNo ?? '-',
     projectId: row?.projectId ?? row?.id ?? null,
     designType: row?.designType ?? row?.category ?? 'Project',
@@ -985,9 +927,11 @@ export function TaskDetailsPage() {
   const [teamSaving, setTeamSaving] = useState(false)
   const [hodUsers, setHodUsers] = useState([])
   const [signRows, setSignRows] = useState([])
+  const [signRowsLoading, setSignRowsLoading] = useState(false)
   const [signRowsSaving, setSignRowsSaving] = useState(false)
   const [qsStatus, setQsStatus] = useState(null)
   const [qsSubmitting, setQsSubmitting] = useState(false)
+  const [deleteConfirm, setDeleteConfirm] = useState(null) // { idx, family }
   const [projectId, setProjectId] = useState('')
   const [taskId, setTaskId] = useState('')
   const [projectFiles, setProjectFiles] = useState([])
@@ -1216,7 +1160,8 @@ export function TaskDetailsPage() {
   const isDesigner = _session?.role === 'DESIGNER'
   const normalizedQsStatus = String(qsStatus?.status ?? '').trim().toLowerCase()
   const isQsCompleted = normalizedQsStatus === 'completed'
-  const isQsReadOnly = isQsCompleted
+  const isQs = _session?.role === 'QS'
+  const isQsReadOnly = isQsCompleted || !isQs
   const hasReworkInstructions = Boolean(record?.previousRevisionTaskId)
   const showWorkflowStatusBlocks =
     DESIGN_WORKFLOW_SOURCES.has(from) || Boolean(pathname?.startsWith('/task-summary/'))
@@ -1259,7 +1204,7 @@ export function TaskDetailsPage() {
   }, [record?.projectNo, record?.projectId])
 
   useEffect(() => {
-    if (!isCreationRoute) return
+    if (!isCreationRoute || isQs) return
     apiClient
       .get('/users?role=HOD&limit=200')
       .then((res) => {
@@ -1267,7 +1212,7 @@ export function TaskDetailsPage() {
         setHodUsers(Array.isArray(list) ? list : [])
       })
       .catch(() => {})
-  }, [isCreationRoute])
+  }, [isCreationRoute, isQs])
 
   useEffect(() => {
     let alive = true
@@ -1317,25 +1262,62 @@ export function TaskDetailsPage() {
     setSubTeamLead(record.subTeamLead ?? '')
   }, [record, isCreationRoute])
 
+  const resolvedOpNo = String(record?.salesForceCode ?? record?.opNo ?? '').trim() || null
+
   useEffect(() => {
-    if (!taskId) {
+    if (!projectId) {
       setSignRows([])
       setQsStatus(null)
       return
     }
     let alive = true
+    setSignRowsLoading(true)
     Promise.all([
-      apiClient.get(`/tasks/${taskId}/sign-rows`).catch(() => []),
-      apiClient.get(`/tasks/${taskId}/qs-status`).catch(() => null),
-    ]).then(([rows, status]) => {
+      apiClient.get(`/projects/${projectId}/sign-rows`).catch(() => []),
+      apiClient.get(`/projects/${projectId}/qs-status`).catch(() => null),
+    ]).then(async ([rows, status]) => {
       if (!alive) return
-      setSignRows(Array.isArray(rows) ? rows : [])
+      let initialRows = Array.isArray(rows) ? rows : []
+
+      if (initialRows.length === 0 && resolvedOpNo && isQs) {
+        try {
+          const groups = await apiClient.get(`/design-list/project-sign-types?salesForceCode=${encodeURIComponent(resolvedOpNo)}`)
+          if (alive && Array.isArray(groups) && groups.length > 0) {
+            let idx = 1
+            initialRows = []
+            for (const group of groups) {
+              for (const st of group.signTypes ?? []) {
+                initialRows.push({
+                  no: String(idx++),
+                  signFamily: group.signfamily ?? '',
+                  signType: st.signCode ?? '',
+                  estQty: st.quantity ?? '',
+                  areaZone: st.area ? String(st.area) : '',
+                  status: st.estimationStatus ?? '',
+                  comment: st.description ?? '',
+                  tNo: '',
+                  planCode: '',
+                  qsQty: '',
+                  levelParcel: '',
+                  sequence: '',
+                  contRef: '',
+                })
+              }
+            }
+          }
+        } catch {
+          // leave empty if ERP unavailable
+        }
+      }
+
+      setSignRows(initialRows)
       setQsStatus(status)
+      if (alive) setSignRowsLoading(false)
     })
     return () => {
       alive = false
     }
-  }, [taskId])
+  }, [projectId, resolvedOpNo])
 
   const PROJECT_FILE_ACTIONS = new Set(['PROJECT_FILE_UPLOADED', 'PROJECT_FILE_DELETED'])
 
@@ -1797,7 +1779,7 @@ export function TaskDetailsPage() {
   }
 
   async function handleSaveSignRows() {
-    if (!taskId) return
+    if (!projectId) return
     if (isQsReadOnly) {
       toast.error('Completed QS projects are read-only.')
       return
@@ -1805,11 +1787,11 @@ export function TaskDetailsPage() {
     setSignRowsSaving(true)
     try {
       const rows = normalizeSignRowsForSave(signRows)
-      const saved = await apiClient.put(`/tasks/${taskId}/sign-rows`, {
+      const saved = await apiClient.put(`/projects/${projectId}/sign-rows`, {
         rows,
       })
-      const verified = await apiClient.get(`/tasks/${taskId}/sign-rows`)
-      const status = await apiClient.get(`/tasks/${taskId}/qs-status`).catch(() => null)
+      const verified = await apiClient.get(`/projects/${projectId}/sign-rows`)
+      const status = await apiClient.get(`/projects/${projectId}/qs-status`).catch(() => null)
       const nextRows = Array.isArray(verified) ? verified : (Array.isArray(saved) ? saved : [])
       setSignRows(nextRows)
       if (status) setQsStatus(status)
@@ -1819,29 +1801,29 @@ export function TaskDetailsPage() {
       toast.success(`Sign Family rows saved (${nextRows.length}).`)
       await fetchActivities({ append: false, cursor: null })
     } catch (error) {
-      toast.error(error instanceof Error ? error.message : 'Failed to save Sign Family rows')
+      toast.error(friendlyError(error, 'Failed to save sign rows'))
     } finally {
       setSignRowsSaving(false)
     }
   }
 
   async function handleSubmitQsUpdate() {
-    if (!taskId) return
+    if (!projectId) return
     if (isQsReadOnly) {
       toast.error('This QS update has already been submitted.')
       return
     }
     setQsSubmitting(true)
     try {
-      const rows = normalizeSignRowsForSave(signRows)
-      const response = await apiClient.post(`/tasks/${taskId}/qs-submit`, { rows })
-      const nextRows = Array.isArray(response?.rows) ? response.rows : await apiClient.get(`/tasks/${taskId}/sign-rows`)
+      const rows = normalizeSignRowsForSubmit(signRows)
+      const response = await apiClient.post(`/projects/${projectId}/qs-submit`, { rows })
+      const nextRows = Array.isArray(response?.rows) ? response.rows : await apiClient.get(`/projects/${projectId}/sign-rows`)
       setSignRows(Array.isArray(nextRows) ? nextRows : [])
       setQsStatus(response?.qsStatus ?? { status: response?.status ?? 'Completed' })
       toast.success('QS update submitted. Project is now read-only.')
       await fetchActivities({ append: false, cursor: null })
     } catch (error) {
-      toast.error(error instanceof Error ? error.message : 'Failed to submit QS update')
+      toast.error(friendlyError(error, 'Failed to submit QS update'))
     } finally {
       setQsSubmitting(false)
     }
@@ -2186,8 +2168,66 @@ export function TaskDetailsPage() {
                           </div>
                         </div>
                       )}
-                      {!isRetail ? (
-                        <div className="mt-4 border-t border-slate-200 pt-3">
+                    </div>
+                  ) : isRetail ? (
+                    <div className="mt-3 border-t border-slate-200 pt-3">
+                      <div className="grid gap-2.5 sm:grid-cols-2">
+                        <DatePickerField
+                          id="retail-submission"
+                          label="Date of Submission"
+                          selected={dateSubmission}
+                          onChange={setDateSubmission}
+                          minDate={today}
+                        />
+                      </div>
+                      {!isQs && (
+                      <div className="mt-2.5 flex justify-end">
+                        <button
+                          type="button"
+                          onClick={() => setCreateModalOpen(true)}
+                          className="rounded-md bg-[#10a6e3] px-5 py-1.5 text-xs font-semibold text-white shadow-sm transition hover:bg-[#0f96cd] focus:outline-none focus-visible:ring-2 focus-visible:ring-blue-500 focus-visible:ring-offset-2"
+                        >
+                          Create
+                        </button>
+                      </div>
+                      )}
+                    </div>
+                  ) : (
+                    <div className="mt-3 border-t border-slate-200 pt-3">
+                      <div className="grid gap-2.5 sm:grid-cols-2">
+                        <DatePickerField
+                          id="project-submission"
+                          label="Date of Submission"
+                          selected={dateSubmission}
+                          onChange={setDateSubmission}
+                          minDate={today}
+                        />
+                      </div>
+                      {!isQs && (
+                      <div className="mt-2.5 flex justify-end">
+                        <button
+                          type="button"
+                          onClick={() => setProjectCreateModalOpen(true)}
+                          className="rounded-md bg-[#10a6e3] px-5 py-1.5 text-xs font-semibold text-white shadow-sm transition hover:bg-[#0f96cd] focus:outline-none focus-visible:ring-2 focus-visible:ring-blue-500 focus-visible:ring-offset-2"
+                        >
+                          Create
+                        </button>
+                      </div>
+                      )}
+                    </div>
+                  )}
+
+                  {!isRetail && projectId ? (
+                    <div className="mt-4 border-t border-slate-200 pt-3">
+                      {!isQs && !isQsCompleted ? (
+                        <div className="flex items-center gap-2">
+                          <p className="text-xs font-semibold text-slate-700">Sign Rows</p>
+                          <span className="rounded-full border border-amber-200 bg-amber-50 px-2 py-0.5 text-[10px] font-semibold text-amber-700">
+                            Awaiting QS Submission
+                          </span>
+                        </div>
+                      ) : (
+                        <>
                           <div className="mb-2 flex items-center justify-between">
                             <div className="flex items-center gap-2">
                               <p className="text-xs font-semibold text-slate-700">Sign Rows</p>
@@ -2203,13 +2243,6 @@ export function TaskDetailsPage() {
                             </div>
                             {!isQsReadOnly ? (
                               <div className="flex gap-2">
-                                <button
-                                  type="button"
-                                  onClick={() => setSignRows((prev) => [...prev, { tNo: '', no: '', signType: '', planCode: '', estQty: '', qsQty: '', areaZone: '', levelParcel: '', sequence: '', status: '', comment: '', contRef: '' }])}
-                                  className="rounded border border-slate-300 bg-white px-2 py-1 text-[11px] font-medium text-slate-700 hover:bg-slate-50"
-                                >
-                                  + Add Row
-                                </button>
                                 <button
                                   type="button"
                                   onClick={handleSaveSignRows}
@@ -2233,90 +2266,107 @@ export function TaskDetailsPage() {
                             <table className="w-full text-[11px]">
                               <thead className="bg-slate-100 text-slate-600">
                                 <tr>
-                                  {['T.No','No','Sign Type','Plan Code','Est QTY','Qs QTY','Area/Zone','Level/Parcel','Sequence','Status','Comment','Cont.Ref',''].map((h) => (
-                                    <th key={h} className="px-2 py-1.5 text-left font-semibold whitespace-nowrap">{h}</th>
+                                  {['Sign Type','No','T.No','Est QTY','Qs QTY','Seq','Status','Cont.Ref',
+                                      'Plan Code','Area/Zone','Level/Parcel','Comment',''].map((h) => (
+                                    <th key={h} className="px-1.5 py-0.5 text-left text-[9px] font-semibold whitespace-nowrap border-r border-slate-200 last:border-r-0">{h}</th>
                                   ))}
                                 </tr>
                               </thead>
                               <tbody className="divide-y divide-slate-100">
-                                {signRows.length === 0 ? (
+                                {signRowsLoading ? (
+                                  Array.from({ length: 4 }).map((_, i) => (
+                                    <tr key={i} className="animate-pulse">
+                                      {Array.from({ length: 13 }).map((__, j) => (
+                                        <td key={j} className="px-1 py-1.5">
+                                          <div className="h-5 rounded bg-slate-200" />
+                                        </td>
+                                      ))}
+                                    </tr>
+                                  ))
+                                ) : signRows.length === 0 ? (
                                   <tr><td colSpan={13} className="px-3 py-6 text-center text-slate-500">No rows yet. Click + Add Row.</td></tr>
-                                ) : null}
-                                {signRows.map((row, idx) => (
-                                  <tr key={row.id ?? idx} className="hover:bg-slate-50">
-                                    {['tNo','no','signType','planCode','estQty','qsQty','areaZone','levelParcel','sequence','status','comment','contRef'].map((field) => (
-                                      <td key={field} className="px-1 py-0.5">
-                                        <input
-                                          value={row[field] ?? ''}
-                                          onChange={(e) => setSignRows((prev) => prev.map((r, i) => i === idx ? { ...r, [field]: e.target.value } : r))}
-                                          disabled={isQsReadOnly}
-                                          className="h-6 w-full min-w-[60px] rounded border border-slate-200 px-1.5 text-[11px] text-slate-900 focus:border-blue-400 focus:outline-none"
-                                        />
-                                      </td>
-                                    ))}
-                                    <td className="px-1 py-0.5">
+                                ) : (() => {
+                                  const signRowGroups = signRows.reduce((acc, row, idx) => {
+                                    const family = String(row.signFamily ?? '').trim() || 'Other'
+                                    let g = acc.find((x) => x.family === family)
+                                    if (!g) { g = { family, rows: [] }; acc.push(g) }
+                                    g.rows.push({ ...row, _idx: idx })
+                                    return acc
+                                  }, [])
+                                  return signRowGroups.map(({ family, rows }) => (
+                                    <React.Fragment key={`fam-${family}`}>
+                                      <tr>
+                                        <td className="pl-0 pr-2 py-1 bg-white">
+                                          <span className="inline-flex items-center border-l-4 border-l-blue-500 bg-slate-50 pl-2 pr-3 py-1 text-xs font-semibold uppercase tracking-wide text-blue-600">
+                                            {family}
+                                          </span>
+                                        </td>
+                                        <td colSpan={12} className="bg-white" />
+                                      </tr>
+                                      {rows.map((row) => (
+                                        <tr key={row.id ?? row._idx} className="hover:bg-slate-50">
+                                          {['signType','no','tNo','estQty','qsQty','sequence','status','contRef',
+                                              'planCode','areaZone','levelParcel','comment'].map((field) => (
+                                            <td key={field} className={`p-0 border-r border-slate-300 last:border-r-0${field === 'signType' ? ' relative group' : ''}`}>
+                                              <input
+                                                value={row[field] ?? ''}
+                                                onChange={(e) => setSignRows((prev) => prev.map((r, i) => i === row._idx ? { ...r, [field]: e.target.value } : r))}
+                                                disabled={isQsReadOnly}
+                                                className="h-6 w-full border border-slate-400 px-1.5 text-[11px] text-slate-900 focus:border-blue-500 focus:outline-none focus:ring-1 focus:ring-blue-300"
+                                              />
+                                              {field === 'signType' && row[field] && (
+                                                <div className="pointer-events-none absolute left-0 top-full z-50 mt-1 hidden max-w-[260px] rounded border border-slate-200 bg-white px-3 py-2 text-[11px] text-slate-800 shadow-lg group-hover:block">
+                                                  {row[field]}
+                                                </div>
+                                              )}
+                                            </td>
+                                          ))}
+                                          <td className="px-1 py-0.5">
+                                            {!isQsReadOnly ? (
+                                              <button
+                                                type="button"
+                                                onClick={() => setDeleteConfirm({ idx: row._idx, family })}
+                                                className="flex items-center justify-center rounded border border-red-200 bg-red-50 px-2 py-0.5 text-[11px] font-semibold text-red-500 transition-colors hover:border-red-500 hover:bg-red-500 hover:text-white"
+                                              >
+                                                Delete
+                                              </button>
+                                            ) : null}
+                                          </td>
+                                        </tr>
+                                      ))}
                                       {!isQsReadOnly ? (
-                                        <button
-                                          type="button"
-                                          onClick={() => setSignRows((prev) => prev.filter((_, i) => i !== idx))}
-                                          className="text-slate-400 hover:text-red-500"
-                                        >
-                                          ✕
-                                        </button>
+                                        <tr>
+                                          <td colSpan={13} className="px-0 py-0.5 bg-white">
+                                            <button
+                                              type="button"
+                                              onClick={() =>
+                                                setSignRows((prev) => {
+                                                  const lastInGroup = rows[rows.length - 1]
+                                                  const insertAt = lastInGroup ? lastInGroup._idx + 1 : prev.length
+                                                  const newRow = { tNo: '', no: '', signType: '', planCode: '', estQty: '', qsQty: '',
+                                                    areaZone: '', levelParcel: '', sequence: '', status: '', comment: '', contRef: '', signFamily: family === 'Other' ? '' : family }
+                                                  const next = [...prev]
+                                                  next.splice(insertAt, 0, newRow)
+                                                  return next
+                                                })
+                                              }
+                                              className="float-right mr-1 my-0.5 rounded px-2 py-0.5 text-[10px] font-semibold text-white bg-[#10a6e3] hover:bg-[#0f96cd]"
+                                            >
+                                              + Add Row
+                                            </button>
+                                          </td>
+                                        </tr>
                                       ) : null}
-                                    </td>
-                                  </tr>
-                                ))}
+                                    </React.Fragment>
+                                  ))
+                                })()}
                               </tbody>
                             </table>
                           </div>
-                        </div>
-                      ) : null}
+                        </>
+                      )}
                     </div>
-                  ) : isRetail ? (
-                    <div className="mt-3 border-t border-slate-200 pt-3">
-                      <div className="grid gap-2.5 sm:grid-cols-2">
-                        <DatePickerField
-                          id="retail-submission"
-                          label="Date of Submission"
-                          selected={dateSubmission}
-                          onChange={setDateSubmission}
-                          minDate={today}
-                        />
-                      </div>
-                      <div className="mt-2.5 flex justify-end">
-                        <button
-                          type="button"
-                          onClick={() => setCreateModalOpen(true)}
-                          className="rounded-md bg-[#10a6e3] px-5 py-1.5 text-xs font-semibold text-white shadow-sm transition hover:bg-[#0f96cd] focus:outline-none focus-visible:ring-2 focus-visible:ring-blue-500 focus-visible:ring-offset-2"
-                        >
-                          Create
-                        </button>
-                      </div>
-                    </div>
-                  ) : (
-                    <div className="mt-3 border-t border-slate-200 pt-3">
-                      <div className="grid gap-2.5 sm:grid-cols-2">
-                        <DatePickerField
-                          id="project-submission"
-                          label="Date of Submission"
-                          selected={dateSubmission}
-                          onChange={setDateSubmission}
-                          minDate={today}
-                        />
-                      </div>
-                      <ProjectDetailsTable opNo={record?.opNo} />
-                      <div className="mt-2.5 flex justify-end">
-                        <button
-                          type="button"
-                          onClick={() => setProjectCreateModalOpen(true)}
-                          className="rounded-md bg-[#10a6e3] px-5 py-1.5 text-xs font-semibold text-white shadow-sm transition hover:bg-[#0f96cd] focus:outline-none focus-visible:ring-2 focus-visible:ring-blue-500 focus-visible:ring-offset-2"
-                        >
-                          Create
-                        </button>
-                      </div>
-                    </div>
-                  )}
+                  ) : null}
 
                   {(isCreationRoute || !hasExistingTask) && isRetail ? (
                     <div className="mt-3 overflow-hidden rounded-md border border-slate-200">
@@ -2354,7 +2404,7 @@ export function TaskDetailsPage() {
                 />
               ) : null}
 
-              {activeTab === 'team' && isCreationRoute && !isRetail ? (
+              {activeTab === 'team' && isCreationRoute && !isRetail && !isQs ? (
                 <div className="mt-3 space-y-2.5">
                   <div className="grid gap-2.5 sm:grid-cols-2">
                     <FieldSelect id="team-technical-head" label="Technical Head" value={technicalHead} onChange={setTechnicalHead} options={hodUsers} />
@@ -2823,6 +2873,38 @@ export function TaskDetailsPage() {
                 className="rounded-md bg-red-500 px-4 py-1.5 text-xs font-semibold text-white hover:bg-red-600 disabled:opacity-50 transition-colors"
               >
                 {reworkSubmitting ? 'Creating revision…' : 'Issue Rework'}
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {deleteConfirm && (
+        <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/40">
+          <div className="w-full max-w-sm rounded-lg border border-slate-200 bg-white p-5 shadow-xl">
+            <p className="text-sm font-semibold text-slate-800">Delete Row?</p>
+            <p className="mt-1 text-xs text-slate-500">
+              Are you sure you want to delete this row from{' '}
+              <span className="font-semibold text-blue-600">{deleteConfirm.family}</span>?
+              This cannot be undone.
+            </p>
+            <div className="mt-4 flex justify-end gap-2">
+              <button
+                type="button"
+                onClick={() => setDeleteConfirm(null)}
+                className="rounded border border-slate-300 px-3 py-1.5 text-xs font-medium text-slate-600 hover:bg-slate-50"
+              >
+                Cancel
+              </button>
+              <button
+                type="button"
+                onClick={() => {
+                  setSignRows((prev) => prev.filter((_, i) => i !== deleteConfirm.idx))
+                  setDeleteConfirm(null)
+                }}
+                className="rounded bg-red-500 px-3 py-1.5 text-xs font-semibold text-white hover:bg-red-600"
+              >
+                Delete
               </button>
             </div>
           </div>

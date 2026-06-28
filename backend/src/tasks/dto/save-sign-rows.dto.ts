@@ -15,6 +15,7 @@ export class ProjectSignRowDto {
   @IsString() @IsNotEmpty() status: string;
   @IsString() @IsOptional() comment?: string;
   @IsString() @IsNotEmpty() contRef: string;
+  @IsString() @IsOptional() signFamily?: string;
 }
 
 export class SaveSignRowsDto {

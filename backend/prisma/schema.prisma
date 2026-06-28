@@ -100,6 +100,7 @@ model Project {
   createdById    String?  @db.UniqueIdentifier
   createdBy    User?    @relation("ProjectCreator", fields: [createdById], references: [id], onDelete: NoAction, onUpdate: NoAction)
   tasks        Task[]
+  signRows     ProjectSignRow[]
   chatterPosts ChatterPost[]
   attachments  ProjectAttachment[]
   createdAt    DateTime @default(dbgenerated("sysutcdatetime()"))
@@ -151,7 +152,6 @@ model Task {
   schedulerAssignments   SchedulerAssignment[]
   retailDetails          RetailTaskDetail[]
   projectDetails         ProjectTaskDetail[]
-  signRows               ProjectSignRow[]
   workSessions           TaskWorkSession[]
   taskDesigners          TaskDesigner[]         @relation("TaskDesigners")
 
@@ -216,8 +216,8 @@ model ProjectTaskDetail {
 
 model ProjectSignRow {
   id          String   @id @default(dbgenerated("newid()")) @db.UniqueIdentifier
-  taskId      String   @db.UniqueIdentifier
-  task        Task     @relation(fields: [taskId], references: [id], onDelete: Cascade, onUpdate: NoAction)
+  projectId   String   @db.UniqueIdentifier
+  project     Project  @relation(fields: [projectId], references: [id], onDelete: Cascade, onUpdate: NoAction)
   tNo         String?  @db.NVarChar(50)
   no          String?  @db.NVarChar(50)
   signType    String?  @db.NVarChar(255)
@@ -230,9 +230,10 @@ model ProjectSignRow {
   status      String?  @db.NVarChar(50)
   comment     String?  @db.NVarChar(Max)
   contRef     String?  @db.NVarChar(100)
+  signFamily  String?  @db.NVarChar(255)
   createdAt   DateTime @default(now())
 
-  @@index([taskId])
+  @@index([projectId])
   @@map("ErpTSProjectSignRow")
 }
 
