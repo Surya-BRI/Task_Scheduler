@@ -23,10 +23,8 @@ import { CreateExtendedTaskDto } from './dto/create-extended-task.dto';
 import { UpdateTaskDto } from './dto/update-task.dto';
 import { AssignTaskDto } from './dto/assign-task.dto';
 import { UpdateTaskStatusDto } from './dto/update-task-status.dto';
-import { SaveSignRowsDto } from './dto/save-sign-rows.dto';
 import { SubmitWorkDto } from './dto/submit-work.dto';
 import { SaveTimerStateDto } from './dto/save-timer-state.dto';
-import { UpdateQsStatusDto } from './dto/update-qs-status.dto';
 import { JwtAuthGuard } from '../common/guards/jwt-auth.guard';
 import { RolesGuard } from '../common/guards/roles.guard';
 import { Roles } from '../common/decorators/roles.decorator';
@@ -140,45 +138,6 @@ export class TasksController {
     @Body() dto: UpdateTaskStatusDto,
   ) {
     return this.tasksService.updateStatus(id, user.sub, user.role, dto);
-  }
-
-  /** GET /tasks/:id/sign-rows */
-  @Get(':id/sign-rows')
-  @Roles(UserRole.HOD, UserRole.DESIGNER, UserRole.SALESPERSON, UserRole.QS)
-  getSignRows(@Param('id') id: string, @CurrentUser() user: JwtPayload) {
-    return this.tasksService.getSignRows(id, user.sub, user.role);
-  }
-
-  /** GET /tasks/:id/qs-status */
-  @Get(':id/qs-status')
-  @Roles(UserRole.HOD, UserRole.QS)
-  getQsStatus(@Param('id') id: string, @CurrentUser() user: JwtPayload) {
-    return this.tasksService.getQsStatusForTask(id, user.sub, user.role);
-  }
-
-  /** PATCH /tasks/:id/qs-status */
-  @Patch(':id/qs-status')
-  @Roles(UserRole.HOD, UserRole.QS)
-  updateQsStatus(
-    @Param('id') id: string,
-    @CurrentUser() user: JwtPayload,
-    @Body() dto: UpdateQsStatusDto,
-  ) {
-    return this.tasksService.updateQsStatusForTask(id, dto, user.sub, user.role);
-  }
-
-  /** PUT /tasks/:id/sign-rows */
-  @Put(':id/sign-rows')
-  @Roles(UserRole.HOD, UserRole.QS)
-  saveSignRows(@Param('id') id: string, @CurrentUser() user: JwtPayload, @Body() dto: SaveSignRowsDto) {
-    return this.tasksService.saveSignRows(id, dto, user.sub, user.role);
-  }
-
-  /** POST /tasks/:id/qs-submit */
-  @Post(':id/qs-submit')
-  @Roles(UserRole.HOD, UserRole.QS)
-  submitQsUpdate(@Param('id') id: string, @CurrentUser() user: JwtPayload, @Body() dto: SaveSignRowsDto) {
-    return this.tasksService.submitQsUpdate(id, dto, user.sub, user.role);
   }
 
   /** GET /tasks/:id/submitted-session — fetch the most recent submitted work session */

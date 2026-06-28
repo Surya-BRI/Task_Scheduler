@@ -8,6 +8,7 @@ import {
   ParseIntPipe,
   Patch,
   Post,
+  Put,
   Query,
   UploadedFile,
   UseGuards,
@@ -19,6 +20,8 @@ import { ProjectsService } from './projects.service';
 import { CreateProjectDto } from './dto/create-project.dto';
 import { UpdateProjectDto } from './dto/update-project.dto';
 import { CreateProjectFileLinkDto } from './dto/create-project-file-link.dto';
+import { SaveSignRowsDto } from '../tasks/dto/save-sign-rows.dto';
+import { UpdateQsStatusDto } from '../tasks/dto/update-qs-status.dto';
 import { JwtAuthGuard } from '../common/guards/jwt-auth.guard';
 import { RolesGuard } from '../common/guards/roles.guard';
 import { Roles } from '../common/decorators/roles.decorator';
@@ -116,5 +119,35 @@ export class ProjectsController {
   @Roles(UserRole.HOD)
   remove(@Param('id') id: string) {
     return this.projectsService.remove(id);
+  }
+
+  @Get(':id/sign-rows')
+  @Roles(UserRole.HOD, UserRole.DESIGNER, UserRole.SALESPERSON, UserRole.QS)
+  getSignRows(@Param('id') id: string, @CurrentUser() user: JwtPayload) {
+    return this.projectsService.getSignRows(id, user.sub, user.role);
+  }
+
+  @Put(':id/sign-rows')
+  @Roles(UserRole.HOD, UserRole.QS)
+  saveSignRows(@Param('id') id: string, @CurrentUser() user: JwtPayload, @Body() dto: SaveSignRowsDto) {
+    return this.projectsService.saveSignRows(id, dto, user.sub, user.role);
+  }
+
+  @Get(':id/qs-status')
+  @Roles(UserRole.HOD, UserRole.QS)
+  getQsStatus(@Param('id') id: string, @CurrentUser() user: JwtPayload) {
+    return this.projectsService.getQsStatus(id, user.sub, user.role);
+  }
+
+  @Patch(':id/qs-status')
+  @Roles(UserRole.HOD, UserRole.QS)
+  updateQsStatus(@Param('id') id: string, @CurrentUser() user: JwtPayload, @Body() dto: UpdateQsStatusDto) {
+    return this.projectsService.updateQsStatus(id, dto, user.sub, user.role);
+  }
+
+  @Post(':id/qs-submit')
+  @Roles(UserRole.HOD, UserRole.QS)
+  submitQsUpdate(@Param('id') id: string, @CurrentUser() user: JwtPayload, @Body() dto: SaveSignRowsDto) {
+    return this.projectsService.submitQsUpdate(id, dto, user.sub, user.role);
   }
 }
