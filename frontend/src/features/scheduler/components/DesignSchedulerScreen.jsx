@@ -89,6 +89,23 @@ const isFullDayLeaveBlock = (task) => task?.requestType === "LEAVE" &&
 
 const hasFullDayLeaveBlock = (taskMap, taskIds = []) => taskIds.some((taskId) => isFullDayLeaveBlock(taskMap?.[taskId]));
 
+const normalizeLeaveSession = (session) =>
+    String(session ?? "").trim().toLowerCase().replace(/[_-]+/g, " ").replace(/\s+/g, " ");
+
+const getHalfDayLeaveVisualOrder = (task) => {
+    if (task?.requestType !== "LEAVE") return 1;
+    if (toPositiveHours(task.leaveHours ?? task.scheduledHours ?? task.estimatedHours) >= DAILY_CAPACITY) return 0;
+    const session = normalizeLeaveSession(task.leaveSession);
+    if (session === "first half" || session === "first session" || session === "first" || session === "am" || session === "morning") return 0;
+    if (session === "second half" || session === "second session" || session === "second" || session === "pm" || session === "afternoon") return 2;
+    return 1;
+};
+
+const sortRegularTaskIdsForVisualSession = (taskIds, taskMap) => taskIds
+    .map((taskId, order) => ({ taskId, order }))
+    .sort((a, b) => getHalfDayLeaveVisualOrder(taskMap[a.taskId]) - getHalfDayLeaveVisualOrder(taskMap[b.taskId]) || a.order - b.order)
+    .map((entry) => entry.taskId);
+
 const getRequestBlockHours = (row) => {
     if (row?.requestType === "LEAVE") return toPositiveHours(row.leaveHours ?? row.scheduledHours ?? row.assignedHours);
     if (row?.requestType === "REGULARIZATION") return toPositiveHours(row.regularizationHours ?? row.scheduledHours ?? row.assignedHours);
@@ -513,6 +530,7 @@ function buildSchedulerStateFromErpAssignments(records, rows, designers) {
                 isLocked: true,
                 isSystemBlock: true,
                 requestType: row.requestType,
+                leaveSession: row.leaveSession ?? null,
                 leaveRequestIds: row.leaveRequestIds ?? [],
                 regularizationRequestIds: row.regularizationRequestIds ?? [],
                 colorClass: row.requestType === "LEAVE"
@@ -1924,6 +1942,7 @@ export function DesignSchedulerScreen() {
                         {visibleDays.map(dayIndex => {
                     const rawTasksInDay = designerDays[dayIndex.toString()] || [];
                     const regularTaskIds = rawTasksInDay.filter((taskId) => !tasks[taskId]?.isOvertime);
+                    const visualRegularTaskIds = sortRegularTaskIdsForVisualSession(regularTaskIds, tasks);
                     const overtimeTaskIds = rawTasksInDay.filter((taskId) => tasks[taskId]?.isOvertime);
                     const isWeekend = dayIndex >= 5;
                     const dayHours = getDayHours(designer.id, dayIndex);
@@ -1945,11 +1964,13 @@ export function DesignSchedulerScreen() {
                                     <span className="text-[8px] text-slate-400 font-medium select-none">—</span>
                                   </div>) : (<div className="h-full min-h-[42px] overflow-hidden flex flex-col justify-center gap-1">
                                     <div className="min-h-[20px] w-full flex flex-nowrap items-center gap-1 pr-0.5">
-                                    {regularTaskIds.map((taskId, idx) => {
+                                    {visualRegularTaskIds.map((taskId, idx) => {
                                 const taskInfo = tasks[taskId];
                                 if (!taskInfo)
                                     return null;
-                                const taskWidth = `calc((100% - ${(Math.max(regularTaskIds.length - 1, 0)) * 4}px) / ${Math.max(regularTaskIds.length, 1)})`;
+                                const rawTaskIndex = rawTasksInDay.indexOf(taskId);
+                                const dropTaskIndex = rawTaskIndex >= 0 ? rawTaskIndex : idx;
+                                const taskWidth = `calc((100% - ${(Math.max(visualRegularTaskIds.length - 1, 0)) * 4}px) / ${Math.max(visualRegularTaskIds.length, 1)})`;
                                 const isSystemBlock = isRequestSystemBlock(taskInfo);
                                 return (<div key={`${taskId}-${designer.id}-${dayIndex}-${idx}`} draggable={!isSystemBlock} onDragStart={(e) => {
                                         if (isSystemBlock) return;
@@ -1958,11 +1979,11 @@ export function DesignSchedulerScreen() {
                                     }} onDragEnd={() => setDropIndicator(null)} onDragOver={(e) => {
                                         if (isSystemBlock) return;
                                         e.stopPropagation();
-                                        handleTaskDragOver(e, designer.id, dayIndex, idx);
+                                        handleTaskDragOver(e, designer.id, dayIndex, dropTaskIndex);
                                     }} onDrop={(e) => {
                                         if (isSystemBlock) return;
                                         e.stopPropagation();
-                                        handleDropToDay(e, designer.id, dayIndex, idx, getDropPosition(e, e.currentTarget));
+                                        handleDropToDay(e, designer.id, dayIndex, dropTaskIndex, getDropPosition(e, e.currentTarget));
                                     }} onClick={(e) => {
                                         e.stopPropagation();
                                         if (isSystemBlock) return;
@@ -1970,7 +1991,7 @@ export function DesignSchedulerScreen() {
                                     }} className={`h-[24px] min-w-0 rounded flex items-center justify-between px-1.5 shadow-sm transition-shadow ${isSystemBlock ? "cursor-default" : "cursor-grab active:cursor-grabbing hover:shadow"} ${dropIndicator &&
                                         dropIndicator.designerId === designer.id &&
                                         dropIndicator.dayIndex === dayIndex &&
-                                        dropIndicator.taskIndex === idx
+                                        dropIndicator.taskIndex === dropTaskIndex
                                         ? dropIndicator.position === "before"
                                             ? "ring-2 ring-blue-400 ring-offset-1"
                                             : "ring-2 ring-green-400 ring-offset-1"

@@ -28,6 +28,25 @@ const getOvertimeHours = (task) => {
   return toPositiveHours(task?.approvedOvertimeHours);
 };
 
+const normalizeLeaveSession = (session) =>
+  String(session ?? "").trim().toLowerCase().replace(/[_-]+/g, " ").replace(/\s+/g, " ");
+
+const getHalfDayLeaveSession = (task, regularHours) => {
+  if (task?.requestType !== "LEAVE") return null;
+  if (regularHours >= NORMAL_DAILY_HOURS) return null;
+  const session = normalizeLeaveSession(task.leaveSession);
+  if (session === "first half" || session === "first session" || session === "first" || session === "am" || session === "morning") return "first";
+  if (session === "second half" || session === "second session" || session === "second" || session === "pm" || session === "afternoon") return "second";
+  return null;
+};
+
+const getRegularVisualOrder = (entry) => {
+  const session = getHalfDayLeaveSession(entry.task, entry.regularHours);
+  if (session === "first") return 0;
+  if (session === "second") return 2;
+  return 1;
+};
+
 const buildDaySlot = (taskIds, tasksMap) => {
   let regularCursor = 0;
   let overtimeCursor = NORMAL_DAILY_HOURS;
@@ -35,6 +54,7 @@ const buildDaySlot = (taskIds, tasksMap) => {
   const rawTasks = [];
   const rawTaskIds = [];
   const rawRecordIds = [];
+  const entries = [];
 
   for (const taskId of taskIds) {
     const task = tasksMap[taskId];
@@ -47,23 +67,7 @@ const buildDaySlot = (taskIds, tasksMap) => {
       rawRecordIds.push(task.parentId ?? task.id);
     }
 
-    if (regularHours > 0) {
-      const startHr = regularCursor;
-      const endHr = regularCursor + regularHours;
-      regularCursor = endHr;
-
-      rawTasks.push({
-        id: task.id,
-        label: toTaskLabel(task),
-        estimatedHours: regularHours,
-        colorClass: task.colorClass,
-        startHr,
-        endHr,
-        isOvertime: false,
-        isSystemBlock: Boolean(task.isSystemBlock),
-        requestType: task.requestType,
-      });
-    }
+    entries.push({ task, regularHours, overtimeHours, order: entries.length });
 
     if (overtimeHours > 0) {
       hasOvertime = true;
@@ -83,6 +87,32 @@ const buildDaySlot = (taskIds, tasksMap) => {
       });
     }
   }
+
+  entries
+    .filter((entry) => entry.regularHours > 0)
+    .sort((a, b) => getRegularVisualOrder(a) - getRegularVisualOrder(b) || a.order - b.order)
+    .forEach(({ task, regularHours }) => {
+      const session = getHalfDayLeaveSession(task, regularHours);
+      const startHr = session === "first"
+        ? 0
+        : session === "second"
+          ? Math.max(NORMAL_DAILY_HOURS / 2, regularCursor)
+          : regularCursor;
+      const endHr = startHr + regularHours;
+      regularCursor = Math.max(regularCursor, endHr);
+
+      rawTasks.push({
+        id: task.id,
+        label: toTaskLabel(task),
+        estimatedHours: regularHours,
+        colorClass: task.colorClass,
+        startHr,
+        endHr,
+        isOvertime: false,
+        isSystemBlock: Boolean(task.isSystemBlock),
+        requestType: task.requestType,
+      });
+    });
 
   const assignedStartHr = 0;
   const assignedEndHr = Math.min(Math.max(regularCursor, hasOvertime ? overtimeCursor : 0), MAX_DAILY_HOURS);
