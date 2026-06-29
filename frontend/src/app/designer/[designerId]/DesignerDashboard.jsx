@@ -278,6 +278,7 @@ function buildLiveScheduleData(assignments, tasksArr) {
         isLocked: true,
         isSystemBlock: true,
         requestType: a.requestType,
+        leaveSession: a.leaveSession ?? null,
       };
       const dayStr = String(a.dayIndex);
       if (!scheduleByDayIndex[dayStr]) scheduleByDayIndex[dayStr] = [];
