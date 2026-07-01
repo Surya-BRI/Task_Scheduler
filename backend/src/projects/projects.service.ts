@@ -67,6 +67,7 @@ export class ProjectsService {
   }
 
   private async ensureQsStatusTable() {
+    // security-sql:allow-static-ddl
     await this.prisma.$executeRawUnsafe(`
 IF OBJECT_ID('dbo.ErpTSProjectQsStatus', 'U') IS NULL
 BEGIN
@@ -250,15 +251,15 @@ END;
 
     // Fallback: if project exists in ERP master tables but not yet hydrated
     // into ErpTSProject, create it on-demand so details page can resolve.
-    const escaped = value.replace(/'/g, "''");
-    const erpRows = await this.prisma.live.$queryRawUnsafe<
+    const projectCode = value.trim();
+    const erpRows = await this.prisma.live.$queryRaw<
       Array<{
         projectCode: string | null;
         projectName: string | null;
         businessUnitCode: string | null;
         salesPerson: string | null;
       }>
-    >(`
+    >(Prisma.sql`
       SELECT TOP 1
         mp.projectCode,
         mp.projectName,
@@ -270,8 +271,8 @@ END;
       LEFT JOIN ErpMasterEmployee me ON me.employeeId = mo.salesRepId
       WHERE mp.isActive = 1
         AND (
-          mp.projectCode = '${escaped}'
-          OR REPLACE(REPLACE(LOWER(mp.projectCode), ' ', ''), '-', '') = REPLACE(REPLACE(LOWER('${escaped}'), ' ', ''), '-', '')
+          mp.projectCode = ${projectCode}
+          OR REPLACE(REPLACE(LOWER(mp.projectCode), ' ', ''), '-', '') = REPLACE(REPLACE(LOWER(${projectCode}), ' ', ''), '-', '')
         )
       ORDER BY mp.createdOn DESC
     `);

@@ -117,6 +117,7 @@ export class SchedulerAssignmentsService implements OnModuleInit {
 
   async onModuleInit(): Promise<void> {
     try {
+      // security-sql:allow-static-ddl
       await this.prisma.$executeRawUnsafe(`
         IF OBJECT_ID('dbo.ErpTSHoliday', 'U') IS NULL
         BEGIN
@@ -136,6 +137,7 @@ export class SchedulerAssignmentsService implements OnModuleInit {
     }
 
     try {
+      // security-sql:allow-static-ddl
       await this.prisma.$executeRawUnsafe(`
         IF OBJECT_ID('dbo.ErpTSLeaveRescheduleSnapshot', 'U') IS NULL
         BEGIN

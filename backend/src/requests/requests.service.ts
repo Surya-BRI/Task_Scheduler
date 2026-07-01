@@ -77,6 +77,7 @@ export class RequestsService implements OnModuleInit {
 
   async onModuleInit(): Promise<void> {
     try {
+      // security-sql:allow-static-ddl
       await this.prisma.$executeRawUnsafe(`
         IF COL_LENGTH('dbo.ErpTSLeaveRequest', 'approverId') IS NULL
         BEGIN

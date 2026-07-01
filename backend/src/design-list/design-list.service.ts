@@ -1,5 +1,11 @@
 import { Injectable, Logger, ServiceUnavailableException } from '@nestjs/common';
+import { Prisma } from '@prisma/client';
 import { PrismaService } from '../prisma/prisma.service';
+import {
+  buildAndWhere,
+  likeContainsPattern,
+  parseOptionalSqlDate,
+} from '../common/utils/sql-param.util';
 
 type SignTypeRawRow = {
   signTypeId: number | bigint;
@@ -54,6 +60,33 @@ function toDdMmYyyy(value: Date): string {
 const RETAIL_UNIT_CODES = new Set<string>(['retail', 'rtl', 'r', 'prosigns-retail']);
 const PROJECT_UNIT_CODES = new Set<string>(['project', 'normal', 'prosigns-projects']);
 const DEFAULT_UNPAGINATED_LIMIT = 500;
+
+const DESIGN_LIST_FROM_JOINS = Prisma.sql`
+  FROM ErpMasterProject mp
+  LEFT JOIN ErpMasterOpportunity mo ON mo.projectid = mp.projectid
+  LEFT JOIN ErpMastercustomer mc ON mc.custId = mp.clientIId
+  LEFT JOIN ErpMasterBusinessUnit mb ON mb.businessUnitId = mp.businessUnitId
+  LEFT JOIN ErpMasterTaxnomy mt ON mt.taxnomyId = mp.statusId
+  LEFT JOIN ErpMasterEmployee me ON me.employeeId = mo.salesRepId
+  LEFT JOIN ErpMasterEmployee mee ON mee.employeeId = mp.projectManagerId
+  LEFT JOIN ErpMasterEmployee meee ON meee.employeeId = mp.projectOwnerId
+`;
+
+const DESIGN_LIST_SELECT = Prisma.sql`
+  SELECT
+    mp.projectid AS projectId,
+    CAST(NULL AS NVARCHAR(36)) AS taskId,
+    mp.projectCode,
+    mo.salesForceCode,
+    mp.projectName,
+    mc.customerName AS clientName,
+    mb.businessUnitCode,
+    mt.taxnomycode AS status,
+    me.firstName + '' + me.lastName AS salesPerson,
+    mee.firstName + '' + mee.lastName AS projectManager,
+    meee.firstName + '' + meee.lastName AS projectOwner,
+    mp.createdOn
+`;
 
 @Injectable()
 export class DesignListService {
@@ -143,116 +176,99 @@ export class DesignListService {
     };
   }
 
-  private buildBaseQuery(whereSearchClause: string) {
-    return `
-      SELECT
-        mp.projectid AS projectId,
-        CAST(NULL AS NVARCHAR(36)) AS taskId,
-        mp.projectCode,
-        mo.salesForceCode,
-        mp.projectName,
-        mc.customerName AS clientName,
-        mb.businessUnitCode,
-        mt.taxnomycode AS status,
-        me.firstName + '' + me.lastName AS salesPerson,
-        mee.firstName + '' + mee.lastName AS projectManager,
-        meee.firstName + '' + meee.lastName AS projectOwner,
-        mp.createdOn
-      FROM ErpMasterProject mp
-      LEFT JOIN ErpMasterOpportunity mo ON mo.projectid = mp.projectid
-      LEFT JOIN ErpMastercustomer mc ON mc.custId = mp.clientIId
-      LEFT JOIN ErpMasterBusinessUnit mb ON mb.businessUnitId = mp.businessUnitId
-      LEFT JOIN ErpMasterTaxnomy mt ON mt.taxnomyId = mp.statusId
-      LEFT JOIN ErpMasterEmployee me ON me.employeeId = mo.salesRepId
-      LEFT JOIN ErpMasterEmployee mee ON mee.employeeId = mp.projectManagerId
-      LEFT JOIN ErpMasterEmployee meee ON meee.employeeId = mp.projectOwnerId
-      WHERE mp.isActive = 1
-      ${whereSearchClause}
-    `;
+  private buildSearchWhereFragments(search: string): Prisma.Sql[] {
+    const trimmed = search.trim();
+    if (!trimmed.length) return [];
+    const pattern = likeContainsPattern(trimmed);
+    return [Prisma.sql`(
+      mp.projectCode LIKE ${pattern}
+      OR mo.salesForceCode LIKE ${pattern}
+      OR mp.projectName LIKE ${pattern}
+      OR (me.firstName + '' + me.lastName) LIKE ${pattern}
+    )`];
   }
 
-  private escapeSqlLike(value: string): string {
-    return value.replace(/'/g, "''");
-  }
+  private buildDesignListWhereFragments(filters: DesignListPageFilters): Prisma.Sql[] {
+    const fragments: Prisma.Sql[] = [];
 
-  private buildDesignListWhereClause(filters: DesignListPageFilters): string {
-    const clauses: string[] = [];
-
-    const search = filters.q.trim();
-    if (search.length > 0) {
-      const escaped = this.escapeSqlLike(search);
-      clauses.push(`(
-        mp.projectCode LIKE '%${escaped}%'
-        OR mo.salesForceCode LIKE '%${escaped}%'
-        OR mp.projectName LIKE '%${escaped}%'
-      )`);
-    }
+    fragments.push(...this.buildSearchWhereFragments(filters.q));
 
     const type = filters.type.trim().toLowerCase();
     if (type === 'retail') {
-      clauses.push(`LOWER(LTRIM(RTRIM(COALESCE(mb.businessUnitCode, '')))) IN ('retail', 'rtl', 'r')`);
+      fragments.push(
+        Prisma.sql`LOWER(LTRIM(RTRIM(COALESCE(mb.businessUnitCode, '')))) IN ('retail', 'rtl', 'r')`,
+      );
     } else if (type === 'project') {
-      clauses.push(
-        `LOWER(LTRIM(RTRIM(COALESCE(mb.businessUnitCode, '')))) NOT IN ('retail', 'rtl', 'r')`,
+      fragments.push(
+        Prisma.sql`LOWER(LTRIM(RTRIM(COALESCE(mb.businessUnitCode, '')))) NOT IN ('retail', 'rtl', 'r')`,
       );
     }
 
     const status = filters.status.trim();
     if (status.length > 0) {
-      const escaped = this.escapeSqlLike(status);
-      clauses.push(`COALESCE(mt.taxnomycode, 'Pending') = '${escaped}'`);
+      fragments.push(Prisma.sql`COALESCE(mt.taxnomycode, 'Pending') = ${status}`);
     }
 
     const salesPerson = filters.salesPerson.trim();
     if (salesPerson.length > 0) {
-      const escaped = this.escapeSqlLike(salesPerson);
-      clauses.push(`COALESCE(me.firstName + '' + me.lastName, 'Unassigned') = '${escaped}'`);
+      fragments.push(
+        Prisma.sql`COALESCE(me.firstName + '' + me.lastName, 'Unassigned') = ${salesPerson}`,
+      );
     }
 
-    const startDate = filters.startDate.trim();
-    if (startDate.length > 0) {
-      const escaped = this.escapeSqlLike(startDate);
-      clauses.push(`CAST(mp.createdOn AS DATE) >= CAST('${escaped}' AS DATE)`);
+    const startDate = parseOptionalSqlDate(filters.startDate);
+    if (startDate) {
+      fragments.push(Prisma.sql`CAST(mp.createdOn AS DATE) >= CAST(${startDate} AS DATE)`);
     }
 
-    const endDate = filters.endDate.trim();
-    if (endDate.length > 0) {
-      const escaped = this.escapeSqlLike(endDate);
-      clauses.push(`CAST(mp.createdOn AS DATE) <= CAST('${escaped}' AS DATE)`);
+    const endDate = parseOptionalSqlDate(filters.endDate);
+    if (endDate) {
+      fragments.push(Prisma.sql`CAST(mp.createdOn AS DATE) <= CAST(${endDate} AS DATE)`);
     }
 
-    return clauses.length > 0 ? ` AND ${clauses.join('\n      AND ')}` : '';
+    return fragments;
+  }
+
+  private async queryDesignListPage(
+    whereFragments: Prisma.Sql[],
+    offset: number,
+    limit: number,
+  ): Promise<{ pageRows: DesignListRow[]; total: number }> {
+    const whereClause = buildAndWhere(whereFragments);
+
+    const pageRows = await this.prisma.live.$queryRaw<DesignListRow[]>(Prisma.sql`
+      ${DESIGN_LIST_SELECT}
+      ${DESIGN_LIST_FROM_JOINS}
+      WHERE mp.isActive = 1
+      ${whereClause}
+      ORDER BY mp.createdOn DESC
+      OFFSET ${offset} ROWS
+      FETCH NEXT ${limit} ROWS ONLY
+    `);
+
+    const totalRows = await this.prisma.live.$queryRaw<Array<{ total: number }>>(Prisma.sql`
+      SELECT COUNT(*) AS total
+      FROM (
+        ${DESIGN_LIST_SELECT}
+        ${DESIGN_LIST_FROM_JOINS}
+        WHERE mp.isActive = 1
+        ${whereClause}
+      ) AS q
+    `);
+
+    return { pageRows, total: Number(totalRows[0]?.total ?? 0) };
   }
 
   async findAll() {
     const rows = await this.queryLive('findAll', () =>
-      this.prisma.live.$queryRaw<DesignListRow[]>`
-      SELECT
-        mp.projectid AS projectId,
-        CAST(NULL AS NVARCHAR(36)) AS taskId,
-        mp.projectCode,
-        mo.salesForceCode,
-        mp.projectName,
-        mc.customerName AS clientName,
-        mb.businessUnitCode,
-        mt.taxnomycode AS status,
-        me.firstName + '' + me.lastName AS salesPerson,
-        mee.firstName + '' + mee.lastName AS projectManager,
-        meee.firstName + '' + meee.lastName AS projectOwner,
-        mp.createdOn
-      FROM ErpMasterProject mp
-      LEFT JOIN ErpMasterOpportunity mo ON mo.projectid = mp.projectid
-      LEFT JOIN ErpMastercustomer mc ON mc.custId = mp.clientIId
-      LEFT JOIN ErpMasterBusinessUnit mb ON mb.businessUnitId = mp.businessUnitId
-      LEFT JOIN ErpMasterTaxnomy mt ON mt.taxnomyId = mp.statusId
-      LEFT JOIN ErpMasterEmployee me ON me.employeeId = mo.salesRepId
-      LEFT JOIN ErpMasterEmployee mee ON mee.employeeId = mp.projectManagerId
-      LEFT JOIN ErpMasterEmployee meee ON meee.employeeId = mp.projectOwnerId
-      WHERE mp.isActive = 1
-      ORDER BY mp.createdOn DESC
-      OFFSET 0 ROWS
-      FETCH NEXT ${DEFAULT_UNPAGINATED_LIMIT} ROWS ONLY
-    `,
+      this.prisma.live.$queryRaw<DesignListRow[]>(Prisma.sql`
+        ${DESIGN_LIST_SELECT}
+        ${DESIGN_LIST_FROM_JOINS}
+        WHERE mp.isActive = 1
+        ORDER BY mp.createdOn DESC
+        OFFSET 0 ROWS
+        FETCH NEXT ${DEFAULT_UNPAGINATED_LIMIT} ROWS ONLY
+      `),
     );
 
     return this.dedupeMappedRows(rows.map((row: DesignListRow) => this.mapRow(row)));
@@ -262,35 +278,11 @@ export class DesignListService {
     const safePage = Math.max(1, page);
     const safeLimit = Math.min(200, Math.max(1, limit));
     const offset = (safePage - 1) * safeLimit;
-    const search = q.trim();
-    const hasSearch = search.length > 0;
-    const escapedSearch = search.replace(/'/g, "''");
-    const whereSearchClause = hasSearch
-      ? `
-      AND (
-        mp.projectCode LIKE '%${escapedSearch}%'
-        OR mo.salesForceCode LIKE '%${escapedSearch}%'
-        OR mp.projectName LIKE '%${escapedSearch}%'
-        OR (me.firstName + '' + me.lastName) LIKE '%${escapedSearch}%'
-      )`
-      : '';
+    const whereFragments = this.buildSearchWhereFragments(q);
 
-    const baseQuery = this.buildBaseQuery(whereSearchClause);
-    const rows = await this.queryLive('findProjectsListPage', async () => {
-      const pageRows = await this.prisma.live.$queryRawUnsafe<DesignListRow[]>(`
-      ${baseQuery}
-      ORDER BY mp.createdOn DESC
-      OFFSET ${offset} ROWS
-      FETCH NEXT ${safeLimit} ROWS ONLY
-    `);
-
-      const totalRows = await this.prisma.live.$queryRawUnsafe<Array<{ total: number }>>(`
-      SELECT COUNT(*) AS total
-      FROM (${baseQuery}) AS q
-    `);
-
-      return { pageRows, total: Number(totalRows[0]?.total ?? 0) };
-    });
+    const rows = await this.queryLive('findProjectsListPage', () =>
+      this.queryDesignListPage(whereFragments, offset, safeLimit),
+    );
 
     return {
       data: this.dedupeMappedRows(rows.pageRows.map((row) => this.mapRow(row, true))),
@@ -302,9 +294,9 @@ export class DesignListService {
   }
 
   async findProjectSignTypes(salesForceCode: string) {
-    const escaped = salesForceCode.replace(/'/g, "''");
+    const code = salesForceCode.trim();
     const rows = await this.queryLive('findProjectSignTypes', () =>
-      this.prisma.live.$queryRawUnsafe<SignTypeRawRow[]>(`
+      this.prisma.live.$queryRaw<SignTypeRawRow[]>(Prisma.sql`
         SELECT
           es.signTypeId,
           es.signFmilyId,
@@ -324,7 +316,7 @@ export class DesignListService {
           AND ess.taxnomyCode = 'Approved'
           AND ess.taxnomyType = 'EstimationStatus'
         LEFT JOIN ErpMasterTaxnomy mttt ON es.signFmilyId = mttt.taxnomyId
-        WHERE LTRIM(RTRIM(mo.salesForceCode)) = '${escaped}'
+        WHERE LTRIM(RTRIM(mo.salesForceCode)) = ${code}
       `),
     );
 
@@ -371,25 +363,11 @@ export class DesignListService {
     const safePage = Math.max(1, page);
     const safeLimit = Math.min(200, Math.max(1, limit));
     const offset = (safePage - 1) * safeLimit;
+    const whereFragments = this.buildDesignListWhereFragments(filters);
 
-    const whereClause = this.buildDesignListWhereClause(filters);
-    const baseQuery = this.buildBaseQuery(whereClause);
-
-    const result = await this.queryLive('findDesignListPage', async () => {
-      const pageRows = await this.prisma.live.$queryRawUnsafe<DesignListRow[]>(`
-      ${baseQuery}
-      ORDER BY mp.createdOn DESC
-      OFFSET ${offset} ROWS
-      FETCH NEXT ${safeLimit} ROWS ONLY
-    `);
-
-      const totalRows = await this.prisma.live.$queryRawUnsafe<Array<{ total: number }>>(`
-      SELECT COUNT(*) AS total
-      FROM (${baseQuery}) AS q
-    `);
-
-      return { pageRows, total: Number(totalRows[0]?.total ?? 0) };
-    });
+    const result = await this.queryLive('findDesignListPage', () =>
+      this.queryDesignListPage(whereFragments, offset, safeLimit),
+    );
 
     return {
       data: result.pageRows.map((row) => this.mapRow(row)),

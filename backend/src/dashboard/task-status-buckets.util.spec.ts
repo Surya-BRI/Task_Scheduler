@@ -16,7 +16,7 @@ describe('task-status-buckets.util', () => {
       PENDING: 5,
       DESIGN_NEW: 17,
       ON_HOLD: 1,
-      COMPLETED: 2,
+      DESIGN_COMPLETED: 2,
     };
     const buckets = aggregateStatusCounts(counts);
     expect(buckets.total).toBe(25);
