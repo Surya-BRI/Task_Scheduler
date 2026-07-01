@@ -26,6 +26,7 @@
     "security:check-sql": "tsx scripts/check-unsafe-sql.ts",
     "security:check": "npm run security:check-sql && npm run test:security",
     "prisma:generate": "prisma generate",
+    "postinstall": "prisma generate",
     "prisma:migrate": "prisma migrate dev",
     "prisma:migrate:deploy": "prisma migrate deploy",
     "prisma:deploy:bootstrap": "npm run prisma:generate && npm run prisma:ensure-tables && npm run prisma:ensure-project-qs-assignments && npm run prisma:ensure-foreign-keys",

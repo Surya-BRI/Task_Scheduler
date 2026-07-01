@@ -17,6 +17,7 @@ describe('SchedulerAssignmentsService', () => {
     schedulerAssignmentHistory: { create: jest.fn() },
     $queryRaw: jest.fn(),
     $executeRaw: jest.fn(),
+    $executeRawUnsafe: jest.fn(),
     $transaction: jest.fn((cb: (tx: any) => Promise<unknown>) => cb(prisma)),
   };
   const activityLogger: any = { log: jest.fn() };
@@ -28,7 +29,7 @@ describe('SchedulerAssignmentsService', () => {
     notificationsService,
   );
 
-  beforeEach(() => {
+  beforeEach(async () => {
     jest.clearAllMocks();
     prisma.schedulerAssignment.findMany.mockResolvedValue([]);
     prisma.overtimeRequest.findMany.mockResolvedValue([]);
@@ -44,7 +45,9 @@ describe('SchedulerAssignmentsService', () => {
     prisma.schedulerAssignmentHistory.create.mockResolvedValue({});
     prisma.$queryRaw.mockResolvedValue([]);
     prisma.$executeRaw.mockResolvedValue(1);
+    prisma.$executeRawUnsafe.mockResolvedValue(undefined);
     prisma.$transaction.mockImplementation((cb: (tx: any) => Promise<unknown>) => cb(prisma));
+    await service.onModuleInit();
   });
 
   it('returns approved leave and regularization as locked scheduler system blocks', async () => {
