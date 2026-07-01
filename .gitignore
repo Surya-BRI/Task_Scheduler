@@ -2,12 +2,20 @@ node_modules
 backend/uploads//
 dist/
 coverage/
-.next/
+
+# Frontend build artifacts and generated files
+frontend/.next/
+frontend/out/
+frontend/build/
+**/.next/
+**/.turbo/
 .turbo/
+
 .cursor/
 *.log
 package-lock.json
 .DS_Store
+*.tsbuildinfo
 
 .env
 .env.local

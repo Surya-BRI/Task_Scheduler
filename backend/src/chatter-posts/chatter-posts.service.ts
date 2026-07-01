@@ -31,16 +31,8 @@ import {
 } from './chatter-mentions.util';
 import { DashboardRealtimeService } from '../dashboard/dashboard-realtime.service';
 import { UserRole } from '../common/constants/roles.enum';
+import { buildWhere, filterValidUuids, optionalUuid } from '../common/utils/sql-param.util';
 import { isSameUserId, normalizeUserId } from '../common/utils/user-id.util';
-
-const UUID_RE =
-  /^[0-9a-f]{8}-[0-9a-f]{4}-[1-5][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i;
-
-function optionalUuid(value?: string | null): string | null {
-  if (!value?.trim()) return null;
-  const trimmed = value.trim();
-  return UUID_RE.test(trimmed) ? trimmed : null;
-}
 
 function optionalPaginationCursor(value?: string | null): string | null {
   if (value == null) return null;
@@ -49,10 +41,6 @@ function optionalPaginationCursor(value?: string | null): string | null {
   const parsed = new Date(trimmed);
   if (Number.isNaN(parsed.getTime())) return null;
   return parsed.toISOString();
-}
-
-function sqlQuotedUuid(value: string): string {
-  return `'${value.replace(/'/g, "''")}'`;
 }
 
 export type ChatterAttachmentDto = {
@@ -141,6 +129,7 @@ export class ChatterPostsService implements OnModuleInit {
 
   async onModuleInit(): Promise<void> {
     try {
+      // security-sql:allow-static-ddl
       await this.prisma.$executeRawUnsafe(`
         IF COL_LENGTH('dbo.ErpTSChatterPost', 'projectId') IS NULL
         BEGIN
@@ -195,6 +184,7 @@ export class ChatterPostsService implements OnModuleInit {
           CREATE NONCLUSTERED INDEX IX_ErpTSChatterPostSeen_postId ON dbo.ErpTSChatterPostSeen (postId);
         END
       `);
+      // security-sql:allow-static-ddl
       await this.prisma.$executeRawUnsafe(`
         INSERT INTO ErpTSChatterPostMention (postId, userId)
         SELECT p.id, p.mentionUserId
@@ -219,9 +209,8 @@ export class ChatterPostsService implements OnModuleInit {
     }
   }
 
-  private sqlInUuidList(ids: string[]): string {
-    const uuids = [...new Set(ids.map((id) => optionalUuid(id)).filter(Boolean) as string[])];
-    return uuids.map((id) => sqlQuotedUuid(id)).join(', ');
+  private filterValidUuidList(ids: string[]): string[] {
+    return filterValidUuids(ids);
   }
 
   private commentIdsMatch(a: string, b: string): boolean {
@@ -241,24 +230,23 @@ export class ChatterPostsService implements OnModuleInit {
     const resolvedProjectId = optionalUuid(projectId);
     if (!resolvedTaskId && !resolvedProjectId) return [];
 
-    const whereParts: string[] = [];
-    if (resolvedTaskId) {
-      whereParts.push(`p.taskId = ${sqlQuotedUuid(resolvedTaskId)}`);
-    } else if (resolvedProjectId) {
-      const projectSql = sqlQuotedUuid(resolvedProjectId);
-      whereParts.push(`(p.projectId = ${projectSql} OR t.projectId = ${projectSql})`);
-    } else {
-      return [];
-    }
-
-    const rows = await this.prisma.$queryRawUnsafe<Array<{ userId: string }>>(`
-      SELECT DISTINCT CONVERT(varchar(36), u.id) AS userId
-      FROM ErpTSChatterPost p
-      LEFT JOIN ErpTSTask t ON t.id = p.taskId
-      LEFT JOIN ErpTSChatterComment c ON c.postId = p.id
-      INNER JOIN ErpTSUser u ON u.id = p.authorId OR u.id = c.authorId
-      WHERE ${whereParts[0]}
-    `);
+    const rows = resolvedTaskId
+      ? await this.prisma.$queryRaw<Array<{ userId: string }>>(Prisma.sql`
+          SELECT DISTINCT CONVERT(varchar(36), u.id) AS userId
+          FROM ErpTSChatterPost p
+          LEFT JOIN ErpTSTask t ON t.id = p.taskId
+          LEFT JOIN ErpTSChatterComment c ON c.postId = p.id
+          INNER JOIN ErpTSUser u ON u.id = p.authorId OR u.id = c.authorId
+          WHERE p.taskId = ${resolvedTaskId}
+        `)
+      : await this.prisma.$queryRaw<Array<{ userId: string }>>(Prisma.sql`
+          SELECT DISTINCT CONVERT(varchar(36), u.id) AS userId
+          FROM ErpTSChatterPost p
+          LEFT JOIN ErpTSTask t ON t.id = p.taskId
+          LEFT JOIN ErpTSChatterComment c ON c.postId = p.id
+          INNER JOIN ErpTSUser u ON u.id = p.authorId OR u.id = c.authorId
+          WHERE (p.projectId = ${resolvedProjectId} OR t.projectId = ${resolvedProjectId})
+        `);
     return rows.map((row) => String(row.userId)).filter(Boolean);
   }
 
@@ -358,11 +346,9 @@ export class ChatterPostsService implements OnModuleInit {
   private async resolveExistingUserIds(ids: string[]): Promise<string[]> {
     const valid = uniqueUuids(ids);
     if (!valid.length) return [];
-    const inList = this.sqlInUuidList(valid);
-    if (!inList) return [];
-    const rows = await this.prisma.$queryRawUnsafe<Array<{ id: string }>>(
-      `SELECT CONVERT(varchar(36), id) AS id FROM ErpTSUser WHERE id IN (${inList})`,
-    );
+    const rows = await this.prisma.$queryRaw<Array<{ id: string }>>(Prisma.sql`
+      SELECT CONVERT(varchar(36), id) AS id FROM ErpTSUser WHERE id IN (${Prisma.join(valid)})
+    `);
     const existing = new Set(
       rows.map((row) => normalizeUserId(String(row.id))).filter(Boolean) as string[],
     );
@@ -433,11 +419,9 @@ export class ChatterPostsService implements OnModuleInit {
   private async insertPostMentions(postId: string, userIds: string[]): Promise<void> {
     const ids = uniqueUuids(userIds);
     if (!ids.length) return;
-    const postSql = sqlQuotedUuid(postId);
-    const valueRows = ids.map((uid) => `(${postSql}, ${sqlQuotedUuid(uid)})`).join(', ');
-    await this.prisma.$executeRawUnsafe(`
+    await this.prisma.$executeRaw(Prisma.sql`
       MERGE INTO ErpTSChatterPostMention AS target
-      USING (VALUES ${valueRows}) AS src(postId, userId)
+      USING (VALUES ${Prisma.join(ids.map((uid) => Prisma.sql`(${postId}, ${uid})`))}) AS src(postId, userId)
       ON target.postId = src.postId AND target.userId = src.userId
       WHEN NOT MATCHED THEN INSERT (postId, userId) VALUES (src.postId, src.userId);
     `);
@@ -446,11 +430,9 @@ export class ChatterPostsService implements OnModuleInit {
   private async insertCommentMentions(commentId: string, userIds: string[]): Promise<void> {
     const ids = uniqueUuids(userIds);
     if (!ids.length) return;
-    const commentSql = sqlQuotedUuid(commentId);
-    const valueRows = ids.map((uid) => `(${commentSql}, ${sqlQuotedUuid(uid)})`).join(', ');
-    await this.prisma.$executeRawUnsafe(`
+    await this.prisma.$executeRaw(Prisma.sql`
       MERGE INTO ErpTSChatterCommentMention AS target
-      USING (VALUES ${valueRows}) AS src(commentId, userId)
+      USING (VALUES ${Prisma.join(ids.map((uid) => Prisma.sql`(${commentId}, ${uid})`))}) AS src(commentId, userId)
       ON target.commentId = src.commentId AND target.userId = src.userId
       WHEN NOT MATCHED THEN INSERT (commentId, userId) VALUES (src.commentId, src.userId);
     `);
@@ -459,20 +441,20 @@ export class ChatterPostsService implements OnModuleInit {
   private async loadPostMentionsMap(
     postIds: string[],
   ): Promise<Map<string, ChatterMentionedUserDto[]>> {
-    const inList = this.sqlInUuidList(postIds);
+    const validIds = this.filterValidUuidList(postIds);
     const result = new Map<string, ChatterMentionedUserDto[]>();
-    if (!inList) return result;
+    if (!validIds.length) return result;
 
-    const rows = await this.prisma.$queryRawUnsafe<
+    const rows = await this.prisma.$queryRaw<
       Array<{ postId: string; userId: string; fullName: string }>
-    >(`
+    >(Prisma.sql`
       SELECT
         CONVERT(varchar(36), pm.postId) AS postId,
         CONVERT(varchar(36), pm.userId) AS userId,
         u.fullName
       FROM ErpTSChatterPostMention pm
       INNER JOIN ErpTSUser u ON u.id = pm.userId
-      WHERE pm.postId IN (${inList})
+      WHERE pm.postId IN (${Prisma.join(validIds)})
       ORDER BY u.fullName ASC
     `);
 
@@ -491,20 +473,20 @@ export class ChatterPostsService implements OnModuleInit {
   private async loadCommentMentionsMap(
     commentIds: string[],
   ): Promise<Map<string, ChatterMentionedUserDto[]>> {
-    const inList = this.sqlInUuidList(commentIds);
+    const validIds = this.filterValidUuidList(commentIds);
     const result = new Map<string, ChatterMentionedUserDto[]>();
-    if (!inList) return result;
+    if (!validIds.length) return result;
 
-    const rows = await this.prisma.$queryRawUnsafe<
+    const rows = await this.prisma.$queryRaw<
       Array<{ commentId: string; userId: string; fullName: string }>
-    >(`
+    >(Prisma.sql`
       SELECT
         CONVERT(varchar(36), cm.commentId) AS commentId,
         CONVERT(varchar(36), cm.userId) AS userId,
         u.fullName
       FROM ErpTSChatterCommentMention cm
       INNER JOIN ErpTSUser u ON u.id = cm.userId
-      WHERE cm.commentId IN (${inList})
+      WHERE cm.commentId IN (${Prisma.join(validIds)})
       ORDER BY u.fullName ASC
     `);
 
@@ -523,20 +505,20 @@ export class ChatterPostsService implements OnModuleInit {
   private async loadPostSeenMap(
     postIds: string[],
   ): Promise<Map<string, ChatterSeenByUserDto[]>> {
-    const inList = this.sqlInUuidList(postIds);
+    const validIds = this.filterValidUuidList(postIds);
     const result = new Map<string, ChatterSeenByUserDto[]>();
-    if (!inList) return result;
+    if (!validIds.length) return result;
 
-    const rows = await this.prisma.$queryRawUnsafe<
+    const rows = await this.prisma.$queryRaw<
       Array<{ postId: string; userId: string; fullName: string }>
-    >(`
+    >(Prisma.sql`
       SELECT
         CONVERT(varchar(36), ps.postId) AS postId,
         CONVERT(varchar(36), ps.userId) AS userId,
         u.fullName
       FROM ErpTSChatterPostSeen ps
       INNER JOIN ErpTSUser u ON u.id = ps.userId
-      WHERE ps.postId IN (${inList})
+      WHERE ps.postId IN (${Prisma.join(validIds)})
       ORDER BY ps.seenAt ASC, u.fullName ASC
     `);
 
@@ -553,14 +535,14 @@ export class ChatterPostsService implements OnModuleInit {
   }
 
   private async loadPostLikeCountMap(postIds: string[]): Promise<Map<string, number>> {
-    const inList = this.sqlInUuidList(postIds);
+    const validIds = this.filterValidUuidList(postIds);
     const result = new Map<string, number>();
-    if (!inList) return result;
+    if (!validIds.length) return result;
 
-    const rows = await this.prisma.$queryRawUnsafe<Array<{ postId: string; cnt: number }>>(`
+    const rows = await this.prisma.$queryRaw<Array<{ postId: string; cnt: number }>>(Prisma.sql`
       SELECT CONVERT(varchar(36), postId) AS postId, COUNT(*) AS cnt
       FROM ErpTSChatterPostLike
-      WHERE postId IN (${inList})
+      WHERE postId IN (${Prisma.join(validIds)})
       GROUP BY postId
     `);
 
@@ -573,19 +555,19 @@ export class ChatterPostsService implements OnModuleInit {
   }
 
   private async syncSeenByCounts(postIds: string[]): Promise<void> {
-    const inList = this.sqlInUuidList(postIds);
-    if (!inList) return;
-    await this.prisma.$executeRawUnsafe(`
+    const validIds = this.filterValidUuidList(postIds);
+    if (!validIds.length) return;
+    await this.prisma.$executeRaw(Prisma.sql`
       UPDATE p
       SET seenByCount = COALESCE(c.cnt, 0)
       FROM ErpTSChatterPost p
       LEFT JOIN (
         SELECT postId, COUNT(*) AS cnt
         FROM ErpTSChatterPostSeen
-        WHERE postId IN (${inList})
+        WHERE postId IN (${Prisma.join(validIds)})
         GROUP BY postId
       ) c ON c.postId = p.id
-      WHERE p.id IN (${inList});
+      WHERE p.id IN (${Prisma.join(validIds)});
     `);
   }
 
@@ -689,7 +671,7 @@ export class ChatterPostsService implements OnModuleInit {
     const id = optionalUuid(commentId);
     if (!id) return null;
 
-    const rows = await this.prisma.$queryRawUnsafe<Array<Record<string, unknown>>>(`
+    const rows = await this.prisma.$queryRaw<Array<Record<string, unknown>>>(Prisma.sql`
       SELECT
         c.id,
         c.postId,
@@ -702,7 +684,7 @@ export class ChatterPostsService implements OnModuleInit {
       FROM ErpTSChatterComment c
       LEFT JOIN ErpTSUser u ON u.id = c.authorId
       LEFT JOIN ErpTSRole r ON r.id = u.roleId
-      WHERE c.id = ${sqlQuotedUuid(id)}
+      WHERE c.id = ${id}
     `);
 
     const row = rows[0];
@@ -750,10 +732,10 @@ export class ChatterPostsService implements OnModuleInit {
   }
 
   private async findCommentsByPostIds(postIds: string[]): Promise<ChatterCommentDto[]> {
-    const inList = this.sqlInUuidList(postIds);
-    if (!inList) return [];
+    const validIds = this.filterValidUuidList(postIds);
+    if (!validIds.length) return [];
 
-    const rows = await this.prisma.$queryRawUnsafe<Array<Record<string, unknown>>>(`
+    const rows = await this.prisma.$queryRaw<Array<Record<string, unknown>>>(Prisma.sql`
       SELECT
         c.id,
         c.postId,
@@ -766,7 +748,7 @@ export class ChatterPostsService implements OnModuleInit {
       FROM ErpTSChatterComment c
       LEFT JOIN ErpTSUser u ON u.id = c.authorId
       LEFT JOIN ErpTSRole r ON r.id = u.roleId
-      WHERE c.postId IN (${inList})
+      WHERE c.postId IN (${Prisma.join(validIds)})
       ORDER BY c.createdAt DESC`);
 
     const commentDtos = rows.map((row) => this.mapCommentRow(row));
@@ -818,7 +800,7 @@ export class ChatterPostsService implements OnModuleInit {
     const result = new Map<string, ChatterAttachmentDto[]>();
     if (ids.length === 0) return result;
 
-    const rows = await this.prisma.$queryRaw<Array<Record<string, unknown>>>`
+    const rows = await this.prisma.$queryRaw<Array<Record<string, unknown>>>(Prisma.sql`
       SELECT
         a.id,
         a.chatterPostId,
@@ -829,7 +811,7 @@ export class ChatterPostsService implements OnModuleInit {
         a.sizeBytes
       FROM ErpTSChatterPostAttachment a
       WHERE a.chatterPostId IN (${Prisma.join(ids)})
-      ORDER BY a.createdAt ASC`;
+      ORDER BY a.createdAt ASC`);
 
     // Generate signed URLs for each attachment
     for (const row of rows) {
@@ -870,7 +852,7 @@ export class ChatterPostsService implements OnModuleInit {
     const result = new Map<string, ChatterLinkAttachmentDto[]>();
     if (ids.length === 0) return result;
 
-    const rows = await this.prisma.$queryRaw<Array<Record<string, unknown>>>`
+    const rows = await this.prisma.$queryRaw<Array<Record<string, unknown>>>(Prisma.sql`
       SELECT
         l.id,
         l.chatterPostId,
@@ -879,7 +861,7 @@ export class ChatterPostsService implements OnModuleInit {
         l.platform
       FROM ErpTSLinkAttachment l
       WHERE l.chatterPostId IN (${Prisma.join(ids)})
-      ORDER BY l.createdAt ASC`;
+      ORDER BY l.createdAt ASC`);
 
     for (const row of rows) {
       const postId = String(row.chatterPostId);
@@ -974,7 +956,7 @@ export class ChatterPostsService implements OnModuleInit {
         projectNo: string | null;
         projectId: string | null;
       }>
-    >`
+    >(Prisma.sql`
       SELECT TOP 1
         t.title,
         t.taskNo,
@@ -984,7 +966,7 @@ export class ChatterPostsService implements OnModuleInit {
         t.projectId
       FROM ErpTSTask t
       LEFT JOIN ErpTSProject pr ON pr.id = t.projectId
-      WHERE t.id = ${taskId}`;
+      WHERE t.id = ${taskId}`);
     const row = rows[0];
     if (!row) {
       return { taskName: null, taskOpNo: null, projectName: null, projectNo: null, projectId: null };
@@ -1132,75 +1114,70 @@ export class ChatterPostsService implements OnModuleInit {
     const commentedByUserId = optionalUuid(commentedByUserIdFilter);
     const postType = postTypeFilter?.trim() || null;
 
-    const whereParts: string[] = [];
+    const whereFragments: Prisma.Sql[] = [];
     if (viewerRole === UserRole.QS) {
       if (!viewerId) throw new ForbiddenException('QS access requires an authenticated user');
-      whereParts.push(`EXISTS (
+      whereFragments.push(Prisma.sql`EXISTS (
         SELECT 1
         FROM ErpTSProjectQsAssignment qsa
-        WHERE qsa.qsUserId = ${sqlQuotedUuid(viewerId)}
+        WHERE qsa.qsUserId = ${viewerId}
           AND qsa.projectId = COALESCE(t.projectId, p.projectId)
       )`);
     }
     if (taskId) {
-      whereParts.push(`p.taskId = ${sqlQuotedUuid(taskId)}`);
+      whereFragments.push(Prisma.sql`p.taskId = ${taskId}`);
     } else if (projectId) {
-      const projectSql = sqlQuotedUuid(projectId);
-      whereParts.push(`(
-        t.projectId = ${projectSql}
-        OR p.projectId = ${projectSql}
+      whereFragments.push(Prisma.sql`(
+        t.projectId = ${projectId}
+        OR p.projectId = ${projectId}
       )`);
     }
     if (mentionUserId) {
-      const mentionSql = sqlQuotedUuid(mentionUserId);
-      whereParts.push(`(
-        p.mentionUserId = ${mentionSql}
+      whereFragments.push(Prisma.sql`(
+        p.mentionUserId = ${mentionUserId}
         OR EXISTS (
           SELECT 1 FROM ErpTSChatterPostMention pm
-          WHERE pm.postId = p.id AND pm.userId = ${mentionSql}
+          WHERE pm.postId = p.id AND pm.userId = ${mentionUserId}
         )
         OR EXISTS (
           SELECT 1 FROM ErpTSChatterComment cm
-          WHERE cm.postId = p.id AND cm.mentionUserId = ${mentionSql}
+          WHERE cm.postId = p.id AND cm.mentionUserId = ${mentionUserId}
         )
         OR EXISTS (
           SELECT 1 FROM ErpTSChatterComment cm
           INNER JOIN ErpTSChatterCommentMention cmm ON cmm.commentId = cm.id
-          WHERE cm.postId = p.id AND cmm.userId = ${mentionSql}
+          WHERE cm.postId = p.id AND cmm.userId = ${mentionUserId}
         )
       )`);
     }
     if (commentedByUserId) {
-      whereParts.push(`EXISTS (
+      whereFragments.push(Prisma.sql`EXISTS (
         SELECT 1 FROM ErpTSChatterComment cm
-        WHERE cm.postId = p.id AND cm.authorId = ${sqlQuotedUuid(commentedByUserId)}
+        WHERE cm.postId = p.id AND cm.authorId = ${commentedByUserId}
       )`);
     }
     if (postType) {
-      whereParts.push(`p.postType = N'${postType.replace(/'/g, "''")}'`);
+      whereFragments.push(Prisma.sql`p.postType = ${postType}`);
     }
     if (weekStartFilter?.trim()) {
       const range = weekRangeContaining(weekStartFilter.trim());
       if (range) {
-        const startSql = `'${range.start.toISOString().replace(/'/g, "''")}'`;
-        const endSql = `'${range.end.toISOString().replace(/'/g, "''")}'`;
-        whereParts.push(`p.createdAt >= ${startSql} AND p.createdAt <= ${endSql}`);
+        whereFragments.push(Prisma.sql`p.createdAt >= ${range.start} AND p.createdAt <= ${range.end}`);
       }
     }
     const cursorIso = optionalPaginationCursor(cursor);
     if (cursorIso) {
-      const cursorSql = `'${cursorIso.replace(/'/g, "''")}'`;
-      whereParts.push(`p.updatedAt < ${cursorSql}`);
+      whereFragments.push(Prisma.sql`p.updatedAt < ${cursorIso}`);
     }
 
-    const whereSql = whereParts.length > 0 ? `WHERE ${whereParts.join(' AND ')}` : '';
+    const whereClause = buildWhere(whereFragments);
     const fetchLimit = limit + 1;
 
-    const rows = await this.prisma.$queryRawUnsafe<Array<Record<string, unknown>>>(`
+    const rows = await this.prisma.$queryRaw<Array<Record<string, unknown>>>(Prisma.sql`
       SELECT TOP (${fetchLimit})
-        ${this.postSelectColumns('p')}
-      ${this.postJoinSql('p')}
-      ${whereSql}
+        ${Prisma.raw(this.postSelectColumns('p'))}
+      ${Prisma.raw(this.postJoinSql('p'))}
+      ${whereClause}
       ORDER BY p.updatedAt DESC, p.createdAt DESC
     `);
 
@@ -1223,11 +1200,11 @@ export class ChatterPostsService implements OnModuleInit {
   async loadPostById(postId: string): Promise<ChatterPostDto | null> {
     const id = optionalUuid(postId);
     if (!id) return null;
-    const rows = await this.prisma.$queryRawUnsafe<Array<Record<string, unknown>>>(`
+    const rows = await this.prisma.$queryRaw<Array<Record<string, unknown>>>(Prisma.sql`
       SELECT TOP (1)
-        ${this.postSelectColumns('p')}
-      ${this.postJoinSql('p')}
-      WHERE p.id = ${sqlQuotedUuid(id)}
+        ${Prisma.raw(this.postSelectColumns('p'))}
+      ${Prisma.raw(this.postJoinSql('p'))}
+      WHERE p.id = ${id}
     `);
     const row = rows[0];
     if (!row) return null;
@@ -1261,11 +1238,11 @@ export class ChatterPostsService implements OnModuleInit {
       throw new BadRequestException('postId must be a valid UUID');
     }
 
-    const postExists = await this.prisma.$queryRaw<Array<{ id: string; taskId: string | null; projectId: string | null }>>`
+    const postExists = await this.prisma.$queryRaw<Array<{ id: string; taskId: string | null; projectId: string | null }>>(Prisma.sql`
       SELECT TOP 1 p.id, p.taskId, COALESCE(t.projectId, p.projectId) AS projectId
       FROM ErpTSChatterPost p
       LEFT JOIN ErpTSTask t ON t.id = p.taskId
-      WHERE p.id = ${normalizedPostId}`;
+      WHERE p.id = ${normalizedPostId}`);
     if (!postExists.length) {
       throw new NotFoundException('Chatter post not found');
     }
@@ -1281,18 +1258,17 @@ export class ChatterPostsService implements OnModuleInit {
       postContext.projectId,
     );
     const mentionUserId = mentionUserIds[0] ?? optionalUuid(dto.mentionUserId);
-    const messageSql = `N'${dto.message.trim().replace(/'/g, "''")}'`;
-    const mentionSql = mentionUserId ? sqlQuotedUuid(mentionUserId) : 'NULL';
+    const message = dto.message.trim();
 
-    const idRows = await this.prisma.$queryRawUnsafe<Array<{ id: string }>>(`
+    const idRows = await this.prisma.$queryRaw<Array<{ id: string }>>(Prisma.sql`
       DECLARE @ids TABLE (cid uniqueidentifier);
       INSERT INTO ErpTSChatterComment (postId, authorId, mentionUserId, message, createdAt)
       OUTPUT INSERTED.id INTO @ids(cid)
       VALUES (
-        ${sqlQuotedUuid(normalizedPostId)},
-        ${sqlQuotedUuid(authorId)},
-        ${mentionSql},
-        ${messageSql},
+        ${normalizedPostId},
+        ${authorId},
+        ${mentionUserId},
+        ${message},
         SYSUTCDATETIME()
       );
       SELECT CONVERT(varchar(36), cid) AS id FROM @ids;
@@ -1302,10 +1278,10 @@ export class ChatterPostsService implements OnModuleInit {
       throw new BadRequestException('Failed to create chatter comment');
     }
 
-    await this.prisma.$executeRawUnsafe(`
+    await this.prisma.$executeRaw(Prisma.sql`
       UPDATE ErpTSChatterPost
       SET updatedAt = SYSUTCDATETIME()
-      WHERE id = ${sqlQuotedUuid(normalizedPostId)}
+      WHERE id = ${normalizedPostId}
     `);
 
     if (mentionUserIds.length > 0) {
@@ -1619,21 +1595,25 @@ export class ChatterPostsService implements OnModuleInit {
     const id = optionalUuid(postId);
     if (!id) throw new BadRequestException('postId must be a valid UUID');
 
-    const rows = await this.prisma.$queryRawUnsafe<Array<{ authorId: string | null; taskId: string | null; projectId: string | null }>>(
-      `SELECT TOP 1 CONVERT(varchar(36), authorId) AS authorId, CONVERT(varchar(36), taskId) AS taskId, CONVERT(varchar(36), projectId) AS projectId FROM ErpTSChatterPost WHERE id = ${sqlQuotedUuid(id)}`,
-    );
+    const rows = await this.prisma.$queryRaw<Array<{ authorId: string | null; taskId: string | null; projectId: string | null }>>(Prisma.sql`
+      SELECT TOP 1 CONVERT(varchar(36), authorId) AS authorId, CONVERT(varchar(36), taskId) AS taskId, CONVERT(varchar(36), projectId) AS projectId
+      FROM ErpTSChatterPost WHERE id = ${id}
+    `);
     if (!rows.length) throw new NotFoundException('Chatter post not found');
     if (!isSameUserId(rows[0].authorId, requesterId)) {
       throw new ForbiddenException('Only the post author can edit this post');
     }
 
-    const setParts: string[] = [`updatedAt = SYSUTCDATETIME()`, `editedAt = SYSUTCDATETIME()`];
-    if (dto.message !== undefined) setParts.push(`message = N'${dto.message.replace(/'/g, "''")}'`);
-    if (dto.title !== undefined) setParts.push(`title = N'${dto.title.replace(/'/g, "''")}'`);
+    const setFragments: Prisma.Sql[] = [
+      Prisma.sql`updatedAt = SYSUTCDATETIME()`,
+      Prisma.sql`editedAt = SYSUTCDATETIME()`,
+    ];
+    if (dto.message !== undefined) setFragments.push(Prisma.sql`message = ${dto.message}`);
+    if (dto.title !== undefined) setFragments.push(Prisma.sql`title = ${dto.title}`);
 
-    await this.prisma.$executeRawUnsafe(
-      `UPDATE ErpTSChatterPost SET ${setParts.join(', ')} WHERE id = ${sqlQuotedUuid(id)}`,
-    );
+    await this.prisma.$executeRaw(Prisma.sql`
+      UPDATE ErpTSChatterPost SET ${Prisma.join(setFragments, ', ')} WHERE id = ${id}
+    `);
 
     this.dashboardRealtime?.notifyChatterRefresh({
       event: 'chatter_post_updated',
@@ -1652,15 +1632,16 @@ export class ChatterPostsService implements OnModuleInit {
     const id = optionalUuid(postId);
     if (!id) throw new BadRequestException('postId must be a valid UUID');
 
-    const rows = await this.prisma.$queryRawUnsafe<Array<{ authorId: string | null; taskId: string | null; projectId: string | null }>>(
-      `SELECT TOP 1 CONVERT(varchar(36), authorId) AS authorId, CONVERT(varchar(36), taskId) AS taskId, CONVERT(varchar(36), projectId) AS projectId FROM ErpTSChatterPost WHERE id = ${sqlQuotedUuid(id)}`,
-    );
+    const rows = await this.prisma.$queryRaw<Array<{ authorId: string | null; taskId: string | null; projectId: string | null }>>(Prisma.sql`
+      SELECT TOP 1 CONVERT(varchar(36), authorId) AS authorId, CONVERT(varchar(36), taskId) AS taskId, CONVERT(varchar(36), projectId) AS projectId
+      FROM ErpTSChatterPost WHERE id = ${id}
+    `);
     if (!rows.length) throw new NotFoundException('Chatter post not found');
     if (!isSameUserId(rows[0].authorId, requesterId)) {
       throw new ForbiddenException('Only the post author can delete this post');
     }
 
-    await this.prisma.$executeRawUnsafe(`DELETE FROM ErpTSChatterPost WHERE id = ${sqlQuotedUuid(id)}`);
+    await this.prisma.$executeRaw(Prisma.sql`DELETE FROM ErpTSChatterPost WHERE id = ${id}`);
 
     this.dashboardRealtime?.notifyChatterRefresh({
       event: 'chatter_post_deleted',
@@ -1676,20 +1657,21 @@ export class ChatterPostsService implements OnModuleInit {
     const pid = optionalUuid(postId);
     if (!cid || !pid) throw new BadRequestException('postId and commentId must be valid UUIDs');
 
-    const rows = await this.prisma.$queryRawUnsafe<Array<{ authorId: string | null }>>(
-      `SELECT TOP 1 CONVERT(varchar(36), authorId) AS authorId FROM ErpTSChatterComment WHERE id = ${sqlQuotedUuid(cid)} AND postId = ${sqlQuotedUuid(pid)}`,
-    );
+    const rows = await this.prisma.$queryRaw<Array<{ authorId: string | null }>>(Prisma.sql`
+      SELECT TOP 1 CONVERT(varchar(36), authorId) AS authorId
+      FROM ErpTSChatterComment WHERE id = ${cid} AND postId = ${pid}
+    `);
     if (!rows.length) throw new NotFoundException('Comment not found');
     if (!isSameUserId(rows[0].authorId, requesterId)) {
       throw new ForbiddenException('Only the comment author can edit this comment');
     }
 
-    await this.prisma.$executeRawUnsafe(
-      `UPDATE ErpTSChatterComment SET message = N'${dto.message.replace(/'/g, "''")}' WHERE id = ${sqlQuotedUuid(cid)}`,
-    );
-    await this.prisma.$executeRawUnsafe(
-      `UPDATE ErpTSChatterPost SET updatedAt = SYSUTCDATETIME() WHERE id = ${sqlQuotedUuid(pid)}`,
-    );
+    await this.prisma.$executeRaw(Prisma.sql`
+      UPDATE ErpTSChatterComment SET message = ${dto.message} WHERE id = ${cid}
+    `);
+    await this.prisma.$executeRaw(Prisma.sql`
+      UPDATE ErpTSChatterPost SET updatedAt = SYSUTCDATETIME() WHERE id = ${pid}
+    `);
 
     this.dashboardRealtime?.notifyChatterRefresh({
       event: 'chatter_comment_created',
@@ -1707,18 +1689,19 @@ export class ChatterPostsService implements OnModuleInit {
     const pid = optionalUuid(postId);
     if (!cid || !pid) throw new BadRequestException('postId and commentId must be valid UUIDs');
 
-    const rows = await this.prisma.$queryRawUnsafe<Array<{ authorId: string | null }>>(
-      `SELECT TOP 1 CONVERT(varchar(36), authorId) AS authorId FROM ErpTSChatterComment WHERE id = ${sqlQuotedUuid(cid)} AND postId = ${sqlQuotedUuid(pid)}`,
-    );
+    const rows = await this.prisma.$queryRaw<Array<{ authorId: string | null }>>(Prisma.sql`
+      SELECT TOP 1 CONVERT(varchar(36), authorId) AS authorId
+      FROM ErpTSChatterComment WHERE id = ${cid} AND postId = ${pid}
+    `);
     if (!rows.length) throw new NotFoundException('Comment not found');
     if (!isSameUserId(rows[0].authorId, requesterId)) {
       throw new ForbiddenException('Only the comment author can delete this comment');
     }
 
-    await this.prisma.$executeRawUnsafe(`DELETE FROM ErpTSChatterComment WHERE id = ${sqlQuotedUuid(cid)}`);
-    await this.prisma.$executeRawUnsafe(
-      `UPDATE ErpTSChatterPost SET updatedAt = SYSUTCDATETIME() WHERE id = ${sqlQuotedUuid(pid)}`,
-    );
+    await this.prisma.$executeRaw(Prisma.sql`DELETE FROM ErpTSChatterComment WHERE id = ${cid}`);
+    await this.prisma.$executeRaw(Prisma.sql`
+      UPDATE ErpTSChatterPost SET updatedAt = SYSUTCDATETIME() WHERE id = ${pid}
+    `);
 
     this.dashboardRealtime?.notifyChatterRefresh({
       event: 'chatter_comment_deleted',
@@ -1739,27 +1722,25 @@ export class ChatterPostsService implements OnModuleInit {
     const ids = uniqueUuids(postIds);
     if (!ids.length) return { updates: [] };
 
-    const inList = this.sqlInUuidList(ids);
-    if (!inList) return { updates: [] };
+    const validIds = this.filterValidUuidList(ids);
+    if (!validIds.length) return { updates: [] };
 
-    const existingRows = await this.prisma.$queryRawUnsafe<
+    const existingRows = await this.prisma.$queryRaw<
       Array<{ id: string; taskId: string | null; projectId: string | null }>
-    >(`
+    >(Prisma.sql`
       SELECT
         CONVERT(varchar(36), id) AS id,
         CONVERT(varchar(36), taskId) AS taskId,
         CONVERT(varchar(36), projectId) AS projectId
       FROM ErpTSChatterPost
-      WHERE id IN (${inList})
+      WHERE id IN (${Prisma.join(validIds)})
     `);
-    const existingIds = existingRows.map((row) => String(row.id));
+    const existingIds = filterValidUuids(existingRows.map((row) => String(row.id)));
     if (!existingIds.length) return { updates: [] };
 
-    const uidSql = sqlQuotedUuid(uid);
-    const valueRows = existingIds.map((postId) => `(${sqlQuotedUuid(postId)}, ${uidSql})`).join(', ');
-    await this.prisma.$executeRawUnsafe(`
+    await this.prisma.$executeRaw(Prisma.sql`
       MERGE INTO ErpTSChatterPostSeen AS target
-      USING (VALUES ${valueRows}) AS src(postId, userId)
+      USING (VALUES ${Prisma.join(existingIds.map((postId) => Prisma.sql`(${postId}, ${uid})`))}) AS src(postId, userId)
       ON target.postId = src.postId AND target.userId = src.userId
       WHEN NOT MATCHED THEN INSERT (postId, userId, seenAt) VALUES (src.postId, src.userId, SYSUTCDATETIME());
     `);
@@ -1793,26 +1774,26 @@ export class ChatterPostsService implements OnModuleInit {
     const uid = optionalUuid(userId);
     if (!id || !uid) throw new BadRequestException('Invalid postId or userId');
 
-    const existing = await this.prisma.$queryRawUnsafe<Array<{ id: string }>>(
-      `SELECT TOP 1 id FROM ErpTSChatterPostLike WHERE postId = ${sqlQuotedUuid(id)} AND userId = ${sqlQuotedUuid(uid)}`,
-    );
+    const existing = await this.prisma.$queryRaw<Array<{ id: string }>>(Prisma.sql`
+      SELECT TOP 1 id FROM ErpTSChatterPostLike WHERE postId = ${id} AND userId = ${uid}
+    `);
 
     let liked: boolean;
     if (existing.length > 0) {
-      await this.prisma.$executeRawUnsafe(
-        `DELETE FROM ErpTSChatterPostLike WHERE postId = ${sqlQuotedUuid(id)} AND userId = ${sqlQuotedUuid(uid)}`,
-      );
+      await this.prisma.$executeRaw(Prisma.sql`
+        DELETE FROM ErpTSChatterPostLike WHERE postId = ${id} AND userId = ${uid}
+      `);
       liked = false;
     } else {
-      await this.prisma.$executeRawUnsafe(
-        `INSERT INTO ErpTSChatterPostLike (postId, userId) VALUES (${sqlQuotedUuid(id)}, ${sqlQuotedUuid(uid)})`,
-      );
+      await this.prisma.$executeRaw(Prisma.sql`
+        INSERT INTO ErpTSChatterPostLike (postId, userId) VALUES (${id}, ${uid})
+      `);
       liked = true;
     }
 
-    const countRows = await this.prisma.$queryRawUnsafe<Array<{ cnt: number }>>(
-      `SELECT COUNT(*) AS cnt FROM ErpTSChatterPostLike WHERE postId = ${sqlQuotedUuid(id)}`,
-    );
+    const countRows = await this.prisma.$queryRaw<Array<{ cnt: number }>>(Prisma.sql`
+      SELECT COUNT(*) AS cnt FROM ErpTSChatterPostLike WHERE postId = ${id}
+    `);
     const likeCount = Number(countRows[0]?.cnt ?? 0);
 
     return { likeCount, liked };
@@ -1829,10 +1810,9 @@ export class ChatterPostsService implements OnModuleInit {
     const roleName = requester?.role?.name ?? '';
     if (!['HOD', 'ADMIN'].includes(roleName)) throw new ForbiddenException('Only HOD or ADMIN can pin posts');
 
-    const pinVal = isPinned ? '1' : '0';
-    await this.prisma.$executeRawUnsafe(
-      `UPDATE ErpTSChatterPost SET isPinned = ${pinVal} WHERE id = ${sqlQuotedUuid(id)}`,
-    );
+    await this.prisma.$executeRaw(Prisma.sql`
+      UPDATE ErpTSChatterPost SET isPinned = ${isPinned ? 1 : 0} WHERE id = ${id}
+    `);
 
     return { isPinned };
   }
