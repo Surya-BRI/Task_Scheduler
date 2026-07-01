@@ -387,6 +387,7 @@ export function ProjectCreateTaskModal({ open, onClose, onCreated, submissionDat
               asBuiltHours:   disc.key === 'asBuilt' && disc.hoursKey ? Number(child[disc.hoursKey]) : undefined,
               bim:            disc.key === 'bim',
               deadline:       resolveDeadline(child.deadline),
+              attachments:    allAttachments.length > 0 ? allAttachments : undefined,
             })
           }
         }
@@ -406,7 +407,6 @@ export function ProjectCreateTaskModal({ open, onClose, onCreated, submissionDat
           dueDate: fallbackDeadline,
         },
         projectDetails: details,
-        attachments: allAttachments.length > 0 ? allAttachments : undefined,
       }
 
       const result = await apiClient.post('/tasks/extended', payload)
