@@ -2217,7 +2217,7 @@ export function TaskDetailsPage() {
                     </div>
                   )}
 
-                  {!isRetail && projectId ? (
+                  {isCreationRoute && !isRetail && projectId ? (
                     <div className="mt-4 border-t border-slate-200 pt-3">
                       {!isQs && !isQsCompleted ? (
                         <div className="flex items-center gap-2">

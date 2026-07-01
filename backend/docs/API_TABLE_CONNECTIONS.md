@@ -30,10 +30,11 @@ Prisma schema models (and mapped SQL tables) in `backend/prisma/schema.prisma`: 
 **Task Details & Attachments**
 8. `RetailTaskDetail` → `ErpTSRetailTaskDetail`
 9. `ProjectTaskDetail` → `ErpTSProjectTaskDetail`
-10. `ProjectSignRow` → `ErpTSProjectSignRow`
+10. `ProjectSignRow` → `ErpTSProjectSignRow` (project-scoped QS sign rows)
 11. `ProjectAttachment` → `ErpTSProjectAttachment`
 12. `RetailTaskDetailAttachment` → `ErpTSRetailTaskDetailAttachment`
 13. `ProjectTaskDetailAttachment` → `ErpTSProjectTaskDetailAttachment`
+- *(raw SQL, no Prisma model)* `ErpTSProjectQsStatus` — per-project QS workflow status, managed by `ProjectsService` via MERGE statements
 
 **Chatter & Communications**
 14. `ChatterPost` → `ErpTSChatterPost`
@@ -85,19 +86,24 @@ Prisma schema models (and mapped SQL tables) in `backend/prisma/schema.prisma`: 
 ### `projects`
 - Controller: `backend/src/projects/projects.controller.ts`
 - Service: `backend/src/projects/projects.service.ts`
-- Connected tables: `ErpTSProject`, `ErpTSProjectAttachment`, `ErpTSActivityLog`
+- Connected tables: `ErpTSProject`, `ErpTSProjectAttachment`, `ErpTSProjectSignRow`, `ErpTSProjectQsStatus` (raw SQL), `ErpTSActivityLog`
 - Fallback read source for hydration: ERP master project tables via `prisma.live` (`ErpMasterProject` + joins)
 - Key endpoints include:
-  - `GET /projects/by-project-no/:projectNo`
-  - `POST /projects/:id/files`
-  - `GET /projects/:id/files`
-  - `DELETE /projects/:id/files/:fileId`
-- `GET /projects/by-project-no/:projectNo` now hydrates missing app rows into `ErpTSProject` when project exists in ERP master source.
+  - `GET /projects/by-project-no/:projectNo` — hydrates missing rows into `ErpTSProject` from ERP master
+  - `POST /projects/:id/files`, `GET /projects/:id/files`, `DELETE /projects/:id/files/:fileId`
+  - `GET /projects/:id/sign-rows` — QS sign rows (HOD, DESIGNER, SALESPERSON, QS)
+  - `PUT /projects/:id/sign-rows` — full-replace sign rows (HOD, QS) — upserts by id, deletes removed rows
+  - `GET /projects/:id/qs-status` — project QS workflow status (HOD, QS)
+  - `PATCH /projects/:id/qs-status` — update status: Pending → In Progress → Completed (HOD, QS)
+  - `POST /projects/:id/qs-submit` — save sign rows + set status Completed in one atomic call (HOD, QS)
+- **Sign rows are project-scoped** (keyed by `projectId`), not task-scoped. Prior task-level sign row endpoints were removed in the QS refactor (2026-06-28).
+- QS status uses MERGE on `ErpTSProjectQsStatus`; `submittedAt` is set once on the first Completed transition and never reset.
 
 ### `tasks`
 - Controller: `backend/src/tasks/tasks.controller.ts`
 - Service: `backend/src/tasks/tasks.service.ts`
 - Connected tables: `ErpTSTask`, `ErpTSUser`, `ErpTSProject`, `ErpTSActivityLog`, `ErpTSRetailTaskDetail`, `ErpTSProjectTaskDetail`, `ErpTSRetailTaskDetailAttachment`, `ErpTSProjectTaskDetailAttachment`, `ErpTSTaskWorkSession`, `ErpTSTaskWorkSessionFile`
+- Note: QS sign rows and QS status were moved out of this module into `projects` as of 2026-06-28.
 - Extended create endpoint: `POST /tasks/extended` creates **one `ErpTSTask` per `projectDetails[]` entry** for project tasks — each entry maps to one discipline for one sign type. `task.projectName` required; missing value returns `400`.
 - Task title for project tasks is built as `[opNo, signType, disciplineType, revisionCode].join(' - ')`.
 - Duplicate check includes `disciplineType` — multiple discipline tasks can share the same project/opNo/signType/revision.

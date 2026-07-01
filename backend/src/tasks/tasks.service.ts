@@ -692,8 +692,37 @@ export class TasksService {
     }
 
     // ── PROJECT PATH: one ErpTSTask per sign-type detail line ───────────────
-    const createdTasks = await this.prisma.$transaction(async (tx) => {
-      const results: any[] = [];
+    const requestedRevision = this.normalizeRevisionCode(dto.task.revisionCode);
+
+    // Pre-flight: batch duplicate check outside the transaction (one query instead of N)
+    if (requestedRevision) {
+      const lines = dto.projectDetails ?? [];
+      const existing = await this.prisma.task.findMany({
+        where: {
+          projectId: project.id,
+          opNo: normalizedOpNo,
+          designType: normalizedDesignType,
+          revisionCode: requestedRevision,
+          OR: lines.map((line) => ({
+            signType: line.signType ?? null,
+            disciplineType: line.disciplineType?.trim() ?? null,
+          })),
+        },
+        select: { signType: true, disciplineType: true },
+      });
+      if (existing.length > 0) {
+        const label = [existing[0].signType ?? normalizedDesignType, existing[0].disciplineType].filter(Boolean).join(' — ');
+        throw new BadRequestException(
+          `Revision ${requestedRevision} already exists for "${label}" in this project/opNo.`,
+        );
+      }
+    }
+
+    // Only writes inside the transaction; reads moved out to avoid P2028 timeout.
+    // Transaction: writes only — no reads except resolveNextRevisionCode when revision not provided.
+    // Returns task IDs and detail IDs; attachments are batched outside in one createMany.
+    const created = await this.prisma.$transaction(async (tx) => {
+      const results: { taskId: string; detailId: string }[] = [];
 
       for (const line of dto.projectDetails ?? []) {
         const lineSignType = line.signType ?? null;
@@ -703,7 +732,6 @@ export class TasksService {
 
         for (let attempt = 0; attempt < 5; attempt++) {
           try {
-            const requestedRevision = this.normalizeRevisionCode(dto.task.revisionCode);
             const revisionCode =
               requestedRevision ??
               (await this.resolveNextRevisionCode(tx, {
@@ -712,24 +740,6 @@ export class TasksService {
                 designType: normalizedDesignType,
                 signType: lineSignType,
               }));
-
-            const duplicate = await tx.task.findFirst({
-              where: {
-                projectId: project.id,
-                opNo: normalizedOpNo,
-                designType: normalizedDesignType,
-                revisionCode,
-                signType: lineSignType,
-                disciplineType: lineDiscipline,
-              },
-              select: { id: true },
-            });
-            if (duplicate) {
-              const label = [lineSignType ?? normalizedDesignType, lineDiscipline].filter(Boolean).join(' — ');
-              throw new BadRequestException(
-                `Revision ${revisionCode} already exists for "${label}" in this project/opNo.`,
-              );
-            }
 
             const taskTitle = [normalizedOpNo, lineSignType, lineDiscipline, revisionCode].filter(Boolean).join(' - ') || dto.task.title?.trim() || null;
             const createdTask = await tx.task.create({
@@ -787,25 +797,32 @@ export class TasksService {
           select: { id: true },
         });
 
-        if ((line.attachments?.length ?? 0) > 0) {
-          await tx.projectTaskDetailAttachment.createMany({
-            data: (line.attachments ?? []).map((attachment) => ({
-              projectTaskDetailId: createdLine.id,
-              fileKey: attachment.fileKey,
-              fileName: attachment.fileName,
-              mimeType: attachment.mimeType ?? null,
-              sizeBytes:
-                typeof attachment.size === 'number' ? Math.round(attachment.size) : null,
-            })),
-          });
-        }
-
-        const full = await tx.task.findUnique({ where: { id: taskId }, select: TASK_SELECT });
-        results.push(full);
+        results.push({ taskId, detailId: createdLine.id });
       }
 
       return results;
-    });
+    }, { timeout: 30000 });
+
+    // One createMany for all attachments across all tasks (same files on every task).
+    const sharedAttachments = (dto.projectDetails?.[0]?.attachments ?? []);
+    if (sharedAttachments.length > 0) {
+      await this.prisma.projectTaskDetailAttachment.createMany({
+        data: created.flatMap(({ detailId }) =>
+          sharedAttachments.map((attachment) => ({
+            projectTaskDetailId: detailId,
+            fileKey: attachment.fileKey,
+            fileName: attachment.fileName,
+            mimeType: attachment.mimeType ?? null,
+            sizeBytes: typeof attachment.size === 'number' ? Math.round(attachment.size) : null,
+          })),
+        ),
+      });
+    }
+
+    // Fetch full task details outside the transaction (heavy joins would cause P2028 inside).
+    const createdTasks = await Promise.all(
+      created.map(({ taskId }) => this.prisma.task.findUnique({ where: { id: taskId }, select: TASK_SELECT })),
+    );
 
     // Log activity + notify for each created task
     const hodUsers = createdTasks.some((t) => t?.assigneeId)
@@ -815,9 +832,8 @@ export class TasksService {
         })
       : [];
 
-    for (const task of createdTasks) {
-      if (!task) continue;
-      await this.activityLogger.log({
+    await Promise.all(createdTasks.filter((t): t is NonNullable<typeof t> => t !== null).map((task) =>
+      this.activityLogger.log({
         action: ActivityAction.TASK_CREATED,
         userId,
         taskId: task.id,
@@ -828,7 +844,11 @@ export class TasksService {
           projectSnapshot: { id: task.project?.id, projectNo: task.project?.projectNo, name: task.project?.name },
           context: { source: 'tasks.createExtended', designType: dto.designType },
         },
-      });
+      }),
+    ));
+
+    for (const task of createdTasks) {
+      if (!task) continue;
 
       if (task.assigneeId) {
         const taskLink = `/project-task-view/${task.id}`;
