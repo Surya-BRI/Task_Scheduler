@@ -566,6 +566,18 @@ overtimeRequestId String → OvertimeRequest (CASCADE delete)
 createdAt         DateTime
 ```
 
+### ErpTSLeaveRescheduleSnapshot (raw SQL — no Prisma model)
+Auto-created on startup by `SchedulerAssignmentsService.onModuleInit`. Stores a JSON snapshot of each scheduler assignment row before it is displaced by an approved leave, so the original schedule can be restored if the leave is later revoked.
+```
+id              UNIQUEIDENTIFIER  PK DEFAULT newid()
+leaveRequestId  UNIQUEIDENTIFIER  NOT NULL
+assignmentId    UNIQUEIDENTIFIER  NOT NULL
+originalJson    NVARCHAR(MAX)     NOT NULL  ← full assignment row JSON
+createdAt       DATETIME2         DEFAULT sysutcdatetime()
+restoredAt      DATETIME2         NULL      ← set when leave is revoked and row is restored
+```
+Unique index: `(leaveRequestId, assignmentId)` — one snapshot per assignment per leave. Rows are never deleted; `restoredAt` is stamped once on revocation.
+
 ### TaskWorkSession (ErpTSTaskWorkSession)
 ```
 id              String @id
@@ -733,11 +745,11 @@ Chatter list responses include `authorName` and `authorRole`.
 |--------|-------|------|-------------|
 | GET | `/regularization-requests` | None | List (query: designerId UUID) |
 | GET | `/regularization-requests/:id` | None | Get by ID |
-| GET | `/regularization-requests/task-options` | None | Tasks available for regularization |
+| GET | `/regularization-requests/task-options` | None | Tasks assigned to designer on date (query: designerId, date YYYY-MM-DD) |
 | GET | `/regularization-requests/pending-approvals` | None | HOD: pending approvals queue |
 | GET | `/regularization-requests/team-requests` | None | HOD: team requests (query: status, designerId) |
 | POST | `/regularization-requests` | None | Create request |
-| POST | `/regularization-requests/:id/review` | None | HOD: review (approve/reject) |
+| POST | `/regularization-requests/:id/review` | None | HOD: review (approve/reject) — HOD own requests auto-approved |
 | PATCH | `/regularization-requests/:id` | None | Update status |
 
 ### Overtime Requests (`/overtime-requests`)
@@ -745,6 +757,7 @@ Chatter list responses include `authorName` and `authorRole`.
 |--------|-------|------|-------------|
 | GET | `/overtime-requests` | None | List for designer (query: designerId) |
 | GET | `/overtime-requests/:id` | None | Get by ID |
+| GET | `/overtime-requests/task-options` | None | Tasks assigned to designer on date (query: designerId, date YYYY-MM-DD) |
 | GET | `/overtime-requests/my-requests` | None | Own requests (query: status, startDate, endDate) |
 | GET | `/overtime-requests/pending-approvals` | None | HOD: pending approvals |
 | GET | `/overtime-requests/team-requests` | None | HOD: team requests (query: status, designerId) |
@@ -753,11 +766,15 @@ Chatter list responses include `authorName` and `authorRole`.
 | GET | `/overtime-requests/export` | None | HOD: export report (query: status) |
 | POST | `/overtime-requests` | None | Create (optional file attachment) |
 | PUT | `/overtime-requests/:id` | None | Update (optional file) |
-| POST | `/overtime-requests/:id/submit` | None | Submit request |
+| POST | `/overtime-requests/:id/submit` | None | Submit — HOD self-submit auto-approves immediately |
 | POST | `/overtime-requests/:id/withdraw` | None | Withdraw request |
 | POST | `/overtime-requests/:id/attachment` | None | Upload attachment to existing request |
 | POST | `/overtime-requests/:id/review` | None | HOD: review/approve |
 | DELETE | `/overtime-requests/:id` | None | Delete |
+
+**HOD self-overtime rule:** When a HOD submits an overtime request for themselves, the request is auto-approved on `POST /overtime-requests/:id/submit` — it never enters `PENDING` status.
+
+**Task-options endpoints:** Both `overtime-requests/task-options` and `regularization-requests/task-options` return only tasks where the designer is the assignee or listed in `ErpTSTaskDesigner` on that specific date. `designerId` and `date` are required query params.
 
 ### Requests/Leave (`/requests`)
 | Method | Route | Auth | Description |
@@ -768,9 +785,19 @@ Chatter list responses include `authorName` and `authorRole`.
 | POST | `/requests` | JWT | Create leave request |
 | PATCH | `/requests/:id` | JWT | Update own request |
 | POST | `/requests/:id/cancel` | JWT | Cancel request (Designer) |
-| POST | `/requests/:id/review` | JWT | Approve/reject request (HOD) |
-| POST | `/requests/:id/revoke` | JWT | Revoke approved request (HOD) |
+| POST | `/requests/:id/review` | JWT | Approve/reject request (HOD) — approval triggers scheduler rescheduling |
+| POST | `/requests/:id/revoke` | JWT | Revoke approved request (HOD) — revocation restores snapshots |
 | PATCH | `/requests/:id/status` | JWT | Update status (HOD) |
+
+**Leave approval → scheduler rescheduling:** When a leave request is approved via `POST /requests/:id/review`, `RequestsService` invokes `SchedulerAssignmentsService.rescheduleForApprovedLeave`. This:
+1. Finds all scheduler assignments overlapping the leave period for the designer.
+2. Snapshots each displaced assignment row into `ErpTSLeaveRescheduleSnapshot`.
+3. Pushes those assignments forward to the next available working days (skipping weekends and holidays in `ErpTSHoliday`).
+4. Logs a `SCHEDULER_LEAVE_RESCHEDULED` activity event.
+
+**Leave revocation → snapshot restore:** When a leave is revoked via `POST /requests/:id/revoke`, `SchedulerAssignmentsService.revokeLeaveReschedule` loads snapshots for that `leaveRequestId`, restores each assignment to its original state, then stamps `restoredAt` on the snapshot rows.
+
+**Half-day leave:** `halfDaySession` on `LeaveRequest` (`FIRST_HALF` | `SECOND_HALF`) controls which session is blocked. The scheduler UI (`designerDashboardSync.js`) normalizes this and visually reorders tasks in the affected day slot — tasks are sorted so they appear before or after the leave block based on the session.
 
 ### Activities (`/activities`)
 | Method | Route | Auth | Roles | Description |
@@ -1216,9 +1243,9 @@ Cursor-based pagination used for activities: `{ data: [], pageInfo: { hasMore, n
 ### Activity Logging
 `ActivityLog` records are created automatically in task/project services on significant state changes.
 
-**Currently logged:** `TASK_CREATED`, `ASSIGNED_TASK`, `STATUS_CHANGED`, `TASK_FILE_UPLOADED`, `PROJECT_FILE_UPLOADED`, `PROJECT_FILE_DELETED`, `CREATED_CHATTER_POST`, `CREATED_CHATTER_COMMENT`, `TASK_WORK_SUBMITTED`, `SCHEDULER_WEEK_SAVED`, `SCHEDULER_WEEK_LOCKED`, `SCHEDULER_WEEK_UNLOCKED`
+**Currently logged:** `TASK_CREATED`, `ASSIGNED_TASK`, `STATUS_CHANGED`, `TASK_FILE_UPLOADED`, `PROJECT_FILE_UPLOADED`, `PROJECT_FILE_DELETED`, `CREATED_CHATTER_POST`, `CREATED_CHATTER_COMMENT`, `TASK_WORK_SUBMITTED`, `SCHEDULER_WEEK_SAVED`, `SCHEDULER_WEEK_LOCKED`, `SCHEDULER_WEEK_UNLOCKED`, `SCHEDULER_LEAVE_RESCHEDULED`
 
-**Not yet logged:** Leave/overtime/regularization lifecycle events, chatter reactions/likes/edits/deletes, dashboard views.
+**Not yet logged:** Leave/overtime/regularization lifecycle events (approval, rejection, withdrawal), chatter reactions/likes/edits/deletes, dashboard views.
 
 Full coverage list: `backend/docs/ACTIVITY_LOG_COVERAGE.md`
 
