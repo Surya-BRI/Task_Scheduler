@@ -105,6 +105,8 @@ type LeaveRescheduleSnapshotRow = {
 @Injectable()
 export class SchedulerAssignmentsService implements OnModuleInit {
   private readonly logger = new Logger(SchedulerAssignmentsService.name);
+  private snapshotTableReady = false;
+
   constructor(
     private readonly prisma: PrismaService,
     _config: ConfigService,
@@ -115,6 +117,7 @@ export class SchedulerAssignmentsService implements OnModuleInit {
 
   async onModuleInit(): Promise<void> {
     try {
+      // security-sql:allow-static-ddl
       await this.prisma.$executeRawUnsafe(`
         IF OBJECT_ID('dbo.ErpTSHoliday', 'U') IS NULL
         BEGIN
@@ -134,6 +137,7 @@ export class SchedulerAssignmentsService implements OnModuleInit {
     }
 
     try {
+      // security-sql:allow-static-ddl
       await this.prisma.$executeRawUnsafe(`
         IF OBJECT_ID('dbo.ErpTSLeaveRescheduleSnapshot', 'U') IS NULL
         BEGIN
@@ -149,9 +153,12 @@ export class SchedulerAssignmentsService implements OnModuleInit {
             ON dbo.ErpTSLeaveRescheduleSnapshot (leaveRequestId, assignmentId);
         END
       `);
+      this.snapshotTableReady = true;
     } catch (err) {
       const detail = err instanceof Error ? err.message : String(err);
-      this.logger.warn(`Could not ensure leave reschedule snapshot table: ${detail}`);
+      this.logger.error(
+        `Leave reschedule snapshot table unavailable — leave approval/revocation will fail. Cause: ${detail}`,
+      );
     }
   }
 
@@ -551,6 +558,12 @@ export class SchedulerAssignmentsService implements OnModuleInit {
     rows: Array<{ row: unknown; id: string }>,
   ): Promise<void> {
     if (!leaveRequestId || rows.length === 0) return;
+    if (!this.snapshotTableReady) {
+      throw new HttpException(
+        'Leave reschedule snapshot table is not available. Cannot approve leave — scheduler state would be unrestorable.',
+        HttpStatus.SERVICE_UNAVAILABLE,
+      );
+    }
 
     for (const entry of rows) {
       await tx.$executeRaw`
@@ -572,6 +585,12 @@ export class SchedulerAssignmentsService implements OnModuleInit {
     leaveRequestId: string | undefined,
   ): Promise<LeaveRescheduleSnapshotRow[]> {
     if (!leaveRequestId) return [];
+    if (!this.snapshotTableReady) {
+      throw new HttpException(
+        'Leave reschedule snapshot table is not available. Cannot revoke leave — original schedule cannot be restored.',
+        HttpStatus.SERVICE_UNAVAILABLE,
+      );
+    }
     return tx.$queryRaw<LeaveRescheduleSnapshotRow[]>`
       SELECT assignmentId, originalJson
       FROM dbo.ErpTSLeaveRescheduleSnapshot
@@ -588,6 +607,12 @@ export class SchedulerAssignmentsService implements OnModuleInit {
     leaveRequestId: string | undefined,
   ): Promise<void> {
     if (!leaveRequestId) return;
+    if (!this.snapshotTableReady) {
+      throw new HttpException(
+        'Leave reschedule snapshot table is not available. Cannot mark snapshots as restored.',
+        HttpStatus.SERVICE_UNAVAILABLE,
+      );
+    }
     await tx.$executeRaw`
       UPDATE dbo.ErpTSLeaveRescheduleSnapshot
       SET restoredAt = sysutcdatetime()

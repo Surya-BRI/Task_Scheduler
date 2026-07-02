@@ -51,11 +51,13 @@ Prisma schema models (and mapped SQL tables) in `backend/prisma/schema.prisma`: 
 23. `OvertimeRequest` → `ErpTSOvertimeRequest`
 24. `OvertimeApprovalHistory` → `ErpTSOvertimeApprovalHistory`
 25. `OvertimeAttachment` → `ErpTSOvertimeAttachment`
+- *(raw SQL, no Prisma model)* `ErpTSLeaveRescheduleSnapshot` — assignment snapshots taken before leave-driven rescheduling; used to restore on revocation. Auto-created by `SchedulerAssignmentsService.onModuleInit`.
 
 **Scheduler**
 26. `SchedulerAssignment` → `ErpTSSchedulerAssignment`
 27. `SchedulerWeek` → `ErpTSSchedulerWeek`
 28. `SchedulerAssignmentHistory` → `ErpTSSchedulerAssignmentHistory`
+29. `Holiday` → `ErpTSHoliday` (holiday calendar; skipped during leave rescheduling)
 
 **Activity, Notifications & Inbox**
 29. `ActivityLog` → `ErpTSActivityLog`
@@ -141,39 +143,43 @@ Prisma schema models (and mapped SQL tables) in `backend/prisma/schema.prisma`: 
   - `GET /requests/pending-approvals` — HOD approval queue
   - `GET /requests/team-requests` — HOD team view
   - `POST /requests/:id/cancel` — cancel (Designer)
-  - `POST /requests/:id/review` — approve/reject (HOD)
-  - `POST /requests/:id/revoke` — revoke approved (HOD)
+  - `POST /requests/:id/review` — approve/reject (HOD); approval triggers `SchedulerAssignmentsService.rescheduleForApprovedLeave`
+  - `POST /requests/:id/revoke` — revoke approved (HOD); triggers `SchedulerAssignmentsService.revokeLeaveReschedule` to restore snapshots
 
 ### `regularization-requests`
 - Controller: `backend/src/regularization-requests/regularization-requests.controller.ts`
 - Service: `backend/src/regularization-requests/regularization-requests.service.ts`
 - Connected table: `ErpTSRegularizationRequest` (raw SQL via Prisma)
 - Key endpoints:
-  - `GET /regularization-requests/task-options` — tasks for selection
+  - `GET /regularization-requests/task-options` — tasks assigned to designer on date (query: designerId, date); validates both assigneeId and TaskDesigner entries
   - `GET /regularization-requests/pending-approvals` — HOD queue
   - `GET /regularization-requests/team-requests` — HOD team view
-  - `POST /regularization-requests/:id/review` — HOD review
+  - `POST /regularization-requests/:id/review` — HOD review; HOD self-requests auto-approved
 
 ### `overtime-requests`
 - Controller: `backend/src/overtime-requests/overtime-requests.controller.ts`
 - Service: `backend/src/overtime-requests/overtime-requests.service.ts`
 - Connected tables: `ErpTSOvertimeRequest`, `ErpTSOvertimeApprovalHistory`, `ErpTSOvertimeAttachment`
 - Key endpoints:
+  - `GET /overtime-requests/task-options` — tasks assigned to designer on date (query: designerId, date); validates both assigneeId and TaskDesigner entries
   - `GET /overtime-requests/my-requests` — own requests with filters
   - `GET /overtime-requests/pending-approvals` — HOD queue
   - `GET /overtime-requests/team-requests` — HOD team view
   - `GET /overtime-requests/all` — HOD paginated all
   - `GET /overtime-requests/statistics` — HOD stats
   - `GET /overtime-requests/export` — HOD export
-  - `POST /overtime-requests/:id/submit` — submit
+  - `POST /overtime-requests/:id/submit` — submit; HOD self-submit auto-approves (skips PENDING)
   - `POST /overtime-requests/:id/withdraw` — withdraw
   - `POST /overtime-requests/:id/attachment` — upload file
   - `POST /overtime-requests/:id/review` — HOD review
+- **Leave conflict validation:** Blocks OT/regularization creation if designer has a full-day or second-half leave on the same date.
 
 ### `scheduler-assignments`
 - Controller: `backend/src/scheduler-assignments/scheduler-assignments.controller.ts`
 - Service: `backend/src/scheduler-assignments/scheduler-assignments.service.ts`
-- Connected tables: `ErpTSSchedulerAssignment`, `ErpTSSchedulerWeek`, `ErpTSSchedulerAssignmentHistory`
+- Connected tables: `ErpTSSchedulerAssignment`, `ErpTSSchedulerWeek`, `ErpTSSchedulerAssignmentHistory`, `ErpTSHoliday`, `ErpTSLeaveRescheduleSnapshot` (raw SQL)
+- **Leave rescheduling:** `rescheduleForApprovedLeave(leave)` — displaces assignments overlapping the leave window, snapshots each to `ErpTSLeaveRescheduleSnapshot`, and reschedules them to next available working days (skips weekends + `ErpTSHoliday` entries). Capacity cap is `DAILY_CAPACITY (8h)`, not `MAX_DAILY_HOURS (12h)`.
+- **Leave revocation:** `revokeLeaveReschedule(leaveId)` — loads unrestored snapshots, restores assignment rows, stamps `restoredAt`.
 
 ### `design-list`
 - Controller: `backend/src/design-list/design-list.controller.ts`
