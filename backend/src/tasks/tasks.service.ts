@@ -328,7 +328,7 @@ export class TasksService {
       const normalized = value.toLowerCase().replace(/[\s-]/g, '');
       const candidates = await this.prisma.project.findMany({
         where: { projectNo: { not: null } },
-        select: { id: true, projectNo: true, name: true, category: true, businessUnit: true, description: true, status: true, salesPerson: true, createdById: true, createdAt: true, updatedAt: true },
+        select: { id: true, projectNo: true, name: true, category: true, businessUnit: true, description: true, status: true, salesPerson: true, technicalHead: true, teamLead: true, subTeamLead: true, designers: true, createdById: true, createdAt: true, updatedAt: true },
         take: 5000,
       });
       return (
@@ -515,6 +515,28 @@ export class TasksService {
     }
 
     const project = await this.resolveOrCreateProjectForExtended(dto.task, dto.designType);
+
+    if (dto.designType === 'Project') {
+      const teamIncomplete =
+        !project.technicalHead?.trim() ||
+        !project.teamLead?.trim() ||
+        !project.subTeamLead?.trim() ||
+        !project.designers?.trim();
+      if (teamIncomplete) {
+        throw new BadRequestException(
+          'Project team must be assigned before creating tasks. Set Technical Head, Team Lead, Sub Team Lead and at least one Designer first.',
+        );
+      }
+
+      const qsStatusRows = await this.prisma.$queryRaw<Array<{ status: string }>>(Prisma.sql`
+        SELECT TOP 1 [status] FROM [dbo].[ErpTSProjectQsStatus] WHERE [projectId] = ${project.id}
+      `);
+      const qsStatus = (qsStatusRows[0]?.status ?? '').trim().toLowerCase();
+      if (qsStatus !== 'completed') {
+        throw new BadRequestException('QS must submit the sign register first.');
+      }
+    }
+
     await this.assignProjectToQsTeam(project.id, userId, {
       name: project.name,
       projectNo: project.projectNo,

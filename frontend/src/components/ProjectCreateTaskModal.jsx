@@ -18,7 +18,6 @@ const DISCIPLINES = [
   { key: 'technical', label: 'Technical', hoursKey: 'techHours' },
   { key: 'location',  label: 'Location',  hoursKey: 'locationHours' },
   { key: 'asBuilt',   label: 'As-Built',  hoursKey: 'asBuiltHours' },
-  { key: 'bim',       label: 'BIM',       hoursKey: null },
 ]
 
 function getPriorityClasses(level) {
@@ -38,25 +37,34 @@ function emptyWorkFields(base) {
     locationHours: '',
     asBuilt: false,
     asBuiltHours: '',
-    bim: false,
     deadline: '',
   }
 }
 
-function buildRowsFromApi(groups) {
-  return groups.map((group) => ({
-    id: `family-${group.signFmilyId ?? group.signfamily}`,
-    signType: group.signfamily,
-    children: group.signTypes.map((st) =>
+function buildRowsFromSignRows(signRows) {
+  const familyOrder = []
+  const byFamily = new Map()
+  for (const row of signRows ?? []) {
+    const family = row.signFamily || 'Other'
+    if (!byFamily.has(family)) {
+      byFamily.set(family, [])
+      familyOrder.push(family)
+    }
+    byFamily.get(family).push(
       emptyWorkFields({
-        id: `sign-${st.signTypeId}`,
-        signType: st.signCode,
-        quantity: st.quantity,
-        area: st.area,
-        description: st.description,
-        estimationStatus: st.estimationStatus,
+        id: `sign-${row.id}`,
+        signType: row.signType || '',
+        quantity: row.qsQty ?? '',
+        area: row.areaZone || '',
+        description: row.comment || '',
+        estimationStatus: row.status || '',
       }),
-    ),
+    )
+  }
+  return familyOrder.map((family) => ({
+    id: `family-${family}`,
+    signType: family,
+    children: byFamily.get(family),
   }))
 }
 
@@ -83,13 +91,11 @@ function TickBox({ checked, onChange }) {
   )
 }
 
-export function ProjectCreateTaskModal({ open, onClose, onCreated, submissionDate, record }) {
+export function ProjectCreateTaskModal({ open, onClose, onCreated, submissionDate, record, signRows, isQsSignRegisterComplete }) {
   const titleId = useId()
   const revisionFetched = useRef(false)
   const fileInputRef = useRef(null)
   const [rows, setRows] = useState([])
-  const [rowsLoading, setRowsLoading] = useState(false)
-  const [rowsError, setRowsError] = useState('')
   const [expanded, setExpanded] = useState(() => new Set())
   const [selectedSignType, setSelectedSignType] = useState('')
   const [planCode, setPlanCode] = useState('')
@@ -153,37 +159,14 @@ export function ProjectCreateTaskModal({ open, onClose, onCreated, submissionDat
     setLinkError('')
   }, [open, submissionDate])
 
-  // Fetch sign types from live DB when modal opens
+  // Build sign types from the QS-submitted sign register (passed in as a prop —
+  // task creation is gated on QS having already saved this data).
   useEffect(() => {
-    if (!open || !record) return
-    const opNo = String(record.opNo ?? '').trim()
-    if (!opNo) {
-      setRows([])
-      setRowsError('No OP code found for this project — cannot load sign types.')
-      return
-    }
-    let alive = true
-    setRowsLoading(true)
-    setRowsError('')
-    apiClient
-      .get(`/design-list/project-sign-types?salesForceCode=${encodeURIComponent(opNo)}`)
-      .then((groups) => {
-        if (!alive) return
-        const list = Array.isArray(groups) ? groups : []
-        const built = buildRowsFromApi(list)
-        setRows(built)
-        // Auto-expand all families that have children
-        setExpanded(new Set(built.filter((r) => (r.children?.length ?? 0) > 0).map((r) => r.id)))
-        if (built.length === 0) setRowsError('No approved sign types found for this project in the ERP.')
-      })
-      .catch((err) => {
-        if (!alive) return
-        setRowsError(err instanceof Error ? err.message : 'Failed to load sign types from ERP.')
-        setRows([])
-      })
-      .finally(() => { if (alive) setRowsLoading(false) })
-    return () => { alive = false }
-  }, [open, record])
+    if (!open) return
+    const built = buildRowsFromSignRows(signRows)
+    setRows(built)
+    setExpanded(new Set(built.filter((r) => (r.children?.length ?? 0) > 0).map((r) => r.id)))
+  }, [open, signRows])
 
   // Fetch next revision code
   useEffect(() => {
@@ -203,7 +186,7 @@ export function ProjectCreateTaskModal({ open, onClose, onCreated, submissionDat
 
   function rowHasSelection(r) {
     return (
-      r.artwork || r.technical || r.location || r.asBuilt || r.bim ||
+      r.artwork || r.technical || r.location || r.asBuilt ||
       String(r.artHours ?? '').trim() !== '' ||
       String(r.techHours ?? '').trim() !== '' ||
       String(r.locationHours ?? '').trim() !== '' ||
@@ -263,6 +246,10 @@ export function ProjectCreateTaskModal({ open, onClose, onCreated, submissionDat
                 if (field === 'technical' && value && !child.techHours) updates.techHours = '1'
                 if (field === 'location' && value && !child.locationHours) updates.locationHours = '1'
                 if (field === 'asBuilt' && value && !child.asBuiltHours) updates.asBuiltHours = '1'
+                const isDisciplineToggle = DISCIPLINES.some((d) => d.key === field)
+                if (isDisciplineToggle && value && !child.deadline && deadlineInputValue) {
+                  updates.deadline = deadlineInputValue
+                }
                 return { ...child, ...updates }
               }),
             }
@@ -385,7 +372,6 @@ export function ProjectCreateTaskModal({ open, onClose, onCreated, submissionDat
               locationHours:  disc.key === 'location' && disc.hoursKey ? Number(child[disc.hoursKey]) : undefined,
               asBuilt:        disc.key === 'asBuilt',
               asBuiltHours:   disc.key === 'asBuilt' && disc.hoursKey ? Number(child[disc.hoursKey]) : undefined,
-              bim:            disc.key === 'bim',
               deadline:       resolveDeadline(child.deadline),
               attachments:    allAttachments.length > 0 ? allAttachments : undefined,
             })
@@ -593,32 +579,24 @@ export function ProjectCreateTaskModal({ open, onClose, onCreated, submissionDat
             <button type="button" onClick={clearNeeds} className="h-10 rounded-md border border-slate-300 px-5 text-sm text-slate-700 transition hover:bg-slate-50">Reset / Clear</button>
           </div>
 
-          {rowsLoading ? (
-            <div className="flex items-center justify-center rounded-lg border border-slate-200 py-16 text-sm text-slate-500">
-              Loading sign types from ERP…
-            </div>
-          ) : rowsError ? (
-            <div className="rounded-lg border border-red-200 bg-red-50 px-4 py-6 text-center text-sm text-red-700">
-              {rowsError}
-            </div>
-          ) : (
-            <div className="overflow-hidden rounded-lg border border-slate-200">
+          <div className="overflow-hidden rounded-lg border border-slate-200">
               {/* Table header */}
-              <div className="grid grid-cols-[1.6fr_0.7fr_0.6fr_0.8fr_0.6fr_0.8fr_0.6fr_0.8fr_0.6fr_0.5fr_1fr] bg-slate-700 text-xs font-semibold text-white">
+              <div className="grid grid-cols-[1.6fr_0.7fr_0.6fr_0.8fr_0.6fr_0.8fr_0.6fr_0.8fr_0.6fr_1fr] bg-slate-700 text-xs font-semibold text-white">
                 <div className="bg-emerald-600 px-3 py-2">Sign Type</div>
-                <div className="px-2 py-2">Artwork</div>
-                <div className="px-2 py-2">Hours</div>
-                <div className="px-2 py-2">Technical</div>
-                <div className="px-2 py-2">Hours</div>
-                <div className="px-2 py-2">Location</div>
-                <div className="px-2 py-2">Hours</div>
-                <div className="px-2 py-2">As Built</div>
-                <div className="px-2 py-2">Hours</div>
-                <div className="px-2 py-2">BIM</div>
+                <div className="px-2 py-2 text-center">Artwork</div>
+                <div className="px-2 py-2 text-center">Hours</div>
+                <div className="px-2 py-2 text-center">Technical</div>
+                <div className="px-2 py-2 text-center">Hours</div>
+                <div className="px-2 py-2 text-center">Location</div>
+                <div className="px-2 py-2 text-center">Hours</div>
+                <div className="px-2 py-2 text-center">As Built</div>
+                <div className="px-2 py-2 text-center">Hours</div>
                 <div className="bg-amber-500 px-2 py-2">Deadline</div>
               </div>
               <div className="max-h-[360px] overflow-auto">
-                {rows.length === 0 ? (
+                {!isQsSignRegisterComplete ? (
+                  <div className="px-4 py-10 text-center text-sm text-red-600">Sign types pending from QS.</div>
+                ) : rows.length === 0 ? (
                   <div className="px-4 py-10 text-center text-sm text-slate-500">No sign types available.</div>
                 ) : rows.map((row) => {
                   const hasChildren = (row.children?.length ?? 0) > 0
@@ -644,7 +622,7 @@ export function ProjectCreateTaskModal({ open, onClose, onCreated, submissionDat
                         <div
                           key={child.id}
                           id={`sign-row-child-${child.id}`}
-                          className="grid grid-cols-[1.6fr_0.7fr_0.6fr_0.8fr_0.6fr_0.8fr_0.6fr_0.8fr_0.6fr_0.5fr_1fr] items-center border-t border-slate-100 bg-white text-xs"
+                          className="grid grid-cols-[1.6fr_0.7fr_0.6fr_0.8fr_0.6fr_0.8fr_0.6fr_0.8fr_0.6fr_1fr] items-center border-t border-slate-100 bg-white text-xs"
                         >
                           <div className="px-6 py-1.5 font-medium text-slate-700" title={child.description || ''}>{child.signType}</div>
                           <div className="px-2 py-1.5 text-center"><TickBox checked={child.artwork} onChange={(v) => updateChildField(row.id, child.id, 'artwork', v)} /></div>
@@ -655,7 +633,6 @@ export function ProjectCreateTaskModal({ open, onClose, onCreated, submissionDat
                           <div className="px-1 py-1.5"><TableInput type="number" value={child.locationHours} onChange={(v) => updateChildField(row.id, child.id, 'locationHours', v)} /></div>
                           <div className="px-2 py-1.5 text-center"><TickBox checked={child.asBuilt} onChange={(v) => updateChildField(row.id, child.id, 'asBuilt', v)} /></div>
                           <div className="px-1 py-1.5"><TableInput type="number" value={child.asBuiltHours} onChange={(v) => updateChildField(row.id, child.id, 'asBuiltHours', v)} /></div>
-                          <div className="px-2 py-1.5 text-center"><TickBox checked={child.bim} onChange={(v) => updateChildField(row.id, child.id, 'bim', v)} /></div>
                           <div className="px-2 py-1.5">
                             <input
                               type="date"
@@ -675,7 +652,6 @@ export function ProjectCreateTaskModal({ open, onClose, onCreated, submissionDat
                 })}
               </div>
             </div>
-          )}
 
           <div className="flex items-center justify-between pt-2">
             <div className="rounded bg-blue-50 px-3 py-2 text-sm text-blue-700">
@@ -687,7 +663,7 @@ export function ProjectCreateTaskModal({ open, onClose, onCreated, submissionDat
               onClick={handleCreateTasks}
               className="rounded-md bg-blue-600 px-8 py-2.5 text-sm font-semibold text-white shadow-sm transition hover:bg-blue-700 focus:outline-none focus-visible:ring-2 focus-visible:ring-blue-500 focus-visible:ring-offset-2 disabled:pointer-events-none disabled:opacity-45"
               disabled={
-                rowsLoading ||
+                !isQsSignRegisterComplete ||
                 selectedCount === 0 ||
                 submitting ||
                 !REVISION_PATTERN.test(revisionCode.trim().toUpperCase()) ||

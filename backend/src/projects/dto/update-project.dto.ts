@@ -39,4 +39,8 @@ export class UpdateProjectDto {
   @IsOptional()
   @IsString()
   subTeamLead?: string;
+
+  @IsOptional()
+  @IsString()
+  designers?: string;
 }

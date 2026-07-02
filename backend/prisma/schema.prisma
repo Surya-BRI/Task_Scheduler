@@ -97,6 +97,7 @@ model Project {
   technicalHead  String?  @db.NVarChar(255)
   teamLead       String?  @db.NVarChar(255)
   subTeamLead    String?  @db.NVarChar(255)
+  designers      String?  @db.NVarChar(Max)
   createdById    String?  @db.UniqueIdentifier
   createdBy    User?    @relation("ProjectCreator", fields: [createdById], references: [id], onDelete: NoAction, onUpdate: NoAction)
   tasks        Task[]

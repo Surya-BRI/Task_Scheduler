@@ -1942,8 +1942,29 @@ export function DesignSchedulerScreen() {
                         {visibleDays.map(dayIndex => {
                     const rawTasksInDay = designerDays[dayIndex.toString()] || [];
                     const regularTaskIds = rawTasksInDay.filter((taskId) => !tasks[taskId]?.isOvertime);
-                    const visualRegularTaskIds = sortRegularTaskIdsForVisualSession(regularTaskIds, tasks);
-                    const overtimeTaskIds = rawTasksInDay.filter((taskId) => tasks[taskId]?.isOvertime);
+
+                    // Split regular tasks into within-capacity and overflow (beyond 8h) so the
+                    // HOD can see which task is pushing the designer into overtime even without
+                    // a formal OT request.
+                    let _cumulativeHours = 0;
+                    const withinCapacityTaskIds = [];
+                    const overflowTaskIds = [];
+                    for (const taskId of regularTaskIds) {
+                      const hrs = Number(tasks[taskId]?.estimatedHours) || 0;
+                      if (_cumulativeHours >= DAILY_CAPACITY) {
+                        overflowTaskIds.push(taskId);
+                      } else {
+                        withinCapacityTaskIds.push(taskId);
+                        _cumulativeHours += hrs;
+                      }
+                    }
+
+                    const visualRegularTaskIds = sortRegularTaskIdsForVisualSession(withinCapacityTaskIds, tasks);
+                    // Merge approved OT request tasks with overflow tasks from regular scheduling
+                    const overtimeTaskIds = [
+                      ...rawTasksInDay.filter((taskId) => tasks[taskId]?.isOvertime),
+                      ...overflowTaskIds,
+                    ];
                     const isWeekend = dayIndex >= 5;
                     const dayHours = getDayHours(designer.id, dayIndex);
                     const overtimeHours = getDayOvertimeHours(designer.id, dayIndex);

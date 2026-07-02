@@ -21,14 +21,19 @@ const TASK_BG = {
 };
 
 function TaskBlock({ task, onOtClick }) {
-  const bgClass = task.colorClass || TASK_BG[task.color] || "bg-slate-100 border border-slate-300 text-slate-800";
-  const canRequestOvertime = onOtClick && !task.isSystemBlock;
+  const bgClass = task.isOvertime
+    ? "bg-red-100 border border-red-300 text-red-800"
+    : task.colorClass || TASK_BG[task.color] || "bg-slate-100 border border-slate-300 text-slate-800";
+  const canRequestOvertime = onOtClick && !task.isSystemBlock && !task.isOvertime;
   return (
     <div className="h-full flex items-center w-full relative z-10 px-0.5 group/task">
       <div className={`h-[24px] w-full min-w-0 rounded flex items-center justify-between px-1 shadow-sm transition-shadow truncate ${bgClass}`}>
         <div className="text-[9px] font-semibold truncate leading-none mr-1 select-none pointer-events-none">{task.label}</div>
         <div className="flex items-center gap-0.5 shrink-0">
           <span className="text-[8px] font-bold opacity-70">{task.estimatedHours || (task.endHr - task.startHr)}h</span>
+          {task.isOvertime && (
+            <span className="text-[7px] font-bold bg-red-500 text-white rounded px-0.5 py-px leading-none ml-0.5">OT</span>
+          )}
           {canRequestOvertime && (
             <button
               type="button"
@@ -60,6 +65,7 @@ function SchedulerRow({ day, daySlot, dayDate, onOtClick }) {
       endHr: Math.min(task.endHr ?? 0, boundedEnd),
     }))
     .filter((task) => task.endHr > task.startHr);
+  const hasOvertimeTasks = timelineTasks.some((t) => t.isOvertime);
 
   return (
     <div className="flex border-b border-slate-100 group relative min-h-[56px] items-stretch">
@@ -99,6 +105,15 @@ function SchedulerRow({ day, daySlot, dayDate, onOtClick }) {
             );
           })}
 
+          {!isWeekend && hasOvertimeTasks && (
+            <div
+              className="absolute top-0 bottom-0 z-20 pointer-events-none flex flex-col items-center"
+              style={{ left: `${(NORMAL_COL_COUNT / TOTAL_COLS) * 100}%` }}
+            >
+              <div className="w-px h-full bg-red-400/60" />
+              <span className="absolute top-1 text-[7px] font-bold text-red-500 bg-white/90 px-0.5 rounded leading-none whitespace-nowrap -translate-x-1/2">OVERTIME</span>
+            </div>
+          )}
           {!isWeekend && (
             <div className="absolute inset-0 pointer-events-none">
               {timelineTasks.map((task, index) => {

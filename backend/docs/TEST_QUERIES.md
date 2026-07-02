@@ -80,6 +80,40 @@ ORDER BY al.createdAt DESC
 
 ---
 
+## Project Team
+
+**Team assignment for a specific project (by projectNo):**
+```sql
+SELECT id, projectNo, name, technicalHead, teamLead, subTeamLead, designers, updatedAt
+FROM ErpTSProject
+WHERE projectNo = '<project-no>'
+```
+
+**Team assignment by project UUID:**
+```sql
+SELECT id, projectNo, name, technicalHead, teamLead, subTeamLead, designers, updatedAt
+FROM ErpTSProject
+WHERE id = '<project-id>'
+```
+
+**Projects still missing a full team (blocked from creating tasks):**
+```sql
+SELECT id, projectNo, name, technicalHead, teamLead, subTeamLead, designers
+FROM ErpTSProject
+WHERE technicalHead IS NULL OR teamLead IS NULL OR subTeamLead IS NULL OR designers IS NULL
+ORDER BY updatedAt DESC
+```
+
+**Recently saved team assignments:**
+```sql
+SELECT TOP 20 id, projectNo, name, technicalHead, teamLead, subTeamLead, designers, updatedAt
+FROM ErpTSProject
+WHERE technicalHead IS NOT NULL OR teamLead IS NOT NULL OR subTeamLead IS NOT NULL OR designers IS NOT NULL
+ORDER BY updatedAt DESC
+```
+
+---
+
 ## Designer Workload
 
 **All tasks currently assigned to a designer:**

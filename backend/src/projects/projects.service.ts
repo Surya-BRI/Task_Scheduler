@@ -25,6 +25,7 @@ const PROJECT_SELECT = {
   technicalHead: true,
   teamLead: true,
   subTeamLead: true,
+  designers: true,
   createdById: true,
   createdBy: { select: { id: true, fullName: true } },
   _count: { select: { tasks: true } },
@@ -500,6 +501,7 @@ END;
         technicalHead: dto.technicalHead !== undefined ? (dto.technicalHead?.trim() || null) : undefined,
         teamLead: dto.teamLead !== undefined ? (dto.teamLead?.trim() || null) : undefined,
         subTeamLead: dto.subTeamLead !== undefined ? (dto.subTeamLead?.trim() || null) : undefined,
+        designers: dto.designers !== undefined ? (dto.designers?.trim() || null) : undefined,
       },
       select: PROJECT_SELECT,
     });

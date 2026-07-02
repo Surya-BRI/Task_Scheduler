@@ -1863,12 +1863,23 @@ export class SchedulerAssignmentsService implements OnModuleInit {
         });
       }
 
-      // Propagate corrected splitIndex/totalParts to other weeks' rows
-      for (const upd of otherWeekUpdates) {
-        await tx.schedulerAssignment.update({
-          where: { id: upd.id },
-          data: { splitIndex: upd.splitIndex, totalParts: upd.totalParts },
-        });
+      // Propagate corrected splitIndex/totalParts to other weeks' rows (single batch, not N round trips)
+      if (otherWeekUpdates.length > 0) {
+        const splitIndexCases = Prisma.join(
+          otherWeekUpdates.map((u) => Prisma.sql`WHEN id = ${u.id} THEN ${u.splitIndex}`),
+          ' ',
+        );
+        const totalPartsCases = Prisma.join(
+          otherWeekUpdates.map((u) => Prisma.sql`WHEN id = ${u.id} THEN ${u.totalParts}`),
+          ' ',
+        );
+        const ids = Prisma.join(otherWeekUpdates.map((u) => u.id));
+        await tx.$executeRaw`
+          UPDATE ErpTSSchedulerAssignment
+          SET splitIndex  = CASE ${splitIndexCases} END,
+              totalParts  = CASE ${totalPartsCases} END
+          WHERE id IN (${ids})
+        `;
       }
 
       const prevTaskIds = Array.from(new Set(previousRows.map((r: any) => r.taskId).filter(Boolean))) as string[];
@@ -2030,7 +2041,7 @@ export class SchedulerAssignmentsService implements OnModuleInit {
         reassignedTasks,
         splitTasks,
       };
-    });
+    }, { timeout: 30_000 });
 
     this.logger.debug(`[SCHED-NOTIFY] changed=${result.changed} reassignedCount=${result.reassignedTasks?.length ?? 0}`);
     if (result.changed && result.reassignedTasks?.length) {
