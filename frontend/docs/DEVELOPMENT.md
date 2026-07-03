@@ -15,7 +15,9 @@ Create `frontend/.env.local` from `frontend/.env.example`.
 
 | Variable | Purpose |
 |----------|---------|
-| `NEXT_PUBLIC_API_BASE_URL` | Base URL for REST calls (must include `/api/v1` if your API uses that prefix). |
+| `NEXT_PUBLIC_API_BASE_URL` | Base URL for REST calls. Local default: `http://localhost:7000/api/v1`. Production default: `/api/v1` (same-origin; proxied to Nest via `API_PROXY_TARGET`). |
+| `API_PROXY_TARGET` | Server-only backend origin for Next.js rewrites (e.g. `https://task-scheduler.app-brisigns.com`). |
+| `NEXT_PUBLIC_WS_ORIGIN` | Optional WebSocket origin when API is same-origin proxied (defaults to browser origin). |
 | `NEXT_PUBLIC_WEB_URL` | Public site URL (e.g. `http://localhost:5000`). |
 | `NEXT_PUBLIC_APP_NAME` | Display name in UI. |
 
@@ -41,8 +43,8 @@ Open http://localhost:5000 — root redirects to `/login` unless you change `src
 
 ## Auth and API client
 
-- Login stores the JWT in **localStorage** (`task_scheduler_access_token`).
-- `src/lib/api-client.ts` attaches `Authorization: Bearer …` and redirects to `/login` on `401` for protected calls (not on failed `/auth/login`).
+- Login stores the JWT in an **httpOnly cookie** (`access_token`) on the frontend host via `/api/auth/login`.
+- `src/lib/api-client.ts` calls the proxied API with `credentials: 'include'` and redirects to `/login` on `401`.
 
 If the API runs on a non-default host/port, update `NEXT_PUBLIC_API_BASE_URL` and ensure backend `CORS_ORIGIN` includes `http://localhost:5000`.
 

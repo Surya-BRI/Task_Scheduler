@@ -2,6 +2,16 @@ import { io, type Socket } from 'socket.io-client';
 import { env } from './env';
 
 function getSocketOrigin(): string {
+  if (env.apiBaseUrl.startsWith('/')) {
+    const wsOrigin = process.env.NEXT_PUBLIC_WS_ORIGIN?.trim();
+    if (wsOrigin) {
+      return wsOrigin.replace(/\/$/, '');
+    }
+    if (typeof window !== 'undefined') {
+      return window.location.origin;
+    }
+    return '';
+  }
   return env.apiBaseUrl.replace(/\/api\/v1\/?$/, '');
 }
 

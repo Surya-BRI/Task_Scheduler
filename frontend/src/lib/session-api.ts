@@ -44,7 +44,12 @@ export async function ensureSession() {
 
 export async function logoutSession() {
   try {
-    await apiClient.post('/auth/logout', {});
+    await fetch('/api/auth/logout', {
+      method: 'POST',
+      credentials: 'include',
+      headers: { 'Content-Type': 'application/json' },
+      body: '{}',
+    });
   } catch {
     // Cookie may already be cleared server-side.
   } finally {
