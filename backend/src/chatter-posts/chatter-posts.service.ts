@@ -11,6 +11,7 @@ import {
 } from '@nestjs/common';
 import { Prisma } from '@prisma/client';
 import { PrismaService } from '../prisma/prisma.service';
+import { shouldRunRuntimeSchemaBootstrap } from '../common/utils/runtime-schema-bootstrap.util';
 import { UsersService } from '../users/users.service';
 import { CreateChatterCommentDto } from './dto/create-chatter-comment.dto';
 import { CreateChatterPostDto } from './dto/create-chatter-post.dto';
@@ -128,6 +129,10 @@ export class ChatterPostsService implements OnModuleInit {
   ) {}
 
   async onModuleInit(): Promise<void> {
+    if (!shouldRunRuntimeSchemaBootstrap()) {
+      this.logger.debug('Skipping chatter runtime DDL (use prisma migrate deploy)');
+      return;
+    }
     try {
       // security-sql:allow-static-ddl
       await this.prisma.$executeRawUnsafe(`

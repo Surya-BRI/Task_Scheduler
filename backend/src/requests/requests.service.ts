@@ -13,6 +13,7 @@ import { PrismaService } from '../prisma/prisma.service';
 import { ActivityLoggerService } from '../activities/activity-logger.service';
 import { ActivityAction } from '../activities/activity-events';
 import { UserRole } from '../common/constants/roles.enum';
+import { shouldRunRuntimeSchemaBootstrap } from '../common/utils/runtime-schema-bootstrap.util';
 import { assertValidLeaveReason } from '../common/constants/leave-reasons';
 import { CreateLeaveRequestDto } from './dto/create-request.dto';
 import { ReviewLeaveRequestDto } from './dto/review-leave-request.dto';
@@ -76,6 +77,10 @@ export class RequestsService implements OnModuleInit {
   ) {}
 
   async onModuleInit(): Promise<void> {
+    if (!shouldRunRuntimeSchemaBootstrap()) {
+      this.logger.debug('Skipping leave-request runtime DDL (use prisma migrate deploy)');
+      return;
+    }
     try {
       // security-sql:allow-static-ddl
       await this.prisma.$executeRawUnsafe(`
@@ -983,6 +988,10 @@ export class RequestsService implements OnModuleInit {
     const reviewedAt = new Date();
     const approverRemarks = dto.remarks?.trim() || null;
 
+    if (status === 'APPROVED') {
+      await this.schedulerAssignments?.rescheduleForApprovedLeave(existing, reviewerId);
+    }
+
     const req = await this.prisma.leaveRequest.update({
       where: { id },
       data: {
@@ -1022,7 +1031,6 @@ export class RequestsService implements OnModuleInit {
     );
 
     if (status === 'APPROVED') {
-      await this.schedulerAssignments?.rescheduleForApprovedLeave(req, reviewerId);
       await this.touchSchedulerWeeksForLeave(req, reviewerId);
     }
     this.dashboardRealtime?.notifyOverviewRefresh(
@@ -1079,6 +1087,8 @@ export class RequestsService implements OnModuleInit {
       select: { fullName: true },
     });
 
+    await this.schedulerAssignments?.rescheduleAfterLeaveRevocation?.(existing, reviewerId);
+
     const revokedAt = new Date();
     const req = await this.prisma.leaveRequest.update({
       where: { id },
@@ -1126,7 +1136,6 @@ export class RequestsService implements OnModuleInit {
       revokedAt,
     );
 
-    await this.schedulerAssignments?.rescheduleAfterLeaveRevocation?.(req, reviewerId);
     await this.touchSchedulerWeeksForLeave(existing, reviewerId);
     this.dashboardRealtime?.notifyOverviewRefresh('leave_revoked');
     this.dashboardRealtime?.notifyUserNotificationRefresh(existing.userId);

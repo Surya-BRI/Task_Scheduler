@@ -112,6 +112,29 @@ const TASK_SELECT = {
   updatedAt: true,
 };
 
+const PROJECT_LOOKUP_SELECT = {
+  id: true,
+  projectNo: true,
+  name: true,
+  category: true,
+  businessUnit: true,
+  description: true,
+  status: true,
+  salesPerson: true,
+  technicalHead: true,
+  teamLead: true,
+  subTeamLead: true,
+  designers: true,
+  createdById: true,
+  createdAt: true,
+  updatedAt: true,
+};
+
+type ProjectLookup = Omit<
+  Prisma.ProjectGetPayload<{ select: typeof PROJECT_LOOKUP_SELECT }>,
+  'designers'
+> & { designers: string | null };
+
 const TASK_LIST_SELECT = {
   id: true,
   taskNo: true,
@@ -315,20 +338,21 @@ export class TasksService {
     return { projectId, opNo, designType, revisionCode };
   }
 
-  private async resolveProjectForCreate(task: { projectId?: string; projectNo?: string; opNo?: string }) {
-    const tryFindByProjectNo = async (raw: string | undefined) => {
+  private async resolveProjectForCreate(task: { projectId?: string; projectNo?: string; opNo?: string }): Promise<ProjectLookup> {
+    const tryFindByProjectNo = async (raw: string | undefined): Promise<ProjectLookup | null> => {
       const value = (raw ?? '').trim();
       if (!value) return null;
 
       const exact = await this.prisma.project.findFirst({
         where: { projectNo: value },
+        select: PROJECT_LOOKUP_SELECT,
       });
       if (exact) return exact;
 
       const normalized = value.toLowerCase().replace(/[\s-]/g, '');
       const candidates = await this.prisma.project.findMany({
         where: { projectNo: { not: null } },
-        select: { id: true, projectNo: true, name: true, category: true, businessUnit: true, description: true, status: true, salesPerson: true, technicalHead: true, teamLead: true, subTeamLead: true, designers: true, createdById: true, createdAt: true, updatedAt: true },
+        select: PROJECT_LOOKUP_SELECT,
         take: 5000,
       });
       return (
@@ -360,7 +384,7 @@ export class TasksService {
       businessUnit?: string;
     },
     designType: 'Retail' | 'Project',
-  ) {
+  ): Promise<ProjectLookup> {
     const requestedName = (task.projectName ?? '').trim();
     if (!requestedName) {
       throw new BadRequestException('projectName is required when creating task from project context');
@@ -372,6 +396,7 @@ export class TasksService {
         return this.prisma.project.update({
           where: { id: existing.id },
           data: { name: requestedName },
+          select: PROJECT_LOOKUP_SELECT,
         });
       }
       return existing;
@@ -396,6 +421,7 @@ export class TasksService {
         status: 'ACTIVE',
         salesPerson: null,
       },
+      select: PROJECT_LOOKUP_SELECT,
     });
   }
 
@@ -1805,31 +1831,33 @@ export class TasksService {
     const task = await this.prisma.task.findUnique({ where: { id: taskId } });
     if (!task) throw new NotFoundException('Task not found');
 
-    const existing = await this.prisma.taskWorkSession.findFirst({
-      where: { taskId, designerId: userId, status: 'Draft' },
-    });
+    return this.prisma.$transaction(async (tx) => {
+      const existing = await tx.taskWorkSession.findFirst({
+        where: { taskId, designerId: userId, status: 'Draft' },
+      });
 
-    if (existing) {
-      await this.prisma.taskWorkSession.update({
-        where: { id: existing.id },
+      if (existing) {
+        await tx.taskWorkSession.update({
+          where: { id: existing.id },
+          data: {
+            durationSeconds: dto.accumulatedSeconds,
+            pauseLog: dto.pauseLog ?? existing.pauseLog,
+          },
+        });
+        return { sessionId: existing.id };
+      }
+
+      const created = await tx.taskWorkSession.create({
         data: {
+          taskId,
+          designerId: userId,
           durationSeconds: dto.accumulatedSeconds,
-          pauseLog: dto.pauseLog ?? existing.pauseLog,
+          pauseLog: dto.pauseLog ?? null,
+          status: 'Draft',
         },
       });
-      return { sessionId: existing.id };
-    }
-
-    const created = await this.prisma.taskWorkSession.create({
-      data: {
-        taskId,
-        designerId: userId,
-        durationSeconds: dto.accumulatedSeconds,
-        pauseLog: dto.pauseLog ?? null,
-        status: 'Draft',
-      },
+      return { sessionId: created.id };
     });
-    return { sessionId: created.id };
   }
 
   private async getAssignedProjectIdsForQsUser(userId: string) {

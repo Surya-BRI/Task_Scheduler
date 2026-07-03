@@ -62,6 +62,8 @@ export const envValidationSchema = Joi.object({
   AWS_REGION: Joi.string().optional(),
   AWS_BUCKET: Joi.string().optional(),
   AWS_FOLDER: Joi.string().max(128).pattern(/^[a-zA-Z0-9/_-]+$/).optional(),
+  /** When true, services run boot-time CREATE/ALTER DDL. Default: true in dev/test, false in production. */
+  RUNTIME_SCHEMA_BOOTSTRAP: Joi.boolean().truthy('true').falsy('false').optional(),
 }).custom((value, helpers) => {
   const hasDatabaseUrl = !!value.DATABASE_URL;
   const hasDbParts =
