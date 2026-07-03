@@ -122,3 +122,17 @@ CHECK ([status] IN ('PENDING','WIP','COMPLETED','REVISION','APPROVED','ON_HOLD')
 2. Rebuild + restart PM2.
 3. Confirm logs are clean.
 
+## 9. Health checks (post-deploy)
+
+Verify the API is ready before sending traffic:
+
+```bash
+curl -sf http://localhost:7000/api/v1/health
+curl -sf http://localhost:7000/api/v1/health/ready
+```
+
+- **Liveness** (`/health`) — process is up
+- **Readiness** (`/health/ready`) — database is reachable (use for deploy gates)
+
+See [backend/docs/RELIABILITY.md](backend/docs/RELIABILITY.md) for graceful shutdown, timeouts, and cron protection.
+
