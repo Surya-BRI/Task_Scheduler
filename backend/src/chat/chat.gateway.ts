@@ -12,6 +12,7 @@ import {
 import { Server, Socket } from 'socket.io';
 import { ChatService } from './chat.service';
 import { SendMessageDto } from './dto/send-message.dto';
+import { extractAccessTokenFromSocket } from '../common/utils/extract-socket-token.util';
 
 @WebSocketGateway()
 export class ChatGateway implements OnGatewayConnection, OnGatewayDisconnect {
@@ -33,16 +34,11 @@ export class ChatGateway implements OnGatewayConnection, OnGatewayDisconnect {
    */
   async handleConnection(client: Socket) {
     try {
-      let token = client.handshake.auth?.token || client.handshake.headers?.authorization;
+      const token = extractAccessTokenFromSocket(client);
       if (!token) {
         this.logger.warn(`Connection rejected: No token provided on socket ${client.id}`);
         client.disconnect();
         return;
-      }
-
-      // Remove Bearer prefix if present
-      if (token.startsWith('Bearer ')) {
-        token = token.slice(7);
       }
 
       const payload = await this.jwtService.verifyAsync(token);

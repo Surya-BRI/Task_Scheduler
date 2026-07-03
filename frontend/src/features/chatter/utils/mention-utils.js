@@ -1,3 +1,5 @@
+import DOMPurify from 'isomorphic-dompurify';
+
 /**
  * @param {Array<{ id: string, fullName: string }>} users
  * @returns {string[]}
@@ -111,6 +113,15 @@ export function applyChatterRichTextFormatting(text) {
  * @param {Array<{ id: string, fullName: string }>} users
  * @param {{ linkMentions?: boolean }} [options]
  */
+const CHATTER_HTML_CONFIG = {
+  ALLOWED_TAGS: ['a', 'strong', 'em', 'del', 'u', 'br', 'span'],
+  ALLOWED_ATTR: ['href', 'class', 'data-mention-user'],
+};
+
+export function sanitizeChatterHtml(html) {
+  return DOMPurify.sanitize(String(html ?? ''), CHATTER_HTML_CONFIG);
+}
+
 export function formatMessageHtml(message, users = [], options = {}) {
   const { linkMentions = true } = options;
   const sorted = [...users].sort(
@@ -160,7 +171,7 @@ export function formatMessageHtml(message, users = [], options = {}) {
   }
 
   if (replacements.length === 0) {
-    return applyChatterRichTextFormatting(html);
+    return sanitizeChatterHtml(applyChatterRichTextFormatting(html));
   }
 
   let out = '';
@@ -172,5 +183,5 @@ export function formatMessageHtml(message, users = [], options = {}) {
   }
   out += html.slice(cursor);
 
-  return applyChatterRichTextFormatting(out);
+  return sanitizeChatterHtml(applyChatterRichTextFormatting(out));
 }

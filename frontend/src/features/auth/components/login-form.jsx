@@ -1,12 +1,11 @@
 'use client';
 
 import { useState } from 'react';
-import { useRouter } from 'next/navigation';
+import { useRouter, useSearchParams } from 'next/navigation';
 import { Eye, EyeOff, Lock, Mail, ShieldCheck } from 'lucide-react';
-import { getHomeRoute } from '@/lib/mock-auth';
+import { getHomeRoute, setSession } from '@/lib/mock-auth';
 import { buildSessionForUser } from '@/lib/designers';
 import { loginApi } from '@/features/auth/services/auth.api';
-import { setAccessToken } from '@/lib/auth-token';
 
 
 const IS_DEV = process.env.NODE_ENV !== 'production';
@@ -26,6 +25,8 @@ const DEMO_ACCOUNTS = IS_DEV
 
 export function LoginForm() {
   const router = useRouter();
+  const searchParams = useSearchParams();
+  const sessionExpired = searchParams.get('expired') === '1';
   const [email, setEmail] = useState('');
   const [password, setPassword] = useState('');
   const [showPassword, setShowPassword] = useState(false);
@@ -40,13 +41,8 @@ export function LoginForm() {
     try {
       await new Promise((r) => setTimeout(r, 400));
       const response = await loginApi(email, password);
-      // Persist JWT for API calls
-      setAccessToken(response.accessToken);
-      // Persist session profile to localStorage so mock-auth helpers still work
       const session = buildSessionForUser(response.user);
-      if (typeof window !== 'undefined') {
-        localStorage.setItem('br_session', JSON.stringify(session));
-      }
+      setSession(session);
       router.push(getHomeRoute(session));
     } catch (err) {
       setError(err.message || 'Login failed. Check your credentials.');
@@ -104,6 +100,12 @@ export function LoginForm() {
           </button>
         </div>
       </div>
+
+      {sessionExpired && !error && (
+        <div className="flex items-center gap-2 rounded-lg bg-amber-50 border border-amber-200 px-3 py-2.5 text-sm text-amber-800">
+          Your session expired. Please sign in again.
+        </div>
+      )}
 
       {error && (
         <div className="flex items-center gap-2 rounded-lg bg-red-50 border border-red-200 px-3 py-2.5 text-sm text-red-700">

@@ -2,11 +2,10 @@
 
 import { useEffect, useState } from 'react'
 import { useRouter } from 'next/navigation'
-import { getSession, getHomeRoute } from '@/lib/mock-auth'
+import { getSession, getHomeRoute, ensureSession } from '@/lib/mock-auth'
 
 /**
- * Client-side role guard. Returns true once the session is confirmed to have
- * one of the allowed roles. Redirects to the role's home route otherwise.
+ * Client-side role guard backed by server session (/auth/me).
  * @param {string[]} allowedRoles
  * @returns {boolean}
  */
@@ -15,17 +14,31 @@ export function useRoleGuard(allowedRoles) {
   const [authorized, setAuthorized] = useState(false)
 
   useEffect(() => {
-    const session = getSession()
-    if (!session) {
-      router.replace('/login')
-      return
+    let cancelled = false
+
+    async function verify() {
+      let session = getSession()
+      if (!session) {
+        session = await ensureSession()
+      }
+      if (cancelled) return
+
+      if (!session) {
+        router.replace('/login')
+        return
+      }
+      if (allowedRoles && !allowedRoles.includes(session.role)) {
+        router.replace(getHomeRoute(session))
+        return
+      }
+      setAuthorized(true)
     }
-    if (allowedRoles && !allowedRoles.includes(session.role)) {
-      router.replace(getHomeRoute(session))
-      return
+
+    void verify()
+    return () => {
+      cancelled = true
     }
-    setAuthorized(true)
-  }, [router])
+  }, [router, allowedRoles])
 
   return authorized
 }

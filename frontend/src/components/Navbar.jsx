@@ -106,8 +106,9 @@ function ProfileDropdown({ session }) {
 
   const handleLogout = () => {
     setOpen(false)
-    mockLogout()
-    router.push('/login')
+    void mockLogout().finally(() => {
+      router.push('/login')
+    })
   }
 
   // Colour badge per role

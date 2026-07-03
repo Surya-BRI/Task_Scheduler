@@ -1,10 +1,17 @@
 import { parseApiErrorMessage } from './api-error';
-import { clearAccessToken, getAccessToken } from './auth-token';
+import { clearSession } from './session';
 import { env } from './env';
 import { dateReviver } from './utils';
 
+function redirectToLogin(expired = false) {
+  if (typeof window === 'undefined') return;
+  if (window.location.pathname.startsWith('/login')) return;
+  const next = encodeURIComponent(`${window.location.pathname}${window.location.search}`);
+  const suffix = expired ? '&expired=1' : '';
+  window.location.href = `/login?next=${next}${suffix}`;
+}
+
 async function request<T>(path: string, init?: RequestInit): Promise<T> {
-  const token = getAccessToken();
   const headers = new Headers(init?.headers);
   if (!(init?.body instanceof FormData)) {
     headers.set('Content-Type', 'application/json');
@@ -12,15 +19,12 @@ async function request<T>(path: string, init?: RequestInit): Promise<T> {
     headers.delete('Content-Type');
   }
 
-  if (token) {
-    headers.set('Authorization', `Bearer ${token}`);
-  }
-
   let response: Response;
   try {
     response = await fetch(`${env.apiBaseUrl}${path}`, {
       ...init,
       headers,
+      credentials: 'include',
     });
   } catch (err) {
     const hint =
@@ -33,7 +37,8 @@ async function request<T>(path: string, init?: RequestInit): Promise<T> {
   }
 
   if (response.status === 401) {
-    clearAccessToken();
+    clearSession();
+    redirectToLogin(true);
     throw new Error('Unauthorized');
   }
 
@@ -42,13 +47,10 @@ async function request<T>(path: string, init?: RequestInit): Promise<T> {
     throw new Error(parseApiErrorMessage(errorBody, response.status));
   }
 
-  // 204 No Content — return undefined cast to T (callers that use void are fine)
   if (response.status === 204) {
     return undefined as unknown as T;
   }
 
-  // Use a date-aware reviver so ISO strings are automatically parsed into
-  // Date objects — this keeps all date fields as Date throughout the app.
   const text = await response.text();
   if (!text.trim()) {
     return undefined as unknown as T;
@@ -80,4 +82,3 @@ export const apiClient = {
     return request(path, { method: 'DELETE' });
   },
 };
-
