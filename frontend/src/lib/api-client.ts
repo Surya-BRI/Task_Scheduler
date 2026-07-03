@@ -14,7 +14,7 @@ function redirectToLogin(expired = false) {
 /** Clear the httpOnly access_token cookie (e.g. after expiry or invalid JWT). */
 async function clearStaleAuthCookie() {
   try {
-    await fetch(`${env.apiBaseUrl}/auth/logout`, {
+    await fetch('/api/auth/logout', {
       method: 'POST',
       credentials: 'include',
       headers: { 'Content-Type': 'application/json' },

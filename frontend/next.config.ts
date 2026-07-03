@@ -3,12 +3,24 @@ import path from "path";
 
 const monorepoRoot = path.resolve(__dirname, "..");
 
-function resolveApiOrigin(): string {
-  const apiBase =
+function resolveClientApiBase(): string {
+  return (
     process.env.NEXT_PUBLIC_API_BASE_URL ??
     (process.env.NODE_ENV === "development"
       ? "http://localhost:7000/api/v1"
-      : "https://task-scheduler.app-brisigns.com/api/v1");
+      : "/api/v1")
+  );
+}
+
+function resolveApiOrigin(): string {
+  const apiBase = resolveClientApiBase();
+  if (apiBase.startsWith("/")) {
+    const proxyTarget =
+      process.env.API_PROXY_TARGET ??
+      process.env.BACKEND_ORIGIN ??
+      "https://task-scheduler.app-brisigns.com";
+    return proxyTarget.replace(/\/$/, "");
+  }
   return apiBase.replace(/\/api\/v1\/?$/, "");
 }
 
@@ -33,6 +45,20 @@ const apiOrigin = resolveApiOrigin();
 
 const nextConfig: NextConfig = {
   outputFileTracingRoot: monorepoRoot,
+  async rewrites() {
+    const clientApiBase = resolveClientApiBase();
+    if (!clientApiBase.startsWith("/")) {
+      return [];
+    }
+
+    const backendOrigin = resolveApiOrigin();
+    return [
+      {
+        source: "/api/v1/:path*",
+        destination: `${backendOrigin}/api/v1/:path*`,
+      },
+    ];
+  },
   async headers() {
     const securityHeaders = [
       { key: "X-Frame-Options", value: "DENY" },

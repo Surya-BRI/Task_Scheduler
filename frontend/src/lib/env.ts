@@ -4,7 +4,8 @@
  * without a code change.
  */
 const LOCAL_API = 'http://localhost:7000/api/v1';
-const PRODUCTION_API = 'https://task-scheduler.app-brisigns.com/api/v1';
+/** Same-origin path; Next.js rewrites proxy this to the Nest backend in production. */
+const PRODUCTION_API = '/api/v1';
 
 export const env = {
   apiBaseUrl:
