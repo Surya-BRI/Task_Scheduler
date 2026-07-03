@@ -21,16 +21,20 @@
     "build": "npm run build --workspace backend && npm run build --workspace frontend",
     "lint": "npm run lint --workspace backend && npm run lint --workspace frontend",
     "test": "npm run test --workspace backend && npm run test --workspace frontend",
+    "test:integration": "npm run test:e2e --workspace backend",
+    "test:e2e": "playwright test",
+    "test:perf": "k6 run perf/api-smoke.js",
     "typecheck": "npm run typecheck --workspace backend && npm run typecheck --workspace frontend",
     "security:check": "npm run security:check --workspace backend",
     "ci:verify": "node scripts/verify-repo-hygiene.js",
-    "ci": "npm run ci:verify && npm run security:check && npm run typecheck --workspace backend && npm run test --workspace backend",
+    "ci": "npm run ci:verify && npm run security:check && npm run typecheck --workspace backend && npm run test --workspace backend && npm run test:integration --workspace backend && npm run test --workspace frontend",
     "deploy:bootstrap": "npm run prisma:setup"
   },
   "engines": {
     "node": ">=20.0.0"
   },
   "devDependencies": {
+    "@playwright/test": "^1.55.0",
     "concurrently": "^9.2.1"
   }
 }
