@@ -8,6 +8,7 @@ Monorepo for task scheduling and resource workflows: **Next.js** frontend + **Ne
 |------|-------|
 | Full backend guide (API, Prisma, auth, DB) | [backend/docs/DEVELOPMENT.md](backend/docs/DEVELOPMENT.md) |
 | Backend API-table mapping | [backend/docs/API_TABLE_CONNECTIONS.md](backend/docs/API_TABLE_CONNECTIONS.md) |
+| Reliability (health, shutdown, cron locks) | [backend/docs/RELIABILITY.md](backend/docs/RELIABILITY.md) |
 | Activity log event coverage | [backend/docs/ACTIVITY_LOG_COVERAGE.md](backend/docs/ACTIVITY_LOG_COVERAGE.md) |
 | Frontend guide (Next.js env + runtime) | [frontend/docs/DEVELOPMENT.md](frontend/docs/DEVELOPMENT.md) |
 | Full repository technical reference | [repo refrence.md](repo%20refrence.md) |
