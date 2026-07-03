@@ -62,6 +62,20 @@ pm2 restart <frontend-pm2-id-or-name>
 
 If frontend is Vercel-hosted, deploy frontend there instead.
 
+### Frontend environment (required for auth)
+Set these **before** `npm run build` (or in Vercel project settings, then redeploy):
+
+| Variable | Value |
+|----------|--------|
+| `NEXT_PUBLIC_API_BASE_URL` | `/api/v1` |
+| `API_PROXY_TARGET` | `https://task-scheduler.app-brisigns.com` |
+| `NEXT_PUBLIC_WEB_URL` | Your public frontend URL |
+| `JWT_ACCESS_EXPIRES_IN` | `1d` (optional; matches backend) |
+
+Do **not** set `NEXT_PUBLIC_API_BASE_URL` to the full `https://task-scheduler.app-brisigns.com/api/v1` URL — login cookies are on the frontend host and will not be sent cross-site.
+
+Backend `CORS_ORIGIN` must include the frontend URL when `NODE_ENV=production`.
+
 ## 5. DB Check Constraint (one-time / when status changes)
 Task status constraint must include:
 - `PENDING`
@@ -86,7 +100,9 @@ CHECK ([status] IN ('PENDING','WIP','COMPLETED','REVISION','APPROVED','ON_HOLD')
 ```
 
 ## 6. Post-Deploy Smoke Tests
-1. Open Design List and verify rows load from `/api/v1/tasks`.
+1. Sign in — confirm no immediate redirect to `/login?expired=1`.
+2. DevTools → Network: first API call should be same-origin `/api/v1/...` with `Cookie: access_token`.
+3. Open Design List and verify rows load from `/api/v1/tasks`.
 2. Open Scheduler and verify real designers load (not mock list).
 3. Hold/unhold a task in Scheduler and confirm status persists.
 4. Open task detail by UUID and verify task loads.

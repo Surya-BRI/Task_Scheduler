@@ -21,6 +21,7 @@ export function middleware(request: NextRequest) {
   const token = request.cookies.get(ACCESS_TOKEN_COOKIE)?.value;
   const hasToken = hasUsableAccessToken(token);
 
+  // Login is always reachable (including ?expired=1 with a stale cookie).
   if (isPublicPath(pathname)) {
     return NextResponse.next();
   }
