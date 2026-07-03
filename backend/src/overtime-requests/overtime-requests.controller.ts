@@ -25,6 +25,8 @@ import { Roles } from '../common/decorators/roles.decorator';
 import { UserRole } from '../common/constants/roles.enum';
 import { CurrentUser } from '../common/decorators/current-user.decorator';
 import type { JwtPayload } from '../common/types/jwt-payload.type';
+import { Throttle } from '@nestjs/throttler';
+import { resolveDesignerScope } from '../common/utils/resolve-designer-scope.util';
 
 @Controller('overtime-requests')
 @UseGuards(JwtAuthGuard, RolesGuard)
@@ -35,6 +37,7 @@ export class OvertimeRequestsController {
 
   @Post()
   @Roles(UserRole.DESIGNER, UserRole.HOD)
+  @Throttle({ default: { limit: 10, ttl: 60_000 } })
   @UseInterceptors(
     FileInterceptor('file', {
       storage: memoryStorage(),
@@ -56,6 +59,7 @@ export class OvertimeRequestsController {
 
   @Put(':id')
   @Roles(UserRole.DESIGNER, UserRole.HOD)
+  @Throttle({ default: { limit: 10, ttl: 60_000 } })
   @UseInterceptors(
     FileInterceptor('file', {
       storage: memoryStorage(),
@@ -111,6 +115,7 @@ export class OvertimeRequestsController {
 
   @Post(':id/attachment')
   @Roles(UserRole.DESIGNER, UserRole.HOD)
+  @Throttle({ default: { limit: 10, ttl: 60_000 } })
   @UseInterceptors(
     FileInterceptor('file', {
       storage: memoryStorage(),
@@ -210,7 +215,8 @@ export class OvertimeRequestsController {
     @Query('designerId') designerId?: string,
     @CurrentUser() user?: JwtPayload,
   ) {
-    const id = designerId?.trim() || user?.sub;
+    if (!user?.sub) return [];
+    const id = resolveDesignerScope(designerId, user.sub, user.role);
     if (!id) return [];
     return this.service.findByDesignerForView(id);
   }

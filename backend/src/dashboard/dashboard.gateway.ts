@@ -17,10 +17,7 @@ import {
 
 const OVERVIEW_ROLES = new Set<string>([UserRole.HOD]);
 
-@WebSocketGateway({
-  cors: { origin: '*' },
-  namespace: '/dashboard',
-})
+@WebSocketGateway({ namespace: '/dashboard' })
 export class DashboardGateway
   implements OnGatewayInit, OnGatewayConnection, OnGatewayDisconnect
 {

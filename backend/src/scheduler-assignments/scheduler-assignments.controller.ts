@@ -8,6 +8,7 @@ import { CurrentUser } from '../common/decorators/current-user.decorator';
 import type { JwtPayload } from '../common/types/jwt-payload.type';
 import { SaveSchedulerWeekDto } from './dto/save-scheduler-week.dto';
 import { UpdateOvertimeSchedulerActionDto } from './dto/update-overtime-scheduler-action.dto';
+import { resolveDesignerScope } from '../common/utils/resolve-designer-scope.util';
 
 @UseGuards(JwtAuthGuard, RolesGuard)
 @Controller('scheduler-assignments')
@@ -16,12 +17,19 @@ export class SchedulerAssignmentsController {
 
   @Get()
   @Roles(UserRole.HOD, UserRole.DESIGNER)
-  findForWeek(@Query('weekStart') weekStart?: string, @Query('designerId') designerId?: string) {
+  findForWeek(
+    @Query('weekStart') weekStart?: string,
+    @Query('designerId') designerId?: string,
+    @CurrentUser() user?: JwtPayload,
+  ) {
     const ws = weekStart?.trim() ?? '';
     if (!ws) {
       return [];
     }
-    return this.schedulerAssignmentsService.findForWeekStart(ws, designerId?.trim() || undefined);
+    const scopedDesignerId = user
+      ? resolveDesignerScope(designerId, user.sub, user.role)
+      : designerId?.trim() || undefined;
+    return this.schedulerAssignmentsService.findForWeekStart(ws, scopedDesignerId || undefined);
   }
 
   @Get('week/:weekStart/meta')

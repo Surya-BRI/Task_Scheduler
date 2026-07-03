@@ -12,6 +12,7 @@ import { LoggingInterceptor } from './common/interceptors/logging.interceptor';
 import { BigIntSerializationInterceptor } from './common/interceptors/bigint-serialization.interceptor';
 import { ConfigService } from '@nestjs/config';
 import { installBigIntJsonSerialization } from './common/utils/json-serialization.util';
+import { resolveCorsOrigins } from './common/utils/resolve-cors-origins.util';
 
 installBigIntJsonSerialization();
 
@@ -24,15 +25,13 @@ async function bootstrap() {
   const prefix = configService.get<string>('api.prefix') ?? 'api/v1';
   const port = configService.get<number>('app.port') ?? 4000;
   const corsOrigin = configService.get<string>('app.corsOrigin') ?? 'http://localhost:5000';
-  const allowedOrigins = corsOrigin.split(',').map((origin) => origin.trim());
+  const nodeEnv = configService.get<string>('app.nodeEnv') ?? process.env.NODE_ENV;
 
   app.setGlobalPrefix(prefix);
   app.use(helmet());
   app.use(compression());
-  const isDev = configService.get<string>('app.nodeEnv') !== 'production';
-  const corsOriginFn = (_o: string | undefined, cb: (e: Error | null, ok?: boolean) => void): void => cb(null, true);
   app.enableCors({
-    origin: isDev ? corsOriginFn : allowedOrigins,
+    origin: resolveCorsOrigins(corsOrigin, nodeEnv),
     credentials: true,
   });
   app.useGlobalPipes(

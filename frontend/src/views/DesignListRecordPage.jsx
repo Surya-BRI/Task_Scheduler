@@ -4,7 +4,6 @@ import { useParams, usePathname, useRouter, useSearchParams } from 'next/navigat
 import { Navbar } from '../components/Navbar'
 import { ProjectTaskTimer } from '../components/ProjectTaskTimer'
 import { useDesignListStore } from '../state/DesignListContext'
-import { isAlexSessionActive } from '@/lib/alex-session'
 import { apiClient } from '@/lib/api-client'
 
 const ACTIVITY_TIMELINE = [
@@ -67,13 +66,6 @@ export function DesignListRecordPage() {
   const rawTab = searchParams.get('tab')
   const activeTab = RECORD_TAB_IDS.includes(rawTab) ? rawTab : 'details'
   const from = searchParams.get('from')
-  const isAlexFlow = from === 'alex-design-list'
-
-  useEffect(() => {
-    if (!isAlexFlow) return
-    if (isAlexSessionActive()) return
-    router.replace('/alex-login')
-  }, [isAlexFlow, router])
 
   useEffect(() => {
     if (!record) {
@@ -142,7 +134,6 @@ export function DesignListRecordPage() {
   }, [activeTab, launchAutostart, launchPauseModal, launchCompleteModal, clearTimerLaunchParams])
 
   if (!record) return null
-  if (isAlexFlow && !isAlexSessionActive()) return null
 
   const pageTitle = `${record.name.toUpperCase()} @ ${record.businessUnit.toUpperCase()}`
 
