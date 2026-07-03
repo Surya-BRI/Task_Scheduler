@@ -1,31 +1,33 @@
 import { NextResponse } from 'next/server';
 import type { NextRequest } from 'next/server';
+import { hasUsableAccessToken } from './lib/auth-middleware.util';
 
 export const ACCESS_TOKEN_COOKIE = 'access_token';
 
 const PUBLIC_PATHS = new Set(['/login']);
 
 function isPublicPath(pathname: string) {
-  if (PUBLIC_PATHS.has(pathname)) return true;
-  return false;
+  return PUBLIC_PATHS.has(pathname);
 }
 
 export function middleware(request: NextRequest) {
   const { pathname } = request.nextUrl;
+
+  // Root always lands on login — never skip straight to the app.
+  if (pathname === '/') {
+    return NextResponse.redirect(new URL('/login', request.url));
+  }
+
   const token = request.cookies.get(ACCESS_TOKEN_COOKIE)?.value;
+  const hasToken = hasUsableAccessToken(token);
 
   if (isPublicPath(pathname)) {
-    if (token) {
-      return NextResponse.redirect(new URL('/design-list', request.url));
-    }
     return NextResponse.next();
   }
 
-  if (!token) {
+  if (!hasToken) {
     const loginUrl = new URL('/login', request.url);
-    if (pathname !== '/') {
-      loginUrl.searchParams.set('next', pathname);
-    }
+    loginUrl.searchParams.set('next', pathname);
     return NextResponse.redirect(loginUrl);
   }
 
