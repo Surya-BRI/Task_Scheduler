@@ -21,6 +21,7 @@ import { Roles } from '../common/decorators/roles.decorator';
 import { UserRole } from '../common/constants/roles.enum';
 import { CurrentUser } from '../common/decorators/current-user.decorator';
 import type { JwtPayload } from '../common/types/jwt-payload.type';
+import { resolveDesignerScope } from '../common/utils/resolve-designer-scope.util';
 
 @Controller('regularization-requests')
 @UseGuards(JwtAuthGuard, RolesGuard)
@@ -64,7 +65,8 @@ export class RegularizationRequestsController {
   @Get()
   @Roles(UserRole.DESIGNER, UserRole.HOD)
   findByDesigner(@Query('designerId') designerIdParam?: string, @CurrentUser() user?: JwtPayload) {
-    const designerId = (designerIdParam ?? user?.sub ?? '').trim();
+    if (!user?.sub) return [];
+    const designerId = resolveDesignerScope(designerIdParam, user.sub, user.role);
     if (!designerId) return [];
     if (!isUuidString(designerId)) {
       throw new BadRequestException('Query designerId must be a UUID.');

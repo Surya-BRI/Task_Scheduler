@@ -4,6 +4,7 @@ import { PassportStrategy } from '@nestjs/passport';
 import { ExtractJwt, Strategy } from 'passport-jwt';
 import type { JwtPayload } from '../common/types/jwt-payload.type';
 import type { UserRole } from '../common/constants/roles.enum';
+import { resolveJwtSecret } from '../common/utils/resolve-jwt-secret.util';
 
 /**
  * JWT Strategy — supports two auth modes:
@@ -31,15 +32,10 @@ export class JwtStrategy extends PassportStrategy(Strategy) {
   constructor(private readonly configService: ConfigService) {
     const authMode = (configService.get<string>('auth.mode') ?? 'demo').toLowerCase();
 
-    const secret =
-      authMode === 'external'
-        ? (configService.get<string>('auth.externalJwtSecret') ?? configService.get<string>('jwt.accessSecret') ?? 'change_me')
-        : (configService.get<string>('jwt.accessSecret') ?? 'change_me');
-
     super({
       jwtFromRequest: ExtractJwt.fromAuthHeaderAsBearerToken(),
       ignoreExpiration: false,
-      secretOrKey: secret,
+      secretOrKey: resolveJwtSecret(configService),
     });
 
     this.authMode = authMode;

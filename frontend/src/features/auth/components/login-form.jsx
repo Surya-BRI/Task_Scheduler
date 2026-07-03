@@ -9,16 +9,20 @@ import { loginApi } from '@/features/auth/services/auth.api';
 import { setAccessToken } from '@/lib/auth-token';
 
 
-const DEMO_ACCOUNTS = [
-  { label: 'HOD — Sarah Mitchell', email: 'sarah.mitchell@bluerhine.com', password: 'hod123', badge: 'HOD', color: 'bg-violet-100 text-violet-700 border-violet-200' },
-  { label: 'HOD — James Carter', email: 'james.carter@bluerhine.com', password: 'hod456', badge: 'HOD', color: 'bg-purple-100 text-purple-700 border-purple-200' },
-  { label: 'HOD — Priya Sharma', email: 'priya.sharma@bluerhine.com', password: 'hod789', badge: 'HOD', color: 'bg-fuchsia-100 text-fuchsia-700 border-fuchsia-200' },
-  { label: 'QS — Ojas', email: 'qs.team@bluerhine.com', password: 'qs1234', badge: 'QS', color: 'bg-amber-100 text-amber-700 border-amber-200' },
-  { label: 'Sales — Rehman', email: 'rehman@bluerhine.com', password: 'rehman123', badge: 'Sales', color: 'bg-orange-100 text-orange-700 border-orange-200' },
-  { label: 'Designer — Alex Johnson', email: 'alex.johnson@bluerhine.com', password: 'alex123', badge: 'Designer', color: 'bg-blue-100 text-blue-700 border-blue-200' },
-  { label: 'Designer — Alexander Allen', email: 'alexander.allen@bluerhine.com', password: 'alex123', badge: 'Designer', color: 'bg-cyan-100 text-cyan-700 border-cyan-200' },
-  { label: 'Designer — Benjamin Harris', email: 'benjamin.harris@bluerhine.com', password: 'ben123', badge: 'Designer', color: 'bg-emerald-100 text-emerald-700 border-emerald-200' },
-];
+const IS_DEV = process.env.NODE_ENV !== 'production';
+
+const DEMO_ACCOUNTS = IS_DEV
+  ? [
+      { label: 'HOD — Sarah Mitchell', email: 'sarah.mitchell@bluerhine.com', password: 'hod123', badge: 'HOD', color: 'bg-violet-100 text-violet-700 border-violet-200' },
+      { label: 'HOD — James Carter', email: 'james.carter@bluerhine.com', password: 'hod456', badge: 'HOD', color: 'bg-purple-100 text-purple-700 border-purple-200' },
+      { label: 'HOD — Priya Sharma', email: 'priya.sharma@bluerhine.com', password: 'hod789', badge: 'HOD', color: 'bg-fuchsia-100 text-fuchsia-700 border-fuchsia-200' },
+      { label: 'QS — Ojas', email: 'qs.team@bluerhine.com', password: 'qs1234', badge: 'QS', color: 'bg-amber-100 text-amber-700 border-amber-200' },
+      { label: 'Sales — Rehman', email: 'rehman@bluerhine.com', password: 'rehman123', badge: 'Sales', color: 'bg-orange-100 text-orange-700 border-orange-200' },
+      { label: 'Designer — Alex Johnson', email: 'alex.johnson@bluerhine.com', password: 'alex123', badge: 'Designer', color: 'bg-blue-100 text-blue-700 border-blue-200' },
+      { label: 'Designer — Alexander Allen', email: 'alexander.allen@bluerhine.com', password: 'alex123', badge: 'Designer', color: 'bg-cyan-100 text-cyan-700 border-cyan-200' },
+      { label: 'Designer — Benjamin Harris', email: 'benjamin.harris@bluerhine.com', password: 'ben123', badge: 'Designer', color: 'bg-emerald-100 text-emerald-700 border-emerald-200' },
+    ]
+  : [];
 
 export function LoginForm() {
   const router = useRouter();
@@ -121,9 +125,9 @@ export function LoginForm() {
         ) : 'Sign In'}
       </button>
 
-      {/* Demo Accounts */}
+      {DEMO_ACCOUNTS.length > 0 && (
       <div className="pt-3 border-t border-slate-100">
-        <p className="text-xs font-semibold text-slate-400 uppercase tracking-wider mb-2.5">Quick Demo Logins</p>
+        <p className="text-xs font-semibold text-slate-400 uppercase tracking-wider mb-2.5">Quick Demo Logins (dev only)</p>
         <div className="grid grid-cols-1 gap-1.5">
           {DEMO_ACCOUNTS.map((account) => (
             <button
@@ -140,6 +144,7 @@ export function LoginForm() {
           ))}
         </div>
       </div>
+      )}
     </form>
   );
 }
