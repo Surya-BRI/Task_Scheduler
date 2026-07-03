@@ -2,9 +2,12 @@ import { Injectable, Logger, UnauthorizedException } from '@nestjs/common';
 import { ConfigService } from '@nestjs/config';
 import { PassportStrategy } from '@nestjs/passport';
 import { ExtractJwt, Strategy } from 'passport-jwt';
+import type { Request } from 'express';
 import type { JwtPayload } from '../common/types/jwt-payload.type';
 import type { UserRole } from '../common/constants/roles.enum';
 import { resolveJwtSecret } from '../common/utils/resolve-jwt-secret.util';
+import { ACCESS_TOKEN_COOKIE } from '../common/constants/auth-cookie.constants';
+import { parseCookieHeader } from '../common/utils/auth-cookie.util';
 
 /**
  * JWT Strategy — supports two auth modes:
@@ -33,7 +36,14 @@ export class JwtStrategy extends PassportStrategy(Strategy) {
     const authMode = (configService.get<string>('auth.mode') ?? 'demo').toLowerCase();
 
     super({
-      jwtFromRequest: ExtractJwt.fromAuthHeaderAsBearerToken(),
+      jwtFromRequest: ExtractJwt.fromExtractors([
+        ExtractJwt.fromAuthHeaderAsBearerToken(),
+        (req: Request) => {
+          const cookieHeader = req?.headers?.cookie;
+          if (!cookieHeader) return null;
+          return parseCookieHeader(cookieHeader)[ACCESS_TOKEN_COOKIE] ?? null;
+        },
+      ]),
       ignoreExpiration: false,
       secretOrKey: resolveJwtSecret(configService),
     });

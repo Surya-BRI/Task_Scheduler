@@ -1,12 +1,12 @@
 import { apiClient } from '@/lib/api-client';
 
 export interface LoginResponse {
-  accessToken: string;
+  accessToken?: string;
   user: {
     id: string;
     email: string;
     fullName: string;
-    role: string; // e.g. "HOD", "DESIGNER"
+    role: string;
   };
 }
 

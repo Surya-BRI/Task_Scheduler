@@ -1,4 +1,5 @@
 import { NotFoundException } from '@nestjs/common';
+import type { ConfigService } from '@nestjs/config';
 import { AuthController } from './auth.controller';
 import { AuthService } from './auth.service';
 
@@ -9,7 +10,15 @@ describe('AuthController security', () => {
     getMe: jest.fn(),
   } as unknown as AuthService;
 
-  const controller = new AuthController(authService);
+  const configService = {
+    get: jest.fn((key: string) => {
+      if (key === 'app.nodeEnv') return process.env.NODE_ENV ?? 'development';
+      if (key === 'jwt.accessExpiresIn') return '1d';
+      return undefined;
+    }),
+  } as unknown as ConfigService;
+
+  const controller = new AuthController(authService, configService);
 
   afterEach(() => {
     jest.clearAllMocks();

@@ -17,6 +17,7 @@
     "@tanstack/react-table": "^8.21.3",
     "@tanstack/react-virtual": "^3.13.24",
     "date-fns": "^4.1.0",
+    "isomorphic-dompurify": "^3.18.0",
     "lucide-react": "^1.8.0",
     "next": "16.2.3",
     "react": "19.2.4",

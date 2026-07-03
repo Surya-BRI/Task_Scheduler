@@ -14,6 +14,7 @@ import {
   DashboardRealtimeService,
   DashboardRefreshPayload,
 } from './dashboard-realtime.service';
+import { extractAccessTokenFromSocket } from '../common/utils/extract-socket-token.util';
 
 const OVERVIEW_ROLES = new Set<string>([UserRole.HOD]);
 
@@ -42,13 +43,10 @@ export class DashboardGateway
 
   async handleConnection(client: Socket) {
     try {
-      let token = client.handshake.auth?.token || client.handshake.headers?.authorization;
+      const token = extractAccessTokenFromSocket(client);
       if (!token) {
         client.disconnect();
         return;
-      }
-      if (typeof token === 'string' && token.startsWith('Bearer ')) {
-        token = token.slice(7);
       }
 
       const payload = await this.jwtService.verifyAsync(token);

@@ -1,5 +1,4 @@
 import { io, type Socket } from 'socket.io-client';
-import { getAccessToken } from './auth-token';
 import { env } from './env';
 
 function getSocketOrigin(): string {
@@ -26,15 +25,14 @@ export type DashboardRealtimeHandlers = {
 };
 
 export function connectDashboardRealtime(handlers: DashboardRealtimeHandlers): () => void {
-  const token = getAccessToken();
-  if (!token || typeof window === 'undefined') {
+  if (typeof window === 'undefined') {
     return () => {};
   }
 
   let socket: Socket | null = null;
   try {
     socket = io(`${getSocketOrigin()}/dashboard`, {
-      auth: { token },
+      withCredentials: true,
       transports: ['websocket', 'polling'],
       reconnection: true,
       reconnectionAttempts: 10,

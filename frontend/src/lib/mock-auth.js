@@ -1,43 +1,10 @@
-import { clearAccessToken } from './auth-token';
-import { slugForDesignerEmail } from './designers';
+import { getSession, getHomeRoute, setSession, clearSession, clearLegacyAuthStorage } from './session';
+import { logoutSession, fetchSession, ensureSession } from './session-api';
 
-const SESSION_KEY = 'br_session';
+export { getSession, getHomeRoute, setSession, clearSession, fetchSession, ensureSession };
 
-function hydrateSession(session) {
-  if (!session || typeof session !== 'object') return session;
-  if (session.role === 'DESIGNER') {
-    if (!session.designerId && session.id) {
-      session.designerId = session.id;
-    }
-    if (!session.erpDesignerId && session.id) {
-      session.erpDesignerId = session.id;
-    }
-  }
-  return session;
-}
-
-export function mockLogout() {
-  if (typeof window !== 'undefined') {
-    localStorage.removeItem(SESSION_KEY);
-    clearAccessToken();
-  }
-}
-
-export function getSession() {
-  if (typeof window === 'undefined') return null;
-  try {
-    const raw = localStorage.getItem(SESSION_KEY);
-    return raw ? hydrateSession(JSON.parse(raw)) : null;
-  } catch {
-    return null;
-  }
-}
-
-export function getHomeRoute(session) {
-  if (!session) return '/login';
-  if (session.role === 'HOD') return '/design-list';
-  if (session.role === 'DESIGNER') return '/design-list/tasks';
-  if (session.role === 'SALESPERSON') return '/sales/tasks';
-  if (session.role === 'QS') return '/qs/projects';
-  return '/design-list';
+/** @deprecated Use logoutSession() — kept for Navbar compatibility. */
+export async function mockLogout() {
+  await logoutSession();
+  clearLegacyAuthStorage();
 }

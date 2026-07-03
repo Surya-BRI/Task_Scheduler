@@ -6,6 +6,7 @@ import { AppModule } from './app.module';
 import { SocketIoAdapter } from './common/adapters/socket-io.adapter';
 import helmet from 'helmet';
 import compression from 'compression';
+import cookieParser from 'cookie-parser';
 import { Logger, ValidationPipe } from '@nestjs/common';
 import { HttpExceptionFilter } from './common/filters/http-exception.filter';
 import { LoggingInterceptor } from './common/interceptors/logging.interceptor';
@@ -28,6 +29,7 @@ async function bootstrap() {
   const nodeEnv = configService.get<string>('app.nodeEnv') ?? process.env.NODE_ENV;
 
   app.setGlobalPrefix(prefix);
+  app.use(cookieParser());
   app.use(helmet());
   app.use(compression());
   app.enableCors({

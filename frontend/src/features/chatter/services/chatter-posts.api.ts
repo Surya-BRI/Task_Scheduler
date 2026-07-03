@@ -1,5 +1,4 @@
 import { apiClient } from '@/lib/api-client';
-import { getAccessToken } from '@/lib/auth-token';
 import { isSameUserId, normalizeUserId } from '@/lib/user-id';
 import { parseMentionUserIdsFromMessage } from '../utils/mention-utils';
 
@@ -519,12 +518,6 @@ export function createChatterPost(
   files?: File[],
   linkAttachments?: Array<{ url: string; name?: string; platformLabel?: string }>,
 ) {
-  if (!getAccessToken()) {
-    return Promise.reject(
-      new Error('You are not signed in. Please log in again before posting or uploading files.'),
-    );
-  }
-
   const payload: Record<string, unknown> = { ...data };
   if (payload.priority == null || String(payload.priority).trim() === '') {
     delete payload.priority;
