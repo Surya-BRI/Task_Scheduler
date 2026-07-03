@@ -47,7 +47,11 @@ const nextConfig: NextConfig = {
   outputFileTracingRoot: monorepoRoot,
   async rewrites() {
     const clientApiBase = resolveClientApiBase();
-    if (!clientApiBase.startsWith("/")) {
+    const enableProxy =
+      isProd ||
+      clientApiBase.startsWith("/");
+
+    if (!enableProxy) {
       return [];
     }
 
