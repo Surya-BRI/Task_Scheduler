@@ -9,7 +9,7 @@
     "build": "next build",
     "start": "next start -p 5000",
     "lint": "eslint",
-    "test": "node -e \"console.log('frontend: no tests yet')\"",
+    "test": "node --experimental-strip-types --test src/lib/auth-middleware.util.spec.js",
     "typecheck": "tsc --noEmit"
   },
   "dependencies": {
