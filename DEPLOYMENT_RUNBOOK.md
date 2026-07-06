@@ -71,6 +71,7 @@ Set these **before** `npm run build` (or in Vercel project settings, then redepl
 | `API_PROXY_TARGET` | `https://task-scheduler.app-brisigns.com` |
 | `NEXT_PUBLIC_WEB_URL` | Your public frontend URL |
 | `JWT_ACCESS_EXPIRES_IN` | `1d` (optional; matches backend) |
+| `DISABLE_PROD_DEMO_LOGINS` | Set to `true` to hide quick demo logins on the sign-in page (shown by default in production until public release) |
 
 Do **not** set `NEXT_PUBLIC_API_BASE_URL` to the full `https://task-scheduler.app-brisigns.com/api/v1` URL — login cookies are on the frontend host and will not be sent cross-site.
 
