@@ -8,6 +8,48 @@ export const FROM_PROJECTS_LIST = "projects-list";
 export const FROM_DESIGN_LIST = "design-list";
 export const FROM_DESIGNER_QUEUE = "designer-queue";
 export const FROM_DESIGN_SCHEDULER = "design-scheduler";
+export const FROM_SALES_QUEUE = "sales-queue";
+export const FROM_SALES_DESIGN_LIST = "sales-design-list";
+export const FROM_SALES_PROJECTS_LIST = "sales-projects-list";
+export const FROM_SALES_PROJECT_DESIGN = "sales-project-design";
+
+/** @param {string | null | undefined} from */
+export function isProjectsListWorkflow(from) {
+  return from === FROM_PROJECTS_LIST || from === FROM_SALES_PROJECTS_LIST;
+}
+
+/**
+ * Resolve the list/hub route to return to after viewing a task or record.
+ * @param {string | null | undefined} from
+ * @returns {string}
+ */
+export function resolveWorkflowBackPath(from) {
+  switch (from) {
+    case FROM_PROJECT_DESIGN:
+      return "/project-design";
+    case FROM_PROJECTS_LIST:
+      return "/projects-list";
+    case FROM_SALES_PROJECT_DESIGN:
+      return "/sales/project-design";
+    case FROM_SALES_PROJECTS_LIST:
+      return "/sales/projects-list";
+    case FROM_SALES_DESIGN_LIST:
+      return "/sales/design-list";
+    case FROM_SALES_QUEUE:
+      return "/sales/tasks";
+    case "qs":
+      return "/qs/projects";
+    case FROM_DESIGN_SCHEDULER:
+      return "/design-scheduler";
+    case FROM_DESIGNER_QUEUE:
+    case "designer-design-list":
+    case "alex-design-list":
+      return "/design-list/tasks";
+    case FROM_DESIGN_LIST:
+    default:
+      return "/design-list";
+  }
+}
 
 /**
  * @param {unknown} value

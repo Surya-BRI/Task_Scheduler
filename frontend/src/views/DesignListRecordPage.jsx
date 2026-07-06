@@ -4,6 +4,13 @@ import { useParams, usePathname, useRouter, useSearchParams } from 'next/navigat
 import { Navbar } from '../components/Navbar'
 import { ProjectTaskTimer } from '../components/ProjectTaskTimer'
 import { useDesignListStore } from '../state/DesignListContext'
+import {
+  FROM_PROJECT_DESIGN,
+  FROM_PROJECTS_LIST,
+  FROM_SALES_PROJECT_DESIGN,
+  FROM_SALES_PROJECTS_LIST,
+  resolveWorkflowBackPath,
+} from '@/lib/design-list-routes'
 import { apiClient } from '@/lib/api-client'
 
 const ACTIVITY_TIMELINE = [
@@ -69,9 +76,9 @@ export function DesignListRecordPage() {
 
   useEffect(() => {
     if (!record) {
-      router.replace('/design-list')
+      router.replace(resolveWorkflowBackPath(from))
     }
-  }, [record, router])
+  }, [record, router, from])
 
   useEffect(() => {
     if (!recordKey || !isTerminalStatus) { setSubmittedSession(null); return }
@@ -97,22 +104,13 @@ export function DesignListRecordPage() {
   )
 
   const showTimerForSource =
-    from === 'project-design' ||
-    from === 'projects-list' ||
+    from === FROM_PROJECT_DESIGN ||
+    from === FROM_PROJECTS_LIST ||
+    from === FROM_SALES_PROJECT_DESIGN ||
+    from === FROM_SALES_PROJECTS_LIST ||
     from === 'designer-queue' ||
     from === 'alex-design-list'
-  const backPath =
-    from === 'design-scheduler'
-      ? '/design-scheduler'
-      : from === 'project-design'
-        ? '/project-design'
-        : from === 'projects-list'
-          ? '/projects-list'
-          : from === 'designer-queue'
-            ? '/design-list/tasks'
-            : from === 'alex-design-list'
-              ? '/design-list/tasks'
-            : '/design-list'
+  const backPath = resolveWorkflowBackPath(from)
 
   const launchAutostart = searchParams.get('autostart') === '1'
   const launchPauseModal = searchParams.get('openPause') === '1'

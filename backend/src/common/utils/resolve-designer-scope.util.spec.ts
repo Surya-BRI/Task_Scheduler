@@ -23,4 +23,8 @@ describe('resolveDesignerScope', () => {
   it('allows HOD to access any designer id', () => {
     expect(resolveDesignerScope(otherId, callerId, UserRole.HOD)).toBe(otherId);
   });
+
+  it('allows SALESPERSON to access any designer id', () => {
+    expect(resolveDesignerScope(otherId, callerId, UserRole.SALESPERSON)).toBe(otherId);
+  });
 });

@@ -69,7 +69,7 @@ export class DeadlineAlertsService {
     const horizon = new Date(now.getTime() + HORIZON_MS);
 
     const hodUsers = await this.prisma.user.findMany({
-      where: { role: { name: { in: ['HOD', 'ADMIN'] } } },
+      where: { role: { name: { in: ['HOD', 'SALESPERSON', 'ADMIN'] } } },
       select: { id: true, fullName: true },
     });
 

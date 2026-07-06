@@ -191,6 +191,8 @@ export type TaskFilters = {
   search?: string;
   page?: number;
   limit?: number;
+  /** When true, SALESPERSON list is limited to SALES_REVIEW (sales review queue). */
+  salesQueue?: boolean;
 };
 
 export type NextRevisionQuery = {
@@ -733,7 +735,7 @@ export class TasksService {
         this.dashboardRealtime?.notifyUserNotificationRefresh(created.assigneeId);
 
         const hodUsers = await this.prisma.user.findMany({
-          where: { role: { name: { in: ['HOD', 'ADMIN'] } } },
+          where: { role: { name: { in: ['HOD', 'SALESPERSON', 'ADMIN'] } } },
           select: { id: true },
         });
         const hodMsg = `${created.taskNo} — ${created.project?.name ?? 'Unknown Project'} created and assigned to ${created.assignee?.fullName ?? 'a designer'}.`;
@@ -887,7 +889,7 @@ export class TasksService {
     // Log activity + notify for each created task
     const hodUsers = createdTasks.some((t) => t?.assigneeId)
       ? await this.prisma.user.findMany({
-          where: { role: { name: { in: ['HOD', 'ADMIN'] } } },
+          where: { role: { name: { in: ['HOD', 'SALESPERSON', 'ADMIN'] } } },
           select: { id: true },
         })
       : [];
@@ -963,11 +965,12 @@ export class TasksService {
   }
 
   async findAll(userId: string, role: UserRole, filters: TaskFilters = {}) {
-    const { projectId, status, priority, assigneeId, search, page = 1, limit = 20 } = filters;
+    const { projectId, status, priority, assigneeId, search, page = 1, limit = 20, salesQueue = false } = filters;
     const skip = (page - 1) * limit;
 
-    // Role-based base filters
-    const baseWhere: Record<string, unknown> = role === UserRole.SALESPERSON ? { status: 'SALES_REVIEW' } : {};
+    // Role-based base filters — preserve sales review queue when salesQueue=true
+    const baseWhere: Record<string, unknown> =
+      role === UserRole.SALESPERSON && salesQueue ? { status: 'SALES_REVIEW' } : {};
     const addAndFilter = (condition: Record<string, unknown>) => {
       baseWhere.AND = [...((baseWhere.AND as Record<string, unknown>[] | undefined) ?? []), condition];
     };
@@ -1136,7 +1139,7 @@ export class TasksService {
         : `/project-task-view/${id}`;
     const assignMessage = `${updatedTask.taskNo} — ${updatedTask.project?.name ?? 'Unknown Project'} has been assigned to ${assignee.fullName}`;
     const hodUsersAssign = await this.prisma.user.findMany({
-      where: { role: { name: { in: ['HOD', 'ADMIN'] } } },
+      where: { role: { name: { in: ['HOD', 'SALESPERSON', 'ADMIN'] } } },
       select: { id: true },
     });
     this.notificationsService
@@ -1269,7 +1272,7 @@ export class TasksService {
           : `/project-task-view/${id}`;
       const statusMessage = `${(updatedTask as any).taskNo} — ${(updatedTask as any).project?.name ?? 'Unknown Project'} status changed to ${effectiveStatusApi}`;
       const hodUsersStatus = await this.prisma.user.findMany({
-        where: { role: { name: { in: ['HOD', 'ADMIN'] } } },
+        where: { role: { name: { in: ['HOD', 'SALESPERSON', 'ADMIN'] } } },
         select: { id: true },
       });
       if ((updatedTask as any).assigneeId) {
@@ -1559,7 +1562,7 @@ export class TasksService {
 
     // Notify HODs
     const hodUsers = await this.prisma.user.findMany({
-      where: { role: { name: { in: ['HOD', 'ADMIN'] } } },
+      where: { role: { name: { in: ['HOD', 'SALESPERSON', 'ADMIN'] } } },
       select: { id: true },
     });
     const taskLink = designType?.toLowerCase() === 'retail'
@@ -1786,7 +1789,7 @@ export class TasksService {
             : 'Designer');
         const submitMsg = `${submittedTask.taskNo} — ${submittedTask.project?.name ?? 'Unknown Project'} work submitted by ${submitterName}. Ready for review.`;
         const hodUsers = await this.prisma.user.findMany({
-          where: { role: { name: { in: ['HOD', 'ADMIN'] } } },
+          where: { role: { name: { in: ['HOD', 'SALESPERSON', 'ADMIN'] } } },
           select: { id: true },
         });
         for (const hod of hodUsers) {

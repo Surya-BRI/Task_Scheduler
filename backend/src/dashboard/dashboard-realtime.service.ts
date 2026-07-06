@@ -41,7 +41,7 @@ type DashboardEmitter = {
   emitChatterRefresh: (payload: ChatterRefreshPayload) => void;
 };
 
-const OVERVIEW_ROLES: UserRole[] = [UserRole.HOD];
+const OVERVIEW_ROLES: UserRole[] = [UserRole.HOD, UserRole.SALESPERSON];
 
 @Injectable()
 export class DashboardRealtimeService {

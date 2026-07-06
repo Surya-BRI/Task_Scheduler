@@ -355,7 +355,7 @@ export default function DesignerDashboard({ designer: designerProp } = {}) {
   useEffect(() => {
     const session = getSession();
     setIsDesignerMode(!fromHome && session?.role === "DESIGNER");
-    setIsHOD(session?.role === "HOD");
+    setIsHOD(session?.role === "HOD" || session?.role === "SALESPERSON");
     if (session?.name) setSessionName(session.name);
     if (session) setSessionUser(session);
   }, [fromHome]);
