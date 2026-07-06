@@ -1,8 +1,9 @@
-import { ConflictException, Injectable, NotFoundException } from '@nestjs/common';
+import { ConflictException, ForbiddenException, Injectable, NotFoundException } from '@nestjs/common';
 import * as bcrypt from 'bcrypt';
 import { PrismaService } from '../prisma/prisma.service';
 import { CreateUserDto } from './dto/create-user.dto';
 import { UpdateUserDto } from './dto/update-user.dto';
+import { UserRole } from '../common/constants/roles.enum';
 
 const USER_SELECT = {
   id: true,
@@ -73,6 +74,14 @@ export class UsersService {
     });
     if (!user) throw new NotFoundException('User not found');
     return user;
+  }
+
+  async findByIdForViewer(id: string, viewerId: string, viewerRole: UserRole | string) {
+    const privilegedRoles = new Set<string>([UserRole.HOD, UserRole.ADMIN, UserRole.PROJECT_MANAGER]);
+    if (viewerId !== id && !privilegedRoles.has(String(viewerRole))) {
+      throw new ForbiddenException('You can only view your own profile');
+    }
+    return this.findById(id);
   }
 
   findByEmail(email: string) {

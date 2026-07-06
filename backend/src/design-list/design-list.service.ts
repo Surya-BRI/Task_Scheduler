@@ -6,6 +6,8 @@ import {
   likeContainsPattern,
   parseOptionalSqlDate,
 } from '../common/utils/sql-param.util';
+import { getCircuitBreaker } from '../common/utils/circuit-breaker.util';
+import { withRetry } from '../common/utils/retry.util';
 
 type SignTypeRawRow = {
   signTypeId: number | bigint;
@@ -91,15 +93,26 @@ const DESIGN_LIST_SELECT = Prisma.sql`
 @Injectable()
 export class DesignListService {
   private readonly logger = new Logger(DesignListService.name);
+  private readonly erpCircuitBreaker = getCircuitBreaker('erp-live-database', {
+    failureThreshold: 5,
+    resetTimeoutMs: 30_000,
+  });
 
   constructor(private readonly prisma: PrismaService) {}
 
   private async queryLive<T>(label: string, run: () => Promise<T>): Promise<T> {
     try {
-      return await run();
+      return await this.erpCircuitBreaker.execute(() =>
+        withRetry(() => run(), { maxAttempts: 3, baseDelayMs: 150 }),
+      );
     } catch (err) {
       const message = err instanceof Error ? err.message : String(err);
       this.logger.error(`Live ERP query failed (${label}): ${message}`);
+      if (message.includes('Circuit breaker')) {
+        throw new ServiceUnavailableException(
+          'The ERP project database is temporarily unavailable. Please retry in a moment.',
+        );
+      }
       if (message.includes('connection pool') || message.includes('Timed out fetching')) {
         throw new ServiceUnavailableException(
           'The ERP project database is busy or unavailable. Please retry in a moment.',

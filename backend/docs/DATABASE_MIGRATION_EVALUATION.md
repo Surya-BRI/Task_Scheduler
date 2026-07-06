@@ -43,7 +43,15 @@ All runtime DDL is **static SQL** with no request parameters. Each call is annot
 
 ## Conclusion
 
-Runtime DDL is **acceptable for static bootstrap** but should be **phased out** in favor of Prisma migrations. No API or business-logic changes are required for this transition; only deployment ordering (`migrate deploy` before `start:prod`).
+Runtime DDL is **acceptable for static bootstrap in development** but is **disabled by default in production** (`RUNTIME_SCHEMA_BOOTSTRAP` defaults to `false` when `NODE_ENV=production`). Use Prisma migrations for all production deployments.
+
+Phase 3 (July 2026) added:
+- `backend/prisma/migrations/` with idempotent baseline + performance index migrations
+- `RUNTIME_SCHEMA_BOOTSTRAP` env flag gating boot-time DDL
+- Missing Prisma models (`ChatterPostSeen`, `ProjectQsStatus`, `ProjectQsAssignment`, `LeaveRescheduleSnapshot`)
+- Performance indexes on leave, overtime, chatter, scheduler, activity log paths
+- Transaction hardening for overtime create/review and timer draft sessions
+- `backend/docs/DATABASE_BACKUP_RESTORE.md` runbook
 
 ## Execution checklist (when environments are ready)
 

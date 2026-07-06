@@ -12,6 +12,7 @@ import { NotificationsService } from '../notifications/notifications.service';
 import { DashboardRealtimeService } from '../dashboard/dashboard-realtime.service';
 import { SaveSignRowsDto } from '../tasks/dto/save-sign-rows.dto';
 import { QsStatusValue, UpdateQsStatusDto } from '../tasks/dto/update-qs-status.dto';
+import { shouldRunRuntimeSchemaBootstrap } from '../common/utils/runtime-schema-bootstrap.util';
 
 const PROJECT_SELECT = {
   id: true,
@@ -68,6 +69,7 @@ export class ProjectsService {
   }
 
   private async ensureQsStatusTable() {
+    if (!shouldRunRuntimeSchemaBootstrap()) return;
     // security-sql:allow-static-ddl
     await this.prisma.$executeRawUnsafe(`
 IF OBJECT_ID('dbo.ErpTSProjectQsStatus', 'U') IS NULL
@@ -497,11 +499,16 @@ END;
     return this.prisma.project.update({
       where: { id },
       data: {
-        ...dto,
-        technicalHead: dto.technicalHead !== undefined ? (dto.technicalHead?.trim() || null) : undefined,
-        teamLead: dto.teamLead !== undefined ? (dto.teamLead?.trim() || null) : undefined,
-        subTeamLead: dto.subTeamLead !== undefined ? (dto.subTeamLead?.trim() || null) : undefined,
-        designers: dto.designers !== undefined ? (dto.designers?.trim() || null) : undefined,
+        name: dto.name,
+        description: dto.description,
+        category: dto.category,
+        businessUnit: dto.businessUnit,
+        status: dto.status,
+        salesPerson: dto.salesPerson,
+        ...(dto.technicalHead !== undefined && { technicalHead: dto.technicalHead.trim() || null }),
+        ...(dto.teamLead !== undefined && { teamLead: dto.teamLead.trim() || null }),
+        ...(dto.subTeamLead !== undefined && { subTeamLead: dto.subTeamLead.trim() || null }),
+        ...(dto.designers !== undefined && { designers: dto.designers.trim() || null }),
       },
       select: PROJECT_SELECT,
     });

@@ -1,7 +1,9 @@
-import { Controller, Get, Query } from '@nestjs/common';
+import { Controller, Get, Query, UseGuards } from '@nestjs/common';
 import { DesignListService } from './design-list.service';
+import { JwtAuthGuard } from '../common/guards/jwt-auth.guard';
 
 @Controller('design-list')
+@UseGuards(JwtAuthGuard)
 export class DesignListController {
   constructor(private readonly designListService: DesignListService) {}
 

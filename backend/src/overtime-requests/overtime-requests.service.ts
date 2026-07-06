@@ -642,57 +642,50 @@ export class OvertimeRequestsService {
     const status = hodAutoApprove ? 'APPROVED' : this.normalizeCreateStatus(dto.status);
     const now = new Date();
 
-    const request = await this.prisma.overtimeRequest.create({
-      data: {
-        designerId,
-        taskId: dto.taskId,
-        date: new Date(dto.date),
-        startTime: schedule.startTime,
-        endTime: schedule.endTime,
-        totalHours,
-        requestedHours: schedule.requestedHours,
-        estimatedRemaining: dto.estimatedRemaining?.trim() || null,
-        reason: dto.reason,
-        status,
-        ...(hodAutoApprove
-          ? {
-              approvedById: creatorId,
-              approvedAt: now,
-              approvedHours: totalHours,
-              managerComments: hodOnBehalf
-                ? 'Auto-approved by system (HOD submission on behalf of designer)'
-                : 'Auto-approved by system (HOD submission)',
-            }
-          : {}),
-      },
-      include: {
-        designer: { select: { id: true, fullName: true, email: true, departmentId: true } },
-        task: { select: this.overtimeActivityTaskSelect },
-        attachments: true,
-      },
-    });
-
-    // Log history
-    try {
-      await this.prisma.overtimeApprovalHistory.create({
+    const request = await this.prisma.$transaction(async (tx) => {
+      const created = await tx.overtimeRequest.create({
         data: {
-          requestId: request.id,
+          designerId,
+          taskId: dto.taskId,
+          date: new Date(dto.date),
+          startTime: schedule.startTime,
+          endTime: schedule.endTime,
+          totalHours,
+          requestedHours: schedule.requestedHours,
+          estimatedRemaining: dto.estimatedRemaining?.trim() || null,
+          reason: dto.reason,
+          status,
+          ...(hodAutoApprove
+            ? {
+                approvedById: creatorId,
+                approvedAt: now,
+                approvedHours: totalHours,
+                managerComments: hodOnBehalf
+                  ? 'Auto-approved by system (HOD submission on behalf of designer)'
+                  : 'Auto-approved by system (HOD submission)',
+              }
+            : {}),
+        },
+        include: {
+          designer: { select: { id: true, fullName: true, email: true, departmentId: true } },
+          task: { select: this.overtimeActivityTaskSelect },
+          attachments: true,
+        },
+      });
+
+      await tx.overtimeApprovalHistory.create({
+        data: {
+          requestId: created.id,
           action: status,
           actionById: creatorId,
           comments: 'Request initiated',
         },
       });
-    } catch (err) {
-      this.logger.warn(
-        `Overtime history log failed for ${request.id}: ${err instanceof Error ? err.message : err}`,
-      );
-    }
 
-    if (hodAutoApprove) {
-      try {
-        await this.prisma.overtimeApprovalHistory.create({
+      if (hodAutoApprove) {
+        await tx.overtimeApprovalHistory.create({
           data: {
-            requestId: request.id,
+            requestId: created.id,
             action: 'APPROVED',
             actionById: creatorId,
             comments: hodOnBehalf
@@ -700,9 +693,12 @@ export class OvertimeRequestsService {
               : 'Auto-approved by system (HOD submission)',
           },
         });
-      } catch (err) {
-        this.logger.warn(`Overtime history log failed: ${err instanceof Error ? err.message : err}`);
       }
+
+      return created;
+    });
+
+    if (hodAutoApprove) {
       await this.logOvertimeActivity({
         action: ActivityAction.OVERTIME_AUTO_APPROVED,
         messageKey: 'overtime_auto_approved',
@@ -1073,22 +1069,26 @@ export class OvertimeRequestsService {
         updateData.rejectedAt = new Date();
       }
 
-      const updated = await this.prisma.overtimeRequest.update({
-        where: { id },
-        data: updateData,
-        include: {
-          designer: { select: { id: true, fullName: true, email: true } },
-          task: { select: this.overtimeActivityTaskSelect },
-        },
-      });
+      const updated = await this.prisma.$transaction(async (tx) => {
+        const row = await tx.overtimeRequest.update({
+          where: { id },
+          data: updateData,
+          include: {
+            designer: { select: { id: true, fullName: true, email: true } },
+            task: { select: this.overtimeActivityTaskSelect },
+          },
+        });
 
-      await this.prisma.overtimeApprovalHistory.create({
-        data: {
-          requestId: id,
-          action: dto.status,
-          actionById: reviewerId,
-          comments: dto.comments || 'Manager review completed',
-        },
+        await tx.overtimeApprovalHistory.create({
+          data: {
+            requestId: id,
+            action: dto.status,
+            actionById: reviewerId,
+            comments: dto.comments || 'Manager review completed',
+          },
+        });
+
+        return row;
       });
 
       const approved = dto.status === 'APPROVED_BY_MANAGER';

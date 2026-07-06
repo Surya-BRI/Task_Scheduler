@@ -5,6 +5,7 @@ import { PrismaModule } from '../prisma/prisma.module';
 import { ChatController } from './chat.controller';
 import { ChatGateway } from './chat.gateway';
 import { ChatService } from './chat.service';
+import { resolveJwtSecret } from '../common/utils/resolve-jwt-secret.util';
 
 @Module({
   imports: [
@@ -13,19 +14,12 @@ import { ChatService } from './chat.service';
     JwtModule.registerAsync({
       imports: [ConfigModule],
       inject: [ConfigService],
-      useFactory: (configService: ConfigService) => {
-        const authMode = (configService.get<string>('auth.mode') ?? 'demo').toLowerCase();
-        const secret =
-          authMode === 'external'
-            ? (configService.get<string>('auth.externalJwtSecret') ?? configService.get<string>('jwt.accessSecret') ?? 'change_me')
-            : (configService.get<string>('jwt.accessSecret') ?? 'change_me');
-        return {
-          secret,
-          signOptions: {
-            expiresIn: (configService.get<string>('jwt.accessExpiresIn') ?? '1d') as never,
-          },
-        };
-      },
+      useFactory: (configService: ConfigService) => ({
+        secret: resolveJwtSecret(configService),
+        signOptions: {
+          expiresIn: (configService.get<string>('jwt.accessExpiresIn') ?? '1d') as never,
+        },
+      }),
     }),
   ],
   controllers: [ChatController],

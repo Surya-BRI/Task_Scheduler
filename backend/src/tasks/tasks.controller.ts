@@ -17,6 +17,7 @@ import {
 } from '@nestjs/common';
 import { FileInterceptor, FilesInterceptor } from '@nestjs/platform-express';
 import { memoryStorage } from 'multer';
+import { Throttle } from '@nestjs/throttler';
 import { TasksService } from './tasks.service';
 import { CreateTaskDto } from './dto/create-task.dto';
 import { CreateExtendedTaskDto } from './dto/create-extended-task.dto';
@@ -53,6 +54,7 @@ export class TasksController {
 
   @Post('upload-file')
   @Roles(UserRole.HOD, UserRole.SALESPERSON)
+  @Throttle({ default: { limit: 10, ttl: 60_000 } })
   @UseInterceptors(
     FileInterceptor('file', {
       storage: memoryStorage(),
@@ -168,6 +170,7 @@ export class TasksController {
   /** POST /tasks/:id/submit-work — all authenticated roles (designer submits their timer work) */
   @Post(':id/submit-work')
   @Roles(UserRole.HOD, UserRole.DESIGNER)
+  @Throttle({ default: { limit: 10, ttl: 60_000 } })
   @UseInterceptors(
     FilesInterceptor('files', 10, {
       storage: memoryStorage(),

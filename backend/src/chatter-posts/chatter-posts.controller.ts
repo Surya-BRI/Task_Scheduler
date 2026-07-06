@@ -25,6 +25,7 @@ import { ChatterPostsService } from './chatter-posts.service';
 import { JwtAuthGuard } from '../common/guards/jwt-auth.guard';
 import { CurrentUser } from '../common/decorators/current-user.decorator';
 import { isAllowedUploadMime } from '../common/utils/allowed-file-mime';
+import { Throttle } from '@nestjs/throttler';
 
 const MAX_FILE_SIZE = 20 * 1024 * 1024; // 20 MB
 
@@ -79,15 +80,15 @@ export class ChatterPostsController {
   }
 
   @Get(':postId')
-  async findOne(@Param('postId') postId: string) {
-    const post = await this.chatterPostsService.loadPostById(postId);
+  async findOne(@Param('postId') postId: string, @CurrentUser() user: { sub: string; role: string }) {
+    const post = await this.chatterPostsService.loadPostById(postId, user.sub, user.role);
     if (!post) throw new NotFoundException('Chatter post not found');
     return post;
   }
 
   @Get(':postId/comments')
-  findComments(@Param('postId') postId: string) {
-    return this.chatterPostsService.findCommentsForPost(postId);
+  findComments(@Param('postId') postId: string, @CurrentUser() user: { sub: string; role: string }) {
+    return this.chatterPostsService.findCommentsForPost(postId, user.sub, user.role);
   }
 
   @Post(':postId/comments')
@@ -120,6 +121,7 @@ export class ChatterPostsController {
   }
 
   @Post()
+  @Throttle({ default: { limit: 10, ttl: 60_000 } })
   @UseInterceptors(FilesInterceptor('files', 10, {
     storage: memoryStorage(),
     limits: { fileSize: MAX_FILE_SIZE },

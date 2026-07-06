@@ -16,6 +16,8 @@ import { JwtAuthGuard } from '../common/guards/jwt-auth.guard';
 import { RolesGuard } from '../common/guards/roles.guard';
 import { Roles } from '../common/decorators/roles.decorator';
 import { UserRole } from '../common/constants/roles.enum';
+import { CurrentUser } from '../common/decorators/current-user.decorator';
+import type { JwtPayload } from '../common/types/jwt-payload.type';
 
 @Controller('users')
 @UseGuards(JwtAuthGuard, RolesGuard)
@@ -40,10 +42,10 @@ export class UsersController {
     return this.usersService.findAll({ role, departmentId, search });
   }
 
-  /** GET /users/:id — authenticated */
+  /** GET /users/:id — self or privileged roles */
   @Get(':id')
-  findOne(@Param('id') id: string) {
-    return this.usersService.findById(id);
+  findOne(@Param('id') id: string, @CurrentUser() user: JwtPayload) {
+    return this.usersService.findByIdForViewer(id, user.sub, user.role);
   }
 
   /** PATCH /users/:id — HOD/Admin only */

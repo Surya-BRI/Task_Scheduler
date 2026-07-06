@@ -53,6 +53,10 @@ model User {
   chatterPostMentions      ChatterPostMention[]       @relation("ChatterPostMentions")
   chatterCommentMentionEntries ChatterCommentMention[] @relation("ChatterCommentMentions")
   chatterPostLikes         ChatterPostLike[]          @relation("ChatterPostLikes")
+  chatterPostSeen          ChatterPostSeen[]          @relation("ChatterPostSeen")
+  projectQsAssignments     ProjectQsAssignment[]      @relation("ProjectQsAssignments")
+  projectQsStatusesUpdated ProjectQsStatus[]          @relation("ProjectQsStatusUpdatedBy")
+  projectQsStatusesSubmitted ProjectQsStatus[]        @relation("ProjectQsStatusSubmittedBy")
   activities               ActivityLog[]
   leaveRequests            LeaveRequest[]
   leaveRequestsApproved    LeaveRequest[]             @relation("LeaveApprover")
@@ -79,6 +83,8 @@ model User {
   createdAt DateTime @default(dbgenerated("sysutcdatetime()"))
   updatedAt DateTime @default(dbgenerated("sysutcdatetime()")) @updatedAt
 
+  @@index([roleId], name: "IX_ErpTSUser_roleId")
+  @@index([departmentId], name: "IX_ErpTSUser_departmentId")
   @@map("ErpTSUser")
 }
 
@@ -104,11 +110,41 @@ model Project {
   signRows     ProjectSignRow[]
   chatterPosts ChatterPost[]
   attachments  ProjectAttachment[]
+  qsStatus     ProjectQsStatus?
+  qsAssignments ProjectQsAssignment[]
   createdAt    DateTime @default(dbgenerated("sysutcdatetime()"))
   updatedAt    DateTime @default(dbgenerated("sysutcdatetime()")) @updatedAt
 
   @@index([createdById])
   @@map("ErpTSProject")
+}
+
+model ProjectQsAssignment {
+  id         String   @id @default(dbgenerated("newid()")) @db.UniqueIdentifier
+  projectId  String   @db.UniqueIdentifier
+  project    Project  @relation(fields: [projectId], references: [id], onDelete: Cascade, onUpdate: NoAction)
+  qsUserId   String   @db.UniqueIdentifier
+  qsUser     User     @relation("ProjectQsAssignments", fields: [qsUserId], references: [id], onDelete: Cascade, onUpdate: NoAction)
+  assignedAt DateTime @default(dbgenerated("sysutcdatetime()"))
+
+  @@unique([projectId, qsUserId], name: "UQ_ErpTSProjectQsAssignment_project_user")
+  @@index([qsUserId, assignedAt(sort: Desc)], name: "IX_ErpTSProjectQsAssignment_qsUserId")
+  @@map("ErpTSProjectQsAssignment")
+}
+
+model ProjectQsStatus {
+  projectId     String    @id @db.UniqueIdentifier
+  project       Project   @relation(fields: [projectId], references: [id], onDelete: Cascade, onUpdate: NoAction)
+  status        String    @default("Pending") @db.NVarChar(20)
+  updatedById   String?   @db.UniqueIdentifier
+  updatedBy     User?     @relation("ProjectQsStatusUpdatedBy", fields: [updatedById], references: [id], onDelete: NoAction, onUpdate: NoAction)
+  submittedById String?   @db.UniqueIdentifier
+  submittedBy   User?     @relation("ProjectQsStatusSubmittedBy", fields: [submittedById], references: [id], onDelete: NoAction, onUpdate: NoAction)
+  submittedAt   DateTime? @db.DateTime2
+  createdAt     DateTime  @default(dbgenerated("sysutcdatetime()"))
+  updatedAt     DateTime  @default(dbgenerated("sysutcdatetime()")) @updatedAt
+
+  @@map("ErpTSProjectQsStatus")
 }
 
 model Task {
@@ -363,10 +399,15 @@ model ChatterPost {
   comments        ChatterComment[]
   mentionEntries  ChatterPostMention[]
   likes           ChatterPostLike[]
+  seenBy          ChatterPostSeen[]
 
   createdAt DateTime? @default(now()) @db.DateTime
   updatedAt DateTime? @default(now()) @updatedAt @db.DateTime
 
+  @@index([taskId], name: "IX_ErpTSChatterPost_taskId")
+  @@index([projectId], name: "IX_ErpTSChatterPost_projectId")
+  @@index([authorId], name: "IX_ErpTSChatterPost_authorId")
+  @@index([createdAt(sort: Desc)], name: "IX_ErpTSChatterPost_createdAt")
   @@map("ErpTSChatterPost")
 }
 
@@ -383,6 +424,7 @@ model ChatterComment {
 
   mentionEntries ChatterCommentMention[]
 
+  @@index([postId], name: "IX_ErpTSChatterComment_postId")
   @@map("ErpTSChatterComment")
 }
 
@@ -422,6 +464,20 @@ model ChatterPostLike {
 
   @@unique([postId, userId], name: "UQ_ErpTSChatterPostLike_post_user")
   @@map("ErpTSChatterPostLike")
+}
+
+model ChatterPostSeen {
+  id        String      @id @default(dbgenerated("newid()")) @db.UniqueIdentifier
+  postId    String      @db.UniqueIdentifier
+  post      ChatterPost @relation(fields: [postId], references: [id], onDelete: Cascade, onUpdate: NoAction)
+  userId    String      @db.UniqueIdentifier
+  user      User        @relation("ChatterPostSeen", fields: [userId], references: [id], onDelete: NoAction, onUpdate: NoAction)
+  seenAt    DateTime    @default(dbgenerated("sysutcdatetime()")) @db.DateTime
+
+  @@unique([postId, userId], name: "UQ_ErpTSChatterPostSeen_post_user")
+  @@index([userId], name: "IX_ErpTSChatterPostSeen_userId")
+  @@index([postId], name: "IX_ErpTSChatterPostSeen_postId")
+  @@map("ErpTSChatterPostSeen")
 }
 
 model Attachment {
@@ -474,6 +530,7 @@ model LeaveRequest {
   createdAt       DateTime  @default(now())
   updatedAt       DateTime  @default(now()) @updatedAt
 
+  @@index([userId, status], name: "IX_ErpTSLeaveRequest_userId_status")
   @@map("ErpTSLeaveRequest")
 }
 
@@ -494,6 +551,7 @@ model RegularizationRequest {
   reviewedAt DateTime? @db.DateTime
   createdAt  DateTime? @default(now())
 
+  @@index([designerId, status], name: "IX_ErpTSRegularizationRequest_designerId_status")
   @@map("ErpTSRegularizationRequest")
 }
 
@@ -527,6 +585,8 @@ model OvertimeRequest {
   history            OvertimeApprovalHistory[]
   attachments        OvertimeAttachment[]
 
+  @@index([designerId, status], name: "IX_ErpTSOvertimeRequest_designerId_status")
+  @@index([date], name: "IX_ErpTSOvertimeRequest_date")
   @@map("ErpTSOvertimeRequest")
 }
 
@@ -540,6 +600,7 @@ model OvertimeApprovalHistory {
   comments   String?         @db.NVarChar(Max)
   createdAt  DateTime        @default(now())
 
+  @@index([requestId], name: "IX_ErpTSOvertimeApprovalHistory_requestId")
   @@map("ErpTSOvertimeApprovalHistory")
 }
 
@@ -581,6 +642,8 @@ model SchedulerAssignment {
   createdAt     DateTime? @default(now())
   updatedAt     DateTime? @default(now()) @updatedAt
 
+  @@index([weekStartDate, designerId], name: "IX_ErpTSSchedulerAssignment_week_designer")
+  @@index([weekStartDate, taskId], name: "IX_ErpTSSchedulerAssignment_week_task")
   @@map("ErpTSSchedulerAssignment")
 }
 
@@ -644,6 +707,18 @@ model Holiday {
   @@map("ErpTSHoliday")
 }
 
+model LeaveRescheduleSnapshot {
+  id             String    @id @default(dbgenerated("newid()")) @db.UniqueIdentifier
+  leaveRequestId String    @db.UniqueIdentifier
+  assignmentId   String    @db.UniqueIdentifier
+  originalJson   String    @db.NVarChar(Max)
+  createdAt      DateTime  @default(dbgenerated("sysutcdatetime()"))
+  restoredAt     DateTime? @db.DateTime2
+
+  @@unique([leaveRequestId, assignmentId], name: "UX_ErpTSLeaveRescheduleSnapshot_leave_assignment")
+  @@map("ErpTSLeaveRescheduleSnapshot")
+}
+
 // ---------------------------------------------------------
 // ACTIVITY & NOTIFICATIONS
 // ---------------------------------------------------------
@@ -657,6 +732,9 @@ model ActivityLog {
   task      Task?    @relation(fields: [taskId], references: [id], onDelete: NoAction, onUpdate: NoAction)
   createdAt DateTime @default(now())
 
+  @@index([userId], name: "IX_ErpTSActivityLog_userId")
+  @@index([taskId], name: "IX_ErpTSActivityLog_taskId")
+  @@index([createdAt(sort: Desc)], name: "IX_ErpTSActivityLog_createdAt")
   @@map("ErpTSActivityLog")
 }
 
@@ -728,6 +806,7 @@ model Message {
   conversation   Conversation @relation(fields: [conversationId], references: [id], onDelete: Cascade, onUpdate: NoAction)
   sender         User         @relation("MessageSender", fields: [senderId], references: [id], onDelete: Cascade, onUpdate: NoAction)
 
+  @@index([conversationId, createdAt(sort: Desc)], name: "IX_ErpTSMessage_conversationId_createdAt")
   @@map("ErpTSMessage")
 }
 

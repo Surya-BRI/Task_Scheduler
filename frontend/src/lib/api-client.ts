@@ -1,10 +1,31 @@
 import { parseApiErrorMessage } from './api-error';
-import { clearAccessToken, getAccessToken } from './auth-token';
+import { clearSession } from './session';
 import { env } from './env';
 import { dateReviver } from './utils';
 
+function redirectToLogin(expired = false) {
+  if (typeof window === 'undefined') return;
+  if (window.location.pathname.startsWith('/login')) return;
+  const next = encodeURIComponent(`${window.location.pathname}${window.location.search}`);
+  const suffix = expired ? '&expired=1' : '';
+  window.location.href = `/login?next=${next}${suffix}`;
+}
+
+/** Clear the httpOnly access_token cookie (e.g. after expiry or invalid JWT). */
+async function clearStaleAuthCookie() {
+  try {
+    await fetch('/api/auth/logout', {
+      method: 'POST',
+      credentials: 'include',
+      headers: { 'Content-Type': 'application/json' },
+      body: '{}',
+    });
+  } catch {
+    // Best-effort; middleware also allows /login when expired=1.
+  }
+}
+
 async function request<T>(path: string, init?: RequestInit): Promise<T> {
-  const token = getAccessToken();
   const headers = new Headers(init?.headers);
   if (!(init?.body instanceof FormData)) {
     headers.set('Content-Type', 'application/json');
@@ -12,15 +33,12 @@ async function request<T>(path: string, init?: RequestInit): Promise<T> {
     headers.delete('Content-Type');
   }
 
-  if (token) {
-    headers.set('Authorization', `Bearer ${token}`);
-  }
-
   let response: Response;
   try {
     response = await fetch(`${env.apiBaseUrl}${path}`, {
       ...init,
       headers,
+      credentials: 'include',
     });
   } catch (err) {
     const hint =
@@ -33,8 +51,13 @@ async function request<T>(path: string, init?: RequestInit): Promise<T> {
   }
 
   if (response.status === 401) {
-    clearAccessToken();
-    throw new Error('Unauthorized');
+    const isLoginAttempt = path === '/auth/login' || path.endsWith('/auth/login');
+    if (!isLoginAttempt) {
+      clearSession();
+      await clearStaleAuthCookie();
+      redirectToLogin(true);
+    }
+    throw new Error(isLoginAttempt ? 'Invalid email or password.' : 'Unauthorized');
   }
 
   if (!response.ok) {
@@ -42,13 +65,10 @@ async function request<T>(path: string, init?: RequestInit): Promise<T> {
     throw new Error(parseApiErrorMessage(errorBody, response.status));
   }
 
-  // 204 No Content — return undefined cast to T (callers that use void are fine)
   if (response.status === 204) {
     return undefined as unknown as T;
   }
 
-  // Use a date-aware reviver so ISO strings are automatically parsed into
-  // Date objects — this keeps all date fields as Date throughout the app.
   const text = await response.text();
   if (!text.trim()) {
     return undefined as unknown as T;
@@ -80,4 +100,3 @@ export const apiClient = {
     return request(path, { method: 'DELETE' });
   },
 };
-
