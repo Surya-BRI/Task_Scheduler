@@ -62,6 +62,19 @@ type RawAssignmentRow = {
   fragmentStatus?: 'UNASSIGNED' | 'ON_HOLD' | null;
 };
 
+type SchedulerTaskFragmentRow = {
+  id: string;
+  taskId: string;
+  parentId: string | null;
+  hours: Prisma.Decimal | number | string;
+  status: string;
+  sourceDesignerId: string | null;
+  splitIndex: number | null;
+  totalParts: number | null;
+  createdAt: Date;
+  updatedAt: Date;
+};
+
 export type SchedulerAssignmentDto = {
   id: string;
   designerId: string;
@@ -404,18 +417,7 @@ export class SchedulerAssignmentsService implements OnModuleInit {
    * carried over from the source row purely for historical context and are ignored
    * by the frontend, which never adds a fragment to `schedulesObj`.
    */
-  private mapFragmentRow(fragment: {
-    id: string;
-    taskId: string;
-    parentId: string | null;
-    hours: Prisma.Decimal | number | string;
-    status: string;
-    sourceDesignerId: string | null;
-    splitIndex: number | null;
-    totalParts: number | null;
-    createdAt: Date;
-    updatedAt: Date;
-  }): SchedulerAssignmentDto {
+  private mapFragmentRow(fragment: SchedulerTaskFragmentRow): SchedulerAssignmentDto {
     return this.mapRow({
       id: `fragment-${fragment.id}`,
       designerId: fragment.sourceDesignerId ?? '',

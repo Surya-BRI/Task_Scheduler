@@ -1,12 +1,27 @@
 import { SchedulerAssignmentsService } from './scheduler-assignments.service';
 
 describe('SchedulerAssignmentsService', () => {
+  const originalRuntimeBootstrap = process.env.RUNTIME_SCHEMA_BOOTSTRAP;
+
+  beforeAll(() => {
+    process.env.RUNTIME_SCHEMA_BOOTSTRAP = 'false';
+  });
+
+  afterAll(() => {
+    if (originalRuntimeBootstrap === undefined) {
+      delete process.env.RUNTIME_SCHEMA_BOOTSTRAP;
+    } else {
+      process.env.RUNTIME_SCHEMA_BOOTSTRAP = originalRuntimeBootstrap;
+    }
+  });
+
   const prisma: any = {
     schedulerAssignment: { findMany: jest.fn(), update: jest.fn() },
     overtimeRequest: { findMany: jest.fn() },
     leaveRequest: { findMany: jest.fn() },
     regularizationRequest: { findMany: jest.fn() },
     taskWorkSession: { findMany: jest.fn() },
+    schedulerTaskFragment: { findMany: jest.fn() },
     user: { findMany: jest.fn() },
     task: { findMany: jest.fn() },
     schedulerWeek: {
@@ -37,6 +52,7 @@ describe('SchedulerAssignmentsService', () => {
     prisma.leaveRequest.findMany.mockResolvedValue([]);
     prisma.regularizationRequest.findMany.mockResolvedValue([]);
     prisma.taskWorkSession.findMany.mockResolvedValue([]);
+    prisma.schedulerTaskFragment.findMany.mockResolvedValue([]);
     prisma.user.findMany.mockResolvedValue([]);
     prisma.task.findMany.mockResolvedValue([]);
     prisma.schedulerWeek.create.mockResolvedValue({});
