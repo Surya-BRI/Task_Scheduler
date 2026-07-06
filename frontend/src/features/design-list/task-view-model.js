@@ -81,6 +81,7 @@ export function mapTaskToDesignRow(task) {
   const deadlineDate = toDeadlineDate(task);
   return {
     id: task?.id,
+    projectId: task?.projectId || task?.project?.id || null,
     opNo: task?.opNo || "—",
     projectNo: task?.project?.projectNo || "—",
     projectName: task?.project?.name || task?.project?.projectNo || "—",

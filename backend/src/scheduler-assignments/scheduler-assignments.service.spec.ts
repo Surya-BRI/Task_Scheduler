@@ -20,6 +20,8 @@ describe('SchedulerAssignmentsService', () => {
     overtimeRequest: { findMany: jest.fn() },
     leaveRequest: { findMany: jest.fn() },
     regularizationRequest: { findMany: jest.fn() },
+    taskWorkSession: { findMany: jest.fn() },
+    schedulerTaskFragment: { findMany: jest.fn() },
     user: { findMany: jest.fn() },
     task: { findMany: jest.fn() },
     schedulerWeek: {
@@ -49,6 +51,8 @@ describe('SchedulerAssignmentsService', () => {
     prisma.overtimeRequest.findMany.mockResolvedValue([]);
     prisma.leaveRequest.findMany.mockResolvedValue([]);
     prisma.regularizationRequest.findMany.mockResolvedValue([]);
+    prisma.taskWorkSession.findMany.mockResolvedValue([]);
+    prisma.schedulerTaskFragment.findMany.mockResolvedValue([]);
     prisma.user.findMany.mockResolvedValue([]);
     prisma.task.findMany.mockResolvedValue([]);
     prisma.schedulerWeek.create.mockResolvedValue({});
