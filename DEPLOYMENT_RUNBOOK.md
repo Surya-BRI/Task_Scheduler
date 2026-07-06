@@ -136,3 +136,14 @@ curl -sf http://localhost:7000/api/v1/health/ready
 
 See [backend/docs/RELIABILITY.md](backend/docs/RELIABILITY.md) for graceful shutdown, timeouts, and cron protection.
 
+## 10. Docker (optional)
+
+```bash
+export JWT_ACCESS_SECRET='your-secret-min-16-chars'
+export DATABASE_URL='sqlserver://...'
+export CORS_ORIGIN='https://your-frontend.example.com'
+docker compose up --build
+```
+
+See [backend/docs/DEVOPS.md](backend/docs/DEVOPS.md) for CI/CD, structured logging, Sentry, and OpenTelemetry.
+

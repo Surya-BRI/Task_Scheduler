@@ -4,19 +4,37 @@ import {
   ExceptionFilter,
   HttpException,
   HttpStatus,
-  Logger,
 } from '@nestjs/common';
 import { Prisma } from '@prisma/client';
 import { MulterError } from 'multer';
+import { writeStructuredLog } from '../logging/structured-log.util';
+import { REQUEST_ID_HEADER } from '../middleware/request-id.middleware';
 
 @Catch()
 export class HttpExceptionFilter implements ExceptionFilter {
-  private readonly logger = new Logger(HttpExceptionFilter.name);
+  private readonly nodeEnv = process.env.NODE_ENV ?? 'development';
+
+  private log(level: 'warn' | 'error', context: string, message: string, requestId?: string, error?: string): void {
+    writeStructuredLog(
+      {
+        timestamp: new Date().toISOString(),
+        level,
+        context,
+        message,
+        requestId,
+        error,
+      },
+      this.nodeEnv,
+    );
+  }
 
   catch(exception: unknown, host: ArgumentsHost): void {
     const ctx = host.switchToHttp();
     const response = ctx.getResponse();
     const request = ctx.getRequest();
+    const requestId = (request.headers?.[REQUEST_ID_HEADER] as string | undefined) ?? undefined;
+    const method = request.method as string;
+    const path = request.url as string;
 
     let status: number;
     let message: unknown;
@@ -30,7 +48,7 @@ export class HttpExceptionFilter implements ExceptionFilter {
         exception.code === 'LIMIT_FILE_SIZE'
           ? 'File size exceeds the 20MB limit'
           : exception.message;
-      this.logger.warn(`MulterError — ${request.method} ${request.url}: ${exception.message}`);
+      this.log('warn', 'HttpExceptionFilter', `MulterError — ${method} ${path}: ${exception.message}`, requestId);
     } else if (
       exception instanceof Error &&
       (exception.message.includes('Unsupported file type') ||
@@ -38,7 +56,7 @@ export class HttpExceptionFilter implements ExceptionFilter {
     ) {
       status = HttpStatus.BAD_REQUEST;
       message = exception.message;
-      this.logger.warn(`Upload rejected — ${request.method} ${request.url}: ${exception.message}`);
+      this.log('warn', 'HttpExceptionFilter', `Upload rejected — ${method} ${path}: ${exception.message}`, requestId);
     } else if (exception instanceof Prisma.PrismaClientKnownRequestError) {
       // Translate known Prisma error codes to meaningful HTTP responses
       switch (exception.code) {
@@ -71,8 +89,11 @@ export class HttpExceptionFilter implements ExceptionFilter {
           // Unknown Prisma DB error — log with code for debugging
           status = HttpStatus.INTERNAL_SERVER_ERROR;
           message = `Database error [${exception.code}]`;
-          this.logger.error(
-            `Prisma ${exception.code} — ${request.method} ${request.url}`,
+          this.log(
+            'error',
+            'HttpExceptionFilter',
+            `Prisma ${exception.code} — ${method} ${path}`,
+            requestId,
             exception.message,
           );
       }
@@ -80,13 +101,16 @@ export class HttpExceptionFilter implements ExceptionFilter {
       // Wrong types passed to Prisma query — always a client/code bug
       status = HttpStatus.BAD_REQUEST;
       message = 'Invalid data format sent to database';
-      this.logger.warn(`PrismaValidationError — ${request.method} ${request.url}: ${exception.message}`);
+      this.log('warn', 'HttpExceptionFilter', `PrismaValidationError — ${method} ${path}: ${exception.message}`, requestId);
     } else {
       // Truly unexpected — log full stack for debugging
       status = HttpStatus.INTERNAL_SERVER_ERROR;
       message = 'Internal server error';
-      this.logger.error(
-        `${request.method} ${request.url}`,
+      this.log(
+        'error',
+        'HttpExceptionFilter',
+        `${method} ${path}`,
+        requestId,
         exception instanceof Error ? exception.stack : String(exception),
       );
     }
@@ -96,6 +120,7 @@ export class HttpExceptionFilter implements ExceptionFilter {
       message,
       timestamp: new Date().toISOString(),
       path: request.url,
+      requestId,
     });
   }
 }

@@ -15,10 +15,20 @@ import { ConfigService } from '@nestjs/config';
 import { installBigIntJsonSerialization } from './common/utils/json-serialization.util';
 import { resolveCorsOrigins } from './common/utils/resolve-cors-origins.util';
 import { requestTimeoutMiddleware } from './common/middleware/request-timeout.middleware';
+import { requestIdMiddleware } from './common/middleware/request-id.middleware';
+import { initObservability, shutdownObservability } from './config/observability';
 
 installBigIntJsonSerialization();
 
 async function bootstrap() {
+  await initObservability({
+    sentryDsn: process.env.SENTRY_DSN,
+    otlpEndpoint: process.env.OTEL_EXPORTER_OTLP_ENDPOINT,
+    serviceName: process.env.SERVICE_NAME,
+    nodeEnv: process.env.NODE_ENV,
+    tracesSampleRate: Number(process.env.SENTRY_TRACES_SAMPLE_RATE ?? 0.1),
+  });
+
   mkdirSync(join(process.cwd(), 'uploads', 'chatter'), { recursive: true });
 
   const app = await NestFactory.create(AppModule, new ExpressAdapter());
@@ -34,6 +44,7 @@ async function bootstrap() {
 
   app.setGlobalPrefix(prefix);
   app.use(cookieParser());
+  app.use(requestIdMiddleware);
   app.use(requestTimeoutMiddleware(requestTimeoutMs));
   app.use(helmet());
   app.use(compression());
@@ -71,6 +82,7 @@ async function bootstrap() {
 
     try {
       await app.close();
+      await shutdownObservability();
       clearTimeout(forceTimer);
       logger.log('Shutdown complete');
       process.exit(0);
