@@ -24,6 +24,10 @@ export default function DesignListPage() {
       router.replace('/qs/projects')
       return
     }
+    if (session.role === 'SALESPERSON') {
+      router.replace('/sales/design-list')
+      return
+    }
     // HOD — show full list
     setRole('HOD')
   }, [router])

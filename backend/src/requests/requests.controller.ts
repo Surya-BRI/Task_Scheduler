@@ -21,13 +21,13 @@ export class RequestsController {
   constructor(private readonly requestsService: RequestsService) {}
 
   @Get('pending-approvals')
-  @Roles(UserRole.HOD)
+  @Roles(UserRole.HOD, UserRole.SALESPERSON)
   findPendingApprovals(@CurrentUser() user: JwtPayload) {
     return this.requestsService.findPendingApprovals(user.sub, user.role);
   }
 
   @Get('team-requests')
-  @Roles(UserRole.HOD)
+  @Roles(UserRole.HOD, UserRole.SALESPERSON)
   findTeamRequests(
     @CurrentUser() user: JwtPayload,
     @Query('status') status?: string,
@@ -37,7 +37,7 @@ export class RequestsController {
   }
 
   @Get()
-  @Roles(UserRole.DESIGNER, UserRole.HOD)
+  @Roles(UserRole.DESIGNER, UserRole.HOD, UserRole.SALESPERSON)
   findAll(@Query('designerId') designerId: string | undefined, @CurrentUser() user: JwtPayload) {
     const targetId = (designerId ?? user.sub ?? '').trim();
     if (!targetId) return [];
@@ -45,7 +45,7 @@ export class RequestsController {
   }
 
   @Post()
-  @Roles(UserRole.DESIGNER, UserRole.HOD)
+  @Roles(UserRole.DESIGNER, UserRole.HOD, UserRole.SALESPERSON)
   create(@CurrentUser() user: JwtPayload, @Body() createDto: CreateLeaveRequestDto) {
     return this.requestsService.create(user.sub, user.role, createDto);
   }
@@ -73,7 +73,7 @@ export class RequestsController {
   }
 
   @Post(':id/review')
-  @Roles(UserRole.HOD)
+  @Roles(UserRole.HOD, UserRole.SALESPERSON)
   review(
     @Param('id') id: string,
     @CurrentUser() user: JwtPayload,
@@ -86,7 +86,7 @@ export class RequestsController {
   }
 
   @Post(':id/revoke')
-  @Roles(UserRole.HOD)
+  @Roles(UserRole.HOD, UserRole.SALESPERSON)
   revoke(
     @Param('id') id: string,
     @CurrentUser() user: JwtPayload,
@@ -99,7 +99,7 @@ export class RequestsController {
   }
 
   @Patch(':id/status')
-  @Roles(UserRole.HOD)
+  @Roles(UserRole.HOD, UserRole.SALESPERSON)
   updateStatus(
     @Param('id') id: string,
     @CurrentUser() user: JwtPayload,

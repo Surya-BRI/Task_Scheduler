@@ -18,6 +18,10 @@ export default function ProjectsOverviewPage() {
       return;
     }
     if (!OVERVIEW_ROLES.has(session.role)) {
+      if (session.role === 'SALESPERSON') {
+        router.replace('/sales/projects-overview');
+        return;
+      }
       router.replace(getHomeRoute(session));
       return;
     }

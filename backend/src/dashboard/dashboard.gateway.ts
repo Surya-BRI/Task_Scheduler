@@ -16,7 +16,7 @@ import {
 } from './dashboard-realtime.service';
 import { extractAccessTokenFromSocket } from '../common/utils/extract-socket-token.util';
 
-const OVERVIEW_ROLES = new Set<string>([UserRole.HOD]);
+const OVERVIEW_ROLES = new Set<string>([UserRole.HOD, UserRole.SALESPERSON]);
 
 @WebSocketGateway({ namespace: '/dashboard' })
 export class DashboardGateway

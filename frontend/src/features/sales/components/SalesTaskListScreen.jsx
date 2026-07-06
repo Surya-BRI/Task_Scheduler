@@ -3,9 +3,10 @@
 import { useCallback, useEffect, useMemo, useState } from 'react'
 import { useRouter } from 'next/navigation'
 import { RefreshCw, Search } from 'lucide-react'
+import { SalesReviewIcon } from '@/features/sales/components/SalesReviewIcon'
 import { Navbar } from '@/components/Navbar'
 import { apiClient } from '@/lib/api-client'
-import { taskViewPathForRecord } from '@/lib/design-list-routes'
+import { taskViewPathForRecord, FROM_SALES_QUEUE } from '@/lib/design-list-routes'
 import { getStatusLabel, mapTaskToDesignRow } from '@/features/design-list/task-view-model'
 
 const getStatusColor = (status) => {
@@ -28,7 +29,7 @@ export default function SalesTaskListScreen() {
   const fetchTasks = useCallback(async () => {
     setLoading(true)
     try {
-      const res = await apiClient.get('/tasks?limit=500')
+      const res = await apiClient.get('/tasks?limit=500&salesQueue=true')
       const raw = Array.isArray(res) ? res : (res?.data ?? [])
       setTasks(raw.map(mapTaskToDesignRow))
     } catch {
@@ -57,7 +58,10 @@ export default function SalesTaskListScreen() {
       <div className="flex-1 flex flex-col min-h-0">
         {/* Toolbar */}
         <div className="shrink-0 mb-4 mt-4 flex flex-col gap-4 px-4 sm:px-6 md:flex-row md:items-center md:justify-between">
-          <h1 className="text-2xl font-semibold tracking-tight text-slate-900 leading-none shrink-0">Sales Review Queue</h1>
+          <h1 className="flex items-center gap-2 text-2xl font-semibold tracking-tight text-slate-900 leading-none shrink-0">
+            <SalesReviewIcon className="h-6 w-6 shrink-0 text-slate-700" strokeWidth={1.75} />
+            Sales Review Queue
+          </h1>
           <div className="flex items-center gap-2 md:ml-auto">
             <div className="relative">
               <Search className="pointer-events-none absolute left-3 top-1/2 h-4 w-4 -translate-y-1/2 text-slate-400" />
@@ -105,7 +109,7 @@ export default function SalesTaskListScreen() {
                     <tr
                       key={row.id}
                       className="hover:bg-slate-50 transition-colors cursor-pointer"
-                      onClick={() => router.push(taskViewPathForRecord(row, { from: 'sales-queue' }))}
+                      onClick={() => router.push(taskViewPathForRecord(row, { from: FROM_SALES_QUEUE }))}
                     >
                       <td className="px-2 py-1 text-slate-800 font-medium">
                         <div className="max-w-[220px] truncate" title={row.name}>{row.name || '—'}</div>

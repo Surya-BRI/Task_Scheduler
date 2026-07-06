@@ -34,7 +34,12 @@ function nextStatus(current) {
 }
 
 function shouldLoadDesignList(pathname) {
-  return pathname?.startsWith('/design-list') || pathname?.startsWith('/project-design')
+  return (
+    pathname?.startsWith('/design-list') ||
+    pathname?.startsWith('/project-design') ||
+    pathname?.startsWith('/sales/design-list') ||
+    pathname?.startsWith('/sales/project-design')
+  )
 }
 
 function normalizeDesignListResponse(data) {

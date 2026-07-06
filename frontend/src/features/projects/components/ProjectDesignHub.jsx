@@ -11,11 +11,19 @@ import {
   taskViewPathForRecord,
 } from "@/lib/design-list-routes";
 
-function hubTaskHref(row, opts = {}) {
+function hubTaskHref(row, workflowFromOrOpts = FROM_PROJECT_DESIGN, maybeOpts = {}) {
+  let workflowFrom = FROM_PROJECT_DESIGN;
+  let opts = {};
+  if (typeof workflowFromOrOpts === 'string') {
+    workflowFrom = workflowFromOrOpts;
+    opts = maybeOpts ?? {};
+  } else if (workflowFromOrOpts && typeof workflowFromOrOpts === 'object') {
+    opts = workflowFromOrOpts;
+  }
   const routingId = row?.taskId || row?.opNo || row?.id;
   if (!routingId) return null;
   const routingRow = { ...row, id: routingId };
-  const q = { from: FROM_PROJECT_DESIGN };
+  const q = { from: workflowFrom };
   if (row?.opNo) q.opNo = row.opNo;
   if (opts.tab) q.tab = opts.tab;
   if (opts.create) return taskCreationPathForRecord(routingRow, q);
@@ -40,7 +48,8 @@ function ActionLink({ href, label }) {
   );
 }
 
-function DesignTypeTable({ rows, variant }) {
+function DesignTypeTable({ rows, variant, workflowFrom = FROM_PROJECT_DESIGN }) {
+  const href = (row, opts) => hubTaskHref(row, workflowFrom, opts);
   return (
     <div className="flex-1 min-h-0 flex flex-col">
       <div className="border border-slate-200 rounded-xl overflow-auto bg-white shadow-sm h-full">
@@ -65,8 +74,8 @@ function DesignTypeTable({ rows, variant }) {
               rows.map((row) => (
                 <tr key={row.id} className="hover:bg-slate-50 transition-colors">
                   <td className="px-2 py-1">
-                    {hubTaskHref(row) ? (
-                      <Link href={hubTaskHref(row)} className="font-medium text-blue-600 hover:underline whitespace-nowrap">
+                    {href(row) ? (
+                      <Link href={href(row)} className="font-medium text-blue-600 hover:underline whitespace-nowrap">
                         {row.opNo}
                       </Link>
                     ) : (
@@ -74,8 +83,8 @@ function DesignTypeTable({ rows, variant }) {
                     )}
                   </td>
                   <td className="px-2 py-1">
-                    {hubTaskHref(row) ? (
-                      <Link href={hubTaskHref(row)} className="text-blue-600 hover:underline whitespace-nowrap">
+                    {href(row) ? (
+                      <Link href={href(row)} className="text-blue-600 hover:underline whitespace-nowrap">
                         {row.projectNo}
                       </Link>
                     ) : (
@@ -83,8 +92,8 @@ function DesignTypeTable({ rows, variant }) {
                     )}
                   </td>
                   <td className="px-2 py-1 text-slate-900">
-                    {hubTaskHref(row) ? (
-                      <Link href={hubTaskHref(row)} className="hover:text-blue-700 hover:underline">
+                    {href(row) ? (
+                      <Link href={href(row)} className="hover:text-blue-700 hover:underline">
                         {row.name}
                       </Link>
                     ) : (
@@ -94,13 +103,13 @@ function DesignTypeTable({ rows, variant }) {
                   <td className="px-2 py-1 text-slate-600">{row.status}</td>
                   <td className="px-2 py-1">
                     <div className="flex flex-wrap items-center justify-center gap-1.5">
-                      <ActionLink href={hubTaskHref(row)} label="Details" />
-                      <ActionLink href={hubTaskHref(row, { tab: "activity" })} label="Activity" />
-                      <ActionLink href={hubTaskHref(row, { tab: "chatter" })} label="Chatter" />
+                      <ActionLink href={href(row)} label="Details" />
+                      <ActionLink href={href(row, { tab: "activity" })} label="Activity" />
+                      <ActionLink href={href(row, { tab: "chatter" })} label="Chatter" />
                       {variant === "project" ? (
-                        <ActionLink href={hubTaskHref(row, { tab: "team" })} label="Team" />
+                        <ActionLink href={href(row, { tab: "team" })} label="Team" />
                       ) : null}
-                      <ActionLink href={hubTaskHref(row, { create: true })} label="Create" />
+                      <ActionLink href={href(row, { create: true })} label="Create" />
                     </div>
                   </td>
                 </tr>
@@ -113,7 +122,7 @@ function DesignTypeTable({ rows, variant }) {
   );
 }
 
-export function ProjectDesignHub() {
+export function ProjectDesignHub({ workflowFrom = FROM_PROJECT_DESIGN }) {
   const { records, loading, error } = useDesignListStore();
   const list = records;
   const [searchQuery, setSearchQuery] = useState("");
@@ -191,9 +200,9 @@ export function ProjectDesignHub() {
               <p className="text-xs text-amber-800">Check that the backend is running and the design-list API is available.</p>
             </div>
           ) : segment === "retail" ? (
-            <DesignTypeTable rows={retailRows} variant="retail" />
+            <DesignTypeTable rows={retailRows} variant="retail" workflowFrom={workflowFrom} />
           ) : (
-            <DesignTypeTable rows={projectRows} variant="project" />
+            <DesignTypeTable rows={projectRows} variant="project" workflowFrom={workflowFrom} />
           )}
         </div>
       </div>

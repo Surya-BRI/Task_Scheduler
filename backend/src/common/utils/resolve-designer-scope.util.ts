@@ -1,21 +1,21 @@
 import { ForbiddenException } from '@nestjs/common';
-import { UserRole } from '../constants/roles.enum';
+import { hasDepartmentManagerAccess } from './workflow-roles.util';
 
 /**
- * Ensures non-HOD users can only access their own designer-scoped data.
- * HOD callers may pass an explicit designerId (e.g. team views).
+ * Ensures non-manager users can only access their own designer-scoped data.
+ * HOD / Sales callers may pass an explicit designerId (e.g. team views).
  */
 export function resolveDesignerScope(
   requestedDesignerId: string | undefined,
   callerId: string,
-  callerRole: UserRole | string,
+  callerRole: string,
 ): string {
   const trimmed = requestedDesignerId?.trim();
   const effectiveId = trimmed || callerId;
   if (!effectiveId) {
     return '';
   }
-  if (callerRole !== UserRole.HOD && effectiveId !== callerId) {
+  if (!hasDepartmentManagerAccess(callerRole) && effectiveId !== callerId) {
     throw new ForbiddenException('You can only access your own designer data.');
   }
   return effectiveId;

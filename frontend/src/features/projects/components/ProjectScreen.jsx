@@ -8,13 +8,13 @@ import { Navbar } from "@/components/Navbar";
 import { FROM_PROJECTS_LIST, taskCreationPathForRecord } from "@/lib/design-list-routes";
 import { useDesignListStore } from "@/state/DesignListContext";
 
-function projectListTaskHref(row) {
+function projectListTaskHref(row, workflowFrom = FROM_PROJECTS_LIST) {
   const projectCode = String(row?.projectCode ?? "").trim();
   if (!projectCode) return null;
   return taskCreationPathForRecord(
     { id: projectCode, designType: row.category, category: row.category },
     {
-      from: FROM_PROJECTS_LIST,
+      from: workflowFrom,
       projectCode,
       designType: row.category,
     },
@@ -26,7 +26,7 @@ const renderCell = (value) => (value == null || value === "" ? "null" : String(v
 const getCategoryColor = (category) =>
   category === "Retail" ? "text-blue-600" : "text-orange-500";
 
-function ProjectTable({ data, onProjectOpen }) {
+function ProjectTable({ data, onProjectOpen, workflowFrom }) {
   return (
     <div className="flex min-h-0 flex-1 flex-col px-4 pb-6 sm:px-6">
       <div className="ui-surface h-full overflow-auto">
@@ -42,7 +42,7 @@ function ProjectTable({ data, onProjectOpen }) {
           <tbody className="divide-y divide-slate-100">
             {data.map((row, idx) => {
               if (!row) return null;
-              const projectHref = projectListTaskHref(row);
+              const projectHref = projectListTaskHref(row, workflowFrom);
               const rowKey = `${row.id ?? row.projectCode ?? "row"}-${idx}`;
 
               return (
@@ -87,7 +87,7 @@ function ProjectTable({ data, onProjectOpen }) {
   );
 }
 
-export function ProjectScreen() {
+export function ProjectScreen({ workflowFrom = FROM_PROJECTS_LIST }) {
   const PAGE_SIZE = 100;
   const { setRecords } = useDesignListStore();
   const [searchQuery, setSearchQuery] = useState("");
@@ -190,7 +190,7 @@ export function ProjectScreen() {
           </div>
         </div>
 
-        <ProjectTable data={projects} onProjectOpen={primeRecordForDetails} />
+        <ProjectTable data={projects} onProjectOpen={primeRecordForDetails} workflowFrom={workflowFrom} />
         <div className="shrink-0 flex items-center justify-between px-4 pb-4 pt-2 sm:px-6 text-xs text-slate-600">
           <span>
             Showing {total === 0 ? 0 : (currentPage - 1) * PAGE_SIZE + 1}-

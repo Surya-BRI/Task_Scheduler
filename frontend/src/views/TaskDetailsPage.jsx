@@ -42,9 +42,16 @@ import {
   FROM_DESIGN_LIST,
   FROM_DESIGNER_QUEUE,
   FROM_DESIGN_SCHEDULER,
+  FROM_SALES_DESIGN_LIST,
+  FROM_SALES_PROJECT_DESIGN,
+  FROM_SALES_PROJECTS_LIST,
+  FROM_SALES_QUEUE,
+  isProjectsListWorkflow,
+  resolveWorkflowBackPath,
   taskViewPathForRecord,
 } from '@/lib/design-list-routes'
 import { getSession } from '@/lib/mock-auth'
+import { hasHodWorkflowAccess } from '@/lib/workflow-roles'
 
 function isValidHttpUrl(value) {
   try {
@@ -943,6 +950,10 @@ const DESIGN_WORKFLOW_SOURCES = new Set([
   FROM_DESIGNER_QUEUE,
   FROM_DESIGN_SCHEDULER,
   'designer-design-list',
+  FROM_SALES_DESIGN_LIST,
+  FROM_SALES_PROJECTS_LIST,
+  FROM_SALES_PROJECT_DESIGN,
+  FROM_SALES_QUEUE,
 ])
 export function TaskDetailsPage() {
   const router = useRouter()
@@ -1033,7 +1044,7 @@ export function TaskDetailsPage() {
       try {
         const rawId = String(recordId ?? '').trim()
         const rawOpNo = String(queryOpNo ?? '').trim()
-        const isProjectsListFlow = from === 'projects-list'
+        const isProjectsListFlow = isProjectsListWorkflow(from)
         const lookupProjectCode = isProjectsListFlow ? (String(queryProjectCode ?? '').trim() || rawId) : ''
         const lookupOpNo = isProjectsListFlow ? rawOpNo : rawOpNo
         let task = null
@@ -1194,18 +1205,7 @@ export function TaskDetailsPage() {
     TASK_TAB_IDS.includes(rawTab) && !(rawTab === 'team' && isRetail)
       ? rawTab
       : 'details'
-  const backPath =
-    from === 'project-design'
-      ? '/project-design'
-      : from === 'projects-list'
-        ? '/projects-list'
-        : from === 'qs'
-          ? '/qs/projects'
-        : from === 'design-scheduler'
-          ? '/design-scheduler'
-          : from === 'designer-queue' || from === 'designer-design-list'
-            ? '/design-list/tasks'
-          : '/design-list'
+  const backPath = resolveWorkflowBackPath(from)
   const resolvedProjectName = record?.projectName ?? record?.name ?? ''
   const resolvedOpCode = String(record?.salesForceCode ?? record?.opNo ?? '').trim()
   const pageTitleCore = `${resolvedProjectName.toUpperCase()} @ ${(record?.businessUnit ?? '').toUpperCase()}`
@@ -1220,7 +1220,7 @@ export function TaskDetailsPage() {
   const TIMER_ACTIVE_STATUSES = ['DESIGN_PLANNED', 'IN_PROGRESS', 'REWORK']
   const showTimer = !isCreationRoute && hasExistingTask && Boolean(taskId) && TIMER_ACTIVE_STATUSES.includes(taskStatus) && (from === 'designer-queue' || from === 'designer-design-list')
   const _session = getSession()
-  const isHod = ['HOD', 'ADMIN', 'PROJECT_MANAGER'].includes(_session?.role ?? '')
+  const isHod = hasHodWorkflowAccess(_session?.role ?? '')
   const isSales = _session?.role === 'SALESPERSON'
   const isDesigner = _session?.role === 'DESIGNER'
   const normalizedQsStatus = String(qsStatus?.status ?? '').trim().toLowerCase()

@@ -3,6 +3,7 @@
 import { useEffect, useRef, useState } from 'react'
 import { usePathname, useRouter } from 'next/navigation'
 import { Bell, Calendar, ClipboardList, Clock, Home, LogOut, MessageSquareText, Users, Volume2, VolumeX } from 'lucide-react'
+import { SalesReviewIcon } from '@/features/sales/components/SalesReviewIcon'
 import { getSession, mockLogout } from '@/lib/mock-auth'
 import {
   getUnreadNotificationCount,
@@ -11,6 +12,7 @@ import {
   markNotificationRead,
 } from '@/features/notifications/services/notifications.api'
 import { connectDashboardRealtime } from '@/lib/realtime'
+import { hasDepartmentManagerAccess } from '@/lib/workflow-roles'
 
 const NAV_ITEMS = [
   'Activities',
@@ -409,23 +411,27 @@ export function Navbar({ currentDate, onCalendarChange, dateRangeText }) {
   const isDesigner = session?.role === 'DESIGNER'
   const isSalesperson = session?.role === 'SALESPERSON'
   const isQs = session?.role === 'QS'
-  const canViewOverview = session?.role === 'HOD'
+  const canViewOverview = hasDepartmentManagerAccess(session?.role)
   const bottomNavItems = isQs ? [] : NAV_ITEMS
 
   const utilityIconClass = 'ui-icon-button'
   const onTeamActivity =
     pathname === '/team-activity' ||
     pathname.startsWith('/team-activity/') ||
-    pathname.includes('/team-activity')
-  const onProjects = pathname === '/projects-overview' || pathname.startsWith('/projects-overview')
+    pathname.includes('/team-activity') ||
+    pathname === '/sales/team-activity' ||
+    pathname.startsWith('/sales/team-activity')
+  const onProjects = pathname === '/projects-overview' || pathname.startsWith('/projects-overview') || pathname === '/sales/projects-overview' || pathname.startsWith('/sales/projects-overview')
+  const onSalesReview = pathname === '/sales/tasks' || pathname.startsWith('/sales/tasks/')
+  const onSalesProjectsList = pathname === '/sales/projects-list' || pathname.startsWith('/sales/projects-list/')
   const onScheduler = pathname === '/design-scheduler' || pathname.startsWith('/designer')
 
-  // Logo click: role-based home route
+  // Logo click: role-based home route (Design List for HOD/Sales design modules)
   const handleLogoClick = () => {
     if (isDesigner) {
       router.push('/design-list/tasks')
     } else if (isSalesperson) {
-      router.push('/sales/tasks')
+      router.push('/sales/design-list')
     } else if (isQs) {
       router.push('/qs/projects')
     } else {
@@ -445,10 +451,10 @@ export function Navbar({ currentDate, onCalendarChange, dateRangeText }) {
     }
   }
 
-  // Home button: HOD → projects-list, Designer → disabled / my-work
+  // Home button: HOD/Sales → Project Design (projects-list), Designer → disabled / my-work
   const handleHomeClick = () => {
     if (isDesigner) return
-    if (isSalesperson) { router.push('/sales/tasks'); return }
+    if (isSalesperson) { router.push('/sales/projects-list'); return }
     if (isQs) { router.push('/qs/projects'); return }
     router.push('/projects-list')
   }
@@ -510,11 +516,25 @@ export function Navbar({ currentDate, onCalendarChange, dateRangeText }) {
               )
             )}
 
+            {/* Sales Review queue — Sales-only module */}
+            {isSalesperson && (
+              <button
+                type="button"
+                onClick={() => router.push('/sales/tasks')}
+                aria-current={onSalesReview ? 'page' : undefined}
+                className={`${utilityIconClass}${onSalesReview ? ' bg-slate-100 text-slate-900' : ''}`}
+                aria-label="Open sales review queue"
+                title="Sales Review"
+              >
+                <SalesReviewIcon className="h-5 w-5" strokeWidth={1.75} />
+              </button>
+            )}
+
             {/* Projects overview — HOD / Admin / PM */}
             {canViewOverview && (
               <button
                 type="button"
-                onClick={() => router.push('/projects-overview')}
+                onClick={() => router.push(isSalesperson ? '/sales/projects-overview' : '/projects-overview')}
                 aria-current={onProjects ? 'page' : undefined}
                 className={`${utilityIconClass}${onProjects ? ' bg-slate-100 text-slate-900' : ''}`}
                 aria-label="Open projects overview"
@@ -537,13 +557,17 @@ export function Navbar({ currentDate, onCalendarChange, dateRangeText }) {
               <MessageSquareText className="h-5 w-5" strokeWidth={1.75} aria-hidden />
             </button>
 
-            {/* Team Activity — hidden for Salesperson and QS */}
-            {!isSalesperson && !isQs && (
+            {/* Team Activity — hidden for QS; sales uses sales module route */}
+            {!isQs && (
               <button
                 type="button"
                 onClick={() => {
                   if (isDesigner) {
                     router.push('/designer/team-activity')
+                    return
+                  }
+                  if (isSalesperson) {
+                    router.push('/sales/team-activity')
                     return
                   }
                   router.push('/team-activity')
@@ -575,9 +599,12 @@ export function Navbar({ currentDate, onCalendarChange, dateRangeText }) {
             <button
               type="button"
               onClick={handleHomeClick}
-              className={`ui-icon-button h-8 w-8 ${isDesigner ? 'opacity-70' : ''}`}
+              className={`ui-icon-button h-8 w-8 ${isDesigner ? 'opacity-70' : ''}${
+                isSalesperson && onSalesProjectsList ? ' bg-white text-slate-900 shadow-sm' : ''
+              }`}
               aria-label={isDesigner ? 'Home (stay on current page)' : 'Go to Projects List'}
               title={isDesigner ? 'Home' : 'Projects List'}
+              aria-current={isSalesperson && onSalesProjectsList ? 'page' : undefined}
             >
               <Home className="h-4 w-4" />
             </button>
