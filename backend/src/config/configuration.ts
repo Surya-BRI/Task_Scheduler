@@ -30,6 +30,13 @@ export default () => {
       port: Number(process.env.PORT ?? 7000),
       nodeEnv,
       corsOrigin: process.env.CORS_ORIGIN ?? 'http://localhost:5000',
+      logLevel: process.env.LOG_LEVEL ?? 'debug',
+      serviceName: process.env.SERVICE_NAME ?? 'task-scheduler-api',
+    },
+    observability: {
+      sentryDsn: process.env.SENTRY_DSN ?? '',
+      otlpEndpoint: process.env.OTEL_EXPORTER_OTLP_ENDPOINT ?? '',
+      tracesSampleRate: Number(process.env.SENTRY_TRACES_SAMPLE_RATE ?? 0.1),
     },
     api: {
       prefix: process.env.API_PREFIX ?? 'api/v1',

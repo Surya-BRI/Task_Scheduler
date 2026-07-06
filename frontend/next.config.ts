@@ -44,6 +44,7 @@ const isProd = process.env.NODE_ENV === "production";
 const apiOrigin = resolveApiOrigin();
 
 const nextConfig: NextConfig = {
+  output: "standalone",
   outputFileTracingRoot: monorepoRoot,
   async rewrites() {
     const clientApiBase = resolveClientApiBase();

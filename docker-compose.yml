@@ -1,0 +1,43 @@
+services:
+  backend:
+    build:
+      context: .
+      dockerfile: backend/Dockerfile
+    ports:
+      - "7000:7000"
+    environment:
+      NODE_ENV: production
+      PORT: 7000
+      API_PREFIX: api/v1
+      JWT_ACCESS_SECRET: ${JWT_ACCESS_SECRET:?set JWT_ACCESS_SECRET}
+      CORS_ORIGIN: ${CORS_ORIGIN:-http://localhost:5000}
+      DATABASE_URL: ${DATABASE_URL:?set DATABASE_URL}
+      LOG_LEVEL: ${LOG_LEVEL:-info}
+      SERVICE_NAME: task-scheduler-api
+      SENTRY_DSN: ${SENTRY_DSN:-}
+      OTEL_EXPORTER_OTLP_ENDPOINT: ${OTEL_EXPORTER_OTLP_ENDPOINT:-}
+    healthcheck:
+      test: ["CMD", "wget", "-qO-", "http://127.0.0.1:7000/api/v1/health/ready"]
+      interval: 30s
+      timeout: 5s
+      retries: 3
+      start_period: 25s
+    restart: unless-stopped
+
+  frontend:
+    build:
+      context: .
+      dockerfile: frontend/Dockerfile
+      args:
+        NEXT_PUBLIC_API_BASE_URL: /api/v1
+        API_PROXY_TARGET: http://backend:7000
+    ports:
+      - "5000:5000"
+    environment:
+      NODE_ENV: production
+      PORT: 5000
+      API_PROXY_TARGET: http://backend:7000
+    depends_on:
+      backend:
+        condition: service_healthy
+    restart: unless-stopped
