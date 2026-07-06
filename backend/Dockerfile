@@ -7,6 +7,8 @@ WORKDIR /app
 COPY package.json package-lock.json ./
 COPY backend/package.json backend/package.json
 COPY frontend/package.json frontend/package.json
+# postinstall runs "prisma generate" — schema must exist before npm ci
+COPY backend/prisma/schema.prisma backend/prisma/schema.prisma
 
 RUN npm ci --workspace backend --include-workspace-root --omit=dev
 
@@ -16,6 +18,7 @@ WORKDIR /app
 COPY package.json package-lock.json ./
 COPY backend/package.json backend/package.json
 COPY frontend/package.json frontend/package.json
+COPY backend/prisma/schema.prisma backend/prisma/schema.prisma
 
 RUN npm ci --workspace backend --include-workspace-root
 
