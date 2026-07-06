@@ -114,7 +114,7 @@ export function LoginForm({ showDemoLogins = false }) {
 
       {showDemoLogins && (
       <div className="pt-3 border-t border-slate-100">
-        <p className="text-xs font-semibold text-slate-400 uppercase tracking-wider mb-2.5">Quick Demo Logins (dev only)</p>
+        <p className="text-xs font-semibold text-slate-400 uppercase tracking-wider mb-2.5">Quick Demo Logins</p>
         <div className="grid grid-cols-1 gap-1.5">
           {getDemoAccounts().map((account) => (
             <button

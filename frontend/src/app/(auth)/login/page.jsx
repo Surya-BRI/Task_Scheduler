@@ -7,6 +7,8 @@ export const metadata = {
   description: 'Sign in to the Task Scheduler',
 };
 
+export const dynamic = 'force-dynamic';
+
 export default function LoginPage() {
   return (
     <div className="w-full max-w-md">
