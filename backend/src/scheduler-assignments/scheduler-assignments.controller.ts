@@ -8,6 +8,7 @@ import { CurrentUser } from '../common/decorators/current-user.decorator';
 import type { JwtPayload } from '../common/types/jwt-payload.type';
 import { SaveSchedulerWeekDto } from './dto/save-scheduler-week.dto';
 import { UpdateOvertimeSchedulerActionDto } from './dto/update-overtime-scheduler-action.dto';
+import { DetachAssignmentPartDto } from './dto/detach-assignment-part.dto';
 
 @UseGuards(JwtAuthGuard, RolesGuard)
 @Controller('scheduler-assignments')
@@ -56,6 +57,18 @@ export class SchedulerAssignmentsController {
   @Roles(UserRole.HOD, UserRole.ADMIN, UserRole.PROJECT_MANAGER)
   clearTask(@Param('taskId') taskId: string) {
     return this.schedulerAssignmentsService.clearTaskSchedule(taskId);
+  }
+
+  @Post(':id/detach')
+  @Roles(UserRole.HOD)
+  detachPart(@Param('id') id: string, @Body() dto: DetachAssignmentPartDto) {
+    return this.schedulerAssignmentsService.detachAssignmentPart(id, dto.status);
+  }
+
+  @Post('fragments/:id/status')
+  @Roles(UserRole.HOD)
+  updateFragmentStatus(@Param('id') id: string, @Body() dto: DetachAssignmentPartDto) {
+    return this.schedulerAssignmentsService.updateFragmentStatus(id, dto.status);
   }
 
   @Post('overtime-requests/:requestId/action')

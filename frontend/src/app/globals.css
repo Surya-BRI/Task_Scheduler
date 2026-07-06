@@ -48,6 +48,14 @@ body {
   @apply border-blue-300 bg-blue-50 text-blue-700 shadow-sm;
 }
 
+.ui-chip-button-danger {
+  @apply border-red-300 bg-red-50 text-red-700;
+}
+
+.ui-chip-button-danger:hover {
+  @apply bg-red-100;
+}
+
 .ui-table-header {
   @apply bg-slate-100 text-[11px] font-semibold uppercase tracking-wide text-slate-600;
 }

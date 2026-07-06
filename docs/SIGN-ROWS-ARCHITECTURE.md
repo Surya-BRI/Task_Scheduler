@@ -1,7 +1,7 @@
 # Project Sign Rows — Architecture & Pending Work
 
 > Reference doc for the two separate sign-row data models in the project task flow.
-> Written: 2026-06-03. Fix when ready.
+> Written: 2026-06-03. Updated: 2026-07-02 — sign rows moved from task-scoped to project-scoped in the QS refactor (2026-06-28).
 
 ---
 
@@ -27,13 +27,18 @@ bim (bool), deadline, comment
 ---
 
 ### 2. `ProjectSignRow` (`ErpTSProjectSignRow`)
-**What it is:** ERP sign register — a flat list of every physical sign in the project with quantities, area, level, status. Imported from ERP/project specs.
+**What it is:** ERP sign register — a flat list of every physical sign in the project with quantities, area, level, status. Imported from ERP/project specs. **Project-scoped** (keyed by `projectId`), not task-scoped.
 
 **Managed by:**
 | Endpoint | Purpose |
 |----------|---------|
-| `GET /tasks/:id/sign-rows` | Fetch the sign register for a task |
-| `PUT /tasks/:id/sign-rows` | Save / full-replace the sign register |
+| `GET /projects/:id/sign-rows` | Fetch the sign register for a project (HOD, DESIGNER, SALESPERSON, QS) |
+| `PUT /projects/:id/sign-rows` | Save / full-replace the sign register (HOD, QS) |
+| `GET /projects/:id/qs-status` | Get project QS workflow status (HOD, QS) |
+| `PATCH /projects/:id/qs-status` | Update QS status: Pending → In Progress → Completed (HOD, QS) |
+| `POST /projects/:id/qs-submit` | Save sign rows + mark Completed in one atomic call (HOD, QS) |
+
+The old task-level endpoints (`GET/PUT /tasks/:id/sign-rows`) were **removed** in the QS refactor (2026-06-28); the controller code now lives in `backend/src/projects/projects.controller.ts`, not `tasks.controller.ts`.
 
 **Fields:**
 ```
@@ -84,19 +89,19 @@ const SIGN_TYPE_ROWS = [
 
 ---
 
-### Fix 2 — Sign register UI on task detail page (larger effort)
+### Fix 2 — Sign register UI (DONE — built as QS pages)
 
-**Goal:** After a task is created, let HOD/PM view, import, and edit the `ProjectSignRow` register.
+**Goal:** Let HOD/QS view, edit, and submit the `ProjectSignRow` register per project.
 
-**Where:** Task detail page (`frontend/src/views/TaskDetailsPage.jsx`) — add a new "Sign Register" tab or section.
+**Where:** `frontend/src/app/qs/projects/page.jsx` (QS project list) and `frontend/src/app/qs/projects/[id]/page.jsx` (sign rows table + status control), not the task detail page.
 
 **Behaviour:**
-- `GET /tasks/:id/sign-rows` → load existing rows into an editable table
+- `GET /projects/:id/sign-rows` → load existing rows into an editable table
 - Editable columns: `tNo`, `no`, `signType`, `planCode`, `estQty`, `qsQty`, `areaZone`, `levelParcel`, `sequence`, `status`, `comment`, `contRef`
-- "Save" button → `PUT /tasks/:id/sign-rows` with the full updated rows array
-- Optional: "Import from Excel" button to bulk-paste rows
+- `GET /projects/:id/qs-status` / `PATCH /projects/:id/qs-status` drive the Pending → In Progress → Completed workflow
+- `POST /projects/:id/qs-submit` saves rows + marks Completed atomically
 
-**Auth required:** HOD, ADMIN, PROJECT_MANAGER (matches backend `@Roles` on the endpoint)
+**Auth required:** HOD, QS (matches backend `@Roles` on the endpoints)
 
 ---
 
@@ -114,11 +119,11 @@ ERP DesignTask
           ▼
   ErpTSTask (Task created)
   ErpTSProjectTaskDetail  ← artwork/technical/BIM hours per sign type
-  ErpTSProjectSignRow     ← [Fix 2] sign register, managed separately after creation
+  ErpTSProjectSignRow     ← project-scoped sign register, managed separately after creation
           │
-          │  PUT /tasks/:id/sign-rows
+          │  PUT /projects/:id/sign-rows
           ▼
-  Task Detail Page — Sign Register tab
+  QS Project Detail Page (frontend/src/app/qs/projects/[id]/page.jsx)
 ```
 
 ---
@@ -127,19 +132,22 @@ ERP DesignTask
 
 | Fix | File |
 |-----|------|
-| Fix 1 | `frontend/src/components/ProjectCreateTaskModal.jsx` — replace `SIGN_TYPE_ROWS` constant, add fetch on open |
-| Fix 1 | `backend/src/design-list/design-list.controller.ts` — may need a new endpoint to serve signage details by opNo |
-| Fix 2 | `frontend/src/views/TaskDetailsPage.jsx` — add Sign Register section |
-| Fix 2 | New API service file: `frontend/src/features/projects/services/sign-rows.api.ts` |
+| Fix 1 (open) | `frontend/src/components/ProjectCreateTaskModal.jsx` — replace `SIGN_TYPE_ROWS` constant, add fetch on open |
+| Fix 1 (open) | `backend/src/design-list/design-list.controller.ts` — may need a new endpoint to serve signage details by opNo |
+| Fix 2 (done) | `frontend/src/app/qs/projects/[id]/page.jsx` — sign register table + status control |
+| Fix 2 (done) | `backend/src/projects/projects.controller.ts` / `projects.service.ts` — sign-rows and qs-status endpoints |
 
 ---
 
 ## Backend Endpoints Reference
 
 ```
-GET  /tasks/:id/sign-rows           → ProjectSignRow[]
-PUT  /tasks/:id/sign-rows           → { rows: ProjectSignRowDto[] } → ProjectSignRow[]
-POST /tasks/extended                → creates Task + ProjectTaskDetail[]
+GET   /projects/:id/sign-rows       → ProjectSignRow[]
+PUT   /projects/:id/sign-rows       → { rows: ProjectSignRowDto[] } → ProjectSignRow[]
+GET   /projects/:id/qs-status       → ErpTSProjectQsStatus
+PATCH /projects/:id/qs-status       → UpdateQsStatusDto → ErpTSProjectQsStatus
+POST  /projects/:id/qs-submit       → save rows + set status Completed (atomic)
+POST  /tasks/extended               → creates Task + ProjectTaskDetail[]
 ```
 
 `ProjectSignRowDto` shape (from `backend/src/tasks/dto/save-sign-rows.dto.ts`):

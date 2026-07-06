@@ -70,12 +70,22 @@ function clearPersistedPauses(taskId) {
   sessionStorage.removeItem(pauseStorageKey(taskId))
 }
 
-function formatHms(totalSeconds) {
-  const s = Math.max(0, Math.floor(totalSeconds))
+const FIVE_MIN_SECONDS = 5 * 60
+
+// Logged work time is rounded UP to the next 5-minute step — seconds-level precision
+// isn't tracked or shown, and any nonzero effort must never be credited as 0 minutes
+// (e.g. 3m20s of real work rounds up to 5m, not down to 0m).
+function roundUpTo5Min(totalSeconds) {
+  const s = Math.max(0, totalSeconds)
+  if (s <= 0) return 0
+  return Math.ceil(s / FIVE_MIN_SECONDS) * FIVE_MIN_SECONDS
+}
+
+function formatHm(totalSeconds) {
+  const s = roundUpTo5Min(totalSeconds)
   const h = Math.floor(s / 3600)
   const m = Math.floor((s % 3600) / 60)
-  const sec = s % 60
-  return `${h}h:${m}m:${sec}s`
+  return `${h}h ${m}m`
 }
 
 function liveTotalSeconds(accumulatedSeconds, runStartAt) {
@@ -218,7 +228,7 @@ export function ProjectTaskTimer({
 
   const freezeRunningClock = useCallback(() => {
     if (!runStartAt) return accumulatedSeconds
-    const total = liveTotalSeconds(accumulatedSeconds, runStartAt)
+    const total = roundUpTo5Min(liveTotalSeconds(accumulatedSeconds, runStartAt))
     setAccumulatedSeconds(total)
     setRunStartAt(null)
     writePersisted(taskId, total, null)
@@ -241,13 +251,13 @@ export function ProjectTaskTimer({
     }
 
     if (launchPauseModal && start0) {
-      setAccumulatedSeconds(totalNow)
+      setAccumulatedSeconds(roundUpTo5Min(totalNow))
       setRunStartAt(null)
       setShowPauseDropdown(true)
     }
 
     if (launchCompleteModal && totalNow > 0) {
-      setAccumulatedSeconds(totalNow)
+      setAccumulatedSeconds(roundUpTo5Min(totalNow))
       setRunStartAt(null)
       setShowCompleteModal(true)
     }
@@ -341,7 +351,7 @@ export function ProjectTaskTimer({
 
     const pauseLog = readPersistedPauses(taskId)
     const formData = new FormData()
-    formData.append('durationSeconds', String(Math.floor(displaySeconds)))
+    formData.append('durationSeconds', String(roundUpTo5Min(displaySeconds)))
     if (hasLink) formData.append('submissionLink', submissionLink.trim())
     if (pauseLog.length) formData.append('pauseLog', JSON.stringify(pauseLog))
     selectedFiles.forEach((f) => formData.append('files', f))
@@ -430,7 +440,7 @@ export function ProjectTaskTimer({
             <span className={inline
               ? 'font-mono text-[11px] font-semibold tabular-nums tracking-tight text-slate-700'
               : 'font-mono text-sm font-medium tabular-nums tracking-tight text-slate-900'}>
-              {formatHms(displaySeconds)}
+              {formatHm(displaySeconds)}
             </span>
           </div>
           <>

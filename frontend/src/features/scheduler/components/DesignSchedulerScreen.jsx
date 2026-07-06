@@ -17,6 +17,8 @@ import {
     lockSchedulerWeek,
     unlockSchedulerWeek,
     clearTaskFromSchedule,
+    detachAssignmentPart,
+    updateFragmentStatus,
     updateOvertimeRequestSchedulerAction,
 } from "../services/scheduler-assignments.api";
 import {
@@ -24,6 +26,7 @@ import {
     formatSchedulerDateRangeText,
     getCurrentDayIndex,
     getWeekDays,
+    isPastDayIndex,
 } from "../utils/schedulerWeek";
 import { FROM_DESIGN_SCHEDULER, taskViewPathForRecord } from "@/lib/design-list-routes";
 import { apiClient } from "@/lib/api-client";
@@ -36,6 +39,7 @@ import {
     parseWeekStartDate,
     writeSchedulerNavState,
 } from "../utils/schedulerNavigationState";
+import { isDesignerEligibleForProject } from "../utils/projectTeamEligibility";
 // Only these backend events should trigger a scheduler reload for other HODs.
 // Chatter, leave, notifications, etc. are irrelevant to the grid.
 const SCHEDULER_RELOAD_EVENTS = new Set([
@@ -59,7 +63,7 @@ const SCHEDULER_RELOAD_EVENTS = new Set([
 const DAILY_CAPACITY = 8; // 8hrs per day = normal capacity (green/blue)
 const MAX_DAILY_HOURS = 12; // absolute max assignable per day
 const WEEKLY_CAPACITY = 40; // 5 working days × 8hrs
-const MIN_SPLIT_HOURS = 1; // smallest allowed split part — gaps smaller than this are skipped
+const MIN_SPLIT_HOURS = 5 / 60; // 5 minutes — smallest allowed split part, matching the timer's 5-minute rounding granularity
 const WEEKDAY_INDICES = [0, 1, 2, 3, 4];
 const ALL_DAY_INDICES = [0, 1, 2, 3, 4, 5, 6];
 const isWeekdayIndex = (dayIndex) => WEEKDAY_INDICES.includes(dayIndex);
@@ -67,6 +71,16 @@ const cloneState = (value) => JSON.parse(JSON.stringify(value));
 const toPositiveHours = (value) => {
     const parsed = Number(value);
     return Number.isFinite(parsed) && parsed > 0 ? parsed : 0;
+};
+// Logged/remaining hours are always 5-minute-aligned; show them as "1h 15m" rather
+// than raw decimals like 1.25h.
+const formatHoursAsHm = (hours) => {
+    const totalMinutes = Math.round(toPositiveHours(hours) * 60);
+    const h = Math.floor(totalMinutes / 60);
+    const m = totalMinutes % 60;
+    if (h > 0 && m > 0) return `${h}h ${m}m`;
+    if (h > 0) return `${h}h`;
+    return `${m}m`;
 };
 const getRegularTaskHours = (task) => task?.isOvertime
     ? 0
@@ -241,6 +255,10 @@ function buildPreparedDropAssignment({
             splitIndex: totalParts > 1 ? index + 1 : undefined,
             totalParts: totalParts > 1 ? totalParts : undefined,
             status: "assigned",
+            // Only the first part reuses droppedTask's own id/fragmentId (see call sites) —
+            // it's the one that resolves the backend fragment row. Any additional part
+            // spawned here is a brand-new entity with no fragment of its own yet.
+            fragmentId: index === 0 ? droppedTask.fragmentId : undefined,
         };
         const dayKey = part.dayIndex.toString();
         if (index === 0 && dayKey === targetDayStr) {
@@ -263,6 +281,10 @@ function buildPreparedDropAssignment({
             splitIndex: totalParts,
             totalParts,
             status: "unassigned",
+            // Brand-new leftover, not the resolved fragment itself — must ride the normal
+            // Rule 3 overflow-to-next-week path, not be mistaken for the still-outstanding
+            // fragment row (which the first part above already resolves).
+            fragmentId: undefined,
         };
     }
 
@@ -276,6 +298,25 @@ function buildPreparedDropAssignment({
         hoursAssignableWithinNormal: assignedWithinNormalParts,
         backlogHoursIfSplit: backlogAfterSplitPlan,
     };
+}
+
+// Shrinks the original card left behind on a busy designer's day to exactly the hours
+// they logged, and locks it so it can no longer be dragged. Called after a partial
+// handoff so the source designer's calendar keeps a real, visible, persisted record
+// instead of the task simply vanishing from their day.
+function applyLoggedCardPatch(preparedAssignment, patch) {
+    if (!preparedAssignment || !patch) return preparedAssignment;
+    const existing = preparedAssignment.updatedTasks[patch.taskId];
+    if (!existing) return preparedAssignment;
+    preparedAssignment.updatedTasks[patch.taskId] = {
+        ...existing,
+        estimatedHours: patch.loggedHours,
+        scheduledHours: patch.loggedHours,
+        isLocked: true,
+        isLoggedRemainder: true,
+        status: "assigned",
+    };
+    return preparedAssignment;
 }
 
 const TASK_COLORS = [
@@ -425,9 +466,13 @@ function buildMockSchedulerState(records, designers) {
     });
     records.slice(0, 100).forEach((record, idx) => {
         const sourceStatus = String(record.status ?? "").toUpperCase();
-        const status = sourceStatus === "ON_HOLD" ? "ON_HOLD" : "unassigned";
+        const alreadyAssignedToDesigner = Boolean(record.assigneeId) || Boolean(record.hasTaskDesigners);
+        const status = sourceStatus === "ON_HOLD"
+            ? "ON_HOLD"
+            : alreadyAssignedToDesigner ? "assigned" : "unassigned";
         tasksObj[record.id] = {
             id: record.id,
+            projectId: record.projectId || null,
             name: record.name,
             tag: record.projectName || "",
             projectName: record.projectName || "",
@@ -469,8 +514,14 @@ function buildSchedulerStateFromErpAssignments(records, rows, designers) {
     const tasksObj = {};
     records.forEach((record, idx) => {
         const sourceStatus = String(record.status ?? "").toUpperCase();
+        // A task already owned by a designer (assigneeId, or split across taskDesigners) stays
+        // out of the backlog sidebar regardless of which week is being viewed — assignment is a
+        // stable, week-independent fact, unlike this week's SchedulerAssignment rows below, which
+        // only flip a task to "assigned" if it happens to have hours placed in this specific week.
+        const alreadyAssignedToDesigner = Boolean(record.assigneeId) || Boolean(record.hasTaskDesigners);
         tasksObj[record.id] = {
             id: record.id,
+            projectId: record.projectId || null,
             name: record.name,
             tag: record.projectName || "",
             projectName: record.projectName || "",
@@ -478,7 +529,9 @@ function buildSchedulerStateFromErpAssignments(records, rows, designers) {
             disciplineType: record.disciplineType || "",
             opNo: record.opNo || "",
             estimatedHours: Number(record.estimatedHours) || 0,
-            status: sourceStatus === "ON_HOLD" ? "ON_HOLD" : "unassigned",
+            status: sourceStatus === "ON_HOLD"
+                ? "ON_HOLD"
+                : alreadyAssignedToDesigner ? "assigned" : "unassigned",
             colorClass: TASK_COLORS[idx % TASK_COLORS.length],
             baseName: record.name,
             holdStartedAt: sourceStatus === "ON_HOLD"
@@ -487,7 +540,6 @@ function buildSchedulerStateFromErpAssignments(records, rows, designers) {
             holdPreviousStatus: record.holdPreviousStatus || null,
         };
     });
-    const assignedIds = new Set();
     // Tracks how many times each taskId has been seen so far.
     // Split tasks (same taskId across multiple designers or days) each get a unique
     // frontend ID so they never overwrite each other in tasksObj.
@@ -495,6 +547,58 @@ function buildSchedulerStateFromErpAssignments(records, rows, designers) {
     // buildWeekSnapshotPayload resolves these back to the canonical taskId via parentId.
     const seenTaskCount = new Map();
     for (const row of rows) {
+        // Detached split-part fragments (Rule 5a) never have a grid placement — they're
+        // sidebar-only cards, independent of whichever siblings remain actively scheduled.
+        // Handled before the designerId checks below since a fragment's sourceDesignerId
+        // can legitimately be blank.
+        if (row.isFragment) {
+            const fragTaskId = String(row.taskId ?? "").trim();
+            if (!fragTaskId) continue;
+            const fragHours = toPositiveHours(row.scheduledHours ?? row.assignedHours);
+            if (!fragHours) continue;
+            const fragBaseRecord = recordById[fragTaskId];
+            const fragId = `frag-${row.fragmentId}`;
+            let fragColorIdx = 0;
+            for (let i = 0; i < fragTaskId.length; i++) fragColorIdx += fragTaskId.charCodeAt(i);
+            const fragBase = fragBaseRecord
+                ? {
+                    projectId: fragBaseRecord.projectId || null,
+                    name: fragBaseRecord.name,
+                    tag: fragBaseRecord.designType,
+                    projectName: fragBaseRecord.projectName || "",
+                    designType: fragBaseRecord.designType || "",
+                    disciplineType: fragBaseRecord.disciplineType || "",
+                    priority: fragBaseRecord.priority || "",
+                    baseName: fragBaseRecord.name,
+                    colorClass: TASK_COLORS[fragColorIdx % TASK_COLORS.length],
+                }
+                : {
+                    projectId: null,
+                    name: `Design task (${fragTaskId.slice(0, 24)}${fragTaskId.length > 24 ? "…" : ""})`,
+                    tag: "ERP",
+                    projectName: "",
+                    designType: "",
+                    priority: "",
+                    baseName: "Design task",
+                    colorClass: "bg-slate-100 border border-slate-200 text-slate-700",
+                };
+            tasksObj[fragId] = {
+                ...fragBase,
+                id: fragId,
+                estimatedHours: fragHours,
+                scheduledHours: fragHours,
+                approvedOvertimeHours: 0,
+                status: row.fragmentStatus === "ON_HOLD" ? "ON_HOLD" : "unassigned",
+                parentId: normalizeParentIdFromErp(row.parentId) || fragTaskId,
+                splitIndex: row.splitIndex ?? undefined,
+                totalParts: row.totalParts ?? undefined,
+                fragmentId: row.fragmentId,
+                holdStartedAt: row.fragmentStatus === "ON_HOLD"
+                    ? new Date(row.updatedAt ?? row.createdAt ?? Date.now())
+                    : undefined,
+            };
+            continue;
+        }
         const designerId = String(row.designerId ?? "").trim();
         if (!designerId)
             continue;
@@ -518,7 +622,6 @@ function buildSchedulerStateFromErpAssignments(records, rows, designers) {
             const blockId = `${String(row.requestType).toLowerCase()}-${requestId}-${dayIdx}`;
             if (!schedulesObj[designerId][dayStr].includes(blockId))
                 schedulesObj[designerId][dayStr].push(blockId);
-            assignedIds.add(blockId);
             tasksObj[blockId] = {
                 id: blockId,
                 name: getRequestBlockLabel(row),
@@ -544,6 +647,7 @@ function buildSchedulerStateFromErpAssignments(records, rows, designers) {
             continue;
         const scheduledHours = toPositiveHours(row.scheduledHours ?? row.assignedHours);
         const approvedOvertimeHours = toPositiveHours(row.approvedOvertimeHours);
+        const workedHours = toPositiveHours(row.workedHours);
         if (!scheduledHours && !approvedOvertimeHours)
             continue;
 
@@ -556,8 +660,6 @@ function buildSchedulerStateFromErpAssignments(records, rows, designers) {
         // buildWeekSnapshotPayload can resolve the canonical taskId on save.
         const parentIdNorm = seenCount > 0 ? taskId : normalizeParentIdFromErp(row.parentId);
 
-        assignedIds.add(taskId); // ensure original never re-appears in sidebar
-
         const baseRecord = recordById[taskId];
         const totalPartsNum = row.totalParts != null ? Number(row.totalParts) : 0;
         const splitTotal = totalPartsNum > 1;
@@ -569,6 +671,7 @@ function buildSchedulerStateFromErpAssignments(records, rows, designers) {
         const baseFromRecord = baseRecord
             ? {
                 id: frontendId,
+                projectId: baseRecord.projectId || null,
                 name: baseRecord.name,
                 tag: baseRecord.designType,
                 projectName: baseRecord.projectName || "",
@@ -580,6 +683,7 @@ function buildSchedulerStateFromErpAssignments(records, rows, designers) {
             }
             : {
                 id: frontendId,
+                projectId: null,
                 name: `Design task (${taskId.slice(0, 24)}${taskId.length > 24 ? "…" : ""})`,
                 tag: "ERP",
                 projectName: "",
@@ -591,16 +695,24 @@ function buildSchedulerStateFromErpAssignments(records, rows, designers) {
         if (scheduledHours > 0) {
             if (!schedulesObj[designerId][dayStr].includes(frontendId))
                 schedulesObj[designerId][dayStr].push(frontendId);
-            assignedIds.add(frontendId);
+            // Row-derived entries (including every split part) always render as plain "assigned"
+            // grid cards. The one true sidebar-visible status per task (ON_HOLD/assigned/unassigned)
+            // is decided once, below, from the canonical record — never per split part — so an
+            // on-hold task with multiple parts across days/weeks can't inflate the sidebar count.
             tasksObj[frontendId] = {
                 ...baseFromRecord,
                 estimatedHours: scheduledHours,
                 scheduledHours,
                 approvedOvertimeHours: 0,
+                workedHours,
                 status: "assigned",
                 parentId: parentIdNorm,
                 splitIndex: splitTotal && row.splitIndex != null ? Number(row.splitIndex) : undefined,
                 totalParts: splitTotal ? totalPartsNum : undefined,
+                isPinned: Boolean(row.isPinned),
+                // The underlying SchedulerAssignment row id — needed to detach just this
+                // part (Rule 5a) without touching its siblings.
+                assignmentRowId: row.id,
             };
         }
         if (approvedOvertimeHours > 0) {
@@ -610,7 +722,6 @@ function buildSchedulerStateFromErpAssignments(records, rows, designers) {
                 : (String(row.id ?? "").startsWith("overtime-") ? [String(row.id).replace(/^overtime-/, "")] : []);
             if (!schedulesObj[designerId][dayStr].includes(overtimeId))
                 schedulesObj[designerId][dayStr].push(overtimeId);
-            assignedIds.add(overtimeId);
             tasksObj[overtimeId] = {
                 ...baseFromRecord,
                 id: overtimeId,
@@ -628,14 +739,20 @@ function buildSchedulerStateFromErpAssignments(records, rows, designers) {
             };
         }
     }
-    for (const id of Object.keys(tasksObj)) {
-        if (!assignedIds.has(id)) {
-            const sourceStatus = String(recordById[id]?.status ?? "").toUpperCase();
-            tasksObj[id] = {
-                ...tasksObj[id],
-                status: sourceStatus === "ON_HOLD" ? "ON_HOLD" : "unassigned",
-            };
-        }
+    // Decide the ONE sidebar-visible status per real task from the canonical record alone —
+    // never from split-part rows, and never conditional on whether this specific week has a row.
+    // This runs for every real task regardless of assignedIds, so a task keeps its correct
+    // ON_HOLD/assigned/unassigned state even if it also has a (now purely "assigned") row this week.
+    for (const id of Object.keys(recordById)) {
+        const record = recordById[id];
+        const sourceStatus = String(record?.status ?? "").toUpperCase();
+        const alreadyAssignedToDesigner = Boolean(record?.assigneeId) || Boolean(record?.hasTaskDesigners);
+        tasksObj[id] = {
+            ...tasksObj[id],
+            status: sourceStatus === "ON_HOLD"
+                ? "ON_HOLD"
+                : alreadyAssignedToDesigner ? "assigned" : "unassigned",
+        };
     }
     return { tasksObj, schedulesObj };
 }
@@ -660,6 +777,8 @@ export function DesignSchedulerScreen() {
     const searchParams = useSearchParams();
     const [designers, setDesigners] = useState([]);
     const [queueRecords, setQueueRecords] = useState([]);
+    const [projectTeamsById, setProjectTeamsById] = useState({});
+    const [teamFilterQuery, setTeamFilterQuery] = useState("");
 
     const [tasks, setTasks] = useState({});
     const [schedules, setSchedules] = useState({});
@@ -674,11 +793,22 @@ export function DesignSchedulerScreen() {
     const pendingReloadRef        = useRef(false);
     const persistDebounceRef      = useRef(null);
     const persistWeekSnapshotRef  = useRef(null);
+    // Fragment ids (Rule 5a) resolved by folding a detached part back into a whole-task
+    // consolidation — collected outside the normal per-task status scan in flushPersist
+    // since those tasks are deleted from state entirely, not transitioned to "assigned".
+    const extraResolvedFragmentIdsRef = useRef([]);
 
     const [searchQuery, setSearchQuery] = useState("");
+    const [showOnlyOnHold, setShowOnlyOnHold] = useState(false);
     const splitIdCounterRef = useRef(0);
     const lastOptimizerSchedulesRef = useRef(null);
+    // Tracks which (sourceDesignerId, canonicalTaskId) pairs have already had their
+    // logged timer hours deducted during this session, so handing off a task that is
+    // split across multiple blocks for the same busy designer doesn't subtract the
+    // same worked hours more than once.
+    const consumedWorkedHoursRef = useRef(new Set());
     const cancelOvertimeButtonRef = useRef(null);
+    const placeOnGapButtonRef = useRef(null);
     const [viewMode, setViewMode] = useState("week");
     const [selectedDays, setSelectedDays] = useState(WEEKDAY_INDICES);
     const [currentDay, setCurrentDay] = useState(getCurrentDayIndex(new Date()));
@@ -686,6 +816,7 @@ export function DesignSchedulerScreen() {
     
     // Custom Date selection state
     const [currentDate, setCurrentDate] = useState(() => new Date());
+    const [isWeekLoading, setIsWeekLoading] = useState(true);
     const [navStateReady, setNavStateReady] = useState(false);
 
     useEffect(() => {
@@ -751,49 +882,72 @@ export function DesignSchedulerScreen() {
             cancelled = true;
         };
     }, []);
-    useEffect(() => {
-        let cancelled = false;
-        apiClient.get("/tasks?page=1&limit=500")
-            .then((res) => {
-                if (cancelled) return;
-                const rows = Array.isArray(res?.data)
-                    ? res.data.map((task) => {
-                        const mapped = mapTaskToDesignRow(task);
-                        const retailHours = task?.retailDetails?.[0]?.hoursRequired;
-                        const projectHours = (task?.projectDetails ?? []).reduce(
-                            (sum, d) =>
-                                sum +
-                                (Number(d.artworkHours) || 0) +
-                                (Number(d.technicalHours) || 0) +
-                                (Number(d.locationHours) || 0) +
-                                (Number(d.asBuiltHours) || 0),
-                            0,
-                        );
-                        return {
-                            id: mapped.id,
-                            name: mapped.name,
-                            designType: task?.designType || mapped.designType || "",
-                            disciplineType: task?.disciplineType || "",
-                            projectName: task?.project?.name || task?.project?.projectNo || "",
-                            opNo: task?.opNo || "",
-                            priority: task?.priority || "",
-                            status: task?.status,
-                            updatedAt: task?.updatedAt,
-                            holdStartedAt: task?.updatedAt,
-                            estimatedHours: Math.max(1, Number(retailHours ?? (projectHours || null) ?? 0) || 0),
+    // Fetches the ERP task queue — the source of the record-level fields (assigneeId,
+    // status, taskDesigners) that decide sidebar membership. Called on mount AND on every
+    // reloadWeek() so week navigation never rebuilds the sidebar from a stale, mount-time
+    // snapshot — otherwise any assign/unassign/hold action made this session gets silently
+    // reverted the next time the week reloads, since those fields live on this fetch, not
+    // on the per-week scheduler-assignment rows.
+    const fetchQueueRecords = useCallback(async () => {
+        try {
+            const res = await apiClient.get("/tasks?page=1&limit=500");
+            const teamsById = {};
+            const rows = Array.isArray(res?.data)
+                ? res.data.map((task) => {
+                    const mapped = mapTaskToDesignRow(task);
+                    const retailHours = task?.retailDetails?.[0]?.hoursRequired;
+                    const projectHours = (task?.projectDetails ?? []).reduce(
+                        (sum, d) =>
+                            sum +
+                            (Number(d.artworkHours) || 0) +
+                            (Number(d.technicalHours) || 0) +
+                            (Number(d.locationHours) || 0) +
+                            (Number(d.asBuiltHours) || 0),
+                        0,
+                    );
+                    const projectId = task?.projectId || task?.project?.id || null;
+                    if (projectId && task?.project) {
+                        teamsById[projectId] = {
+                            technicalHead: task.project.technicalHead ?? null,
+                            teamLead: task.project.teamLead ?? null,
+                            subTeamLead: task.project.subTeamLead ?? null,
+                            designers: task.project.designers ?? null,
                         };
-                    })
-                    : [];
-                setQueueRecords(rows);
-            })
-            .catch(() => {
-                if (cancelled) return;
-                setQueueRecords([]);
-            });
-        return () => {
-            cancelled = true;
-        };
+                    }
+                    return {
+                        id: mapped.id,
+                        projectId,
+                        name: mapped.name,
+                        designType: task?.designType || mapped.designType || "",
+                        disciplineType: task?.disciplineType || "",
+                        projectName: task?.project?.name || task?.project?.projectNo || "",
+                        projectNo: task?.project?.projectNo || "",
+                        opNo: task?.opNo || "",
+                        priority: task?.priority || "",
+                        status: task?.status,
+                        updatedAt: task?.updatedAt,
+                        holdStartedAt: task?.updatedAt,
+                        estimatedHours: Math.max(1, Number(retailHours ?? (projectHours || null) ?? 0) || 0),
+                        // Stable, week-independent signal of whether a designer already owns this
+                        // task — unlike scheduler assignment rows, which are scoped to one week.
+                        assigneeId: mapped.assigneeId || null,
+                        hasTaskDesigners: (task?.taskDesigners?.length ?? 0) > 0,
+                    };
+                })
+                : [];
+            setQueueRecords(rows);
+            setProjectTeamsById(teamsById);
+            return rows;
+        } catch {
+            setQueueRecords([]);
+            setProjectTeamsById({});
+            return [];
+        }
     }, []);
+
+    useEffect(() => {
+        fetchQueueRecords();
+    }, [fetchQueueRecords]);
 
     const buildWeekSnapshotPayload = (sourceSchedules, sourceTasks) => {
         const assignments = [];
@@ -818,6 +972,7 @@ export function DesignSchedulerScreen() {
                         totalParts: Number.isFinite(task.totalParts) ? Number(task.totalParts) : null,
                         position: positionIndex,
                         notes: null,
+                        isPinned: Boolean(task.isPinned),
                     });
                 });
             });
@@ -865,11 +1020,15 @@ export function DesignSchedulerScreen() {
     };
 
     const reloadWeek = useCallback(async () => {
+        setIsWeekLoading(true);
         const weekStartStr = formatLocalYyyyMmDd(getWeekDays(currentDate)[0]);
         try {
-            const [rows, meta] = await Promise.all([
+            // Refetch the ERP task queue every time a week loads — not just the closure-captured
+            // state — so assigneeId/status/taskDesigners are never rebuilt from a stale snapshot.
+            const [rows, meta, freshQueueRecords] = await Promise.all([
                 listSchedulerAssignmentsForWeek(weekStartStr),
                 getSchedulerWeekMeta(weekStartStr),
+                fetchQueueRecords(),
             ]);
             setWeekVersion(Number(meta?.version ?? 0));
             const locked = Boolean(meta?.isLocked);
@@ -879,7 +1038,7 @@ export function DesignSchedulerScreen() {
             // block can use accurate hour data without relying on stale React closure state.
             let weekTasks = {};
             if (Array.isArray(rows) && rows.length > 0) {
-                const next = buildSchedulerStateFromErpAssignments(queueRecords, rows, designers);
+                const next = buildSchedulerStateFromErpAssignments(freshQueueRecords, rows, designers);
                 weekTasks = next.tasksObj;
                 setTasks(next.tasksObj);
                 setSchedules(next.schedulesObj);
@@ -887,7 +1046,7 @@ export function DesignSchedulerScreen() {
                 // applyPreparedAssignment and commitPanelDrop set this back to false.
                 setLoadedFromErp(true);
             } else {
-                const mock = buildMockSchedulerState(queueRecords, designers);
+                const mock = buildMockSchedulerState(freshQueueRecords, designers);
                 weekTasks = mock.tasksObj;
                 setTasks(mock.tasksObj);
                 setSchedules(mock.schedulesObj);
@@ -912,13 +1071,14 @@ export function DesignSchedulerScreen() {
                             const allTasks = { ...weekTasks, ...carryTasks };
                             entries.forEach(({ task, designerId }) => {
                                 if (!next[designerId]) next[designerId] = {};
-                                // Find the first weekday that still has room
+                                // Find the first weekday that still has room — never place on an elapsed day
                                 const firstAvailable = WEEKDAY_INDICES.find((d) => {
+                                    if (isPastDayIndex(d, currentDate)) return false;
                                     const dayKey = d.toString();
                                     const tasksInDay = next[designerId][dayKey] ?? [];
                                     const usedHours = sumTaskHours(allTasks, tasksInDay);
                                     return usedHours < DAILY_CAPACITY;
-                                }) ?? 0; // fallback to Monday if all days are full
+                                }) ?? getCurrentDayIndex(currentDate); // fallback to today if all non-past days are full
                                 const dayKey = firstAvailable.toString();
                                 if (!next[designerId][dayKey]) next[designerId][dayKey] = [];
                                 if (!next[designerId][dayKey].includes(task.id)) {
@@ -947,8 +1107,10 @@ export function DesignSchedulerScreen() {
             setSchedules(mock.schedulesObj);
             setLoadedFromErp(false);
             setWeekVersion(0);
+        } finally {
+            setIsWeekLoading(false);
         }
-    }, [currentDate, queueRecords, designers]);
+    }, [currentDate, designers, fetchQueueRecords]);
 
     useEffect(() => {
         pendingPersistRef.current = null;
@@ -965,9 +1127,21 @@ export function DesignSchedulerScreen() {
         const { schedules: s, tasks: t, weekStartStr } = pendingPersistRef.current;
         pendingPersistRef.current = null;
         try {
+            // A fragment (Rule 5a) is "resolved" once it's been dragged back onto the grid —
+            // buildPreparedDropAssignment carries its fragmentId onto the placed part (and
+            // only that part) so the backend row can be cleaned up in the same save. Plus
+            // any fragments folded back into a whole-task consolidation (see commitPanelDrop).
+            const resolvedFragmentIds = Array.from(new Set([
+                ...Object.values(t)
+                    .filter((task) => task.fragmentId && task.status !== "unassigned" && task.status !== "ON_HOLD")
+                    .map((task) => task.fragmentId),
+                ...extraResolvedFragmentIdsRef.current,
+            ]));
+            extraResolvedFragmentIdsRef.current = [];
             const payload = {
                 version: weekVersionRef.current,
                 assignments: buildWeekSnapshotPayload(s, t),
+                ...(resolvedFragmentIds.length > 0 ? { resolvedFragmentIds } : {}),
             };
 
             // Apply corrected splitIndex/totalParts from the payload immediately so
@@ -1017,6 +1191,13 @@ export function DesignSchedulerScreen() {
             } else if (msg.toLowerCase().includes('approved full-day leave')) {
                 toast.error(msg);
                 reloadWeek();
+            } else if (msg.toLowerCase().includes('project team')) {
+                // Backend's Rule 10 eligibility check rejected the save — the frontend's own
+                // pre-drop check should normally catch this first, but reload here as a
+                // safety net so the local grid can't keep showing a placement that was
+                // never actually persisted.
+                toast.error(msg);
+                reloadWeek();
             } else {
                 toast.error('Unable to save scheduler changes. Please try again.');
             }
@@ -1051,6 +1232,10 @@ export function DesignSchedulerScreen() {
             const nextWeekStart = addDaysToDateStr(weekStartStr, 7);
             const overflowEntries = [];
             Object.values(nextTasks).forEach((t) => {
+                // Detached fragments (Rule 5a) already persist server-side and are pulled in on
+                // every reload regardless of week — they must never also ride the overflow-carry
+                // mechanism, or the fragment would silently reappear scheduled on next week's grid.
+                if (t.fragmentId != null) return;
                 if (t.status !== "unassigned" || !isUuid(t.parentId)) return;
                 // Find which designer owns a sibling part of this split in the current schedule.
                 let ownerDesignerId = null;
@@ -1092,6 +1277,37 @@ export function DesignSchedulerScreen() {
         backlogHoursIfSplit: 0,
         splitIdCounterAfterFull: 0,
         splitIdCounterAfterSplit: 0,
+        clearHoldTaskId: null,
+        clearHoldPreviousStatus: null,
+    });
+    // Rule 1's sequential-fill redirect: instead of silently auto-moving a drop to the
+    // earliest open day, ask the HOD to choose between the suggested gap day or pinning
+    // the task to the day they actually dropped on (exempting it from the auto-optimizer).
+    const [redirectPrompt, setRedirectPrompt] = useState({
+        open: false,
+        gapDayLabel: '',
+        droppedDayLabel: '',
+        onPlaceGapDay: null,
+        onPin: null,
+        designerName: '',
+        taskName: '',
+        projectName: '',
+        designType: '',
+        priority: '',
+        estimatedHours: 0,
+    });
+    const closeRedirectPrompt = () => setRedirectPrompt({
+        open: false,
+        gapDayLabel: '',
+        droppedDayLabel: '',
+        onPlaceGapDay: null,
+        onPin: null,
+        designerName: '',
+        taskName: '',
+        projectName: '',
+        designType: '',
+        priority: '',
+        estimatedHours: 0,
     });
     const [unassignPrompt, setUnassignPrompt] = useState({
         open: false,
@@ -1187,6 +1403,11 @@ export function DesignSchedulerScreen() {
             cancelOvertimeButtonRef.current?.focus();
         }
     }, [overtimePrompt.open]);
+    useEffect(() => {
+        if (redirectPrompt.open) {
+            placeOnGapButtonRef.current?.focus();
+        }
+    }, [redirectPrompt.open]);
     const handleDayToggle = (dayIndex) => {
         if (viewMode !== "custom")
             return;
@@ -1223,6 +1444,9 @@ export function DesignSchedulerScreen() {
         setDropIndicator({ designerId, dayIndex, taskIndex, position });
     };
     const getTaskLabel = (task) => {
+        if (task.isLoggedRemainder) {
+            return `${task.baseName ?? task.name} · logged`;
+        }
         if (task.splitIndex && task.totalParts && task.totalParts > 1) {
             return `${task.baseName ?? task.name} ${task.splitIndex}/${task.totalParts}`;
         }
@@ -1276,6 +1500,11 @@ export function DesignSchedulerScreen() {
         // Block drops on weekends (Sat=5, Sun=6)
         if (targetDayIndex >= 5)
             return;
+        // Block drops on days that have already elapsed — only today and future days are schedulable
+        if (isPastDayIndex(targetDayIndex, currentDate)) {
+            toast.error("Cannot schedule tasks on a past day.");
+            return;
+        }
         if (isWeekLocked) {
             toast.error("This week is locked. Unlock it first to make changes.");
             return;
@@ -1294,6 +1523,24 @@ export function DesignSchedulerScreen() {
         const droppedTask = tasks[taskId];
         if (!droppedTask)
             return;
+        // Dragging a task off the ON_HOLD sidebar onto a designer's day only ever touched the
+        // schedule (assigneeId + SchedulerAssignment row) — the task's real ON_HOLD status on the
+        // backend was never cleared, so it silently reappeared in the sidebar on the next reload.
+        // Scheduling it here is the HOD's explicit signal to take it off hold.
+        const wasOnHold = sourceId === "ON_HOLD";
+        const holdPreviousStatusForClear = droppedTask.holdPreviousStatus;
+        // Only check eligibility for a NEW (task, designer) pairing — moving a task within
+        // its current designer's own days is never blocked, even if that designer has since
+        // left the project team. A team change should never retroactively disturb work
+        // already assigned; it only gates where a task can be assigned next.
+        if (droppedTask.projectId && sourceId !== targetDesignerId) {
+            const targetDesigner = designers.find((d) => d.id === targetDesignerId);
+            const project = projectTeamsById[droppedTask.projectId];
+            if (targetDesigner && !isDesignerEligibleForProject(targetDesigner.name, project)) {
+                toast.error(`${targetDesigner.name} is not on this project's team.`);
+                return;
+            }
+        }
         if (droppedTask.isOvertime) {
             toast.info("Approved overtime blocks are managed from overtime requests.");
             return;
@@ -1306,67 +1553,176 @@ export function DesignSchedulerScreen() {
             toast.error("Cannot schedule tasks on approved full-day leave.");
             return;
         }
-        // Always start from the first unfilled weekday so no day is left idle — applies to all drag sources
-        const firstUnfilled = WEEKDAY_INDICES.find((d) => getDayHours(targetDesignerId, d) < DAILY_CAPACITY);
-        const wasRedirected = firstUnfilled !== undefined && firstUnfilled < targetDayIndex;
-        if (wasRedirected) {
-            const dayNames = ['Mon', 'Tue', 'Wed', 'Thu', 'Fri'];
-            toast.info(`Placed on ${dayNames[firstUnfilled]} — fill earlier days first`);
-            targetDayIndex = firstUnfilled;
-            targetDayStr = targetDayIndex.toString();
-            if (hasFullDayLeaveBlock(tasks, schedules[targetDesignerId]?.[targetDayStr] ?? [])) {
+        // Handing a busy task off to a DIFFERENT designer: only the hours not yet logged by
+        // the timer should move. The original designer's card stays on their day, shrunk to
+        // exactly what they logged and locked (a real, persisted, non-draggable record) —
+        // a brand-new split part carries the unworked remainder to the new designer.
+        // Same-designer moves (reordering own days) are never touched.
+        let effectiveDroppedTask = droppedTask;
+        let dropTaskId = taskId;
+        let loggedCardPatch = null; // { taskId, loggedHours } — applied to the prepared assignment after build
+        if (sourceId !== targetDesignerId && sourceId !== "unassigned" && sourceId !== "ON_HOLD") {
+            const loggedHours = Math.round(toPositiveHours(droppedTask.workedHours) * 100) / 100;
+            if (loggedHours > 0) {
+                const canonicalTaskId = droppedTask.parentId ?? taskId;
+                const consumeKey = `${sourceId}|${canonicalTaskId}`;
+                if (!consumedWorkedHoursRef.current.has(consumeKey)) {
+                    const scheduledForThisBlock = toPositiveHours(droppedTask.estimatedHours);
+                    const remainingHours = Math.round(Math.max(0, scheduledForThisBlock - loggedHours) * 100) / 100;
+                    if (remainingHours <= 0) {
+                        toast.info(`${droppedTask.baseName ?? droppedTask.name} — all ${formatHoursAsHm(scheduledForThisBlock)} already logged. Nothing left to reassign.`);
+                        return;
+                    }
+                    if (remainingHours < scheduledForThisBlock) {
+                        consumedWorkedHoursRef.current.add(consumeKey);
+                        const remainderId = getNextTaskId();
+                        effectiveDroppedTask = {
+                            ...droppedTask,
+                            id: remainderId,
+                            parentId: canonicalTaskId,
+                            estimatedHours: remainingHours,
+                            scheduledHours: remainingHours,
+                        };
+                        dropTaskId = remainderId;
+                        loggedCardPatch = { taskId, loggedHours };
+                        // workedHours only reflects what's saved as of the designer's last Play/Pause/Stop
+                        // click — if their timer is still running right now, this can undercount by
+                        // however long they've been going since that last sync. Not enforceable to require
+                        // a pause first (their browser tab, not this one), so just flag the caveat.
+                        toast.warning(
+                            `${formatHoursAsHm(loggedHours)} logged by the previous designer stays on their day — assigning the remaining ${formatHoursAsHm(remainingHours)}.`,
+                            { description: "If they're still actively timing this task, that number may be a few minutes behind — ask them to pause first for an exact split." },
+                        );
+                    }
+                }
+            }
+        }
+        // Builds and commits (or opens the overtime modal for) a placement on a specific day,
+        // optionally pinned. Shared by the no-redirect path and both redirect-dialog choices
+        // below, so a pin decision and an overtime decision can be resolved as two independent
+        // steps instead of one tangled branch.
+        const proceedWithPlacement = (chosenDayIndex, { isPinned = false } = {}) => {
+            const chosenDayStr = chosenDayIndex.toString();
+            if (hasFullDayLeaveBlock(tasks, schedules[targetDesignerId]?.[chosenDayStr] ?? [])) {
                 toast.error("Cannot schedule tasks on approved full-day leave.");
                 return;
             }
-        }
-        const targetList = schedules[targetDesignerId]?.[targetDayStr] ?? [];
-        // When redirected, always append — the original targetTaskIndex is from a different day
-        const rawInsertIndex = (wasRedirected || targetTaskIndex === undefined)
-            ? targetList.length
-            : targetTaskIndex + (targetPosition === "after" ? 1 : 0);
-        const insertionIndex = Math.max(0, Math.min(rawInsertIndex, targetList.length));
-        const assignArgs = {
-            droppedTask,
-            taskId,
-            targetDesignerId,
-            targetDayIndex,
-            targetDayStr,
-            insertionIndex,
-            sourceId,
-            sourceDay,
-            schedulesSnapshot: schedules,
-            tasksSnapshot: tasks,
-            visibleDays,
-            getNextSplitId: getNextTaskId,
+            const targetList = schedules[targetDesignerId]?.[chosenDayStr] ?? [];
+            // Pinning onto the originally-dropped day can honor the drop's insertion position;
+            // any other placement (the auto-suggested gap day) always appends, since
+            // targetTaskIndex was captured against a different day's list.
+            const useOriginalInsertPosition = isPinned && chosenDayIndex === targetDayIndex && targetTaskIndex !== undefined;
+            const rawInsertIndex = useOriginalInsertPosition
+                ? targetTaskIndex + (targetPosition === "after" ? 1 : 0)
+                : targetList.length;
+            const insertionIndex = Math.max(0, Math.min(rawInsertIndex, targetList.length));
+            const assignArgs = {
+                droppedTask: effectiveDroppedTask,
+                taskId: dropTaskId,
+                targetDesignerId,
+                targetDayIndex: chosenDayIndex,
+                targetDayStr: chosenDayStr,
+                insertionIndex,
+                sourceId,
+                sourceDay,
+                schedulesSnapshot: schedules,
+                tasksSnapshot: tasks,
+                visibleDays,
+                getNextSplitId: getNextTaskId,
+            };
+            // Pinning is a per-placement decision, not a sticky tag: every manual re-drag
+            // must explicitly set isPinned (true or false) rather than only setting it when
+            // true, otherwise buildPreparedDropAssignment's `{...droppedTask}` spread would
+            // silently carry an old pin forward into a placement that never chose "Pin".
+            // Covers every part this drop touches — the primary dropped task plus any
+            // brand-new split/overflow parts it spawned — not just the first part, so a
+            // re-drag of a previously-pinned task can't leave a stray pinned sibling behind.
+            const stampPin = (preparedAssignment) => {
+                if (!preparedAssignment) return preparedAssignment;
+                const touchedIds = new Set([dropTaskId]);
+                for (const id of Object.keys(preparedAssignment.updatedTasks)) {
+                    if (!(id in tasks)) touchedIds.add(id);
+                }
+                for (const id of touchedIds) {
+                    const existing = preparedAssignment.updatedTasks[id];
+                    if (existing) {
+                        preparedAssignment.updatedTasks[id] = { ...existing, isPinned };
+                    }
+                }
+                return preparedAssignment;
+            };
+            const splitIdBaseline = splitIdCounterRef.current;
+            const fullResult = buildPreparedDropAssignment({ ...assignArgs, allowOvertime: true });
+            if (!fullResult?.preparedAssignment)
+                return;
+            if (loggedCardPatch) applyLoggedCardPatch(fullResult.preparedAssignment, loggedCardPatch);
+            stampPin(fullResult.preparedAssignment);
+            if (!fullResult.hasOvertime) {
+                applyPreparedAssignment(fullResult.preparedAssignment);
+                if (wasOnHold) clearOnHoldStatus(taskId, holdPreviousStatusForClear);
+                return;
+            }
+            const splitIdAfterFull = splitIdCounterRef.current;
+            splitIdCounterRef.current = splitIdBaseline;
+            const splitResult = buildPreparedDropAssignment({ ...assignArgs, allowOvertime: false });
+            if (!splitResult?.preparedAssignment)
+                return;
+            if (loggedCardPatch) applyLoggedCardPatch(splitResult.preparedAssignment, loggedCardPatch);
+            stampPin(splitResult.preparedAssignment);
+            const splitIdAfterSplit = splitIdCounterRef.current;
+            splitIdCounterRef.current = splitIdBaseline;
+            setOvertimePrompt({
+                open: true,
+                pendingFull: fullResult.preparedAssignment,
+                pendingAvailableOnly: splitResult.preparedAssignment,
+                totalTaskHours: effectiveDroppedTask.estimatedHours,
+                hoursWithinNormalCapacity: splitResult.hoursAssignableWithinNormal,
+                backlogHoursIfSplit: splitResult.backlogHoursIfSplit ?? 0,
+                splitIdCounterAfterFull: splitIdAfterFull,
+                splitIdCounterAfterSplit: splitIdAfterSplit,
+                clearHoldTaskId: wasOnHold ? taskId : null,
+                clearHoldPreviousStatus: wasOnHold ? holdPreviousStatusForClear : null,
+            });
         };
-        const splitIdBaseline = splitIdCounterRef.current;
-        const fullResult = buildPreparedDropAssignment({ ...assignArgs, allowOvertime: true });
-        if (!fullResult?.preparedAssignment)
-            return;
-        if (!fullResult.hasOvertime) {
-            applyPreparedAssignment(fullResult.preparedAssignment);
+        // Always start from the first unfilled weekday so no day is left idle — applies to all drag sources.
+        // Never redirect backward into a day that has already elapsed.
+        const firstUnfilled = WEEKDAY_INDICES.find(
+            (d) => !isPastDayIndex(d, currentDate) && getDayHours(targetDesignerId, d) < DAILY_CAPACITY
+        );
+        const wasRedirected = firstUnfilled !== undefined && firstUnfilled < targetDayIndex;
+        if (wasRedirected) {
+            const dayNames = ['Mon', 'Tue', 'Wed', 'Thu', 'Fri'];
+            const redirectDesigner = designers.find((d) => d.id === targetDesignerId);
+            setRedirectPrompt({
+                open: true,
+                gapDayLabel: dayNames[firstUnfilled],
+                droppedDayLabel: dayNames[targetDayIndex],
+                onPlaceGapDay: () => proceedWithPlacement(firstUnfilled, { isPinned: false }),
+                onPin: () => proceedWithPlacement(targetDayIndex, { isPinned: true }),
+                designerName: redirectDesigner?.name || '',
+                taskName: effectiveDroppedTask.baseName ?? effectiveDroppedTask.name,
+                projectName: effectiveDroppedTask.projectName || '',
+                designType: effectiveDroppedTask.designType || effectiveDroppedTask.tag || '',
+                priority: effectiveDroppedTask.priority || '',
+                estimatedHours: effectiveDroppedTask.estimatedHours || 0,
+            });
             return;
         }
-        const splitIdAfterFull = splitIdCounterRef.current;
-        splitIdCounterRef.current = splitIdBaseline;
-        const splitResult = buildPreparedDropAssignment({ ...assignArgs, allowOvertime: false });
-        if (!splitResult?.preparedAssignment)
-            return;
-        const splitIdAfterSplit = splitIdCounterRef.current;
-        splitIdCounterRef.current = splitIdBaseline;
-        setOvertimePrompt({
-            open: true,
-            pendingFull: fullResult.preparedAssignment,
-            pendingAvailableOnly: splitResult.preparedAssignment,
-            totalTaskHours: droppedTask.estimatedHours,
-            hoursWithinNormalCapacity: splitResult.hoursAssignableWithinNormal,
-            backlogHoursIfSplit: splitResult.backlogHoursIfSplit ?? 0,
-            splitIdCounterAfterFull: splitIdAfterFull,
-            splitIdCounterAfterSplit: splitIdAfterSplit,
-        });
+        proceedWithPlacement(targetDayIndex, { isPinned: false });
     };
     const LEGACY_STATUS_MAP = { PENDING: 'DESIGN_NEW', WIP: 'IN_PROGRESS', COMPLETED: 'DESIGN_COMPLETED', REVISION: 'REWORK', APPROVED: 'CLIENT_ACCEPTED' };
     const normalizeBackendStatus = (s) => LEGACY_STATUS_MAP[s] ?? s ?? 'DESIGN_NEW';
+    // Scheduling an ON_HOLD task onto a designer is the HOD's explicit signal to take it off
+    // hold — without this, the task's real backend status stays ON_HOLD forever and it silently
+    // reappears in the sidebar's hold list on the next week navigation/reload.
+    const clearOnHoldStatus = (taskId, holdPreviousStatus) => {
+        if (!taskId || !isUuid(taskId)) return;
+        const backendStatus = normalizeBackendStatus(holdPreviousStatus ?? "DESIGN_NEW");
+        apiClient.patch(`/tasks/${taskId}/status`, { status: backendStatus }).catch((error) => {
+            console.warn("Unable to clear on-hold status after scheduling", { taskId, error });
+            toast.error("Task was scheduled, but its on-hold status couldn't be cleared — it may reappear as on-hold.");
+        });
+    };
 
     const commitOvertimeRequestAction = async (taskId, sourceId, sourceDay, newStatus) => {
         const taskBefore = tasks[taskId];
@@ -1417,6 +1773,42 @@ export function DesignSchedulerScreen() {
         }
     };
 
+    // Rule 5a — detaching a single split part while active siblings remain elsewhere.
+    // Only this part's own SchedulerAssignment row is removed (via the backend
+    // detach-to-fragment endpoint); siblings on other days/designers/weeks are
+    // never touched. The detached part becomes its own sidebar card.
+    const detachSinglePart = (taskId, sourceId, sourceDay, newStatus, taskBefore) => {
+        const newSchedules = cloneState(schedules);
+        if (sourceId !== 'unassigned' && sourceId !== 'ON_HOLD' && newSchedules[sourceId]?.[sourceDay]) {
+            newSchedules[sourceId][sourceDay] = newSchedules[sourceId][sourceDay].filter((id) => id !== taskId);
+        }
+        const nextTaskState = {
+            ...taskBefore,
+            status: newStatus,
+            splitIndex: undefined,
+            totalParts: undefined,
+            fragmentId: undefined,
+            holdStartedAt: newStatus === "ON_HOLD" ? new Date() : undefined,
+            holdPreviousStatus: newStatus === "ON_HOLD" ? taskBefore.status : taskBefore.holdPreviousStatus,
+        };
+        const nextTasks = { ...tasks, [taskId]: nextTaskState };
+        setSchedules(newSchedules);
+        setTasks(nextTasks);
+        persistWeekSnapshot(newSchedules, nextTasks);
+        if (taskBefore.assignmentRowId) {
+            detachAssignmentPart(taskBefore.assignmentRowId, newStatus)
+                .then(({ fragmentId }) => {
+                    setTasks((prev) =>
+                        prev[taskId] ? { ...prev, [taskId]: { ...prev[taskId], fragmentId } } : prev,
+                    );
+                })
+                .catch((error) => {
+                    console.warn("Unable to detach scheduler assignment part", error);
+                    toast.error("Failed to detach this part. Please try again.");
+                });
+        }
+    };
+
     const commitPanelDrop = (taskId, sourceId, sourceDay, newStatus) => {
         setLoadedFromErp(false);
         const taskBefore = tasks[taskId];
@@ -1424,11 +1816,46 @@ export function DesignSchedulerScreen() {
             commitOvertimeRequestAction(taskId, sourceId, sourceDay, newStatus);
             return;
         }
+        // Already its own detached fragment (Rule 5a) — e.g. toggling ON-Hold<->Unassigned
+        // via the sidebar. It has no grid placement or siblings to consider; just flip its
+        // own status, whatever else remains of the original task elsewhere is untouched.
+        if (taskBefore?.fragmentId && (newStatus === 'unassigned' || newStatus === 'ON_HOLD')) {
+            const nextTaskState = {
+                ...taskBefore,
+                status: newStatus,
+                holdStartedAt: newStatus === "ON_HOLD" ? new Date() : undefined,
+                holdPreviousStatus: newStatus === "ON_HOLD" ? taskBefore.status : taskBefore.holdPreviousStatus,
+            };
+            setTasks((prev) => ({ ...prev, [taskId]: nextTaskState }));
+            updateFragmentStatus(taskBefore.fragmentId, newStatus).catch((error) => {
+                console.warn("Unable to update fragment status", error);
+                toast.error("Failed to update this part. Please try again.");
+            });
+            return;
+        }
         const parentId = taskBefore?.parentId;
         const siblingIds = parentId
             ? Object.keys(tasks).filter(id => id !== taskId && tasks[id]?.parentId === parentId)
             : [];
+        // Only siblings still actively occupying a grid cell count towards "this isn't the
+        // last part" — a sibling that's already its own fragment/unassigned card is
+        // independent and shouldn't force a per-part detach here.
+        const activeSiblingIds = siblingIds.filter(id => tasks[id]?.status === 'assigned');
+        if (
+            activeSiblingIds.length > 0 &&
+            (newStatus === 'unassigned' || newStatus === 'ON_HOLD') &&
+            taskBefore?.assignmentRowId
+        ) {
+            detachSinglePart(taskId, sourceId, sourceDay, newStatus, taskBefore);
+            return;
+        }
         const isSplitPart = siblingIds.length > 0 && (newStatus === 'unassigned' || newStatus === 'ON_HOLD');
+        // If any siblings are already-detached fragments, folding everything back into one
+        // blob (below) also needs their backend fragment rows cleaned up in this same save.
+        const fragmentIdsToResolve = siblingIds.map(id => tasks[id]?.fragmentId).filter(Boolean);
+        if (fragmentIdsToResolve.length > 0) {
+            extraResolvedFragmentIdsRef.current.push(...fragmentIdsToResolve);
+        }
 
         const newSchedules = (() => {
             const s = cloneState(schedules);
@@ -1566,6 +1993,27 @@ export function DesignSchedulerScreen() {
     const lowerSearchQuery = searchQuery.toLowerCase();
     const unassignedTasks = useMemo(() => Object.values(tasks).filter((t) => t.status === "unassigned" && t.name.toLowerCase().includes(lowerSearchQuery)), [tasks, lowerSearchQuery]);
     const onHoldTasks = useMemo(() => Object.values(tasks).filter((t) => t.status === "ON_HOLD" && t.name.toLowerCase().includes(lowerSearchQuery)), [tasks, lowerSearchQuery]);
+    // Resolves the typed project number / op number to a project team, so the
+    // designer grid can dim out anyone not eligible for that project.
+    const teamFilterProject = useMemo(() => {
+        const query = teamFilterQuery.trim().toLowerCase();
+        if (!query) return null;
+        const match = queueRecords.find((record) =>
+            (record.opNo && record.opNo.toLowerCase().includes(query)) ||
+            (record.projectNo && record.projectNo.toLowerCase().includes(query)) ||
+            (record.projectName && record.projectName.toLowerCase().includes(query)));
+        if (!match?.projectId) return null;
+        return projectTeamsById[match.projectId] ?? null;
+    }, [teamFilterQuery, queueRecords, projectTeamsById]);
+    const eligibleDesignerIds = useMemo(() => {
+        if (!teamFilterQuery.trim()) return null;
+        if (!teamFilterProject) return new Set();
+        return new Set(
+            designers
+                .filter((designer) => isDesignerEligibleForProject(designer.name, teamFilterProject))
+                .map((designer) => designer.id),
+        );
+    }, [teamFilterQuery, teamFilterProject, designers]);
     // Shift tasks from later weekdays to earlier weekdays up to DAILY_CAPACITY.
     // When a task from a later day is too large to move whole, it is split: the portion
     // that fills the gap goes to the earlier day, the remainder stays.
@@ -1579,8 +2027,10 @@ export function DesignSchedulerScreen() {
                 continue;
             // Iteratively fill each target day (Mon-Thu) from subsequent days (up to Fri)
             for (let targetDay = 0; targetDay < 4; targetDay++) {
+                if (isPastDayIndex(targetDay, currentDate)) continue; // never backfill an elapsed day
                 const targetDayStr = targetDay.toString();
                 for (let sourceDay = targetDay + 1; sourceDay < 5; sourceDay++) {
+                    if (isPastDayIndex(sourceDay, currentDate)) continue; // never auto-pull off an elapsed day
                     const sourceDayStr = sourceDay.toString();
                     const sourceTasks = [...(newSchedules[dId][sourceDayStr] || [])];
                     if (sourceTasks.length === 0)
@@ -1594,6 +2044,12 @@ export function DesignSchedulerScreen() {
                     for (const tid of sourceTasks) {
                         const taskInfo = newTasks[tid];
                         if (taskInfo?.isOvertime) {
+                            keptInSource.push(tid);
+                            continue;
+                        }
+                        // Pinned tasks were deliberately placed on a later day via the redirect
+                        // override — never pull them backward into an earlier gap.
+                        if (taskInfo?.isPinned) {
                             keptInSource.push(tid);
                             continue;
                         }
@@ -1723,10 +2179,10 @@ export function DesignSchedulerScreen() {
         </div>
         <div className="flex min-w-0 flex-1 items-center justify-between gap-3 px-3 sm:px-6">
           <div className="flex min-w-0 flex-1 flex-wrap items-center justify-center gap-x-4 gap-y-2 px-2">
-            <div><span className="mr-1 font-medium text-slate-500">Designers:</span>{totalDesignersCount}</div>
-            <div className="flex items-center gap-2"><div className="h-2.5 w-2.5 rounded-sm bg-green-400" /> Scheduled: {totalScheduledTaskCount}</div>
-            <div className="flex items-center gap-2"><div className="h-2.5 w-2.5 rounded-sm bg-orange-400" /> Total Hours: {totalScheduledHours}h</div>
-            <div className="flex items-center gap-2 text-red-500"><AlertTriangle size={14}/> Overloaded: {overloadedCount}</div>
+            <div><span className="mr-1 font-medium text-slate-500">Designers:</span>{isWeekLoading ? <span className="inline-block h-3 w-4 align-middle bg-slate-200 rounded animate-pulse" /> : totalDesignersCount}</div>
+            <div className="flex items-center gap-2"><div className="h-2.5 w-2.5 rounded-sm bg-green-400" /> Scheduled: {isWeekLoading ? <span className="inline-block h-3 w-4 align-middle bg-slate-200 rounded animate-pulse" /> : totalScheduledTaskCount}</div>
+            <div className="flex items-center gap-2"><div className="h-2.5 w-2.5 rounded-sm bg-orange-400" /> Total Hours: {isWeekLoading ? <span className="inline-block h-3 w-8 align-middle bg-slate-200 rounded animate-pulse" /> : `${totalScheduledHours}h`}</div>
+            <div className="flex items-center gap-2 text-red-500"><AlertTriangle size={14}/> Overloaded: {isWeekLoading ? <span className="inline-block h-3 w-4 align-middle bg-slate-200 rounded animate-pulse" /> : overloadedCount}</div>
             <div className="flex items-center gap-2">
               <button type="button" onClick={() => setCurrentDate((d) => { const p = new Date(d); p.setDate(p.getDate() - 7); return p; })} className="ui-chip-button px-2" title="Previous week">‹</button>
               <span className="whitespace-nowrap rounded-md border border-slate-200 bg-slate-100 px-2.5 py-1 text-xs font-medium text-slate-600">{dateRangeText}</span>
@@ -1802,6 +2258,18 @@ export function DesignSchedulerScreen() {
                {onHoldTasks.length > 0 && <span className="text-red-500 flex items-center gap-1"><AlertTriangle size={12}/> {onHoldTasks.length}</span>}
              </div>
 
+             <button
+               type="button"
+               onClick={() => setShowOnlyOnHold((prev) => !prev)}
+               className={`mb-4 flex items-center justify-center gap-1.5 rounded-md border px-2.5 py-1.5 text-xs font-semibold transition-colors ${showOnlyOnHold
+                   ? "border-red-300 bg-red-50 text-red-600"
+                   : "border-slate-300 bg-white text-slate-500 hover:bg-slate-100"}`}
+               title={showOnlyOnHold ? "Showing on-hold tasks only" : "Show on-hold tasks only"}
+             >
+               <PauseCircle size={12} />
+               {showOnlyOnHold ? "Showing On-Hold Only" : "On-Hold Only"}
+             </button>
+
              <div className="relative mb-6">
                 <div className="pointer-events-none absolute inset-y-0 left-0 flex items-center pl-3">
                   <Search className="h-4 w-4 text-slate-400" />
@@ -1845,7 +2313,7 @@ export function DesignSchedulerScreen() {
                     <div className="text-[9px] font-bold mt-1.5 bg-red-100 text-red-600 inline-block px-1.5 py-0.5 rounded uppercase self-start">Hold: {formatHoldDuration(task.holdStartedAt)}</div>
                   </div>))}
 
-                {unassignedTasks.map(task => (<div key={task.id} draggable onDragStart={(e) => handleDragStart(e, task.id, "unassigned")} onDragEnd={() => setDropIndicator(null)} onClick={() => router.push(taskViewPathForRecord({ id: getDesignListRoutingTaskId(task), designType: task.designType }, { from: FROM_DESIGN_SCHEDULER }))} className={`p-3 rounded cursor-grab active:cursor-grabbing flex flex-col relative group bg-white shadow-sm hover:shadow-md transition-shadow ${task.colorClass.replace(/bg-\S+/g, "")}`}>
+                {!showOnlyOnHold && unassignedTasks.map(task => (<div key={task.id} draggable onDragStart={(e) => handleDragStart(e, task.id, "unassigned")} onDragEnd={() => setDropIndicator(null)} onClick={() => router.push(taskViewPathForRecord({ id: getDesignListRoutingTaskId(task), designType: task.designType }, { from: FROM_DESIGN_SCHEDULER }))} className={`p-3 rounded cursor-grab active:cursor-grabbing flex flex-col relative group bg-white shadow-sm hover:shadow-md transition-shadow ${task.colorClass.replace(/bg-\S+/g, "")}`}>
                     <div className="flex justify-between items-start">
                       <span className="font-semibold text-[12px] leading-tight pr-5">{getTaskLabel(task)}</span>
                       <button
@@ -1884,6 +2352,27 @@ export function DesignSchedulerScreen() {
 
         {/* Main Grid Area */}
         <div className="flex-1 flex flex-col min-w-0 bg-white">
+          <div className="flex items-center gap-2 border-b border-slate-200 bg-slate-50 px-4 py-2">
+            <div className="relative w-72">
+              <div className="pointer-events-none absolute inset-y-0 left-0 flex items-center pl-3">
+                <Search className="h-4 w-4 text-slate-400" />
+              </div>
+              <input
+                type="text"
+                value={teamFilterQuery}
+                onChange={(e) => setTeamFilterQuery(e.target.value)}
+                placeholder="Filter eligible designers by project/op no..."
+                className="w-full rounded-md border border-slate-300 bg-white py-1.5 pl-9 pr-3 text-sm text-slate-900 outline-none transition focus:border-blue-500 focus:ring-2 focus:ring-blue-500/25"
+              />
+            </div>
+            {teamFilterQuery.trim() && (
+              <span className="text-xs font-medium text-slate-500">
+                {teamFilterProject
+                    ? `${eligibleDesignerIds?.size ?? 0} eligible designer(s)`
+                    : "No matching project/task found"}
+              </span>
+            )}
+          </div>
           <div className={`flex-1 ${layoutMode === "horizontal-scroll" ? "overflow-x-auto overflow-y-auto" : "overflow-auto"}`}>
             <div className="min-w-[800px]">
               {/* Grid Header */}
@@ -1906,12 +2395,39 @@ export function DesignSchedulerScreen() {
               </div>
               
               {/* Designers Rows */}
-              <div className="flex flex-col">
+              <div className="flex flex-col relative">
+                {isWeekLoading && (
+                  <div className="absolute inset-0 z-30 flex flex-col bg-white/85 backdrop-blur-[1px]">
+                    {Array.from({ length: Math.max(designers.length, 5) }).map((_, rowIdx) => (
+                      <div key={`week-skeleton-row-${rowIdx}`} className="flex border-b border-slate-100 min-h-[56px] items-stretch animate-pulse">
+                        <div className="w-[180px] shrink-0 py-1.5 px-3 flex items-center gap-2 border-r border-slate-200 bg-white">
+                          <div className="w-6 h-6 rounded-full bg-slate-200 shrink-0" />
+                          <div className="flex flex-col gap-1.5 w-full">
+                            <div className="h-2.5 w-20 bg-slate-200 rounded" />
+                            <div className="h-1.5 w-full bg-slate-100 rounded-full" />
+                          </div>
+                        </div>
+                        <div className="flex-1 grid" style={{
+                          gridTemplateColumns: layoutMode === "single-column"
+                              ? "minmax(0, 1fr)"
+                              : `repeat(${visibleDays.length}, minmax(160px, 1fr))`,
+                        }}>
+                          {visibleDays.map((dayIndex) => (
+                            <div key={`week-skeleton-cell-${rowIdx}-${dayIndex}`} className="border-r border-slate-100 p-2 flex items-center">
+                              <div className="h-5 w-3/4 bg-slate-200 rounded" />
+                            </div>
+                          ))}
+                        </div>
+                      </div>
+                    ))}
+                  </div>
+                )}
                 {designers.map((designer) => {
             const booked = getDesignerBookedHours(designer.id);
             const overloaded = isDesignerOverloaded(designer.id);
             const designerDays = schedules[designer.id] || {};
-            return (<div key={designer.id} className="flex border-b border-slate-100 group relative min-h-[56px] items-stretch">
+            const isDimmedByTeamFilter = eligibleDesignerIds != null && !eligibleDesignerIds.has(designer.id);
+            return (<div key={designer.id} className={`flex border-b border-slate-100 group relative min-h-[56px] items-stretch ${isDimmedByTeamFilter ? "opacity-40 pointer-events-none" : ""}`}>
                       {/* Left: Designer Info */}
                       <div
                         className="w-[180px] shrink-0 py-1.5 px-3 flex items-center gap-2 border-r border-slate-200 bg-white z-10 transition-colors group-hover:bg-blue-50 cursor-pointer"
@@ -1966,6 +2482,7 @@ export function DesignSchedulerScreen() {
                       ...overflowTaskIds,
                     ];
                     const isWeekend = dayIndex >= 5;
+                    const isPastDay = !isWeekend && isPastDayIndex(dayIndex, currentDate);
                     const dayHours = getDayHours(designer.id, dayIndex);
                     const overtimeHours = getDayOvertimeHours(designer.id, dayIndex);
                     const isDayOverloaded = dayHours > DAILY_CAPACITY;
@@ -1973,7 +2490,9 @@ export function DesignSchedulerScreen() {
                     return (<div key={dayIndex} className={`border-r relative flex flex-col transition-colors overflow-hidden
                                 ${isWeekend
                             ? 'bg-slate-100 border-slate-200 cursor-not-allowed'
-                            : isDayOverloaded
+                            : isPastDay
+                                ? 'bg-slate-100/70 border-slate-200 cursor-not-allowed grayscale-[35%]'
+                                : isDayOverloaded
                                 ? 'border-slate-100 bg-red-50/40'
                                 : 'border-slate-100 hover:bg-blue-50/30'}
                               `} onDragOver={isWeekend ? undefined : handleDragOver} onDrop={isWeekend ? undefined : (e) => handleDropToDay(e, designer.id, dayIndex)}>
@@ -1993,30 +2512,35 @@ export function DesignSchedulerScreen() {
                                 const dropTaskIndex = rawTaskIndex >= 0 ? rawTaskIndex : idx;
                                 const taskWidth = `calc((100% - ${(Math.max(visualRegularTaskIds.length - 1, 0)) * 4}px) / ${Math.max(visualRegularTaskIds.length, 1)})`;
                                 const isSystemBlock = isRequestSystemBlock(taskInfo);
-                                return (<div key={`${taskId}-${designer.id}-${dayIndex}-${idx}`} draggable={!isSystemBlock} onDragStart={(e) => {
-                                        if (isSystemBlock) return;
+                                // Locked cards (e.g. the shrunk "logged hours" remainder left behind on a
+                                // busy designer's day after a partial handoff) can't be dragged, but unlike
+                                // system blocks they're still a real task — clicking should still navigate.
+                                const isDragLocked = isSystemBlock || Boolean(taskInfo?.isLocked);
+                                return (<div key={`${taskId}-${designer.id}-${dayIndex}-${idx}`} draggable={!isDragLocked} onDragStart={(e) => {
+                                        if (isDragLocked) return;
                                         handleDragStart(e, taskId, designer.id, dayIndex.toString());
                                         setCurrentDay(dayIndex);
                                     }} onDragEnd={() => setDropIndicator(null)} onDragOver={(e) => {
-                                        if (isSystemBlock) return;
+                                        if (isDragLocked || isPastDay) return;
                                         e.stopPropagation();
                                         handleTaskDragOver(e, designer.id, dayIndex, dropTaskIndex);
                                     }} onDrop={(e) => {
-                                        if (isSystemBlock) return;
+                                        if (isDragLocked || isPastDay) return;
                                         e.stopPropagation();
                                         handleDropToDay(e, designer.id, dayIndex, dropTaskIndex, getDropPosition(e, e.currentTarget));
                                     }} onClick={(e) => {
                                         e.stopPropagation();
                                         if (isSystemBlock) return;
                                         router.push(taskViewPathForRecord({ id: getDesignListRoutingTaskId(taskInfo), designType: taskInfo.designType }, { from: FROM_DESIGN_SCHEDULER }));
-                                    }} className={`h-[24px] min-w-0 rounded flex items-center justify-between px-1.5 shadow-sm transition-shadow ${isSystemBlock ? "cursor-default" : "cursor-grab active:cursor-grabbing hover:shadow"} ${dropIndicator &&
+                                    }} className={`h-[24px] min-w-0 rounded flex items-center justify-between px-1.5 shadow-sm transition-shadow ${isDragLocked ? "cursor-default" : "cursor-grab active:cursor-grabbing hover:shadow"} ${dropIndicator &&
                                         dropIndicator.designerId === designer.id &&
                                         dropIndicator.dayIndex === dayIndex &&
                                         dropIndicator.taskIndex === dropTaskIndex
                                         ? dropIndicator.position === "before"
                                             ? "ring-2 ring-blue-400 ring-offset-1"
                                             : "ring-2 ring-green-400 ring-offset-1"
-                                        : ""} ${taskInfo.colorClass}`} style={{ width: taskWidth, maxWidth: taskWidth }} title={`${getTaskLabel(taskInfo)} (${taskInfo.estimatedHours}h)`}>
+                                        : ""} ${taskInfo.colorClass}`} style={{ width: taskWidth, maxWidth: taskWidth }} title={`${getTaskLabel(taskInfo)} (${taskInfo.estimatedHours}h)${taskInfo.isPinned ? " — pinned: exempt from auto-fill" : ""}`}>
+                                          {taskInfo.isPinned && (<span className="text-[8px] leading-none mr-0.5 shrink-0 select-none" aria-hidden="true">📌</span>)}
                                           <div className="text-[9px] font-semibold truncate leading-none mr-1 select-none">{getTaskLabel(taskInfo)}</div>
                                           <div className="text-[8px] font-bold opacity-60 bg-black/5 rounded px-1 shrink-0">{taskInfo.estimatedHours}h</div>
                                         </div>);
@@ -2110,13 +2634,17 @@ export function DesignSchedulerScreen() {
             hoursWithinNormalCapacity: 0,
             backlogHoursIfSplit: 0,
             splitIdCounterAfterFull: 0,
-            splitIdCounterAfterSplit: 0
+            splitIdCounterAfterSplit: 0,
+            clearHoldTaskId: null,
+            clearHoldPreviousStatus: null
         })} className="ui-chip-button">
                 Cancel
               </button>
               <button type="button" disabled={overtimePrompt.hoursWithinNormalCapacity === 0} onClick={() => {
             if (overtimePrompt.pendingAvailableOnly)
                 applyPreparedAssignment(overtimePrompt.pendingAvailableOnly);
+            if (overtimePrompt.clearHoldTaskId)
+                clearOnHoldStatus(overtimePrompt.clearHoldTaskId, overtimePrompt.clearHoldPreviousStatus);
             splitIdCounterRef.current = overtimePrompt.splitIdCounterAfterSplit;
             setOvertimePrompt({
                 open: false,
@@ -2126,7 +2654,9 @@ export function DesignSchedulerScreen() {
                 hoursWithinNormalCapacity: 0,
                 backlogHoursIfSplit: 0,
                 splitIdCounterAfterFull: 0,
-                splitIdCounterAfterSplit: 0
+                splitIdCounterAfterSplit: 0,
+                clearHoldTaskId: null,
+                clearHoldPreviousStatus: null
             });
         }} className={`ui-chip-button${overtimePrompt.hoursWithinNormalCapacity === 0 ? ' opacity-40 cursor-not-allowed' : ''}`}>
                 Assign Available Only
@@ -2134,6 +2664,8 @@ export function DesignSchedulerScreen() {
               <button type="button" onClick={() => {
             if (overtimePrompt.pendingFull)
                 applyPreparedAssignment(overtimePrompt.pendingFull);
+            if (overtimePrompt.clearHoldTaskId)
+                clearOnHoldStatus(overtimePrompt.clearHoldTaskId, overtimePrompt.clearHoldPreviousStatus);
             splitIdCounterRef.current = overtimePrompt.splitIdCounterAfterFull;
             setOvertimePrompt({
                 open: false,
@@ -2143,10 +2675,72 @@ export function DesignSchedulerScreen() {
                 hoursWithinNormalCapacity: 0,
                 backlogHoursIfSplit: 0,
                 splitIdCounterAfterFull: 0,
-                splitIdCounterAfterSplit: 0
+                splitIdCounterAfterSplit: 0,
+                clearHoldTaskId: null,
+                clearHoldPreviousStatus: null
             });
         }} className="ui-chip-button ui-chip-button-active">
                 Assign Full (Overtime)
+              </button>
+            </div>
+          </div>
+        </div>) : null}
+      {redirectPrompt.open ? (<div className="fixed inset-0 z-[120] flex items-center justify-center bg-slate-900/40 p-4" aria-modal="true" role="alertdialog">
+          <div className="ui-surface w-full max-w-2xl p-6">
+            <h2 className="text-lg font-semibold text-slate-900">
+              <span aria-hidden="true">📌</span> Schedule on {redirectPrompt.droppedDayLabel}?
+            </h2>
+            <p className="mt-3 text-sm leading-6 text-slate-600">
+              Do you want to schedule this task on <span className="font-semibold text-amber-700">{redirectPrompt.droppedDayLabel}</span> while <span className="font-semibold text-blue-700">{redirectPrompt.gapDayLabel}</span> still has a gap, or place it on {redirectPrompt.gapDayLabel} instead?
+            </p>
+            {redirectPrompt.designerName && (
+              <div className="mt-3 flex items-center gap-2 text-sm text-slate-600">
+                <div className="w-6 h-6 rounded-full bg-slate-800 text-white flex items-center justify-center text-[10px] font-bold shrink-0">
+                  {redirectPrompt.designerName.split(' ').map((p) => p[0]).join('').slice(0, 2).toUpperCase()}
+                </div>
+                <span>Scheduling for <span className="font-semibold text-slate-900">{redirectPrompt.designerName}</span></span>
+              </div>
+            )}
+            <div className="mt-4 rounded-lg border border-slate-200 bg-slate-50 px-4 py-3 text-sm text-slate-700">
+              <div className="font-medium text-slate-900 truncate">{redirectPrompt.taskName}</div>
+              {redirectPrompt.projectName && (
+                <div className="mt-1 text-xs text-slate-500 truncate">{redirectPrompt.projectName}</div>
+              )}
+              <div className="mt-2 flex flex-wrap items-center gap-2">
+                {redirectPrompt.designType && (
+                  <span className={`text-[10px] font-semibold px-2 py-0.5 rounded ${getDesignTypeChipClass(redirectPrompt.designType)}`}>
+                    {redirectPrompt.designType}
+                  </span>
+                )}
+                {redirectPrompt.priority && (
+                  <span className={`text-[10px] font-semibold px-2 py-0.5 rounded border ${
+                    redirectPrompt.priority === 'High' ? 'bg-red-50 text-red-700 border-red-200' :
+                    redirectPrompt.priority === 'Medium' ? 'bg-amber-50 text-amber-700 border-amber-200' :
+                    'bg-slate-50 text-slate-600 border-slate-200'
+                  }`}>
+                    {redirectPrompt.priority}
+                  </span>
+                )}
+                {redirectPrompt.estimatedHours > 0 && (
+                  <span className="text-[10px] text-slate-500">{redirectPrompt.estimatedHours}h estimated</span>
+                )}
+              </div>
+            </div>
+            <div className="mt-6 flex flex-nowrap items-center justify-end gap-2">
+              <button type="button" onClick={closeRedirectPrompt} className="ui-chip-button ui-chip-button-danger whitespace-nowrap">
+                Cancel
+              </button>
+              <button type="button" ref={placeOnGapButtonRef} onClick={() => {
+            redirectPrompt.onPlaceGapDay?.();
+            closeRedirectPrompt();
+        }} className="ui-chip-button whitespace-nowrap">
+                Place on {redirectPrompt.gapDayLabel} (first open day)
+              </button>
+              <button type="button" onClick={() => {
+            redirectPrompt.onPin?.();
+            closeRedirectPrompt();
+        }} className="ui-chip-button ui-chip-button-active whitespace-nowrap">
+                Schedule on {redirectPrompt.droppedDayLabel} (as dropped)
               </button>
             </div>
           </div>
@@ -2195,7 +2789,7 @@ export function DesignSchedulerScreen() {
               <button
                 type="button"
                 onClick={() => setUnassignPrompt({ open: false, taskId: null, taskName: '', estimatedHours: 0, sourceId: null, sourceDay: null, designerName: '', projectName: '', designType: '', priority: '' })}
-                className="ui-chip-button"
+                className="ui-chip-button ui-chip-button-danger"
               >
                 Cancel
               </button>

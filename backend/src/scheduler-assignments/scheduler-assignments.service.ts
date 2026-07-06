@@ -34,6 +34,7 @@ type RawAssignmentRow = {
   assignedHours: string | number | null;
   scheduledHours?: string | number | null;
   approvedOvertimeHours?: string | number | null;
+  workedHours?: number | null;
   parentId: string | null;
   splitIndex: number | null;
   totalParts: number | null;
@@ -41,6 +42,7 @@ type RawAssignmentRow = {
   weekEndDate: Date;
   notes: string | null;
   isLocked: boolean | number | null;
+  isPinned?: boolean | number | null;
   assignedBy: string | null;
   createdAt: Date;
   updatedAt: Date;
@@ -54,6 +56,9 @@ type RawAssignmentRow = {
   regularizationHours?: string | number | null;
   requestStatus?: string | null;
   requestLabel?: string | null;
+  isFragment?: boolean;
+  fragmentId?: string | null;
+  fragmentStatus?: 'UNASSIGNED' | 'ON_HOLD' | null;
 };
 
 export type SchedulerAssignmentDto = {
@@ -64,6 +69,7 @@ export type SchedulerAssignmentDto = {
   assignedHours: number;
   scheduledHours: number;
   approvedOvertimeHours: number;
+  workedHours: number;
   parentId: string | null;
   splitIndex: number | null;
   totalParts: number | null;
@@ -71,6 +77,7 @@ export type SchedulerAssignmentDto = {
   weekEndDate: string;
   notes: string | null;
   isLocked: boolean;
+  isPinned: boolean;
   assignedBy: string | null;
   createdAt: string;
   updatedAt: string;
@@ -84,6 +91,9 @@ export type SchedulerAssignmentDto = {
   regularizationHours: number;
   requestStatus: string | null;
   requestLabel: string | null;
+  isFragment: boolean;
+  fragmentId: string | null;
+  fragmentStatus: 'UNASSIGNED' | 'ON_HOLD' | null;
 };
 
 type SchedulerWeekMetaDto = {
@@ -343,6 +353,7 @@ export class SchedulerAssignmentsService implements OnModuleInit {
     const assignedHours = this.toHours(row.assignedHours);
     const scheduledHours = row.scheduledHours == null ? assignedHours : this.toHours(row.scheduledHours);
     const approvedOvertimeHours = this.toHours(row.approvedOvertimeHours);
+    const workedHours = this.toHours(row.workedHours);
     const requestType = row.requestType ?? null;
     return {
       id: row.id,
@@ -352,6 +363,7 @@ export class SchedulerAssignmentsService implements OnModuleInit {
       assignedHours,
       scheduledHours,
       approvedOvertimeHours,
+      workedHours,
       parentId,
       splitIndex: row.splitIndex == null ? null : Number(row.splitIndex),
       totalParts: row.totalParts == null ? null : Number(row.totalParts),
@@ -359,6 +371,7 @@ export class SchedulerAssignmentsService implements OnModuleInit {
       weekEndDate: this.toIso(row.weekEndDate ? new Date(row.weekEndDate) : null),
       notes: row.notes ?? null,
       isLocked: this.toBool(row.isLocked),
+      isPinned: this.toBool(row.isPinned),
       assignedBy,
       createdAt: this.toIso(row.createdAt ? new Date(row.createdAt) : null),
       updatedAt: this.toIso(row.updatedAt ? new Date(row.updatedAt) : null),
@@ -372,7 +385,53 @@ export class SchedulerAssignmentsService implements OnModuleInit {
       regularizationHours: this.toHours(row.regularizationHours),
       requestStatus: row.requestStatus ?? null,
       requestLabel: row.requestLabel ?? null,
+      isFragment: Boolean(row.isFragment),
+      fragmentId: row.fragmentId ?? null,
+      fragmentStatus: row.fragmentStatus ?? null,
     };
+  }
+
+  /**
+   * Maps a detached SchedulerTaskFragment (see Rule 5a) into the same DTO shape as
+   * a normal assignment row, so the frontend can merge it into the sidebar without
+   * a separate response shape. Fragments have no grid placement — dayIndex/week are
+   * carried over from the source row purely for historical context and are ignored
+   * by the frontend, which never adds a fragment to `schedulesObj`.
+   */
+  private mapFragmentRow(fragment: {
+    id: string;
+    taskId: string;
+    parentId: string | null;
+    hours: Prisma.Decimal | number | string;
+    status: string;
+    sourceDesignerId: string | null;
+    splitIndex: number | null;
+    totalParts: number | null;
+    createdAt: Date;
+    updatedAt: Date;
+  }): SchedulerAssignmentDto {
+    return this.mapRow({
+      id: `fragment-${fragment.id}`,
+      designerId: fragment.sourceDesignerId ?? '',
+      taskId: fragment.taskId,
+      dayIndex: 0,
+      assignedHours: Number(fragment.hours),
+      scheduledHours: Number(fragment.hours),
+      approvedOvertimeHours: 0,
+      parentId: fragment.parentId,
+      splitIndex: fragment.splitIndex,
+      totalParts: fragment.totalParts,
+      weekStartDate: fragment.createdAt,
+      weekEndDate: fragment.createdAt,
+      notes: null,
+      isLocked: false,
+      assignedBy: null,
+      createdAt: fragment.createdAt,
+      updatedAt: fragment.updatedAt,
+      isFragment: true,
+      fragmentId: fragment.id,
+      fragmentStatus: fragment.status === 'ON_HOLD' ? 'ON_HOLD' : 'UNASSIGNED',
+    });
   }
 
   private buildLeaveSystemRows(
@@ -545,6 +604,64 @@ export class SchedulerAssignmentsService implements OnModuleInit {
         const designerLabel = conflictingLeave.user?.fullName?.trim() || assignment.designerId;
         throw new BadRequestException(
           `Cannot schedule task ${assignment.taskId} for ${designerLabel} on approved full-day leave.`,
+        );
+      }
+    }
+  }
+
+  /**
+   * A task can only be assigned to a NEW designer who is part of its project's
+   * team (technicalHead/teamLead/subTeamLead/designers). Matching is by trimmed,
+   * lowercased User.fullName since these project fields are stored as
+   * comma-joined names, not user IDs. Projects with no team configured at all
+   * (e.g. Retail-category projects) are unrestricted.
+   *
+   * (taskId, designerId) pairs that were already saved for this week are
+   * grandfathered in and skipped — if the team changes after a task was
+   * assigned, that designer's existing work is left alone. Only a *new*
+   * pairing (a fresh drop, or moving the task to a different designer) is
+   * checked against the project's current team.
+   */
+  private assertDesignerEligibleForProjectTeam(
+    assignments: SaveSchedulerWeekDto['assignments'],
+    tasks: Array<{
+      id: string;
+      projectId: string | null;
+      project: {
+        technicalHead: string | null;
+        teamLead: string | null;
+        subTeamLead: string | null;
+        designers: string | null;
+      } | null;
+    }>,
+    schedulableUsers: Array<{ id: string; fullName: string }>,
+    previousRows: Array<{ taskId: string | null; designerId: string | null }>,
+  ): void {
+    const normalize = (value: string) => value.trim().toLowerCase();
+    const taskById = new Map(tasks.map((task) => [task.id, task]));
+    const userNameById = new Map(schedulableUsers.map((user) => [user.id, user.fullName]));
+    const previousPairs = new Set(
+      previousRows.filter((row) => row.taskId && row.designerId).map((row) => `${row.taskId}|${row.designerId}`),
+    );
+
+    for (const assignment of assignments) {
+      if (previousPairs.has(`${assignment.taskId}|${assignment.designerId}`)) continue;
+
+      const task = taskById.get(assignment.taskId);
+      const project = task?.project;
+      if (!project) continue;
+
+      const teamNames = new Set(
+        [project.technicalHead, project.teamLead, project.subTeamLead, ...(project.designers?.split(',') ?? [])]
+          .map((name) => (name ? normalize(name) : ''))
+          .filter(Boolean),
+      );
+      if (teamNames.size === 0) continue;
+
+      const designerName = userNameById.get(assignment.designerId);
+      if (!designerName || !teamNames.has(normalize(designerName))) {
+        throw new BadRequestException(
+          `${designerName ?? assignment.designerId} is not on the project team for task ${assignment.taskId}.`,
         );
       }
     }
@@ -968,6 +1085,7 @@ export class SchedulerAssignmentsService implements OnModuleInit {
                 notes: string | null;
                 position?: number | null;
                 isLocked: boolean | null;
+                isPinned?: boolean | null;
                 assignedBy: string | null;
                 updatedAt?: string | Date | null;
               },
@@ -1037,6 +1155,7 @@ export class SchedulerAssignmentsService implements OnModuleInit {
               notes: entry.row.notes,
               position: entry.row.position ?? 0,
               isLocked: entry.row.isLocked ?? false,
+              isPinned: entry.row.isPinned ?? false,
               assignedBy: entry.row.assignedBy,
               updatedAt: entry.row.updatedAt ? new Date(entry.row.updatedAt) : undefined,
             } as Prisma.SchedulerAssignmentUncheckedUpdateInput,
@@ -1466,6 +1585,23 @@ export class SchedulerAssignmentsService implements OnModuleInit {
         });
       }
 
+      // In-progress timer work (Draft TaskWorkSession) logged against this task by this
+      // designer, so the frontend can offer "hours actually remaining" when the HOD
+      // reassigns a partially-worked task to a different designer via drag-and-drop.
+      const taskIds = [...new Set(rows.map((r) => r.taskId).filter((id): id is string => Boolean(id)))];
+      const designerIdsForWork = [...new Set(rows.map((r) => r.designerId).filter((id): id is string => Boolean(id)))];
+      const workedSecondsByKey = new Map<string, number>();
+      if (taskIds.length > 0 && designerIdsForWork.length > 0) {
+        const draftSessions = await this.prisma.taskWorkSession.findMany({
+          where: { status: 'Draft', taskId: { in: taskIds }, designerId: { in: designerIdsForWork } },
+          select: { taskId: true, designerId: true, durationSeconds: true },
+        });
+        for (const session of draftSessions) {
+          const key = `${session.designerId}|${session.taskId}`;
+          workedSecondsByKey.set(key, (workedSecondsByKey.get(key) ?? 0) + session.durationSeconds);
+        }
+      }
+
       const mappedRows = rows.map((r) => {
         const designerKey = r.designerId ?? '';
         const taskKey = r.taskId ?? '';
@@ -1475,6 +1611,7 @@ export class SchedulerAssignmentsService implements OnModuleInit {
         const approvedOvertimeHours = approvedOvertime?.hours ?? 0;
         approvedByAssignmentKey.delete(overtimeKey);
         const scheduledHours = this.toHours(r.assignedHours);
+        const workedSeconds = workedSecondsByKey.get(`${designerKey}|${taskKey}`) ?? 0;
         return this.mapRow({
           ...(r as unknown as RawAssignmentRow),
           designerId: designerKey,
@@ -1484,6 +1621,14 @@ export class SchedulerAssignmentsService implements OnModuleInit {
           approvedOvertimeHours,
           assignedHours: scheduledHours + approvedOvertimeHours,
           overtimeRequestIds: approvedOvertime?.requestIds ?? [],
+          // Logged work time is rounded UP to 5-minute steps on the frontend timer so any
+          // nonzero effort is never credited as 0; round up defensively here too so older
+          // unrounded rows don't leak odd fractions or collapse to 0. 5-minute buckets
+          // (1/12h) don't divide evenly in decimal (e.g. 20min = 0.3333...h), so the
+          // result is also rounded to 2 decimal places — well within half a 5-minute
+          // bucket of precision, so it always reconstructs to the correct minute count.
+          workedHours:
+            workedSeconds > 0 ? Math.round(((Math.ceil(workedSeconds / 300) * 300) / 3600) * 100) / 100 : 0,
         });
       });
 
@@ -1520,11 +1665,21 @@ export class SchedulerAssignmentsService implements OnModuleInit {
         })
         .filter((row): row is SchedulerAssignmentDto => row != null);
 
+      // Detached split-part fragments (Rule 5a) are week-independent — a designer might
+      // detach a part while viewing week N, but the sidebar must keep showing it while
+      // browsing any other week too. So this isn't filtered by weekStartDate at all,
+      // unlike every other query in this method.
+      const fragments = await this.prisma.schedulerTaskFragment.findMany({
+        where: designerId ? { sourceDesignerId: designerId } : {},
+        orderBy: { createdAt: 'asc' },
+      });
+
       return [
         ...mappedRows,
         ...virtualRows,
         ...this.buildLeaveSystemRows(approvedLeaves, weekStartDate, weekEndDate),
         ...this.buildRegularizationSystemRows(approvedRegularizations, weekStartDate, weekEndDate),
+        ...fragments.map((fragment) => this.mapFragmentRow(fragment)),
       ];
     } catch (err) {
       this.fail('Scheduler assignments query failed', err);
@@ -1685,6 +1840,83 @@ export class SchedulerAssignmentsService implements OnModuleInit {
     });
   }
 
+  /**
+   * Detaches ONE split part from its siblings (Rule 5a) — the opposite of Rule 5's
+   * "all parts move together" default. Only valid when at least one sibling part
+   * (same taskId) is still actively scheduled; if this is the last part, the caller
+   * should use the whole-task unassign/hold flow instead (PATCH /tasks/:id/status +
+   * DELETE /scheduler-assignments/task/:taskId), which is unchanged.
+   *
+   * The detached part becomes a SchedulerTaskFragment — its own row, independent of
+   * whatever happens to its former siblings — and the remaining active siblings for
+   * this taskId are renumbered so splitIndex/totalParts stay contiguous.
+   */
+  async detachAssignmentPart(assignmentId: string, status: 'UNASSIGNED' | 'ON_HOLD'): Promise<{ fragmentId: string }> {
+    return this.prisma.$transaction(async (tx) => {
+      const row = await tx.schedulerAssignment.findUnique({ where: { id: assignmentId } });
+      if (!row || !row.taskId) {
+        throw new NotFoundException('Scheduler assignment not found.');
+      }
+
+      const siblingCount = await tx.schedulerAssignment.count({
+        where: { taskId: row.taskId, id: { not: assignmentId } },
+      });
+      if (siblingCount === 0) {
+        throw new BadRequestException(
+          'This is the last scheduled part of this task — unassign/hold the whole task instead.',
+        );
+      }
+
+      const fragment = await tx.schedulerTaskFragment.create({
+        data: {
+          taskId: row.taskId,
+          parentId: row.parentId ?? row.taskId,
+          hours: row.assignedHours ?? new Prisma.Decimal(0),
+          status,
+          sourceDesignerId: row.designerId,
+          splitIndex: row.splitIndex,
+          totalParts: row.totalParts,
+        },
+      });
+
+      await tx.schedulerAssignment.delete({ where: { id: assignmentId } });
+
+      const remaining = await tx.schedulerAssignment.findMany({
+        where: { taskId: row.taskId },
+        orderBy: [{ weekStartDate: 'asc' }, { dayIndex: 'asc' }],
+      });
+      if (remaining.length <= 1) {
+        if (remaining.length === 1) {
+          await tx.schedulerAssignment.update({
+            where: { id: remaining[0].id },
+            data: { splitIndex: null, totalParts: null, parentId: null },
+          });
+        }
+      } else {
+        const total = remaining.length;
+        await Promise.all(
+          remaining.map((part, idx) =>
+            tx.schedulerAssignment.update({
+              where: { id: part.id },
+              data: { splitIndex: idx + 1, totalParts: total, parentId: part.parentId ?? row.taskId },
+            }),
+          ),
+        );
+      }
+
+      return { fragmentId: fragment.id };
+    });
+  }
+
+  /** Flips an already-detached fragment (Rule 5a) between UNASSIGNED and ON_HOLD in place — it has no grid placement or siblings to consider. */
+  async updateFragmentStatus(fragmentId: string, status: 'UNASSIGNED' | 'ON_HOLD'): Promise<void> {
+    const fragment = await this.prisma.schedulerTaskFragment.findUnique({ where: { id: fragmentId } });
+    if (!fragment) {
+      throw new NotFoundException('Scheduler task fragment not found.');
+    }
+    await this.prisma.schedulerTaskFragment.update({ where: { id: fragmentId }, data: { status } });
+  }
+
   async saveWeekSnapshot(weekStart: string, userId: string, dto: SaveSchedulerWeekDto) {
     const { weekStartDate, weekEndDate } = this.parseWeekStart(weekStart);
     this.validateAssignments(dto);
@@ -1697,9 +1929,18 @@ export class SchedulerAssignmentsService implements OnModuleInit {
       const [schedulableUsers, tasks, previousRows, weekRows, approvedLeaves] = await Promise.all([
         tx.user.findMany({
           where: { id: { in: designerIds }, role: { name: { in: [UserRole.DESIGNER, UserRole.HOD] } } },
-          select: { id: true },
+          select: { id: true, fullName: true },
         }),
-        tx.task.findMany({ where: { id: { in: taskIds } }, select: { id: true, status: true, assigneeId: true } }),
+        tx.task.findMany({
+          where: { id: { in: taskIds } },
+          select: {
+            id: true,
+            status: true,
+            assigneeId: true,
+            projectId: true,
+            project: { select: { technicalHead: true, teamLead: true, subTeamLead: true, designers: true } },
+          },
+        }),
         tx.schedulerAssignment.findMany({ where: { weekStartDate } }),
         // UPDLOCK + ROWLOCK: prevents two concurrent transactions from both passing the
         // version check before either commits, which would cause a silent lost update.
@@ -1739,6 +1980,8 @@ export class SchedulerAssignmentsService implements OnModuleInit {
       if (tasks.length !== taskIds.length) {
         throw new BadRequestException('One or more taskId values are invalid.');
       }
+
+      this.assertDesignerEligibleForProjectTeam(dto.assignments, tasks, schedulableUsers, previousRows);
 
       const existing = week ??
         (await tx.schedulerWeek.create({
@@ -1843,6 +2086,13 @@ export class SchedulerAssignmentsService implements OnModuleInit {
 
       await tx.schedulerAssignment.deleteMany({ where: { weekStartDate } });
 
+      // Fragments (Rule 5a — a single detached split part) that this save resolves,
+      // e.g. because the fragment card was dragged back onto the grid and is now part
+      // of dto.assignments. Deleted here so the sidebar doesn't keep a stale duplicate.
+      if (dto.resolvedFragmentIds?.length) {
+        await tx.schedulerTaskFragment.deleteMany({ where: { id: { in: dto.resolvedFragmentIds } } });
+      }
+
       if (dto.assignments.length > 0) {
         await tx.schedulerAssignment.createMany({
           data: dto.assignments.map((a) => ({
@@ -1858,6 +2108,7 @@ export class SchedulerAssignmentsService implements OnModuleInit {
             weekEndDate,
             notes: a.notes ?? null,
             isLocked: false,
+            isPinned: a.isPinned ?? false,
             assignedBy: userId,
           })),
         });
