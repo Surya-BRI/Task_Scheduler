@@ -1,6 +1,8 @@
 import { Module } from '@nestjs/common';
+import { APP_GUARD } from '@nestjs/core';
 import { ConfigModule } from '@nestjs/config';
 import { ScheduleModule } from '@nestjs/schedule';
+import { ThrottlerGuard, ThrottlerModule } from '@nestjs/throttler';
 import { PrismaModule } from './prisma/prisma.module';
 import { HealthModule } from './health/health.module';
 import { AuthModule } from './auth/auth.module';
@@ -31,6 +33,10 @@ import { DeadlineAlertsModule } from './deadline-alerts/deadline-alerts.module';
       load: [configuration],
       validationSchema: envValidationSchema,
     }),
+    // Only the default throttler is global. Named limits (login, upload, etc.) are
+    // applied per-route via @Throttle({ default: ... }) — extra names in forRoot()
+    // would otherwise apply to every endpoint and cap the whole API at the lowest limit.
+    ThrottlerModule.forRoot([{ name: 'default', ttl: 60_000, limit: 100 }]),
     ScheduleModule.forRoot(),
     PrismaModule,
     HealthModule,
@@ -50,6 +56,12 @@ import { DeadlineAlertsModule } from './deadline-alerts/deadline-alerts.module';
     ChatModule,
     NotificationsModule,
     DeadlineAlertsModule,
+  ],
+  providers: [
+    {
+      provide: APP_GUARD,
+      useClass: ThrottlerGuard,
+    },
   ],
 })
 export class AppModule {}

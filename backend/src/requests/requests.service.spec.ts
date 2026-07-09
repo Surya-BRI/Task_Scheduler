@@ -418,7 +418,7 @@ describe('RequestsService', () => {
 
       await service.review(leaveId, hodId, UserRole.HOD, { status: 'APPROVED' });
 
-      expect(mockSchedulerAssignments.rescheduleForApprovedLeave).toHaveBeenCalledWith(approvedLeave, hodId);
+      expect(mockSchedulerAssignments.rescheduleForApprovedLeave).toHaveBeenCalledWith(pendingLeave, hodId);
       expect(mockPrisma.schedulerWeek.upsert).toHaveBeenCalled();
     });
 
@@ -502,7 +502,7 @@ describe('RequestsService', () => {
         expect.objectContaining({
           id: leaveId,
           userId: designerId,
-          status: 'REVOKED',
+          status: 'APPROVED',
         }),
         hodId,
       );

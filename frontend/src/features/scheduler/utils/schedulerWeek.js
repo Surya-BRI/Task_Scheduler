@@ -15,6 +15,14 @@ export const getWeekDays = (baseDate) => {
   return dates;
 };
 
+export function isPastDayIndex(dayIndex, weekAnchorDate, today = new Date()) {
+  const weekDays = getWeekDays(weekAnchorDate);
+  const target = weekDays[dayIndex];
+  if (!target) return false;
+  const strip = (d) => new Date(d.getFullYear(), d.getMonth(), d.getDate()).getTime();
+  return strip(target) < strip(today);
+}
+
 export const formatSchedulerDateRangeText = (weekDates) => {
   if (!weekDates || weekDates.length === 0) return "";
   const start = weekDates[0];

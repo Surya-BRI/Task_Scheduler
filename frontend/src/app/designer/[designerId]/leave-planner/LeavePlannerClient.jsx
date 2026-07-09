@@ -448,7 +448,7 @@ export default function LeavePlannerClient() {
   useEffect(() => {
     import("@/lib/mock-auth").then(({ getSession }) => {
       const session = getSession();
-      if (session?.role === "HOD") setIsHOD(true);
+      if (session?.role === "HOD" || session?.role === "SALESPERSON") setIsHOD(true);
       if (session?.name) setSessionName(session.name);
       if (session) setSessionUser(session);
     });

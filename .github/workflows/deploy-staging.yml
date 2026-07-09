@@ -1,0 +1,46 @@
+name: Deploy Staging
+
+on:
+  workflow_dispatch:
+    inputs:
+      run_migrations:
+        description: Run prisma migrate deploy before restart
+        required: false
+        default: 'true'
+        type: choice
+        options:
+          - 'true'
+          - 'false'
+
+jobs:
+  deploy:
+    runs-on: ubuntu-latest
+    environment: staging
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Validate build artifacts compile
+        uses: actions/setup-node@v4
+        with:
+          node-version: 20
+          cache: npm
+          cache-dependency-path: package-lock.json
+
+      - run: npm ci
+      - run: npm run prisma:generate --workspace backend
+      - run: npm run build --workspace backend
+      - run: npm run build --workspace frontend
+        env:
+          NEXT_PUBLIC_API_BASE_URL: /api/v1
+          API_PROXY_TARGET: ${{ secrets.STAGING_API_ORIGIN }}
+
+      - name: Deployment checklist
+        run: |
+          echo "Build verified. Deploy to staging host using DEPLOYMENT_RUNBOOK.md."
+          echo "Suggested backend steps:"
+          echo "  npm run prisma:migrate:deploy --workspace backend  # when run_migrations=${{ inputs.run_migrations }}"
+          echo "  pm2 restart task-sc"
+          echo "Suggested post-deploy checks:"
+          echo "  curl -sf \$STAGING_ORIGIN/api/v1/health"
+          echo "  curl -sf \$STAGING_ORIGIN/api/v1/health/ready"

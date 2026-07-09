@@ -17,6 +17,7 @@ import {
 } from '@nestjs/common';
 import { FileInterceptor, FilesInterceptor } from '@nestjs/platform-express';
 import { memoryStorage } from 'multer';
+import { Throttle } from '@nestjs/throttler';
 import { TasksService } from './tasks.service';
 import { CreateTaskDto } from './dto/create-task.dto';
 import { CreateExtendedTaskDto } from './dto/create-extended-task.dto';
@@ -25,6 +26,7 @@ import { AssignTaskDto } from './dto/assign-task.dto';
 import { UpdateTaskStatusDto } from './dto/update-task-status.dto';
 import { SubmitWorkDto } from './dto/submit-work.dto';
 import { SaveTimerStateDto } from './dto/save-timer-state.dto';
+import { FreezeDraftWorkSessionDto } from './dto/freeze-draft-work-session.dto';
 import { JwtAuthGuard } from '../common/guards/jwt-auth.guard';
 import { RolesGuard } from '../common/guards/roles.guard';
 import { Roles } from '../common/decorators/roles.decorator';
@@ -37,22 +39,23 @@ import type { JwtPayload } from '../common/types/jwt-payload.type';
 export class TasksController {
   constructor(private readonly tasksService: TasksService) {}
 
-  /** POST /tasks — HOD/Admin/PM */
+  /** POST /tasks — HOD/Sales department managers */
   @Post()
-  @Roles(UserRole.HOD)
+  @Roles(UserRole.HOD, UserRole.SALESPERSON)
   create(@CurrentUser() user: JwtPayload, @Body() dto: CreateTaskDto) {
     return this.tasksService.create(user.sub, dto);
   }
 
-  /** POST /tasks/extended — HOD/Admin/PM */
+  /** POST /tasks/extended — HOD/Sales department managers */
   @Post('extended')
-  @Roles(UserRole.HOD)
+  @Roles(UserRole.HOD, UserRole.SALESPERSON)
   createExtended(@CurrentUser() user: JwtPayload, @Body() dto: CreateExtendedTaskDto) {
     return this.tasksService.createExtended(user.sub, dto);
   }
 
   @Post('upload-file')
   @Roles(UserRole.HOD, UserRole.SALESPERSON)
+  @Throttle({ default: { limit: 10, ttl: 60_000 } })
   @UseInterceptors(
     FileInterceptor('file', {
       storage: memoryStorage(),
@@ -73,26 +76,30 @@ export class TasksController {
     @CurrentUser() user: JwtPayload,
     @Query('projectId') projectId?: string,
     @Query('status') status?: string,
+    @Query('excludeStatuses') excludeStatuses?: string,
     @Query('priority') priority?: string,
     @Query('assigneeId') assigneeId?: string,
     @Query('search') search?: string,
     @Query('page', new DefaultValuePipe(1), ParseIntPipe) page = 1,
     @Query('limit', new DefaultValuePipe(20), ParseIntPipe) limit = 20,
+    @Query('salesQueue') salesQueue?: string,
   ) {
     return this.tasksService.findAll(user.sub, user.role, {
       projectId,
       status,
+      excludeStatuses,
       priority,
       assigneeId,
       search,
       page,
       limit,
+      salesQueue: salesQueue === 'true' || salesQueue === '1',
     });
   }
 
   /** GET /tasks/summary — dashboard widget */
   @Get('next-revision')
-  @Roles(UserRole.HOD, UserRole.DESIGNER)
+  @Roles(UserRole.HOD, UserRole.DESIGNER, UserRole.SALESPERSON)
   getNextRevision(
     @Query('projectId') projectId?: string,
     @Query('projectNo') projectNo?: string,
@@ -103,9 +110,16 @@ export class TasksController {
   }
 
   @Get('summary')
-  @Roles(UserRole.HOD, UserRole.DESIGNER)
+  @Roles(UserRole.HOD, UserRole.DESIGNER, UserRole.SALESPERSON)
   getSummary(@CurrentUser() user: JwtPayload) {
     return this.tasksService.getStatusSummary(user.sub, user.role);
+  }
+
+  /** GET /tasks/scheduler-queue — sidebar backlog (unassigned + on-hold only). */
+  @Get('scheduler-queue')
+  @Roles(UserRole.HOD)
+  findSchedulerQueue() {
+    return this.tasksService.findSchedulerQueue();
   }
 
   /** GET /tasks/:id */
@@ -115,16 +129,16 @@ export class TasksController {
     return this.tasksService.findOne(id, user.sub, user.role);
   }
 
-  /** PATCH /tasks/:id — HOD/Admin/PM */
+  /** PATCH /tasks/:id — HOD/Sales department managers */
   @Patch(':id')
-  @Roles(UserRole.HOD)
+  @Roles(UserRole.HOD, UserRole.SALESPERSON)
   update(@Param('id') id: string, @Body() dto: UpdateTaskDto) {
     return this.tasksService.update(id, dto);
   }
 
-  /** PATCH /tasks/:id/assign — HOD/Admin */
+  /** PATCH /tasks/:id/assign — HOD/Sales department managers */
   @Patch(':id/assign')
-  @Roles(UserRole.HOD)
+  @Roles(UserRole.HOD, UserRole.SALESPERSON)
   assign(@Param('id') id: string, @CurrentUser() user: JwtPayload, @Body() dto: AssignTaskDto) {
     return this.tasksService.assign(id, user.sub, dto);
   }
@@ -165,9 +179,20 @@ export class TasksController {
     return this.tasksService.saveTimerState(id, user.sub, dto);
   }
 
+  /** POST /tasks/:id/freeze-draft-session — finalize draft timer before scheduler handoff */
+  @Post(':id/freeze-draft-session')
+  @Roles(UserRole.HOD)
+  freezeDraftWorkSession(
+    @Param('id') id: string,
+    @Body() dto: FreezeDraftWorkSessionDto,
+  ) {
+    return this.tasksService.freezeDraftWorkSession(id, dto.designerId);
+  }
+
   /** POST /tasks/:id/submit-work — all authenticated roles (designer submits their timer work) */
   @Post(':id/submit-work')
   @Roles(UserRole.HOD, UserRole.DESIGNER)
+  @Throttle({ default: { limit: 10, ttl: 60_000 } })
   @UseInterceptors(
     FilesInterceptor('files', 10, {
       storage: memoryStorage(),
@@ -183,9 +208,9 @@ export class TasksController {
     return this.tasksService.submitWork(id, user.sub, dto, files ?? []);
   }
 
-  /** DELETE /tasks/:id — HOD only */
+  /** DELETE /tasks/:id — HOD/Sales department managers */
   @Delete(':id')
-  @Roles(UserRole.HOD)
+  @Roles(UserRole.HOD, UserRole.SALESPERSON)
   remove(@Param('id') id: string) {
     return this.tasksService.remove(id);
   }

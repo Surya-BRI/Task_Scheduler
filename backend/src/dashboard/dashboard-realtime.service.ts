@@ -25,7 +25,25 @@ export type DashboardRealtimeEvent =
 export interface DashboardRefreshPayload {
   event: DashboardRealtimeEvent;
   at: string;
+  /** Monday YYYY-MM-DD for scheduler-scoped events. */
+  weekStart?: string;
+  /** Scheduler week version after the change. */
+  version?: number;
+  /** User who made the change — clients can ignore self-echoes via version. */
+  updatedBy?: string | null;
+  /** Task ids touched by a scheduler save or task status event. */
+  changedTaskIds?: string[];
+  /** Weeks affected by leave reschedule / approval spanning multiple Mondays. */
+  affectedWeekStarts?: string[];
+  /** Primary task id for task_* events. */
+  taskId?: string;
+  /** New task status for task_* events (API form, e.g. ON_HOLD). */
+  status?: string;
 }
+
+export type DashboardRefreshDetails = Partial<
+  Omit<DashboardRefreshPayload, 'event' | 'at'>
+>;
 
 export interface ChatterRefreshPayload {
   event: 'chatter_post_created' | 'chatter_post_updated' | 'chatter_post_deleted' | 'chatter_comment_created' | 'chatter_comment_deleted';
@@ -41,7 +59,7 @@ type DashboardEmitter = {
   emitChatterRefresh: (payload: ChatterRefreshPayload) => void;
 };
 
-const OVERVIEW_ROLES: UserRole[] = [UserRole.HOD];
+const OVERVIEW_ROLES: UserRole[] = [UserRole.HOD, UserRole.SALESPERSON];
 
 @Injectable()
 export class DashboardRealtimeService {
@@ -52,10 +70,10 @@ export class DashboardRealtimeService {
     this.emitter = emitter;
   }
 
-  notifyOverviewRefresh(event: DashboardRealtimeEvent) {
+  notifyOverviewRefresh(event: DashboardRealtimeEvent, details: DashboardRefreshDetails = {}) {
     if (!this.emitter) return;
     try {
-      this.emitter.emitDashboardRefresh({ event, at: new Date().toISOString() });
+      this.emitter.emitDashboardRefresh({ event, at: new Date().toISOString(), ...details });
     } catch (err) {
       this.logger.warn(`Failed to emit dashboard refresh (${event}): ${(err as Error).message}`);
     }

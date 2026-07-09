@@ -1,27 +1,17 @@
 'use client';
 
 import { useState } from 'react';
-import { useRouter } from 'next/navigation';
+import { useRouter, useSearchParams } from 'next/navigation';
 import { Eye, EyeOff, Lock, Mail, ShieldCheck } from 'lucide-react';
-import { getHomeRoute } from '@/lib/mock-auth';
+import { getHomeRoute, setSession } from '@/lib/mock-auth';
 import { buildSessionForUser } from '@/lib/designers';
 import { loginApi } from '@/features/auth/services/auth.api';
-import { setAccessToken } from '@/lib/auth-token';
+import { getDemoAccounts } from '@/config/demoUsers';
 
-
-const DEMO_ACCOUNTS = [
-  { label: 'HOD — Sarah Mitchell', email: 'sarah.mitchell@bluerhine.com', password: 'hod123', badge: 'HOD', color: 'bg-violet-100 text-violet-700 border-violet-200' },
-  { label: 'HOD — James Carter', email: 'james.carter@bluerhine.com', password: 'hod456', badge: 'HOD', color: 'bg-purple-100 text-purple-700 border-purple-200' },
-  { label: 'HOD — Priya Sharma', email: 'priya.sharma@bluerhine.com', password: 'hod789', badge: 'HOD', color: 'bg-fuchsia-100 text-fuchsia-700 border-fuchsia-200' },
-  { label: 'QS — Ojas', email: 'qs.team@bluerhine.com', password: 'qs1234', badge: 'QS', color: 'bg-amber-100 text-amber-700 border-amber-200' },
-  { label: 'Sales — Rehman', email: 'rehman@bluerhine.com', password: 'rehman123', badge: 'Sales', color: 'bg-orange-100 text-orange-700 border-orange-200' },
-  { label: 'Designer — Alex Johnson', email: 'alex.johnson@bluerhine.com', password: 'alex123', badge: 'Designer', color: 'bg-blue-100 text-blue-700 border-blue-200' },
-  { label: 'Designer — Alexander Allen', email: 'alexander.allen@bluerhine.com', password: 'alex123', badge: 'Designer', color: 'bg-cyan-100 text-cyan-700 border-cyan-200' },
-  { label: 'Designer — Benjamin Harris', email: 'benjamin.harris@bluerhine.com', password: 'ben123', badge: 'Designer', color: 'bg-emerald-100 text-emerald-700 border-emerald-200' },
-];
-
-export function LoginForm() {
+export function LoginForm({ showDemoLogins = false }) {
   const router = useRouter();
+  const searchParams = useSearchParams();
+  const sessionExpired = searchParams.get('expired') === '1';
   const [email, setEmail] = useState('');
   const [password, setPassword] = useState('');
   const [showPassword, setShowPassword] = useState(false);
@@ -36,13 +26,8 @@ export function LoginForm() {
     try {
       await new Promise((r) => setTimeout(r, 400));
       const response = await loginApi(email, password);
-      // Persist JWT for API calls
-      setAccessToken(response.accessToken);
-      // Persist session profile to localStorage so mock-auth helpers still work
       const session = buildSessionForUser(response.user);
-      if (typeof window !== 'undefined') {
-        localStorage.setItem('br_session', JSON.stringify(session));
-      }
+      setSession(session);
       router.push(getHomeRoute(session));
     } catch (err) {
       setError(err.message || 'Login failed. Check your credentials.');
@@ -101,6 +86,12 @@ export function LoginForm() {
         </div>
       </div>
 
+      {sessionExpired && !error && (
+        <div className="flex items-center gap-2 rounded-lg bg-amber-50 border border-amber-200 px-3 py-2.5 text-sm text-amber-800">
+          Your session expired. Please sign in again.
+        </div>
+      )}
+
       {error && (
         <div className="flex items-center gap-2 rounded-lg bg-red-50 border border-red-200 px-3 py-2.5 text-sm text-red-700">
           <ShieldCheck className="h-4 w-4 shrink-0" />
@@ -121,11 +112,11 @@ export function LoginForm() {
         ) : 'Sign In'}
       </button>
 
-      {/* Demo Accounts */}
+      {showDemoLogins && (
       <div className="pt-3 border-t border-slate-100">
         <p className="text-xs font-semibold text-slate-400 uppercase tracking-wider mb-2.5">Quick Demo Logins</p>
         <div className="grid grid-cols-1 gap-1.5">
-          {DEMO_ACCOUNTS.map((account) => (
+          {getDemoAccounts().map((account) => (
             <button
               key={account.email}
               type="button"
@@ -140,6 +131,7 @@ export function LoginForm() {
           ))}
         </div>
       </div>
+      )}
     </form>
   );
 }

@@ -15,6 +15,17 @@ import { SaveTimerStateDto } from './dto/save-timer-state.dto';
 import { DashboardRealtimeService } from '../dashboard/dashboard-realtime.service';
 import { COMPLETED_STATUS_FILTER } from '../dashboard/task-status-buckets.util';
 import { NotificationsService } from '../notifications/notifications.service';
+import {
+  mapSchedulerTaskSummary,
+  SCHEDULER_TASK_SUMMARY_SELECT,
+  schedulerQueueWhere,
+  type SchedulerTaskSummaryDto,
+} from './scheduler-task-summary.util';
+import {
+  effectiveWorkSessionSeconds,
+  roundWorkSecondsUpTo5Min,
+  workedHoursFromSeconds,
+} from '../common/utils/task-work-session-time.util';
 
 const TASK_SELECT = {
   id: true,
@@ -112,6 +123,29 @@ const TASK_SELECT = {
   updatedAt: true,
 };
 
+const PROJECT_LOOKUP_SELECT = {
+  id: true,
+  projectNo: true,
+  name: true,
+  category: true,
+  businessUnit: true,
+  description: true,
+  status: true,
+  salesPerson: true,
+  technicalHead: true,
+  teamLead: true,
+  subTeamLead: true,
+  designers: true,
+  createdById: true,
+  createdAt: true,
+  updatedAt: true,
+};
+
+type ProjectLookup = Omit<
+  Prisma.ProjectGetPayload<{ select: typeof PROJECT_LOOKUP_SELECT }>,
+  'designers'
+> & { designers: string | null };
+
 const TASK_LIST_SELECT = {
   id: true,
   taskNo: true,
@@ -136,7 +170,19 @@ const TASK_LIST_SELECT = {
   reworkLinkName: true,
   previousRevisionTaskId: true,
   projectId: true,
-  project: { select: { id: true, name: true, projectNo: true, category: true, salesPerson: true } },
+  project: {
+    select: {
+      id: true,
+      name: true,
+      projectNo: true,
+      category: true,
+      salesPerson: true,
+      technicalHead: true,
+      teamLead: true,
+      subTeamLead: true,
+      designers: true,
+    },
+  },
   assigneeId: true,
   assignee: { select: { id: true, fullName: true, email: true } },
   taskDesigners: { select: { designer: { select: { id: true, fullName: true, email: true } } } },
@@ -151,11 +197,15 @@ const TASK_LIST_SELECT = {
 export type TaskFilters = {
   projectId?: string;
   status?: string;
+  /** Comma-separated statuses to exclude, e.g. callers that only need outstanding work. */
+  excludeStatuses?: string;
   priority?: string;
   assigneeId?: string;
   search?: string;
   page?: number;
   limit?: number;
+  /** When true, SALESPERSON list is limited to SALES_REVIEW (sales review queue). */
+  salesQueue?: boolean;
 };
 
 export type NextRevisionQuery = {
@@ -315,20 +365,21 @@ export class TasksService {
     return { projectId, opNo, designType, revisionCode };
   }
 
-  private async resolveProjectForCreate(task: { projectId?: string; projectNo?: string; opNo?: string }) {
-    const tryFindByProjectNo = async (raw: string | undefined) => {
+  private async resolveProjectForCreate(task: { projectId?: string; projectNo?: string; opNo?: string }): Promise<ProjectLookup> {
+    const tryFindByProjectNo = async (raw: string | undefined): Promise<ProjectLookup | null> => {
       const value = (raw ?? '').trim();
       if (!value) return null;
 
       const exact = await this.prisma.project.findFirst({
         where: { projectNo: value },
+        select: PROJECT_LOOKUP_SELECT,
       });
       if (exact) return exact;
 
       const normalized = value.toLowerCase().replace(/[\s-]/g, '');
       const candidates = await this.prisma.project.findMany({
         where: { projectNo: { not: null } },
-        select: { id: true, projectNo: true, name: true, category: true, businessUnit: true, description: true, status: true, salesPerson: true, createdById: true, createdAt: true, updatedAt: true },
+        select: PROJECT_LOOKUP_SELECT,
         take: 5000,
       });
       return (
@@ -360,7 +411,7 @@ export class TasksService {
       businessUnit?: string;
     },
     designType: 'Retail' | 'Project',
-  ) {
+  ): Promise<ProjectLookup> {
     const requestedName = (task.projectName ?? '').trim();
     if (!requestedName) {
       throw new BadRequestException('projectName is required when creating task from project context');
@@ -372,6 +423,7 @@ export class TasksService {
         return this.prisma.project.update({
           where: { id: existing.id },
           data: { name: requestedName },
+          select: PROJECT_LOOKUP_SELECT,
         });
       }
       return existing;
@@ -396,6 +448,7 @@ export class TasksService {
         status: 'ACTIVE',
         salesPerson: null,
       },
+      select: PROJECT_LOOKUP_SELECT,
     });
   }
 
@@ -515,6 +568,28 @@ export class TasksService {
     }
 
     const project = await this.resolveOrCreateProjectForExtended(dto.task, dto.designType);
+
+    if (dto.designType === 'Project') {
+      const teamIncomplete =
+        !project.technicalHead?.trim() ||
+        !project.teamLead?.trim() ||
+        !project.subTeamLead?.trim() ||
+        !project.designers?.trim();
+      if (teamIncomplete) {
+        throw new BadRequestException(
+          'Project team must be assigned before creating tasks. Set Technical Head, Team Lead, Sub Team Lead and at least one Designer first.',
+        );
+      }
+
+      const qsStatusRows = await this.prisma.$queryRaw<Array<{ status: string }>>(Prisma.sql`
+        SELECT TOP 1 [status] FROM [dbo].[ErpTSProjectQsStatus] WHERE [projectId] = ${project.id}
+      `);
+      const qsStatus = (qsStatusRows[0]?.status ?? '').trim().toLowerCase();
+      if (qsStatus !== 'completed') {
+        throw new BadRequestException('QS must submit the sign register first.');
+      }
+    }
+
     await this.assignProjectToQsTeam(project.id, userId, {
       name: project.name,
       projectNo: project.projectNo,
@@ -673,7 +748,7 @@ export class TasksService {
         this.dashboardRealtime?.notifyUserNotificationRefresh(created.assigneeId);
 
         const hodUsers = await this.prisma.user.findMany({
-          where: { role: { name: { in: ['HOD', 'ADMIN'] } } },
+          where: { role: { name: { in: ['HOD', 'SALESPERSON', 'ADMIN'] } } },
           select: { id: true },
         });
         const hodMsg = `${created.taskNo} — ${created.project?.name ?? 'Unknown Project'} created and assigned to ${created.assignee?.fullName ?? 'a designer'}.`;
@@ -827,7 +902,7 @@ export class TasksService {
     // Log activity + notify for each created task
     const hodUsers = createdTasks.some((t) => t?.assigneeId)
       ? await this.prisma.user.findMany({
-          where: { role: { name: { in: ['HOD', 'ADMIN'] } } },
+          where: { role: { name: { in: ['HOD', 'SALESPERSON', 'ADMIN'] } } },
           select: { id: true },
         })
       : [];
@@ -903,11 +978,12 @@ export class TasksService {
   }
 
   async findAll(userId: string, role: UserRole, filters: TaskFilters = {}) {
-    const { projectId, status, priority, assigneeId, search, page = 1, limit = 20 } = filters;
+    const { projectId, status, excludeStatuses, priority, assigneeId, search, page = 1, limit = 20, salesQueue = false } = filters;
     const skip = (page - 1) * limit;
 
-    // Role-based base filters
-    const baseWhere: Record<string, unknown> = role === UserRole.SALESPERSON ? { status: 'SALES_REVIEW' } : {};
+    // Role-based base filters — preserve sales review queue when salesQueue=true
+    const baseWhere: Record<string, unknown> =
+      role === UserRole.SALESPERSON && salesQueue ? { status: 'SALES_REVIEW' } : {};
     const addAndFilter = (condition: Record<string, unknown>) => {
       baseWhere.AND = [...((baseWhere.AND as Record<string, unknown>[] | undefined) ?? []), condition];
     };
@@ -938,6 +1014,13 @@ export class TasksService {
 
     if (projectId) baseWhere.projectId = projectId;
     if (status) baseWhere.status = this.toDbTaskStatus(status);
+    if (excludeStatuses) {
+      const excluded = excludeStatuses
+        .split(',')
+        .map((s) => this.toDbTaskStatus(s))
+        .filter(Boolean);
+      if (excluded.length > 0) addAndFilter({ status: { notIn: excluded } });
+    }
     if (priority) baseWhere.priority = priority;
     if (assigneeId) {
       addAndFilter({
@@ -976,6 +1059,16 @@ export class TasksService {
     };
   }
 
+  /** Sidebar backlog only — unassigned + on-hold, excluding completed. */
+  async findSchedulerQueue(): Promise<{ data: SchedulerTaskSummaryDto[] }> {
+    const rows = await this.prisma.task.findMany({
+      where: schedulerQueueWhere(),
+      select: SCHEDULER_TASK_SUMMARY_SELECT,
+      orderBy: { createdAt: 'desc' },
+    });
+    return { data: rows.map((task) => mapSchedulerTaskSummary(task)) };
+  }
+
   async findOne(id: string, userId?: string, role?: UserRole) {
     if (!this.isUuid(id)) {
       throw new BadRequestException('Invalid task id');
@@ -984,7 +1077,50 @@ export class TasksService {
     if (!task) throw new NotFoundException('Task not found');
     await this.assertQsTaskAccess(id, userId, role);
     const withUrls = await this.withSignedAttachmentUrls(task);
-    return this.normalizeTaskForApi(withUrls);
+    const schedulerHours = await this.getSchedulerHoursForTask(id, userId);
+    return { ...this.normalizeTaskForApi(withUrls), schedulerHours };
+  }
+
+  private async getSchedulerHoursForTask(taskId: string, viewerUserId?: string) {
+    const rows = await this.prisma.schedulerAssignment.findMany({
+      where: { taskId },
+      select: {
+        designerId: true,
+        assignedHours: true,
+        designer: { select: { fullName: true } },
+      },
+    });
+
+    const partsByDesigner = new Map<string, { designerId: string; designerName: string; hours: number }>();
+    for (const row of rows) {
+      if (!row.designerId) continue;
+      const hours = Number(row.assignedHours) || 0;
+      if (hours <= 0) continue;
+      const existing = partsByDesigner.get(row.designerId);
+      if (existing) {
+        existing.hours += hours;
+      } else {
+        partsByDesigner.set(row.designerId, {
+          designerId: row.designerId,
+          designerName: row.designer?.fullName?.trim() || 'Designer',
+          hours,
+        });
+      }
+    }
+
+    const parts = Array.from(partsByDesigner.values())
+      .map((part) => ({ ...part, hours: Math.round(part.hours * 100) / 100 }))
+      .filter((part) => part.hours > 0)
+      .sort((a, b) => b.hours - a.hours);
+
+    const totalHours = Math.round(parts.reduce((sum, part) => sum + part.hours, 0) * 100) / 100;
+    const myPart = viewerUserId ? parts.find((part) => part.designerId === viewerUserId) : undefined;
+
+    return {
+      totalHours,
+      myHours: myPart?.hours ?? null,
+      parts,
+    };
   }
 
   async update(id: string, dto: UpdateTaskDto) {
@@ -1067,7 +1203,10 @@ export class TasksService {
     });
 
     if (existing.assigneeId && existing.assigneeId !== dto.assigneeId) {
-      this.dashboardRealtime?.notifyOverviewRefresh('task_reassigned');
+      this.dashboardRealtime?.notifyOverviewRefresh('task_reassigned', {
+        taskId: id,
+        changedTaskIds: [id],
+      });
     }
 
     const linkUrlAssign =
@@ -1076,7 +1215,7 @@ export class TasksService {
         : `/project-task-view/${id}`;
     const assignMessage = `${updatedTask.taskNo} — ${updatedTask.project?.name ?? 'Unknown Project'} has been assigned to ${assignee.fullName}`;
     const hodUsersAssign = await this.prisma.user.findMany({
-      where: { role: { name: { in: ['HOD', 'ADMIN'] } } },
+      where: { role: { name: { in: ['HOD', 'SALESPERSON', 'ADMIN'] } } },
       select: { id: true },
     });
     this.notificationsService
@@ -1197,9 +1336,17 @@ export class TasksService {
     });
 
     if (COMPLETED_STATUS_FILTER.includes(effectiveStatusApi)) {
-      this.dashboardRealtime?.notifyOverviewRefresh('task_completed');
+      this.dashboardRealtime?.notifyOverviewRefresh('task_completed', {
+        taskId: id,
+        status: effectiveStatusApi,
+        changedTaskIds: [id],
+      });
     } else {
-      this.dashboardRealtime?.notifyOverviewRefresh('task_status_changed');
+      this.dashboardRealtime?.notifyOverviewRefresh('task_status_changed', {
+        taskId: id,
+        status: effectiveStatusApi,
+        changedTaskIds: [id],
+      });
     }
 
     if (COMPLETED_STATUS_FILTER.includes(effectiveStatusApi)) {
@@ -1209,7 +1356,7 @@ export class TasksService {
           : `/project-task-view/${id}`;
       const statusMessage = `${(updatedTask as any).taskNo} — ${(updatedTask as any).project?.name ?? 'Unknown Project'} status changed to ${effectiveStatusApi}`;
       const hodUsersStatus = await this.prisma.user.findMany({
-        where: { role: { name: { in: ['HOD', 'ADMIN'] } } },
+        where: { role: { name: { in: ['HOD', 'SALESPERSON', 'ADMIN'] } } },
         select: { id: true },
       });
       if ((updatedTask as any).assigneeId) {
@@ -1499,7 +1646,7 @@ export class TasksService {
 
     // Notify HODs
     const hodUsers = await this.prisma.user.findMany({
-      where: { role: { name: { in: ['HOD', 'ADMIN'] } } },
+      where: { role: { name: { in: ['HOD', 'SALESPERSON', 'ADMIN'] } } },
       select: { id: true },
     });
     const taskLink = designType?.toLowerCase() === 'retail'
@@ -1610,6 +1757,7 @@ export class TasksService {
             durationSeconds: dto.durationSeconds,
             submissionLink: dto.submissionLink?.trim() || null,
             pauseLog: dto.pauseLog || draft.pauseLog || null,
+            runStartedAt: null,
             status: 'Submitted',
             submittedAt: new Date(),
           },
@@ -1726,7 +1874,7 @@ export class TasksService {
             : 'Designer');
         const submitMsg = `${submittedTask.taskNo} — ${submittedTask.project?.name ?? 'Unknown Project'} work submitted by ${submitterName}. Ready for review.`;
         const hodUsers = await this.prisma.user.findMany({
-          where: { role: { name: { in: ['HOD', 'ADMIN'] } } },
+          where: { role: { name: { in: ['HOD', 'SALESPERSON', 'ADMIN'] } } },
           select: { id: true },
         });
         for (const hod of hodUsers) {
@@ -1775,7 +1923,21 @@ export class TasksService {
       orderBy: { createdAt: 'desc' },
     });
     if (!draft) return null;
-    return { accumulatedSeconds: draft.durationSeconds, pauseLog: draft.pauseLog ?? null };
+    return {
+      accumulatedSeconds: draft.durationSeconds,
+      pauseLog: draft.pauseLog ?? null,
+      runStartedAt: draft.runStartedAt?.toISOString() ?? null,
+    };
+  }
+
+  private resolveRunStartedAtFromDto(dto: SaveTimerStateDto): Date | null | undefined {
+    if (!('runStartedAt' in dto)) return undefined;
+    if (dto.runStartedAt == null || dto.runStartedAt === '') return null;
+    const parsed = new Date(dto.runStartedAt);
+    if (Number.isNaN(parsed.getTime())) {
+      throw new BadRequestException('Invalid runStartedAt');
+    }
+    return parsed;
   }
 
   async saveTimerState(taskId: string, userId: string, dto: SaveTimerStateDto) {
@@ -1783,31 +1945,80 @@ export class TasksService {
     const task = await this.prisma.task.findUnique({ where: { id: taskId } });
     if (!task) throw new NotFoundException('Task not found');
 
-    const existing = await this.prisma.taskWorkSession.findFirst({
-      where: { taskId, designerId: userId, status: 'Draft' },
-    });
+    const runStartedAt = this.resolveRunStartedAtFromDto(dto);
 
-    if (existing) {
-      await this.prisma.taskWorkSession.update({
-        where: { id: existing.id },
+    return this.prisma.$transaction(async (tx) => {
+      const existing = await tx.taskWorkSession.findFirst({
+        where: { taskId, designerId: userId, status: 'Draft' },
+      });
+
+      if (existing) {
+        await tx.taskWorkSession.update({
+          where: { id: existing.id },
+          data: {
+            durationSeconds: dto.accumulatedSeconds,
+            pauseLog: dto.pauseLog ?? existing.pauseLog,
+            ...(runStartedAt !== undefined ? { runStartedAt } : {}),
+          },
+        });
+        return { sessionId: existing.id };
+      }
+
+      const created = await tx.taskWorkSession.create({
         data: {
+          taskId,
+          designerId: userId,
           durationSeconds: dto.accumulatedSeconds,
-          pauseLog: dto.pauseLog ?? existing.pauseLog,
+          pauseLog: dto.pauseLog ?? null,
+          runStartedAt: runStartedAt ?? null,
+          status: 'Draft',
         },
       });
-      return { sessionId: existing.id };
+      return { sessionId: created.id };
+    });
+  }
+
+  async freezeDraftWorkSession(taskId: string, designerId: string) {
+    if (!this.isUuid(taskId)) throw new BadRequestException('Invalid task id');
+    if (!this.isUuid(designerId)) throw new BadRequestException('Invalid designer id');
+
+    const task = await this.prisma.task.findUnique({ where: { id: taskId }, select: { id: true } });
+    if (!task) throw new NotFoundException('Task not found');
+
+    const draft = await this.prisma.taskWorkSession.findFirst({
+      where: { taskId, designerId, status: 'Draft' },
+      orderBy: { createdAt: 'desc' },
+    });
+
+    if (!draft) {
+      return {
+        workedSeconds: 0,
+        workedHours: 0,
+        frozen: false,
+        hadRunningTimer: false,
+      };
     }
 
-    const created = await this.prisma.taskWorkSession.create({
-      data: {
-        taskId,
-        designerId: userId,
-        durationSeconds: dto.accumulatedSeconds,
-        pauseLog: dto.pauseLog ?? null,
-        status: 'Draft',
-      },
-    });
-    return { sessionId: created.id };
+    const effectiveSeconds = effectiveWorkSessionSeconds(draft.durationSeconds, draft.runStartedAt);
+    const frozenSeconds = roundWorkSecondsUpTo5Min(effectiveSeconds);
+    const hadRunningTimer = draft.runStartedAt != null;
+
+    if (frozenSeconds !== draft.durationSeconds || hadRunningTimer) {
+      await this.prisma.taskWorkSession.update({
+        where: { id: draft.id },
+        data: {
+          durationSeconds: frozenSeconds,
+          runStartedAt: null,
+        },
+      });
+    }
+
+    return {
+      workedSeconds: frozenSeconds,
+      workedHours: workedHoursFromSeconds(frozenSeconds),
+      frozen: frozenSeconds > 0 || hadRunningTimer,
+      hadRunningTimer,
+    };
   }
 
   private async getAssignedProjectIdsForQsUser(userId: string) {

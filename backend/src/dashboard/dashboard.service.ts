@@ -2,6 +2,7 @@ import { BadRequestException, Injectable } from '@nestjs/common';
 import { PrismaService } from '../prisma/prisma.service';
 import { ActivityAction } from '../activities/activity-events';
 import { UserRole } from '../common/constants/roles.enum';
+import { hasDepartmentManagerAccess } from '../common/utils/workflow-roles.util';
 import {
   ProjectsOverviewResponseDto,
   ScheduledTaskItem,
@@ -378,7 +379,7 @@ export class DashboardService {
         ],
       };
     }
-    if (role === UserRole.HOD) {
+    if (hasDepartmentManagerAccess(role)) {
       const viewer = await this.prisma.user.findUnique({
         where: { id: userId },
         select: { departmentId: true },
@@ -395,13 +396,13 @@ export class DashboardService {
     viewerId?: string,
     viewerRole?: UserRole,
   ): Promise<InboxItem[]> {
-    if (!viewerId || viewerRole !== UserRole.HOD) {
+    if (!viewerId || !hasDepartmentManagerAccess(viewerRole ?? '')) {
       return [];
     }
 
     const deptFilter: Record<string, unknown> = {};
     let hodDepartmentId: string | null = null;
-    if (viewerRole === UserRole.HOD) {
+    if (hasDepartmentManagerAccess(viewerRole ?? '')) {
       const viewer = await this.prisma.user.findUnique({
         where: { id: viewerId },
         select: { departmentId: true },

@@ -13,6 +13,8 @@ import { PrismaService } from '../prisma/prisma.service';
 import { ActivityLoggerService } from '../activities/activity-logger.service';
 import { ActivityAction } from '../activities/activity-events';
 import { UserRole } from '../common/constants/roles.enum';
+import { hasDepartmentManagerAccess } from '../common/utils/workflow-roles.util';
+import { shouldRunRuntimeSchemaBootstrap } from '../common/utils/runtime-schema-bootstrap.util';
 import { assertValidLeaveReason } from '../common/constants/leave-reasons';
 import { CreateLeaveRequestDto } from './dto/create-request.dto';
 import { ReviewLeaveRequestDto } from './dto/review-leave-request.dto';
@@ -76,6 +78,10 @@ export class RequestsService implements OnModuleInit {
   ) {}
 
   async onModuleInit(): Promise<void> {
+    if (!shouldRunRuntimeSchemaBootstrap()) {
+      this.logger.debug('Skipping leave-request runtime DDL (use prisma migrate deploy)');
+      return;
+    }
     try {
       // security-sql:allow-static-ddl
       await this.prisma.$executeRawUnsafe(`
@@ -158,6 +164,16 @@ export class RequestsService implements OnModuleInit {
     d.setUTCDate(diff);
     d.setUTCHours(0, 0, 0, 0);
     return d;
+  }
+
+  private weekStartKeysForLeave(leave: { startDate: Date; endDate?: Date | null }): string[] {
+    const keys: string[] = [];
+    const start = this.getStartOfWeek(new Date(leave.startDate));
+    const end = this.getStartOfWeek(new Date(leave.endDate ?? leave.startDate));
+    for (const cursor = new Date(start); cursor <= end; cursor.setUTCDate(cursor.getUTCDate() + 7)) {
+      keys.push(cursor.toISOString().slice(0, 10));
+    }
+    return keys;
   }
 
   private async touchSchedulerWeeksForLeave(
@@ -351,22 +367,26 @@ export class RequestsService implements OnModuleInit {
     return `/designer/leave-planner?${params.toString()}`;
   }
 
-  private async findDepartmentHods(departmentId: string | null | undefined) {
+  private async findDepartmentManagers(departmentId: string | null | undefined) {
     if (!departmentId?.trim()) return [];
     return this.prisma.user.findMany({
       where: {
         departmentId: departmentId.trim(),
-        role: { name: UserRole.HOD },
+        role: { name: { in: [UserRole.HOD, UserRole.SALESPERSON] } },
       },
       select: { id: true, fullName: true },
     });
+  }
+
+  private async findDepartmentHods(departmentId: string | null | undefined) {
+    return this.findDepartmentManagers(departmentId);
   }
 
   private async resolveHodRecipientName(departmentId: string | null | undefined): Promise<string> {
     let targets = await this.findDepartmentHods(departmentId);
     if (targets.length === 0) {
       targets = await this.prisma.user.findMany({
-        where: { role: { name: UserRole.HOD } },
+        where: { role: { name: { in: [UserRole.HOD, UserRole.SALESPERSON] } } },
         select: { id: true, fullName: true },
         take: 1,
       });
@@ -397,7 +417,7 @@ export class RequestsService implements OnModuleInit {
     let targets = await this.findDepartmentHods(requester?.departmentId);
     if (targets.length === 0) {
       targets = await this.prisma.user.findMany({
-        where: { role: { name: UserRole.HOD } },
+        where: { role: { name: { in: [UserRole.HOD, UserRole.SALESPERSON] } } },
         select: { id: true, fullName: true },
       });
     }
@@ -434,7 +454,7 @@ export class RequestsService implements OnModuleInit {
     let targets = await this.findDepartmentHods(requester?.departmentId);
     if (targets.length === 0) {
       targets = await this.prisma.user.findMany({
-        where: { role: { name: UserRole.HOD } },
+        where: { role: { name: { in: [UserRole.HOD, UserRole.SALESPERSON] } } },
         select: { id: true, fullName: true },
       });
     }
@@ -512,11 +532,11 @@ export class RequestsService implements OnModuleInit {
   }
 
   private assertCreateAccess(submitterId: string, role: UserRole, targetUserId: string) {
-    if (role === UserRole.HOD) {
+    if (hasDepartmentManagerAccess(role)) {
       return;
     }
     if (role !== UserRole.DESIGNER) {
-      throw new ForbiddenException('Only designers or HOD can submit leave requests');
+      throw new ForbiddenException('Only designers or department managers can submit leave requests');
     }
     if (submitterId !== targetUserId) {
       throw new ForbiddenException('You can only submit leave requests for yourself');
@@ -534,8 +554,8 @@ export class RequestsService implements OnModuleInit {
 
     const requesterRole = request.user.role.name;
 
-    if (role !== UserRole.HOD) {
-      throw new ForbiddenException('Only HOD can review leave requests');
+    if (!hasDepartmentManagerAccess(role)) {
+      throw new ForbiddenException('Only department managers can review leave requests');
     }
 
     if (requesterRole !== UserRole.DESIGNER) {
@@ -561,7 +581,7 @@ export class RequestsService implements OnModuleInit {
     role: UserRole,
     request: { userId: string; user: { role: { name: string }; departmentId: string | null } },
   ) {
-    if (role !== UserRole.HOD) {
+    if (!hasDepartmentManagerAccess(role)) {
       throw new ForbiddenException('Only HOD can revoke leave requests');
     }
     if (revokerId === request.userId) {
@@ -583,7 +603,7 @@ export class RequestsService implements OnModuleInit {
     if (role === UserRole.DESIGNER && resolvedId !== requesterId) {
       throw new ForbiddenException('You can only view your own leave requests');
     }
-    if (role === UserRole.HOD && userId && resolvedId !== requesterId) {
+    if (hasDepartmentManagerAccess(role) && userId && resolvedId !== requesterId) {
       const target = await this.prisma.user.findUnique({
         where: { id: resolvedId },
         select: { role: { select: { name: true } } },
@@ -603,7 +623,7 @@ export class RequestsService implements OnModuleInit {
   }
 
   async findPendingApprovals(reviewerId: string, role: UserRole): Promise<LeaveRequestView[]> {
-    if (role !== UserRole.HOD) {
+    if (!hasDepartmentManagerAccess(role)) {
       throw new ForbiddenException('Only HOD can view pending leave approvals');
     }
 
@@ -634,7 +654,7 @@ export class RequestsService implements OnModuleInit {
     role: UserRole,
     filters?: { status?: string; designerId?: string },
   ): Promise<LeaveRequestView[]> {
-    if (role !== UserRole.HOD) {
+    if (!hasDepartmentManagerAccess(role)) {
       throw new ForbiddenException('Only HOD can view team leave requests');
     }
 
@@ -683,7 +703,7 @@ export class RequestsService implements OnModuleInit {
       throw new BadRequestException('A valid user id is required to submit a leave request');
     }
 
-    if (role === UserRole.HOD && resolvedId !== submitterId) {
+    if (hasDepartmentManagerAccess(role) && resolvedId !== submitterId) {
       if (requester.role.name !== UserRole.DESIGNER) {
         throw new ForbiddenException('HOD can only apply leave on behalf of designers');
       }
@@ -704,7 +724,7 @@ export class RequestsService implements OnModuleInit {
     const halfDaySession = this.resolveHalfDaySessionOrThrow(type, dto.halfDaySession);
     await this.assertNoOverlappingLeave(resolvedId, range, type, halfDaySession);
 
-    const hodAutoApprove = role === UserRole.HOD;
+    const hodAutoApprove = hasDepartmentManagerAccess(role);
     const status = hodAutoApprove ? 'Approved' : 'Pending';
     const reviewedAt = hodAutoApprove ? new Date() : undefined;
 
@@ -782,7 +802,9 @@ export class RequestsService implements OnModuleInit {
       }
       await this.schedulerAssignments?.rescheduleForApprovedLeave(req, submitterId);
       await this.touchSchedulerWeeksForLeave(req, submitterId);
-      this.dashboardRealtime?.notifyOverviewRefresh('leave_approved');
+      this.dashboardRealtime?.notifyOverviewRefresh('leave_approved', {
+        affectedWeekStarts: this.weekStartKeysForLeave(req),
+      });
       if (resolvedId) {
         this.dashboardRealtime?.notifyUserNotificationRefresh(resolvedId);
       }
@@ -983,6 +1005,10 @@ export class RequestsService implements OnModuleInit {
     const reviewedAt = new Date();
     const approverRemarks = dto.remarks?.trim() || null;
 
+    if (status === 'APPROVED') {
+      await this.schedulerAssignments?.rescheduleForApprovedLeave(existing, reviewerId);
+    }
+
     const req = await this.prisma.leaveRequest.update({
       where: { id },
       data: {
@@ -1022,11 +1048,11 @@ export class RequestsService implements OnModuleInit {
     );
 
     if (status === 'APPROVED') {
-      await this.schedulerAssignments?.rescheduleForApprovedLeave(req, reviewerId);
       await this.touchSchedulerWeeksForLeave(req, reviewerId);
     }
     this.dashboardRealtime?.notifyOverviewRefresh(
       status === 'APPROVED' ? 'leave_approved' : 'leave_rejected',
+      status === 'APPROVED' ? { affectedWeekStarts: this.weekStartKeysForLeave(req) } : {},
     );
     this.dashboardRealtime?.notifyUserNotificationRefresh(req.userId);
 
@@ -1079,6 +1105,8 @@ export class RequestsService implements OnModuleInit {
       select: { fullName: true },
     });
 
+    await this.schedulerAssignments?.rescheduleAfterLeaveRevocation?.(existing, reviewerId);
+
     const revokedAt = new Date();
     const req = await this.prisma.leaveRequest.update({
       where: { id },
@@ -1126,9 +1154,10 @@ export class RequestsService implements OnModuleInit {
       revokedAt,
     );
 
-    await this.schedulerAssignments?.rescheduleAfterLeaveRevocation?.(req, reviewerId);
     await this.touchSchedulerWeeksForLeave(existing, reviewerId);
-    this.dashboardRealtime?.notifyOverviewRefresh('leave_revoked');
+    this.dashboardRealtime?.notifyOverviewRefresh('leave_revoked', {
+      affectedWeekStarts: this.weekStartKeysForLeave(existing),
+    });
     this.dashboardRealtime?.notifyUserNotificationRefresh(existing.userId);
 
     return view;

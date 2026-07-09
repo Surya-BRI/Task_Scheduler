@@ -16,6 +16,8 @@ import { JwtAuthGuard } from '../common/guards/jwt-auth.guard';
 import { RolesGuard } from '../common/guards/roles.guard';
 import { Roles } from '../common/decorators/roles.decorator';
 import { UserRole } from '../common/constants/roles.enum';
+import { CurrentUser } from '../common/decorators/current-user.decorator';
+import type { JwtPayload } from '../common/types/jwt-payload.type';
 
 @Controller('users')
 @UseGuards(JwtAuthGuard, RolesGuard)
@@ -24,14 +26,14 @@ export class UsersController {
 
   /** POST /users — HOD/Admin only */
   @Post()
-  @Roles(UserRole.HOD)
+  @Roles(UserRole.HOD, UserRole.SALESPERSON)
   create(@Body() dto: CreateUserDto) {
     return this.usersService.create(dto);
   }
 
   /** GET /users?role=DESIGNER&departmentId=x&search=john — HOD/Admin/PM */
   @Get()
-  @Roles(UserRole.HOD, UserRole.ADMIN, UserRole.PROJECT_MANAGER)
+  @Roles(UserRole.HOD, UserRole.ADMIN, UserRole.PROJECT_MANAGER, UserRole.SALESPERSON)
   findAll(
     @Query('role') role?: string,
     @Query('departmentId') departmentId?: string,
@@ -40,22 +42,22 @@ export class UsersController {
     return this.usersService.findAll({ role, departmentId, search });
   }
 
-  /** GET /users/:id — authenticated */
+  /** GET /users/:id — self or privileged roles */
   @Get(':id')
-  findOne(@Param('id') id: string) {
-    return this.usersService.findById(id);
+  findOne(@Param('id') id: string, @CurrentUser() user: JwtPayload) {
+    return this.usersService.findByIdForViewer(id, user.sub, user.role);
   }
 
   /** PATCH /users/:id — HOD/Admin only */
   @Patch(':id')
-  @Roles(UserRole.HOD)
+  @Roles(UserRole.HOD, UserRole.SALESPERSON)
   update(@Param('id') id: string, @Body() dto: UpdateUserDto) {
     return this.usersService.update(id, dto);
   }
 
   /** DELETE /users/:id — Admin only */
   @Delete(':id')
-  @Roles(UserRole.HOD)
+  @Roles(UserRole.HOD, UserRole.SALESPERSON)
   remove(@Param('id') id: string) {
     return this.usersService.remove(id);
   }

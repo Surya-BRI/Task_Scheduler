@@ -1,8 +1,17 @@
 import { io, type Socket } from 'socket.io-client';
-import { getAccessToken } from './auth-token';
 import { env } from './env';
 
 function getSocketOrigin(): string {
+  if (env.apiBaseUrl.startsWith('/')) {
+    const wsOrigin = process.env.NEXT_PUBLIC_WS_ORIGIN?.trim();
+    if (wsOrigin) {
+      return wsOrigin.replace(/\/$/, '');
+    }
+    if (typeof window !== 'undefined') {
+      return window.location.origin;
+    }
+    return '';
+  }
   return env.apiBaseUrl.replace(/\/api\/v1\/?$/, '');
 }
 
@@ -17,6 +26,13 @@ export type ChatterRefreshPayload = {
 export type DashboardRefreshPayload = {
   event: string;
   at: string;
+  weekStart?: string;
+  version?: number;
+  updatedBy?: string | null;
+  changedTaskIds?: string[];
+  affectedWeekStarts?: string[];
+  taskId?: string;
+  status?: string;
 };
 
 export type DashboardRealtimeHandlers = {
@@ -26,15 +42,14 @@ export type DashboardRealtimeHandlers = {
 };
 
 export function connectDashboardRealtime(handlers: DashboardRealtimeHandlers): () => void {
-  const token = getAccessToken();
-  if (!token || typeof window === 'undefined') {
+  if (typeof window === 'undefined') {
     return () => {};
   }
 
   let socket: Socket | null = null;
   try {
     socket = io(`${getSocketOrigin()}/dashboard`, {
-      auth: { token },
+      withCredentials: true,
       transports: ['websocket', 'polling'],
       reconnection: true,
       reconnectionAttempts: 10,

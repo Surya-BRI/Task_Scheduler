@@ -38,7 +38,11 @@ export const envValidationSchema = Joi.object({
       }
       return value;
     }),
-  LOG_LEVEL: Joi.string().default('debug'),
+  LOG_LEVEL: Joi.string().valid('debug', 'info', 'log', 'warn', 'error').default('debug'),
+  SERVICE_NAME: Joi.string().max(64).default('task-scheduler-api'),
+  SENTRY_DSN: Joi.string().uri().allow('').optional(),
+  SENTRY_TRACES_SAMPLE_RATE: Joi.number().min(0).max(1).default(0.1),
+  OTEL_EXPORTER_OTLP_ENDPOINT: Joi.string().uri().allow('').optional(),
   ERP_SQL_CATALOG: Joi.string().max(128).optional(),
   /** dbo table name only — bracketed as [dbo].[name] in SQL */
   ERP_CHATTER_POST_TABLE: Joi.string().max(128).pattern(/^[\w-]+$/).optional(),
@@ -62,6 +66,8 @@ export const envValidationSchema = Joi.object({
   AWS_REGION: Joi.string().optional(),
   AWS_BUCKET: Joi.string().optional(),
   AWS_FOLDER: Joi.string().max(128).pattern(/^[a-zA-Z0-9/_-]+$/).optional(),
+  /** When true, services run boot-time CREATE/ALTER DDL. Default: true in dev/test, false in production. */
+  RUNTIME_SCHEMA_BOOTSTRAP: Joi.boolean().truthy('true').falsy('false').optional(),
 }).custom((value, helpers) => {
   const hasDatabaseUrl = !!value.DATABASE_URL;
   const hasDbParts =

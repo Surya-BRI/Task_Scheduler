@@ -1,6 +1,6 @@
 import React, { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import { toast } from 'sonner'
-import { Ban, Calendar, CheckCircle2, ChevronLeft, CircleCheck, Clock3, ExternalLink, FileText, Flag, Hourglass, Info, Link, Pause, Pencil, RotateCcw, Shield, Trash2, Upload } from 'lucide-react'
+import { Ban, Calendar, CheckCircle2, ChevronDown, ChevronLeft, CircleCheck, Clock3, ExternalLink, FileText, Flag, Hourglass, Info, Link, Pause, Pencil, RotateCcw, Shield, Trash2, Upload } from 'lucide-react'
 import { useParams, usePathname, useRouter, useSearchParams } from 'next/navigation'
 import DatePicker from 'react-datepicker'
 import { CreateTaskModal } from '../components/CreateTaskModal'
@@ -42,9 +42,21 @@ import {
   FROM_DESIGN_LIST,
   FROM_DESIGNER_QUEUE,
   FROM_DESIGN_SCHEDULER,
+  FROM_SALES_DESIGN_LIST,
+  FROM_SALES_PROJECT_DESIGN,
+  FROM_SALES_PROJECTS_LIST,
+  FROM_SALES_QUEUE,
+  isProjectsListWorkflow,
+  resolveWorkflowBackPath,
   taskViewPathForRecord,
 } from '@/lib/design-list-routes'
 import { getSession } from '@/lib/mock-auth'
+import { hasHodWorkflowAccess } from '@/lib/workflow-roles'
+import {
+  formatHoursAsHm,
+  formatSchedulerAssignedHours,
+  resolveSchedulerHoursForViewer,
+} from '@/lib/format-duration'
 
 function isValidHttpUrl(value) {
   try {
@@ -370,6 +382,68 @@ function FieldSelect({ id, label, value, onChange, options }) {
           <option key={u.id} value={u.fullName}>{u.fullName}</option>
         ))}
       </select>
+    </div>
+  )
+}
+
+function FieldMultiSelect({ id, label, value, onChange, options }) {
+  const [open, setOpen] = useState(false)
+  const containerRef = useRef(null)
+
+  useEffect(() => {
+    if (!open) return
+    function handleClickOutside(e) {
+      if (containerRef.current && !containerRef.current.contains(e.target)) {
+        setOpen(false)
+      }
+    }
+    document.addEventListener('mousedown', handleClickOutside)
+    return () => document.removeEventListener('mousedown', handleClickOutside)
+  }, [open])
+
+  function toggleOption(fullName) {
+    if (value.includes(fullName)) {
+      onChange(value.filter((v) => v !== fullName))
+    } else {
+      onChange([...value, fullName])
+    }
+  }
+
+  return (
+    <div ref={containerRef}>
+      <label className="text-[11px] font-semibold text-slate-600" htmlFor={id}>
+        {label}
+      </label>
+      <button
+        type="button"
+        id={id}
+        onClick={() => setOpen((o) => !o)}
+        className="mt-1 flex w-full items-center justify-between rounded-md border border-slate-300 bg-white py-1.5 pl-2.5 pr-2.5 text-[13px] text-slate-900 outline-none focus:border-blue-500 focus:ring-2 focus:ring-blue-500/25"
+      >
+        <span className={`truncate text-left ${value.length === 0 ? 'text-slate-400' : ''}`}>
+          {value.length > 0 ? value.join(', ') : '— Select —'}
+        </span>
+        <ChevronDown className="h-3.5 w-3.5 shrink-0 text-slate-400" />
+      </button>
+      {open ? (
+        <div className="mt-1 max-h-40 w-full overflow-y-auto rounded-md border border-slate-300 bg-white shadow-lg">
+          {options.length === 0 ? (
+            <p className="px-2.5 py-1.5 text-[12px] text-slate-400">No designers available</p>
+          ) : (
+            options.map((u) => (
+              <label key={u.id} className="flex items-center gap-1.5 px-2.5 py-1.5 text-[12px] text-slate-800 hover:bg-slate-50 cursor-pointer">
+                <input
+                  type="checkbox"
+                  checked={value.includes(u.fullName)}
+                  onChange={() => toggleOption(u.fullName)}
+                  className="h-3.5 w-3.5 rounded border-slate-300 text-blue-600 focus:ring-blue-500/25"
+                />
+                {u.fullName}
+              </label>
+            ))
+          )}
+        </div>
+      ) : null}
     </div>
   )
 }
@@ -742,6 +816,7 @@ function mapTaskToRecord(task) {
     reworkLinkUrl: task.reworkLinkUrl ?? null,
     reworkLinkName: task.reworkLinkName ?? null,
     previousRevisionTaskId: task.previousRevisionTaskId ?? null,
+    schedulerHours: task.schedulerHours ?? null,
   }
 }
 
@@ -881,6 +956,10 @@ const DESIGN_WORKFLOW_SOURCES = new Set([
   FROM_DESIGNER_QUEUE,
   FROM_DESIGN_SCHEDULER,
   'designer-design-list',
+  FROM_SALES_DESIGN_LIST,
+  FROM_SALES_PROJECTS_LIST,
+  FROM_SALES_PROJECT_DESIGN,
+  FROM_SALES_QUEUE,
 ])
 export function TaskDetailsPage() {
   const router = useRouter()
@@ -924,8 +1003,11 @@ export function TaskDetailsPage() {
   const [technicalHead, setTechnicalHead] = useState('')
   const [teamLead, setTeamLead] = useState('')
   const [subTeamLead, setSubTeamLead] = useState('')
+  const [selectedDesigners, setSelectedDesigners] = useState([])
+  const [savedTeamSnapshot, setSavedTeamSnapshot] = useState(null)
   const [teamSaving, setTeamSaving] = useState(false)
   const [hodUsers, setHodUsers] = useState([])
+  const [designerUsers, setDesignerUsers] = useState([])
   const [signRows, setSignRows] = useState([])
   const [signRowsLoading, setSignRowsLoading] = useState(false)
   const [signRowsSaving, setSignRowsSaving] = useState(false)
@@ -968,7 +1050,7 @@ export function TaskDetailsPage() {
       try {
         const rawId = String(recordId ?? '').trim()
         const rawOpNo = String(queryOpNo ?? '').trim()
-        const isProjectsListFlow = from === 'projects-list'
+        const isProjectsListFlow = isProjectsListWorkflow(from)
         const lookupProjectCode = isProjectsListFlow ? (String(queryProjectCode ?? '').trim() || rawId) : ''
         const lookupOpNo = isProjectsListFlow ? rawOpNo : rawOpNo
         let task = null
@@ -1129,18 +1211,7 @@ export function TaskDetailsPage() {
     TASK_TAB_IDS.includes(rawTab) && !(rawTab === 'team' && isRetail)
       ? rawTab
       : 'details'
-  const backPath =
-    from === 'project-design'
-      ? '/project-design'
-      : from === 'projects-list'
-        ? '/projects-list'
-        : from === 'qs'
-          ? '/qs/projects'
-        : from === 'design-scheduler'
-          ? '/design-scheduler'
-          : from === 'designer-queue' || from === 'designer-design-list'
-            ? '/design-list/tasks'
-          : '/design-list'
+  const backPath = resolveWorkflowBackPath(from)
   const resolvedProjectName = record?.projectName ?? record?.name ?? ''
   const resolvedOpCode = String(record?.salesForceCode ?? record?.opNo ?? '').trim()
   const pageTitleCore = `${resolvedProjectName.toUpperCase()} @ ${(record?.businessUnit ?? '').toUpperCase()}`
@@ -1155,13 +1226,29 @@ export function TaskDetailsPage() {
   const TIMER_ACTIVE_STATUSES = ['DESIGN_PLANNED', 'IN_PROGRESS', 'REWORK']
   const showTimer = !isCreationRoute && hasExistingTask && Boolean(taskId) && TIMER_ACTIVE_STATUSES.includes(taskStatus) && (from === 'designer-queue' || from === 'designer-design-list')
   const _session = getSession()
-  const isHod = ['HOD', 'ADMIN', 'PROJECT_MANAGER'].includes(_session?.role ?? '')
+  const isHod = hasHodWorkflowAccess(_session?.role ?? '')
   const isSales = _session?.role === 'SALESPERSON'
   const isDesigner = _session?.role === 'DESIGNER'
   const normalizedQsStatus = String(qsStatus?.status ?? '').trim().toLowerCase()
   const isQsCompleted = normalizedQsStatus === 'completed'
   const isQs = _session?.role === 'QS'
   const isQsReadOnly = isQsCompleted || !isQs
+  const isProjectTeamComplete =
+    Boolean(technicalHead.trim()) &&
+    Boolean(teamLead.trim()) &&
+    Boolean(subTeamLead.trim()) &&
+    selectedDesigners.length > 0
+  const isProjectTeamSaved =
+    Boolean(savedTeamSnapshot) &&
+    savedTeamSnapshot.technicalHead === technicalHead &&
+    savedTeamSnapshot.teamLead === teamLead &&
+    savedTeamSnapshot.subTeamLead === subTeamLead &&
+    savedTeamSnapshot.designers.length === selectedDesigners.length &&
+    savedTeamSnapshot.designers.every((d) => selectedDesigners.includes(d))
+  const canCreateProjectTasks = isProjectTeamComplete && isProjectTeamSaved
+  const projectTaskCreateGateMessage = canCreateProjectTasks
+    ? 'Team assigned. You can create tasks now.'
+    : 'Set and save the full team before creating tasks.'
   const hasReworkInstructions = Boolean(record?.previousRevisionTaskId)
   const showWorkflowStatusBlocks =
     DESIGN_WORKFLOW_SOURCES.has(from) || Boolean(pathname?.startsWith('/task-summary/'))
@@ -1186,9 +1273,23 @@ export function TaskDetailsPage() {
         if (!alive) return
         setProjectId(project?.id ?? '')
         if (isCreationRoute && !isRetail) {
-          setTechnicalHead(project?.technicalHead ?? '')
-          setTeamLead(project?.teamLead ?? '')
-          setSubTeamLead(project?.subTeamLead ?? '')
+          const loadedTechnicalHead = project?.technicalHead ?? ''
+          const loadedTeamLead = project?.teamLead ?? ''
+          const loadedSubTeamLead = project?.subTeamLead ?? ''
+          const loadedDesigners = String(project?.designers ?? '')
+            .split(',')
+            .map((s) => s.trim())
+            .filter(Boolean)
+          setTechnicalHead(loadedTechnicalHead)
+          setTeamLead(loadedTeamLead)
+          setSubTeamLead(loadedSubTeamLead)
+          setSelectedDesigners(loadedDesigners)
+          setSavedTeamSnapshot({
+            technicalHead: loadedTechnicalHead,
+            teamLead: loadedTeamLead,
+            subTeamLead: loadedSubTeamLead,
+            designers: loadedDesigners,
+          })
         }
       } catch {
         if (!alive) return
@@ -1212,7 +1313,25 @@ export function TaskDetailsPage() {
         setHodUsers(Array.isArray(list) ? list : [])
       })
       .catch(() => {})
+    apiClient
+      .get('/users?role=DESIGNER&limit=200')
+      .then((res) => {
+        const list = Array.isArray(res) ? res : (res?.data ?? [])
+        setDesignerUsers(Array.isArray(list) ? list : [])
+      })
+      .catch(() => {})
   }, [isCreationRoute, isQs])
+
+  const leadOptions = useMemo(() => {
+    const seen = new Set()
+    const merged = []
+    for (const u of [...hodUsers, ...designerUsers]) {
+      if (!u?.id || seen.has(u.id)) continue
+      seen.add(u.id)
+      merged.push(u)
+    }
+    return merged
+  }, [hodUsers, designerUsers])
 
   useEffect(() => {
     let alive = true
@@ -1772,7 +1891,17 @@ export function TaskDetailsPage() {
     if (!projectId) return
     setTeamSaving(true)
     try {
-      await apiClient.patch(`/projects/${projectId}`, { technicalHead, teamLead, subTeamLead })
+      const designersValue = selectedDesigners.join(', ')
+      await apiClient.patch(`/projects/${projectId}`, {
+        technicalHead,
+        teamLead,
+        subTeamLead,
+        designers: designersValue,
+      })
+      setSavedTeamSnapshot({ technicalHead, teamLead, subTeamLead, designers: [...selectedDesigners] })
+      toast.success('Team saved')
+    } catch (err) {
+      toast.error(err instanceof Error ? err.message : 'Failed to save team')
     } finally {
       setTeamSaving(false)
     }
@@ -1915,13 +2044,19 @@ export function TaskDetailsPage() {
                           <DetailRow
                             label="Assigned Hours"
                             value={(() => {
-                              if (record.hoursRequired > 0) return `${record.hoursRequired}h`
+                              const viewerId = _session?.designerId ?? _session?.id ?? null;
+                              const fromScheduler = formatSchedulerAssignedHours(record.schedulerHours, {
+                                isHod,
+                                viewerUserId: viewerId,
+                              });
+                              if (fromScheduler) return fromScheduler;
+                              if (record.hoursRequired > 0) return formatHoursAsHm(record.hoursRequired);
                               const total = Array.isArray(record.projectDetails)
                                 ? record.projectDetails.reduce((sum, d) =>
                                     sum + (Number(d.artworkHours) || 0) + (Number(d.technicalHours) || 0) +
                                     (Number(d.locationHours) || 0) + (Number(d.asBuiltHours) || 0), 0)
-                                : 0
-                              return total > 0 ? `${total}h` : '-'
+                                : 0;
+                              return total > 0 ? formatHoursAsHm(total) : '-';
                             })()}
                           />
                         </div>
@@ -2157,9 +2292,21 @@ export function TaskDetailsPage() {
                                   {activeDiscipline && (
                                     <div className="mt-2 flex items-center gap-2">
                                       <DisciplinePill type={activeDiscipline.label} />
-                                      {activeDiscipline.hours != null && activeDiscipline.hours > 0 && (
-                                        <span className="text-xs text-slate-500">{activeDiscipline.hours}h estimated</span>
-                                      )}
+                                      {(() => {
+                                        const viewerId = _session?.designerId ?? _session?.id ?? null;
+                                        const scheduledHours = resolveSchedulerHoursForViewer(record.schedulerHours, viewerId);
+                                        const scopeHours = activeDiscipline.hours != null && activeDiscipline.hours > 0
+                                          ? Number(activeDiscipline.hours)
+                                          : 0;
+                                        const displayHours = scheduledHours > 0 ? scheduledHours : scopeHours;
+                                        if (displayHours <= 0) return null;
+                                        const label = scheduledHours > 0 ? 'scheduled' : 'estimated';
+                                        return (
+                                          <span className="text-xs text-slate-500">
+                                            {formatHoursAsHm(displayHours)} {label}
+                                          </span>
+                                        );
+                                      })()}
                                     </div>
                                   )}
                                 </div>
@@ -2204,11 +2351,13 @@ export function TaskDetailsPage() {
                         />
                       </div>
                       {!isQs && (
-                      <div className="mt-2.5 flex justify-end">
+                      <div className="mt-2.5 flex items-center justify-end gap-2.5">
+                        <p className="text-[11px] text-slate-400">{projectTaskCreateGateMessage}</p>
                         <button
                           type="button"
                           onClick={() => setProjectCreateModalOpen(true)}
-                          className="rounded-md bg-[#10a6e3] px-5 py-1.5 text-xs font-semibold text-white shadow-sm transition hover:bg-[#0f96cd] focus:outline-none focus-visible:ring-2 focus-visible:ring-blue-500 focus-visible:ring-offset-2"
+                          disabled={!canCreateProjectTasks}
+                          className="rounded-md bg-[#10a6e3] px-5 py-1.5 text-xs font-semibold text-white shadow-sm transition hover:bg-[#0f96cd] focus:outline-none focus-visible:ring-2 focus-visible:ring-blue-500 focus-visible:ring-offset-2 disabled:cursor-not-allowed disabled:opacity-50 disabled:hover:bg-[#10a6e3]"
                         >
                           Create
                         </button>
@@ -2408,18 +2557,30 @@ export function TaskDetailsPage() {
                 <div className="mt-3 space-y-2.5">
                   <div className="grid gap-2.5 sm:grid-cols-2">
                     <FieldSelect id="team-technical-head" label="Technical Head" value={technicalHead} onChange={setTechnicalHead} options={hodUsers} />
-                    <FieldSelect id="team-team-lead" label="Team Lead" value={teamLead} onChange={setTeamLead} options={hodUsers} />
-                    <FieldSelect id="team-sub-team-lead" label="Sub Team Lead" value={subTeamLead} onChange={setSubTeamLead} options={hodUsers} />
+                    <FieldSelect id="team-team-lead" label="Team Lead" value={teamLead} onChange={setTeamLead} options={leadOptions} />
+                    <FieldSelect id="team-sub-team-lead" label="Sub Team Lead" value={subTeamLead} onChange={setSubTeamLead} options={leadOptions} />
+                    <FieldMultiSelect id="team-designers" label="Designer" value={selectedDesigners} onChange={setSelectedDesigners} options={designerUsers} />
                   </div>
                   <div className="flex items-center justify-between border-t border-slate-200 pt-2.5">
-                    <p className="text-[11px] text-slate-400">Team will be assigned when the task is created.</p>
-                    <button
-                      type="button"
-                      onClick={() => setProjectCreateModalOpen(true)}
-                      className="rounded-md bg-[#10a6e3] px-5 py-1.5 text-xs font-semibold text-white shadow-sm transition hover:bg-[#0f96cd] focus:outline-none focus-visible:ring-2 focus-visible:ring-blue-500 focus-visible:ring-offset-2"
-                    >
-                      Create
-                    </button>
+                    <p className="text-[11px] text-slate-400">{projectTaskCreateGateMessage}</p>
+                    <div className="flex items-center gap-2">
+                      <button
+                        type="button"
+                        onClick={handleSaveTeam}
+                        disabled={!isProjectTeamComplete || teamSaving}
+                        className="rounded-md border border-slate-300 bg-white px-4 py-1.5 text-xs font-semibold text-slate-700 shadow-sm transition hover:bg-slate-50 disabled:cursor-not-allowed disabled:opacity-50"
+                      >
+                        {teamSaving ? 'Saving…' : 'Save Team'}
+                      </button>
+                      <button
+                        type="button"
+                        onClick={() => setProjectCreateModalOpen(true)}
+                        disabled={!canCreateProjectTasks}
+                        className="rounded-md bg-[#10a6e3] px-5 py-1.5 text-xs font-semibold text-white shadow-sm transition hover:bg-[#0f96cd] focus:outline-none focus-visible:ring-2 focus-visible:ring-blue-500 focus-visible:ring-offset-2 disabled:cursor-not-allowed disabled:opacity-50 disabled:hover:bg-[#10a6e3]"
+                      >
+                        Create
+                      </button>
+                    </div>
                   </div>
                 </div>
               ) : null}
@@ -2732,7 +2893,7 @@ export function TaskDetailsPage() {
       <ProjectCreateTaskModal
         open={projectCreateModalOpen}
         onClose={() => setProjectCreateModalOpen(false)}
-        onCreated={async (tasks) => {
+        onCreated={(tasks) => {
           setProjectCreateModalOpen(false)
           const taskList = Array.isArray(tasks) ? tasks : (tasks ? [tasks] : [])
           for (const t of taskList) {
@@ -2741,16 +2902,11 @@ export function TaskDetailsPage() {
           fetchProjectTasks()
           const count = taskList.length
           if (count > 0) toast.success(`${count} task${count !== 1 ? 's' : ''} created successfully`)
-          if (projectId && (technicalHead || teamLead || subTeamLead)) {
-            try {
-              await apiClient.patch(`/projects/${projectId}`, { technicalHead, teamLead, subTeamLead })
-            } catch {
-              toast.error('Task created but team assignment failed — please edit the task to retry.')
-            }
-          }
         }}
         submissionDate={dateSubmission}
         record={record}
+        signRows={signRows}
+        isQsSignRegisterComplete={isQsCompleted}
       />
       {historyDialog && (
         <HistoryDialog

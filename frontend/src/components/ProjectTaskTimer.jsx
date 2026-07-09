@@ -4,11 +4,12 @@ import { useCallback, useEffect, useReducer, useRef, useState } from 'react'
 import { Pause, Play, Square, X } from 'lucide-react'
 import { apiClient } from '@/lib/api-client'
 
-function saveTimerStateToDb(taskId, accumulatedSeconds, pauseLog) {
+function saveTimerStateToDb(taskId, accumulatedSeconds, pauseLog, runStartedAt) {
   apiClient
     .post(`/tasks/${taskId}/save-timer`, {
       accumulatedSeconds,
       ...(pauseLog !== undefined ? { pauseLog: JSON.stringify(pauseLog) } : {}),
+      ...(runStartedAt !== undefined ? { runStartedAt } : {}),
     })
     .catch(() => {})
 }
@@ -70,12 +71,22 @@ function clearPersistedPauses(taskId) {
   sessionStorage.removeItem(pauseStorageKey(taskId))
 }
 
-function formatHms(totalSeconds) {
-  const s = Math.max(0, Math.floor(totalSeconds))
+const FIVE_MIN_SECONDS = 5 * 60
+
+// Logged work time is rounded UP to the next 5-minute step — seconds-level precision
+// isn't tracked or shown, and any nonzero effort must never be credited as 0 minutes
+// (e.g. 3m20s of real work rounds up to 5m, not down to 0m).
+function roundUpTo5Min(totalSeconds) {
+  const s = Math.max(0, totalSeconds)
+  if (s <= 0) return 0
+  return Math.ceil(s / FIVE_MIN_SECONDS) * FIVE_MIN_SECONDS
+}
+
+function formatHm(totalSeconds) {
+  const s = roundUpTo5Min(totalSeconds)
   const h = Math.floor(s / 3600)
   const m = Math.floor((s % 3600) / 60)
-  const sec = s % 60
-  return `${h}h:${m}m:${sec}s`
+  return `${h}h ${m}m`
 }
 
 function liveTotalSeconds(accumulatedSeconds, runStartAt) {
@@ -149,10 +160,13 @@ export function ProjectTaskTimer({
           if (!data) return
           const restored = data.accumulatedSeconds ?? 0
           const restoredPauses = data.pauseLog ? JSON.parse(data.pauseLog) : []
-          // Only overwrite if DB has more than what sessionStorage has
-          if (restored > acc || (restored === 0 && restoredPauses.length > 0)) {
+          const restoredRunStartAt = data.runStartedAt ? Date.parse(data.runStartedAt) : null
+          const hasDbRun = restoredRunStartAt != null && !Number.isNaN(restoredRunStartAt)
+          // Only overwrite if DB has more than what sessionStorage has, or an in-progress run anchor
+          if (hasDbRun || restored > acc || (restored === 0 && restoredPauses.length > 0)) {
             setAccumulatedSeconds(restored)
-            writePersisted(taskId, restored, null)
+            setRunStartAt(hasDbRun ? restoredRunStartAt : null)
+            writePersisted(taskId, restored, hasDbRun ? restoredRunStartAt : null)
           }
           if (restoredPauses.length > 0) {
             const existing = readPersistedPauses(taskId)
@@ -218,7 +232,7 @@ export function ProjectTaskTimer({
 
   const freezeRunningClock = useCallback(() => {
     if (!runStartAt) return accumulatedSeconds
-    const total = liveTotalSeconds(accumulatedSeconds, runStartAt)
+    const total = roundUpTo5Min(liveTotalSeconds(accumulatedSeconds, runStartAt))
     setAccumulatedSeconds(total)
     setRunStartAt(null)
     writePersisted(taskId, total, null)
@@ -241,13 +255,13 @@ export function ProjectTaskTimer({
     }
 
     if (launchPauseModal && start0) {
-      setAccumulatedSeconds(totalNow)
+      setAccumulatedSeconds(roundUpTo5Min(totalNow))
       setRunStartAt(null)
       setShowPauseDropdown(true)
     }
 
     if (launchCompleteModal && totalNow > 0) {
-      setAccumulatedSeconds(totalNow)
+      setAccumulatedSeconds(roundUpTo5Min(totalNow))
       setRunStartAt(null)
       setShowCompleteModal(true)
     }
@@ -287,7 +301,7 @@ export function ProjectTaskTimer({
     const startedAt = Date.now()
     setRunStartAt(startedAt)
     writePersisted(taskId, accumulatedSeconds, startedAt)
-    saveTimerStateToDb(taskId, accumulatedSeconds)
+    saveTimerStateToDb(taskId, accumulatedSeconds, undefined, new Date(startedAt).toISOString())
     // Move task to IN_PROGRESS so it reflects active work
     apiClient.patch(`/tasks/${taskId}/status`, { status: 'IN_PROGRESS' })
       .catch(() => {})
@@ -299,7 +313,7 @@ export function ProjectTaskTimer({
     const frozen = freezeRunningClock()
     pauseStartedAt.current = Date.now()
     setShowPauseDropdown(true)
-    saveTimerStateToDb(taskId, frozen)
+    saveTimerStateToDb(taskId, frozen, undefined, null)
   }
 
   const applyPauseReason = () => {
@@ -313,7 +327,7 @@ export function ProjectTaskTimer({
     setPauseReason('')
     setShowPauseDropdown(false)
     const updatedPauses = readPersistedPauses(taskId)
-    saveTimerStateToDb(taskId, accumulatedSeconds, updatedPauses)
+    saveTimerStateToDb(taskId, accumulatedSeconds, updatedPauses, null)
   }
 
   const cancelPauseReason = () => {
@@ -323,6 +337,7 @@ export function ProjectTaskTimer({
     const resumedAt = Date.now()
     setRunStartAt(resumedAt)
     writePersisted(taskId, accumulatedSeconds, resumedAt)
+    saveTimerStateToDb(taskId, accumulatedSeconds, undefined, new Date(resumedAt).toISOString())
   }
 
   const handleStopClick = () => {
@@ -341,7 +356,7 @@ export function ProjectTaskTimer({
 
     const pauseLog = readPersistedPauses(taskId)
     const formData = new FormData()
-    formData.append('durationSeconds', String(Math.floor(displaySeconds)))
+    formData.append('durationSeconds', String(roundUpTo5Min(displaySeconds)))
     if (hasLink) formData.append('submissionLink', submissionLink.trim())
     if (pauseLog.length) formData.append('pauseLog', JSON.stringify(pauseLog))
     selectedFiles.forEach((f) => formData.append('files', f))
@@ -430,7 +445,7 @@ export function ProjectTaskTimer({
             <span className={inline
               ? 'font-mono text-[11px] font-semibold tabular-nums tracking-tight text-slate-700'
               : 'font-mono text-sm font-medium tabular-nums tracking-tight text-slate-900'}>
-              {formatHms(displaySeconds)}
+              {formatHm(displaySeconds)}
             </span>
           </div>
           <>

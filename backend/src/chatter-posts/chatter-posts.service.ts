@@ -11,6 +11,7 @@ import {
 } from '@nestjs/common';
 import { Prisma } from '@prisma/client';
 import { PrismaService } from '../prisma/prisma.service';
+import { shouldRunRuntimeSchemaBootstrap } from '../common/utils/runtime-schema-bootstrap.util';
 import { UsersService } from '../users/users.service';
 import { CreateChatterCommentDto } from './dto/create-chatter-comment.dto';
 import { CreateChatterPostDto } from './dto/create-chatter-post.dto';
@@ -128,6 +129,10 @@ export class ChatterPostsService implements OnModuleInit {
   ) {}
 
   async onModuleInit(): Promise<void> {
+    if (!shouldRunRuntimeSchemaBootstrap()) {
+      this.logger.debug('Skipping chatter runtime DDL (use prisma migrate deploy)');
+      return;
+    }
     try {
       // security-sql:allow-static-ddl
       await this.prisma.$executeRawUnsafe(`
@@ -1197,7 +1202,11 @@ export class ChatterPostsService implements OnModuleInit {
     return { data, pageInfo: { hasMore: hasMore && Boolean(nextCursor), nextCursor } };
   }
 
-  async loadPostById(postId: string): Promise<ChatterPostDto | null> {
+  async loadPostById(
+    postId: string,
+    viewerId?: string,
+    viewerRole?: string,
+  ): Promise<ChatterPostDto | null> {
     const id = optionalUuid(postId);
     if (!id) return null;
     const rows = await this.prisma.$queryRaw<Array<Record<string, unknown>>>(Prisma.sql`
@@ -1208,6 +1217,13 @@ export class ChatterPostsService implements OnModuleInit {
     `);
     const row = rows[0];
     if (!row) return null;
+
+    const taskId = row.taskId != null ? String(row.taskId) : null;
+    const projectId = row.projectId != null ? String(row.projectId) : null;
+    if (viewerId && viewerRole) {
+      await this.assertQsChatterContextAccess(taskId, projectId, viewerId, viewerRole);
+    }
+
     const posts = await this.enrichPosts([
       {
         ...this.mapRow(row),
@@ -1219,10 +1235,20 @@ export class ChatterPostsService implements OnModuleInit {
     return posts[0] ?? null;
   }
 
-  async findCommentsForPost(postId: string): Promise<ChatterCommentDto[]> {
+  async findCommentsForPost(
+    postId: string,
+    viewerId?: string,
+    viewerRole?: string,
+  ): Promise<ChatterCommentDto[]> {
     const id = postId.trim();
     if (!optionalUuid(id)) {
       throw new BadRequestException('postId must be a valid UUID');
+    }
+    if (viewerId && viewerRole) {
+      const post = await this.loadPostById(id, viewerId, viewerRole);
+      if (!post) {
+        throw new NotFoundException('Chatter post not found');
+      }
     }
     return this.findCommentsByPostIds([id]);
   }

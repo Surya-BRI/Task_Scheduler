@@ -1,4 +1,5 @@
 import { apiClient } from '@/lib/api-client';
+import type { SchedulerTaskSummary } from './scheduler-queue.api';
 
 export type SchedulerAssignmentRow = {
   id: string;
@@ -8,6 +9,7 @@ export type SchedulerAssignmentRow = {
   assignedHours: number;
   scheduledHours?: number;
   approvedOvertimeHours?: number;
+  workedHours?: number;
   parentId: string | null;
   splitIndex: number | null;
   totalParts: number | null;
@@ -15,6 +17,7 @@ export type SchedulerAssignmentRow = {
   weekEndDate: Date;
   notes: string | null;
   isLocked: boolean;
+  isPinned: boolean;
   assignedBy: string | null;
   createdAt: Date;
   updatedAt: Date;
@@ -28,6 +31,12 @@ export type SchedulerAssignmentRow = {
   regularizationHours?: number;
   requestStatus?: string | null;
   requestLabel?: string | null;
+  isFragment?: boolean;
+  fragmentId?: string | null;
+  fragmentStatus?: 'UNASSIGNED' | 'ON_HOLD' | null;
+  /** Other SchedulerAssignment rows for the same task (any week), excluding this row. */
+  otherScheduledAssignmentCount?: number;
+  task?: SchedulerTaskSummary | null;
 };
 
 export type SchedulerWeekMeta = {
@@ -47,6 +56,7 @@ export type SaveSchedulerAssignmentInput = {
   splitIndex?: number | null;
   totalParts?: number | null;
   notes?: string | null;
+  isPinned?: boolean;
 };
 
 export function listSchedulerAssignmentsForWeek(weekStart: string, designerId?: string) {
@@ -61,7 +71,12 @@ export function getSchedulerWeekMeta(weekStart: string) {
 
 export function saveSchedulerWeekSnapshot(
   weekStart: string,
-  payload: { version: number; assignments: SaveSchedulerAssignmentInput[] },
+  payload: {
+    version: number;
+    assignments: SaveSchedulerAssignmentInput[];
+    resolvedFragmentIds?: string[];
+    affectedTaskIds?: string[];
+  },
 ) {
   return apiClient.put<{
     weekStart: string;
@@ -83,6 +98,31 @@ export function unlockSchedulerWeek(weekStart: string) {
 
 export function clearTaskFromSchedule(taskId: string) {
   return apiClient.delete(`/scheduler-assignments/task/${encodeURIComponent(taskId)}`);
+}
+
+/** Backend fragment/detach endpoints use UNASSIGNED; sidebar UI uses lowercase unassigned. */
+function normalizeFragmentApiStatus(status: string): 'UNASSIGNED' | 'ON_HOLD' {
+  return status === 'ON_HOLD' ? 'ON_HOLD' : 'UNASSIGNED';
+}
+
+export function detachAssignmentPart(
+  assignmentId: string,
+  status: 'UNASSIGNED' | 'ON_HOLD' | 'unassigned',
+) {
+  return apiClient.post<{ fragmentId: string }>(
+    `/scheduler-assignments/${encodeURIComponent(assignmentId)}/detach`,
+    { status: normalizeFragmentApiStatus(status) },
+  );
+}
+
+export function updateFragmentStatus(
+  fragmentId: string,
+  status: 'UNASSIGNED' | 'ON_HOLD' | 'unassigned',
+) {
+  return apiClient.post(
+    `/scheduler-assignments/fragments/${encodeURIComponent(fragmentId)}/status`,
+    { status: normalizeFragmentApiStatus(status) },
+  );
 }
 
 export function updateOvertimeRequestSchedulerAction(

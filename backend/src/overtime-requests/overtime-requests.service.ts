@@ -8,6 +8,7 @@ import { CreateOvertimeRequestDto } from './dto/create-overtime-request.dto';
 import { UpdateOvertimeRequestDto } from './dto/update-overtime-request.dto';
 import { ReviewOvertimeRequestDto } from './dto/review-overtime-request.dto';
 import { UserRole } from '../common/constants/roles.enum';
+import { hasDepartmentManagerAccess } from '../common/utils/workflow-roles.util';
 import { assertOvertimeDateIsToday } from '../common/utils/date-window.util';
 import {
   HALF_DAY_SESSION_SECOND,
@@ -574,7 +575,7 @@ export class OvertimeRequestsService {
   async findPendingApprovalsForView(managerId: string, role: UserRole) {
     const where: Record<string, unknown> = { status: 'SUBMITTED' };
 
-    if (role === UserRole.HOD) {
+    if (hasDepartmentManagerAccess(role)) {
       const manager = await this.prisma.user.findUnique({ where: { id: managerId }, select: { departmentId: true } });
       if (manager?.departmentId) {
         where.designer = { departmentId: manager.departmentId };
@@ -609,7 +610,7 @@ export class OvertimeRequestsService {
     const designerId = dto.designerId || creatorId;
 
     // Authorization check
-    if (designerId !== creatorId && creatorRole !== UserRole.HOD) {
+    if (designerId !== creatorId && !hasDepartmentManagerAccess(creatorRole)) {
       throw new ForbiddenException('You are not authorized to create request for this designer');
     }
 
@@ -637,62 +638,55 @@ export class OvertimeRequestsService {
     const totalHours = new Decimal(
       (this.timeToMinutes(schedule.endTime) - this.timeToMinutes(schedule.startTime)) / 60,
     );
-    const hodAutoApprove = creatorRole === UserRole.HOD;
+    const hodAutoApprove = hasDepartmentManagerAccess(creatorRole);
     const hodOnBehalf = hodAutoApprove && creatorId !== designerId;
     const status = hodAutoApprove ? 'APPROVED' : this.normalizeCreateStatus(dto.status);
     const now = new Date();
 
-    const request = await this.prisma.overtimeRequest.create({
-      data: {
-        designerId,
-        taskId: dto.taskId,
-        date: new Date(dto.date),
-        startTime: schedule.startTime,
-        endTime: schedule.endTime,
-        totalHours,
-        requestedHours: schedule.requestedHours,
-        estimatedRemaining: dto.estimatedRemaining?.trim() || null,
-        reason: dto.reason,
-        status,
-        ...(hodAutoApprove
-          ? {
-              approvedById: creatorId,
-              approvedAt: now,
-              approvedHours: totalHours,
-              managerComments: hodOnBehalf
-                ? 'Auto-approved by system (HOD submission on behalf of designer)'
-                : 'Auto-approved by system (HOD submission)',
-            }
-          : {}),
-      },
-      include: {
-        designer: { select: { id: true, fullName: true, email: true, departmentId: true } },
-        task: { select: this.overtimeActivityTaskSelect },
-        attachments: true,
-      },
-    });
-
-    // Log history
-    try {
-      await this.prisma.overtimeApprovalHistory.create({
+    const request = await this.prisma.$transaction(async (tx) => {
+      const created = await tx.overtimeRequest.create({
         data: {
-          requestId: request.id,
+          designerId,
+          taskId: dto.taskId,
+          date: new Date(dto.date),
+          startTime: schedule.startTime,
+          endTime: schedule.endTime,
+          totalHours,
+          requestedHours: schedule.requestedHours,
+          estimatedRemaining: dto.estimatedRemaining?.trim() || null,
+          reason: dto.reason,
+          status,
+          ...(hodAutoApprove
+            ? {
+                approvedById: creatorId,
+                approvedAt: now,
+                approvedHours: totalHours,
+                managerComments: hodOnBehalf
+                  ? 'Auto-approved by system (HOD submission on behalf of designer)'
+                  : 'Auto-approved by system (HOD submission)',
+              }
+            : {}),
+        },
+        include: {
+          designer: { select: { id: true, fullName: true, email: true, departmentId: true } },
+          task: { select: this.overtimeActivityTaskSelect },
+          attachments: true,
+        },
+      });
+
+      await tx.overtimeApprovalHistory.create({
+        data: {
+          requestId: created.id,
           action: status,
           actionById: creatorId,
           comments: 'Request initiated',
         },
       });
-    } catch (err) {
-      this.logger.warn(
-        `Overtime history log failed for ${request.id}: ${err instanceof Error ? err.message : err}`,
-      );
-    }
 
-    if (hodAutoApprove) {
-      try {
-        await this.prisma.overtimeApprovalHistory.create({
+      if (hodAutoApprove) {
+        await tx.overtimeApprovalHistory.create({
           data: {
-            requestId: request.id,
+            requestId: created.id,
             action: 'APPROVED',
             actionById: creatorId,
             comments: hodOnBehalf
@@ -700,9 +694,12 @@ export class OvertimeRequestsService {
               : 'Auto-approved by system (HOD submission)',
           },
         });
-      } catch (err) {
-        this.logger.warn(`Overtime history log failed: ${err instanceof Error ? err.message : err}`);
       }
+
+      return created;
+    });
+
+    if (hodAutoApprove) {
       await this.logOvertimeActivity({
         action: ActivityAction.OVERTIME_AUTO_APPROVED,
         messageKey: 'overtime_auto_approved',
@@ -764,7 +761,7 @@ export class OvertimeRequestsService {
     }
 
     // Auth check
-    if (request.designerId !== userId && role !== UserRole.HOD) {
+    if (request.designerId !== userId && !hasDepartmentManagerAccess(role)) {
       throw new ForbiddenException('You can only update your own requests');
     }
 
@@ -984,7 +981,7 @@ export class OvertimeRequestsService {
 
     // Auth check: owner or HOD in the same department
     if (request.designerId !== userId) {
-      if (role !== UserRole.HOD) {
+      if (!hasDepartmentManagerAccess(role)) {
         throw new ForbiddenException('Access denied');
       }
       const viewer = await this.prisma.user.findUnique({ where: { id: userId }, select: { departmentId: true } });
@@ -1048,8 +1045,8 @@ export class OvertimeRequestsService {
 
     // HOD review (single-step approval — no separate HR role)
     if (dto.status === 'APPROVED_BY_MANAGER' || dto.status === 'REJECTED_BY_MANAGER') {
-      if (reviewerRole !== UserRole.HOD) {
-        throw new ForbiddenException('Only HOD can review overtime requests');
+      if (!hasDepartmentManagerAccess(reviewerRole)) {
+        throw new ForbiddenException('Only department managers can review overtime requests');
       }
       if (request.status !== 'SUBMITTED') {
         throw new BadRequestException('Request is not in a submittable state for review');
@@ -1073,22 +1070,26 @@ export class OvertimeRequestsService {
         updateData.rejectedAt = new Date();
       }
 
-      const updated = await this.prisma.overtimeRequest.update({
-        where: { id },
-        data: updateData,
-        include: {
-          designer: { select: { id: true, fullName: true, email: true } },
-          task: { select: this.overtimeActivityTaskSelect },
-        },
-      });
+      const updated = await this.prisma.$transaction(async (tx) => {
+        const row = await tx.overtimeRequest.update({
+          where: { id },
+          data: updateData,
+          include: {
+            designer: { select: { id: true, fullName: true, email: true } },
+            task: { select: this.overtimeActivityTaskSelect },
+          },
+        });
 
-      await this.prisma.overtimeApprovalHistory.create({
-        data: {
-          requestId: id,
-          action: dto.status,
-          actionById: reviewerId,
-          comments: dto.comments || 'Manager review completed',
-        },
+        await tx.overtimeApprovalHistory.create({
+          data: {
+            requestId: id,
+            action: dto.status,
+            actionById: reviewerId,
+            comments: dto.comments || 'Manager review completed',
+          },
+        });
+
+        return row;
       });
 
       const approved = dto.status === 'APPROVED_BY_MANAGER';
@@ -1113,6 +1114,12 @@ export class OvertimeRequestsService {
 
       this.dashboardRealtime?.notifyOverviewRefresh(
         approved ? 'overtime_approved' : 'overtime_rejected',
+        approved && updated.date
+          ? {
+              weekStart: this.getStartOfWeek(new Date(updated.date)).toISOString().slice(0, 10),
+              taskId: updated.taskId ?? undefined,
+            }
+          : {},
       );
       if (updated.designerId) {
         this.dashboardRealtime?.notifyUserNotificationRefresh(updated.designerId);
@@ -1131,7 +1138,7 @@ export class OvertimeRequestsService {
     const where: any = { status: 'SUBMITTED' };
 
     // If HOD, filter by department
-    if (role === UserRole.HOD) {
+    if (hasDepartmentManagerAccess(role)) {
       const manager = await this.prisma.user.findUnique({ where: { id: managerId }, select: { departmentId: true } });
       if (manager?.departmentId) {
         where.designer = { departmentId: manager.departmentId };
@@ -1156,7 +1163,7 @@ export class OvertimeRequestsService {
     if (filters.status) where.status = filters.status;
     if (filters.designerId) where.designerId = filters.designerId;
 
-    if (role === UserRole.HOD) {
+    if (hasDepartmentManagerAccess(role)) {
       const manager = await this.prisma.user.findUnique({ where: { id: managerId }, select: { departmentId: true } });
       if (manager?.departmentId) {
         where.designer = { departmentId: manager.departmentId };
@@ -1298,7 +1305,7 @@ export class OvertimeRequestsService {
       hods = await this.prisma.user.findMany({
         where: {
           departmentId,
-          role: { name: UserRole.HOD },
+          role: { name: { in: [UserRole.HOD, UserRole.SALESPERSON] } },
         },
         select: { fullName: true },
         take: 1,
@@ -1306,7 +1313,7 @@ export class OvertimeRequestsService {
     }
     if (hods.length === 0) {
       hods = await this.prisma.user.findMany({
-        where: { role: { name: UserRole.HOD } },
+        where: { role: { name: { in: [UserRole.HOD, UserRole.SALESPERSON] } } },
         select: { fullName: true },
         take: 1,
       });
@@ -1322,14 +1329,14 @@ export class OvertimeRequestsService {
       hods = await this.prisma.user.findMany({
         where: {
           departmentId: deptId,
-          role: { name: UserRole.HOD },
+          role: { name: { in: [UserRole.HOD, UserRole.SALESPERSON] } },
         },
         select: { id: true },
       });
     }
     if (hods.length === 0) {
       hods = await this.prisma.user.findMany({
-        where: { role: { name: UserRole.HOD } },
+        where: { role: { name: { in: [UserRole.HOD, UserRole.SALESPERSON] } } },
         select: { id: true },
       });
     }

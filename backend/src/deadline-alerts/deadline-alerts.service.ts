@@ -6,6 +6,9 @@ import { NotificationsService } from '../notifications/notifications.service';
 import { ActivityLoggerService } from '../activities/activity-logger.service';
 import { ActivityAction } from '../activities/activity-events';
 import { DashboardRealtimeService } from '../dashboard/dashboard-realtime.service';
+import { CronLockService } from '../common/services/cron-lock.service';
+
+const DEADLINE_CRON_LOCK = 'TaskScheduler:DeadlineAlertsCron';
 
 const REMINDER_INTERVALS = [
   { label: '24 hours', ms: 24 * 60 * 60 * 1000 },
@@ -29,21 +32,44 @@ type DeadlineInterval = (typeof REMINDER_INTERVALS)[number];
 @Injectable()
 export class DeadlineAlertsService {
   private readonly logger = new Logger(DeadlineAlertsService.name);
+  private cronRunning = false;
 
   constructor(
     private readonly prisma: PrismaService,
     private readonly notificationsService: NotificationsService,
     private readonly activityLogger: ActivityLoggerService,
+    private readonly cronLockService: CronLockService,
     @Optional() private readonly dashboardRealtime?: DashboardRealtimeService,
   ) {}
 
   @Cron('*/5 * * * *')
   async checkDeadlines() {
+    if (this.cronRunning) {
+      this.logger.debug('Deadline alerts skipped: previous run still in progress');
+      return;
+    }
+
+    const release = await this.cronLockService.tryAcquire(DEADLINE_CRON_LOCK);
+    if (!release) {
+      this.logger.debug('Deadline alerts skipped: lock held by another instance');
+      return;
+    }
+
+    this.cronRunning = true;
+    try {
+      await this.runDeadlineScan();
+    } finally {
+      this.cronRunning = false;
+      await release();
+    }
+  }
+
+  private async runDeadlineScan() {
     const now = new Date();
     const horizon = new Date(now.getTime() + HORIZON_MS);
 
     const hodUsers = await this.prisma.user.findMany({
-      where: { role: { name: { in: ['HOD', 'ADMIN'] } } },
+      where: { role: { name: { in: ['HOD', 'SALESPERSON', 'ADMIN'] } } },
       select: { id: true, fullName: true },
     });
 

@@ -8,6 +8,9 @@ import { CurrentUser } from '../common/decorators/current-user.decorator';
 import type { JwtPayload } from '../common/types/jwt-payload.type';
 import { SaveSchedulerWeekDto } from './dto/save-scheduler-week.dto';
 import { UpdateOvertimeSchedulerActionDto } from './dto/update-overtime-scheduler-action.dto';
+import { DetachAssignmentPartDto } from './dto/detach-assignment-part.dto';
+import { resolveDesignerScope } from '../common/utils/resolve-designer-scope.util';
+import { hasDepartmentManagerAccess } from '../common/utils/workflow-roles.util';
 
 @UseGuards(JwtAuthGuard, RolesGuard)
 @Controller('scheduler-assignments')
@@ -16,12 +19,30 @@ export class SchedulerAssignmentsController {
 
   @Get()
   @Roles(UserRole.HOD, UserRole.DESIGNER)
-  findForWeek(@Query('weekStart') weekStart?: string, @Query('designerId') designerId?: string) {
+  findForWeek(
+    @Query('weekStart') weekStart?: string,
+    @Query('designerId') designerId?: string,
+    @CurrentUser() user?: JwtPayload,
+  ) {
     const ws = weekStart?.trim() ?? '';
     if (!ws) {
       return [];
     }
-    return this.schedulerAssignmentsService.findForWeekStart(ws, designerId?.trim() || undefined);
+    const trimmedDesignerId = designerId?.trim();
+    // resolveDesignerScope defaults to the caller's own id whenever no designerId is passed —
+    // correct for a plain DESIGNER (their own schedule), but wrong here for an HOD: the
+    // scheduler grid's normal "give me the whole week" call never passes a designerId, so an
+    // HOD's own reload was silently scoped to only their own rows, making every OTHER
+    // designer's correctly-saved assignments disappear on every refresh. An HOD with no
+    // designerId explicitly requested should see the whole week; resolveDesignerScope's
+    // access check still applies whenever a SPECIFIC designerId is requested.
+    const scopedDesignerId =
+      !trimmedDesignerId && user && hasDepartmentManagerAccess(user.role)
+        ? undefined
+        : user
+          ? resolveDesignerScope(designerId, user.sub, user.role)
+          : trimmedDesignerId || undefined;
+    return this.schedulerAssignmentsService.findForWeekStart(ws, scopedDesignerId || undefined);
   }
 
   @Get('week/:weekStart/meta')
@@ -56,6 +77,18 @@ export class SchedulerAssignmentsController {
   @Roles(UserRole.HOD, UserRole.ADMIN, UserRole.PROJECT_MANAGER)
   clearTask(@Param('taskId') taskId: string) {
     return this.schedulerAssignmentsService.clearTaskSchedule(taskId);
+  }
+
+  @Post(':id/detach')
+  @Roles(UserRole.HOD)
+  detachPart(@Param('id') id: string, @Body() dto: DetachAssignmentPartDto) {
+    return this.schedulerAssignmentsService.detachAssignmentPart(id, dto.status);
+  }
+
+  @Post('fragments/:id/status')
+  @Roles(UserRole.HOD)
+  updateFragmentStatus(@Param('id') id: string, @Body() dto: DetachAssignmentPartDto) {
+    return this.schedulerAssignmentsService.updateFragmentStatus(id, dto.status);
   }
 
   @Post('overtime-requests/:requestId/action')

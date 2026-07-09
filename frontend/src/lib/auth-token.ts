@@ -1,16 +1,19 @@
-const TOKEN_KEY = 'task_scheduler_access_token';
+/**
+ * Legacy token helpers — httpOnly cookies replaced localStorage JWT storage.
+ * clearAccessToken remains for migrating stale client state.
+ */
+import { clearLegacyAuthStorage } from './session';
 
+/** @deprecated JWT is stored in an httpOnly cookie; this always returns null. */
 export function getAccessToken() {
-  if (typeof window === 'undefined') return null;
-  return localStorage.getItem(TOKEN_KEY);
+  return null;
 }
 
-export function setAccessToken(token: string) {
+/** @deprecated Do not store JWT in localStorage. */
+export function setAccessToken(_token: string) {
   if (typeof window === 'undefined') return;
-  localStorage.setItem(TOKEN_KEY, token);
 }
 
 export function clearAccessToken() {
-  if (typeof window === 'undefined') return;
-  localStorage.removeItem(TOKEN_KEY);
+  clearLegacyAuthStorage();
 }

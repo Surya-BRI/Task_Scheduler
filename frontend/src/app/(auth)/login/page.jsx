@@ -1,16 +1,18 @@
+import { Suspense } from 'react';
 import { LoginForm } from '@/features/auth/components/login-form';
+import { shouldShowDemoLogins } from '@/lib/demo-logins';
 
 export const metadata = {
   title: 'Sign In — Blue Rhine Industries',
   description: 'Sign in to the Task Scheduler',
 };
 
+export const dynamic = 'force-dynamic';
+
 export default function LoginPage() {
   return (
     <div className="w-full max-w-md">
-      {/* Card */}
       <div className="rounded-2xl border border-slate-200 bg-white shadow-xl shadow-slate-200/60 overflow-hidden">
-        {/* Header band */}
         <div className="bg-[#1a3c6e] px-8 py-7">
           <div className="flex items-center gap-3 mb-4">
             <img src="/blue-rhine-logo.png" alt="Blue Rhine Industries" className="h-10 w-auto object-contain brightness-0 invert" />
@@ -19,9 +21,10 @@ export default function LoginPage() {
           <p className="text-blue-200 text-sm mt-1">Sign in to Task Scheduler</p>
         </div>
 
-        {/* Form area */}
         <div className="px-8 py-7">
-          <LoginForm />
+          <Suspense fallback={<div className="text-sm text-slate-500">Loading...</div>}>
+            <LoginForm showDemoLogins={shouldShowDemoLogins()} />
+          </Suspense>
         </div>
       </div>
 

@@ -18,7 +18,7 @@ export class DashboardController {
   }
 
   @Get('projects-overview')
-  @Roles(UserRole.HOD)
+  @Roles(UserRole.HOD, UserRole.SALESPERSON)
   getProjectsOverview(
     @Query('weekStart') weekStart?: string,
     @CurrentUser() user?: JwtPayload,

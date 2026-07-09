@@ -16,6 +16,7 @@ import {
 } from '@nestjs/common';
 import { FileInterceptor } from '@nestjs/platform-express';
 import { memoryStorage } from 'multer';
+import { Throttle } from '@nestjs/throttler';
 import { ProjectsService } from './projects.service';
 import { CreateProjectDto } from './dto/create-project.dto';
 import { UpdateProjectDto } from './dto/update-project.dto';
@@ -36,7 +37,7 @@ export class ProjectsController {
 
   /** POST /projects — HOD/Admin */
   @Post()
-  @Roles(UserRole.HOD)
+  @Roles(UserRole.HOD, UserRole.SALESPERSON)
   create(@CurrentUser() user: JwtPayload, @Body() dto: CreateProjectDto) {
     return this.projectsService.create(user.sub, dto);
   }
@@ -70,7 +71,8 @@ export class ProjectsController {
   }
 
   @Post(':id/files')
-  @Roles(UserRole.HOD)
+  @Roles(UserRole.HOD, UserRole.SALESPERSON)
+  @Throttle({ default: { limit: 10, ttl: 60_000 } })
   @UseInterceptors(
     FileInterceptor('file', {
       storage: memoryStorage(),
@@ -86,7 +88,7 @@ export class ProjectsController {
   }
 
   @Post(':id/files/link')
-  @Roles(UserRole.HOD)
+  @Roles(UserRole.HOD, UserRole.SALESPERSON)
   addFileLink(
     @Param('id') id: string,
     @Body() dto: CreateProjectFileLinkDto,
@@ -102,21 +104,21 @@ export class ProjectsController {
   }
 
   @Delete(':id/files/:fileId')
-  @Roles(UserRole.HOD)
+  @Roles(UserRole.HOD, UserRole.SALESPERSON)
   removeFile(@Param('id') id: string, @Param('fileId') fileId: string, @CurrentUser() user: JwtPayload) {
     return this.projectsService.removeProjectFile(id, fileId, user.sub);
   }
 
   /** PATCH /projects/:id — HOD/Admin */
   @Patch(':id')
-  @Roles(UserRole.HOD)
+  @Roles(UserRole.HOD, UserRole.SALESPERSON)
   update(@Param('id') id: string, @Body() dto: UpdateProjectDto) {
     return this.projectsService.update(id, dto);
   }
 
   /** DELETE /projects/:id — Admin only */
   @Delete(':id')
-  @Roles(UserRole.HOD)
+  @Roles(UserRole.HOD, UserRole.SALESPERSON)
   remove(@Param('id') id: string) {
     return this.projectsService.remove(id);
   }
