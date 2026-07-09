@@ -68,5 +68,8 @@ export default () => {
       bucket: process.env.AWS_BUCKET ?? '',
       folder: process.env.AWS_FOLDER ?? 'taskfiles',
     },
+    scheduler: {
+      splitRecomputeWeekWindow: Number(process.env.SCHEDULER_SPLIT_RECOMPUTE_WEEK_WINDOW ?? 26),
+    },
   };
 };

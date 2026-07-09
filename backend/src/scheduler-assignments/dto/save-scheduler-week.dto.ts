@@ -69,4 +69,13 @@ export class SaveSchedulerWeekDto {
   @IsArray()
   @IsUUID(undefined, { each: true })
   resolvedFragmentIds?: string[];
+
+  /**
+   * When set, only rows for these task ids in this week are replaced — other assignments
+   * are left untouched so concurrent editors working on different tasks can merge saves.
+   */
+  @IsOptional()
+  @IsArray()
+  @IsUUID(undefined, { each: true })
+  affectedTaskIds?: string[];
 }

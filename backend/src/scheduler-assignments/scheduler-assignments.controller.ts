@@ -10,6 +10,7 @@ import { SaveSchedulerWeekDto } from './dto/save-scheduler-week.dto';
 import { UpdateOvertimeSchedulerActionDto } from './dto/update-overtime-scheduler-action.dto';
 import { DetachAssignmentPartDto } from './dto/detach-assignment-part.dto';
 import { resolveDesignerScope } from '../common/utils/resolve-designer-scope.util';
+import { hasDepartmentManagerAccess } from '../common/utils/workflow-roles.util';
 
 @UseGuards(JwtAuthGuard, RolesGuard)
 @Controller('scheduler-assignments')
@@ -27,9 +28,20 @@ export class SchedulerAssignmentsController {
     if (!ws) {
       return [];
     }
-    const scopedDesignerId = user
-      ? resolveDesignerScope(designerId, user.sub, user.role)
-      : designerId?.trim() || undefined;
+    const trimmedDesignerId = designerId?.trim();
+    // resolveDesignerScope defaults to the caller's own id whenever no designerId is passed —
+    // correct for a plain DESIGNER (their own schedule), but wrong here for an HOD: the
+    // scheduler grid's normal "give me the whole week" call never passes a designerId, so an
+    // HOD's own reload was silently scoped to only their own rows, making every OTHER
+    // designer's correctly-saved assignments disappear on every refresh. An HOD with no
+    // designerId explicitly requested should see the whole week; resolveDesignerScope's
+    // access check still applies whenever a SPECIFIC designerId is requested.
+    const scopedDesignerId =
+      !trimmedDesignerId && user && hasDepartmentManagerAccess(user.role)
+        ? undefined
+        : user
+          ? resolveDesignerScope(designerId, user.sub, user.role)
+          : trimmedDesignerId || undefined;
     return this.schedulerAssignmentsService.findForWeekStart(ws, scopedDesignerId || undefined);
   }
 

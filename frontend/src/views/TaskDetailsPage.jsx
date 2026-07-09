@@ -52,6 +52,11 @@ import {
 } from '@/lib/design-list-routes'
 import { getSession } from '@/lib/mock-auth'
 import { hasHodWorkflowAccess } from '@/lib/workflow-roles'
+import {
+  formatHoursAsHm,
+  formatSchedulerAssignedHours,
+  resolveSchedulerHoursForViewer,
+} from '@/lib/format-duration'
 
 function isValidHttpUrl(value) {
   try {
@@ -811,6 +816,7 @@ function mapTaskToRecord(task) {
     reworkLinkUrl: task.reworkLinkUrl ?? null,
     reworkLinkName: task.reworkLinkName ?? null,
     previousRevisionTaskId: task.previousRevisionTaskId ?? null,
+    schedulerHours: task.schedulerHours ?? null,
   }
 }
 
@@ -2038,13 +2044,19 @@ export function TaskDetailsPage() {
                           <DetailRow
                             label="Assigned Hours"
                             value={(() => {
-                              if (record.hoursRequired > 0) return `${record.hoursRequired}h`
+                              const viewerId = _session?.designerId ?? _session?.id ?? null;
+                              const fromScheduler = formatSchedulerAssignedHours(record.schedulerHours, {
+                                isHod,
+                                viewerUserId: viewerId,
+                              });
+                              if (fromScheduler) return fromScheduler;
+                              if (record.hoursRequired > 0) return formatHoursAsHm(record.hoursRequired);
                               const total = Array.isArray(record.projectDetails)
                                 ? record.projectDetails.reduce((sum, d) =>
                                     sum + (Number(d.artworkHours) || 0) + (Number(d.technicalHours) || 0) +
                                     (Number(d.locationHours) || 0) + (Number(d.asBuiltHours) || 0), 0)
-                                : 0
-                              return total > 0 ? `${total}h` : '-'
+                                : 0;
+                              return total > 0 ? formatHoursAsHm(total) : '-';
                             })()}
                           />
                         </div>
@@ -2280,9 +2292,21 @@ export function TaskDetailsPage() {
                                   {activeDiscipline && (
                                     <div className="mt-2 flex items-center gap-2">
                                       <DisciplinePill type={activeDiscipline.label} />
-                                      {activeDiscipline.hours != null && activeDiscipline.hours > 0 && (
-                                        <span className="text-xs text-slate-500">{activeDiscipline.hours}h estimated</span>
-                                      )}
+                                      {(() => {
+                                        const viewerId = _session?.designerId ?? _session?.id ?? null;
+                                        const scheduledHours = resolveSchedulerHoursForViewer(record.schedulerHours, viewerId);
+                                        const scopeHours = activeDiscipline.hours != null && activeDiscipline.hours > 0
+                                          ? Number(activeDiscipline.hours)
+                                          : 0;
+                                        const displayHours = scheduledHours > 0 ? scheduledHours : scopeHours;
+                                        if (displayHours <= 0) return null;
+                                        const label = scheduledHours > 0 ? 'scheduled' : 'estimated';
+                                        return (
+                                          <span className="text-xs text-slate-500">
+                                            {formatHoursAsHm(displayHours)} {label}
+                                          </span>
+                                        );
+                                      })()}
                                     </div>
                                   )}
                                 </div>

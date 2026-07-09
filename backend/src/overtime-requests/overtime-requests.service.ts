@@ -1114,6 +1114,12 @@ export class OvertimeRequestsService {
 
       this.dashboardRealtime?.notifyOverviewRefresh(
         approved ? 'overtime_approved' : 'overtime_rejected',
+        approved && updated.date
+          ? {
+              weekStart: this.getStartOfWeek(new Date(updated.date)).toISOString().slice(0, 10),
+              taskId: updated.taskId ?? undefined,
+            }
+          : {},
       );
       if (updated.designerId) {
         this.dashboardRealtime?.notifyUserNotificationRefresh(updated.designerId);

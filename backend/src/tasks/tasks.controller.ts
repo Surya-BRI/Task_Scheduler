@@ -26,6 +26,7 @@ import { AssignTaskDto } from './dto/assign-task.dto';
 import { UpdateTaskStatusDto } from './dto/update-task-status.dto';
 import { SubmitWorkDto } from './dto/submit-work.dto';
 import { SaveTimerStateDto } from './dto/save-timer-state.dto';
+import { FreezeDraftWorkSessionDto } from './dto/freeze-draft-work-session.dto';
 import { JwtAuthGuard } from '../common/guards/jwt-auth.guard';
 import { RolesGuard } from '../common/guards/roles.guard';
 import { Roles } from '../common/decorators/roles.decorator';
@@ -75,6 +76,7 @@ export class TasksController {
     @CurrentUser() user: JwtPayload,
     @Query('projectId') projectId?: string,
     @Query('status') status?: string,
+    @Query('excludeStatuses') excludeStatuses?: string,
     @Query('priority') priority?: string,
     @Query('assigneeId') assigneeId?: string,
     @Query('search') search?: string,
@@ -85,6 +87,7 @@ export class TasksController {
     return this.tasksService.findAll(user.sub, user.role, {
       projectId,
       status,
+      excludeStatuses,
       priority,
       assigneeId,
       search,
@@ -110,6 +113,13 @@ export class TasksController {
   @Roles(UserRole.HOD, UserRole.DESIGNER, UserRole.SALESPERSON)
   getSummary(@CurrentUser() user: JwtPayload) {
     return this.tasksService.getStatusSummary(user.sub, user.role);
+  }
+
+  /** GET /tasks/scheduler-queue — sidebar backlog (unassigned + on-hold only). */
+  @Get('scheduler-queue')
+  @Roles(UserRole.HOD)
+  findSchedulerQueue() {
+    return this.tasksService.findSchedulerQueue();
   }
 
   /** GET /tasks/:id */
@@ -167,6 +177,16 @@ export class TasksController {
     @Body() dto: SaveTimerStateDto,
   ) {
     return this.tasksService.saveTimerState(id, user.sub, dto);
+  }
+
+  /** POST /tasks/:id/freeze-draft-session — finalize draft timer before scheduler handoff */
+  @Post(':id/freeze-draft-session')
+  @Roles(UserRole.HOD)
+  freezeDraftWorkSession(
+    @Param('id') id: string,
+    @Body() dto: FreezeDraftWorkSessionDto,
+  ) {
+    return this.tasksService.freezeDraftWorkSession(id, dto.designerId);
   }
 
   /** POST /tasks/:id/submit-work — all authenticated roles (designer submits their timer work) */

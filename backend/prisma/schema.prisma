@@ -644,6 +644,7 @@ model SchedulerAssignment {
 
   @@index([weekStartDate, designerId], name: "IX_ErpTSSchedulerAssignment_week_designer")
   @@index([weekStartDate, taskId], name: "IX_ErpTSSchedulerAssignment_week_task")
+  @@index([taskId, weekStartDate], name: "IX_ErpTSSchedulerAssignment_task_week")
   @@map("ErpTSSchedulerAssignment")
 }
 
@@ -820,6 +821,7 @@ model TaskWorkSession {
   designerId      String   @db.UniqueIdentifier
   designer        User     @relation("WorkSessionDesigner", fields: [designerId], references: [id], onDelete: NoAction, onUpdate: NoAction)
   durationSeconds Int
+  runStartedAt    DateTime?
   submissionLink  String?  @db.NVarChar(2000)
   pauseLog        String?  @db.NVarChar(Max)
   status          String   @default("Submitted") @db.NVarChar(50)

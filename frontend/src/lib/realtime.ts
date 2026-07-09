@@ -26,6 +26,13 @@ export type ChatterRefreshPayload = {
 export type DashboardRefreshPayload = {
   event: string;
   at: string;
+  weekStart?: string;
+  version?: number;
+  updatedBy?: string | null;
+  changedTaskIds?: string[];
+  affectedWeekStarts?: string[];
+  taskId?: string;
+  status?: string;
 };
 
 export type DashboardRealtimeHandlers = {

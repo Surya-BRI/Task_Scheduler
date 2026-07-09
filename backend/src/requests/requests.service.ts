@@ -166,6 +166,16 @@ export class RequestsService implements OnModuleInit {
     return d;
   }
 
+  private weekStartKeysForLeave(leave: { startDate: Date; endDate?: Date | null }): string[] {
+    const keys: string[] = [];
+    const start = this.getStartOfWeek(new Date(leave.startDate));
+    const end = this.getStartOfWeek(new Date(leave.endDate ?? leave.startDate));
+    for (const cursor = new Date(start); cursor <= end; cursor.setUTCDate(cursor.getUTCDate() + 7)) {
+      keys.push(cursor.toISOString().slice(0, 10));
+    }
+    return keys;
+  }
+
   private async touchSchedulerWeeksForLeave(
     leave: { startDate: Date; endDate?: Date | null },
     userId: string,
@@ -792,7 +802,9 @@ export class RequestsService implements OnModuleInit {
       }
       await this.schedulerAssignments?.rescheduleForApprovedLeave(req, submitterId);
       await this.touchSchedulerWeeksForLeave(req, submitterId);
-      this.dashboardRealtime?.notifyOverviewRefresh('leave_approved');
+      this.dashboardRealtime?.notifyOverviewRefresh('leave_approved', {
+        affectedWeekStarts: this.weekStartKeysForLeave(req),
+      });
       if (resolvedId) {
         this.dashboardRealtime?.notifyUserNotificationRefresh(resolvedId);
       }
@@ -1040,6 +1052,7 @@ export class RequestsService implements OnModuleInit {
     }
     this.dashboardRealtime?.notifyOverviewRefresh(
       status === 'APPROVED' ? 'leave_approved' : 'leave_rejected',
+      status === 'APPROVED' ? { affectedWeekStarts: this.weekStartKeysForLeave(req) } : {},
     );
     this.dashboardRealtime?.notifyUserNotificationRefresh(req.userId);
 
@@ -1142,7 +1155,9 @@ export class RequestsService implements OnModuleInit {
     );
 
     await this.touchSchedulerWeeksForLeave(existing, reviewerId);
-    this.dashboardRealtime?.notifyOverviewRefresh('leave_revoked');
+    this.dashboardRealtime?.notifyOverviewRefresh('leave_revoked', {
+      affectedWeekStarts: this.weekStartKeysForLeave(existing),
+    });
     this.dashboardRealtime?.notifyUserNotificationRefresh(existing.userId);
 
     return view;

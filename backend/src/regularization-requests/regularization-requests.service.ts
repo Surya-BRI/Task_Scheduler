@@ -733,6 +733,9 @@ export class RegularizationRequestsService implements RegularizationRequestsCont
     }
     this.dashboardRealtime?.notifyOverviewRefresh(
       dto.status === 'Approved' ? 'regularization_approved' : 'regularization_rejected',
+      dto.status === 'Approved' && updatedRow.date
+        ? { weekStart: this.getStartOfWeek(new Date(updatedRow.date)).toISOString().slice(0, 10), taskId: updatedRow.taskId ?? undefined }
+        : {},
     );
     this.dashboardRealtime?.notifyUserNotificationRefresh(updated.designerId);
 

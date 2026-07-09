@@ -4,11 +4,12 @@ import { useCallback, useEffect, useReducer, useRef, useState } from 'react'
 import { Pause, Play, Square, X } from 'lucide-react'
 import { apiClient } from '@/lib/api-client'
 
-function saveTimerStateToDb(taskId, accumulatedSeconds, pauseLog) {
+function saveTimerStateToDb(taskId, accumulatedSeconds, pauseLog, runStartedAt) {
   apiClient
     .post(`/tasks/${taskId}/save-timer`, {
       accumulatedSeconds,
       ...(pauseLog !== undefined ? { pauseLog: JSON.stringify(pauseLog) } : {}),
+      ...(runStartedAt !== undefined ? { runStartedAt } : {}),
     })
     .catch(() => {})
 }
@@ -159,10 +160,13 @@ export function ProjectTaskTimer({
           if (!data) return
           const restored = data.accumulatedSeconds ?? 0
           const restoredPauses = data.pauseLog ? JSON.parse(data.pauseLog) : []
-          // Only overwrite if DB has more than what sessionStorage has
-          if (restored > acc || (restored === 0 && restoredPauses.length > 0)) {
+          const restoredRunStartAt = data.runStartedAt ? Date.parse(data.runStartedAt) : null
+          const hasDbRun = restoredRunStartAt != null && !Number.isNaN(restoredRunStartAt)
+          // Only overwrite if DB has more than what sessionStorage has, or an in-progress run anchor
+          if (hasDbRun || restored > acc || (restored === 0 && restoredPauses.length > 0)) {
             setAccumulatedSeconds(restored)
-            writePersisted(taskId, restored, null)
+            setRunStartAt(hasDbRun ? restoredRunStartAt : null)
+            writePersisted(taskId, restored, hasDbRun ? restoredRunStartAt : null)
           }
           if (restoredPauses.length > 0) {
             const existing = readPersistedPauses(taskId)
@@ -297,7 +301,7 @@ export function ProjectTaskTimer({
     const startedAt = Date.now()
     setRunStartAt(startedAt)
     writePersisted(taskId, accumulatedSeconds, startedAt)
-    saveTimerStateToDb(taskId, accumulatedSeconds)
+    saveTimerStateToDb(taskId, accumulatedSeconds, undefined, new Date(startedAt).toISOString())
     // Move task to IN_PROGRESS so it reflects active work
     apiClient.patch(`/tasks/${taskId}/status`, { status: 'IN_PROGRESS' })
       .catch(() => {})
@@ -309,7 +313,7 @@ export function ProjectTaskTimer({
     const frozen = freezeRunningClock()
     pauseStartedAt.current = Date.now()
     setShowPauseDropdown(true)
-    saveTimerStateToDb(taskId, frozen)
+    saveTimerStateToDb(taskId, frozen, undefined, null)
   }
 
   const applyPauseReason = () => {
@@ -323,7 +327,7 @@ export function ProjectTaskTimer({
     setPauseReason('')
     setShowPauseDropdown(false)
     const updatedPauses = readPersistedPauses(taskId)
-    saveTimerStateToDb(taskId, accumulatedSeconds, updatedPauses)
+    saveTimerStateToDb(taskId, accumulatedSeconds, updatedPauses, null)
   }
 
   const cancelPauseReason = () => {
@@ -333,6 +337,7 @@ export function ProjectTaskTimer({
     const resumedAt = Date.now()
     setRunStartAt(resumedAt)
     writePersisted(taskId, accumulatedSeconds, resumedAt)
+    saveTimerStateToDb(taskId, accumulatedSeconds, undefined, new Date(resumedAt).toISOString())
   }
 
   const handleStopClick = () => {

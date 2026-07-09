@@ -15,6 +15,17 @@ import { SaveTimerStateDto } from './dto/save-timer-state.dto';
 import { DashboardRealtimeService } from '../dashboard/dashboard-realtime.service';
 import { COMPLETED_STATUS_FILTER } from '../dashboard/task-status-buckets.util';
 import { NotificationsService } from '../notifications/notifications.service';
+import {
+  mapSchedulerTaskSummary,
+  SCHEDULER_TASK_SUMMARY_SELECT,
+  schedulerQueueWhere,
+  type SchedulerTaskSummaryDto,
+} from './scheduler-task-summary.util';
+import {
+  effectiveWorkSessionSeconds,
+  roundWorkSecondsUpTo5Min,
+  workedHoursFromSeconds,
+} from '../common/utils/task-work-session-time.util';
 
 const TASK_SELECT = {
   id: true,
@@ -186,6 +197,8 @@ const TASK_LIST_SELECT = {
 export type TaskFilters = {
   projectId?: string;
   status?: string;
+  /** Comma-separated statuses to exclude, e.g. callers that only need outstanding work. */
+  excludeStatuses?: string;
   priority?: string;
   assigneeId?: string;
   search?: string;
@@ -965,7 +978,7 @@ export class TasksService {
   }
 
   async findAll(userId: string, role: UserRole, filters: TaskFilters = {}) {
-    const { projectId, status, priority, assigneeId, search, page = 1, limit = 20, salesQueue = false } = filters;
+    const { projectId, status, excludeStatuses, priority, assigneeId, search, page = 1, limit = 20, salesQueue = false } = filters;
     const skip = (page - 1) * limit;
 
     // Role-based base filters — preserve sales review queue when salesQueue=true
@@ -1001,6 +1014,13 @@ export class TasksService {
 
     if (projectId) baseWhere.projectId = projectId;
     if (status) baseWhere.status = this.toDbTaskStatus(status);
+    if (excludeStatuses) {
+      const excluded = excludeStatuses
+        .split(',')
+        .map((s) => this.toDbTaskStatus(s))
+        .filter(Boolean);
+      if (excluded.length > 0) addAndFilter({ status: { notIn: excluded } });
+    }
     if (priority) baseWhere.priority = priority;
     if (assigneeId) {
       addAndFilter({
@@ -1039,6 +1059,16 @@ export class TasksService {
     };
   }
 
+  /** Sidebar backlog only — unassigned + on-hold, excluding completed. */
+  async findSchedulerQueue(): Promise<{ data: SchedulerTaskSummaryDto[] }> {
+    const rows = await this.prisma.task.findMany({
+      where: schedulerQueueWhere(),
+      select: SCHEDULER_TASK_SUMMARY_SELECT,
+      orderBy: { createdAt: 'desc' },
+    });
+    return { data: rows.map((task) => mapSchedulerTaskSummary(task)) };
+  }
+
   async findOne(id: string, userId?: string, role?: UserRole) {
     if (!this.isUuid(id)) {
       throw new BadRequestException('Invalid task id');
@@ -1047,7 +1077,50 @@ export class TasksService {
     if (!task) throw new NotFoundException('Task not found');
     await this.assertQsTaskAccess(id, userId, role);
     const withUrls = await this.withSignedAttachmentUrls(task);
-    return this.normalizeTaskForApi(withUrls);
+    const schedulerHours = await this.getSchedulerHoursForTask(id, userId);
+    return { ...this.normalizeTaskForApi(withUrls), schedulerHours };
+  }
+
+  private async getSchedulerHoursForTask(taskId: string, viewerUserId?: string) {
+    const rows = await this.prisma.schedulerAssignment.findMany({
+      where: { taskId },
+      select: {
+        designerId: true,
+        assignedHours: true,
+        designer: { select: { fullName: true } },
+      },
+    });
+
+    const partsByDesigner = new Map<string, { designerId: string; designerName: string; hours: number }>();
+    for (const row of rows) {
+      if (!row.designerId) continue;
+      const hours = Number(row.assignedHours) || 0;
+      if (hours <= 0) continue;
+      const existing = partsByDesigner.get(row.designerId);
+      if (existing) {
+        existing.hours += hours;
+      } else {
+        partsByDesigner.set(row.designerId, {
+          designerId: row.designerId,
+          designerName: row.designer?.fullName?.trim() || 'Designer',
+          hours,
+        });
+      }
+    }
+
+    const parts = Array.from(partsByDesigner.values())
+      .map((part) => ({ ...part, hours: Math.round(part.hours * 100) / 100 }))
+      .filter((part) => part.hours > 0)
+      .sort((a, b) => b.hours - a.hours);
+
+    const totalHours = Math.round(parts.reduce((sum, part) => sum + part.hours, 0) * 100) / 100;
+    const myPart = viewerUserId ? parts.find((part) => part.designerId === viewerUserId) : undefined;
+
+    return {
+      totalHours,
+      myHours: myPart?.hours ?? null,
+      parts,
+    };
   }
 
   async update(id: string, dto: UpdateTaskDto) {
@@ -1130,7 +1203,10 @@ export class TasksService {
     });
 
     if (existing.assigneeId && existing.assigneeId !== dto.assigneeId) {
-      this.dashboardRealtime?.notifyOverviewRefresh('task_reassigned');
+      this.dashboardRealtime?.notifyOverviewRefresh('task_reassigned', {
+        taskId: id,
+        changedTaskIds: [id],
+      });
     }
 
     const linkUrlAssign =
@@ -1260,9 +1336,17 @@ export class TasksService {
     });
 
     if (COMPLETED_STATUS_FILTER.includes(effectiveStatusApi)) {
-      this.dashboardRealtime?.notifyOverviewRefresh('task_completed');
+      this.dashboardRealtime?.notifyOverviewRefresh('task_completed', {
+        taskId: id,
+        status: effectiveStatusApi,
+        changedTaskIds: [id],
+      });
     } else {
-      this.dashboardRealtime?.notifyOverviewRefresh('task_status_changed');
+      this.dashboardRealtime?.notifyOverviewRefresh('task_status_changed', {
+        taskId: id,
+        status: effectiveStatusApi,
+        changedTaskIds: [id],
+      });
     }
 
     if (COMPLETED_STATUS_FILTER.includes(effectiveStatusApi)) {
@@ -1673,6 +1757,7 @@ export class TasksService {
             durationSeconds: dto.durationSeconds,
             submissionLink: dto.submissionLink?.trim() || null,
             pauseLog: dto.pauseLog || draft.pauseLog || null,
+            runStartedAt: null,
             status: 'Submitted',
             submittedAt: new Date(),
           },
@@ -1838,13 +1923,29 @@ export class TasksService {
       orderBy: { createdAt: 'desc' },
     });
     if (!draft) return null;
-    return { accumulatedSeconds: draft.durationSeconds, pauseLog: draft.pauseLog ?? null };
+    return {
+      accumulatedSeconds: draft.durationSeconds,
+      pauseLog: draft.pauseLog ?? null,
+      runStartedAt: draft.runStartedAt?.toISOString() ?? null,
+    };
+  }
+
+  private resolveRunStartedAtFromDto(dto: SaveTimerStateDto): Date | null | undefined {
+    if (!('runStartedAt' in dto)) return undefined;
+    if (dto.runStartedAt == null || dto.runStartedAt === '') return null;
+    const parsed = new Date(dto.runStartedAt);
+    if (Number.isNaN(parsed.getTime())) {
+      throw new BadRequestException('Invalid runStartedAt');
+    }
+    return parsed;
   }
 
   async saveTimerState(taskId: string, userId: string, dto: SaveTimerStateDto) {
     if (!this.isUuid(taskId)) throw new BadRequestException('Invalid task id');
     const task = await this.prisma.task.findUnique({ where: { id: taskId } });
     if (!task) throw new NotFoundException('Task not found');
+
+    const runStartedAt = this.resolveRunStartedAtFromDto(dto);
 
     return this.prisma.$transaction(async (tx) => {
       const existing = await tx.taskWorkSession.findFirst({
@@ -1857,6 +1958,7 @@ export class TasksService {
           data: {
             durationSeconds: dto.accumulatedSeconds,
             pauseLog: dto.pauseLog ?? existing.pauseLog,
+            ...(runStartedAt !== undefined ? { runStartedAt } : {}),
           },
         });
         return { sessionId: existing.id };
@@ -1868,11 +1970,55 @@ export class TasksService {
           designerId: userId,
           durationSeconds: dto.accumulatedSeconds,
           pauseLog: dto.pauseLog ?? null,
+          runStartedAt: runStartedAt ?? null,
           status: 'Draft',
         },
       });
       return { sessionId: created.id };
     });
+  }
+
+  async freezeDraftWorkSession(taskId: string, designerId: string) {
+    if (!this.isUuid(taskId)) throw new BadRequestException('Invalid task id');
+    if (!this.isUuid(designerId)) throw new BadRequestException('Invalid designer id');
+
+    const task = await this.prisma.task.findUnique({ where: { id: taskId }, select: { id: true } });
+    if (!task) throw new NotFoundException('Task not found');
+
+    const draft = await this.prisma.taskWorkSession.findFirst({
+      where: { taskId, designerId, status: 'Draft' },
+      orderBy: { createdAt: 'desc' },
+    });
+
+    if (!draft) {
+      return {
+        workedSeconds: 0,
+        workedHours: 0,
+        frozen: false,
+        hadRunningTimer: false,
+      };
+    }
+
+    const effectiveSeconds = effectiveWorkSessionSeconds(draft.durationSeconds, draft.runStartedAt);
+    const frozenSeconds = roundWorkSecondsUpTo5Min(effectiveSeconds);
+    const hadRunningTimer = draft.runStartedAt != null;
+
+    if (frozenSeconds !== draft.durationSeconds || hadRunningTimer) {
+      await this.prisma.taskWorkSession.update({
+        where: { id: draft.id },
+        data: {
+          durationSeconds: frozenSeconds,
+          runStartedAt: null,
+        },
+      });
+    }
+
+    return {
+      workedSeconds: frozenSeconds,
+      workedHours: workedHoursFromSeconds(frozenSeconds),
+      frozen: frozenSeconds > 0 || hadRunningTimer,
+      hadRunningTimer,
+    };
   }
 
   private async getAssignedProjectIdsForQsUser(userId: string) {
