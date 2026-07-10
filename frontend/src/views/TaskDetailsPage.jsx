@@ -789,7 +789,7 @@ function mapTaskToRecord(task) {
     taskDesignType: task.designType ?? null,
     retailDesignTypes,
     revisionCode: task.revisionCode ?? null,
-    status: normalizeStatusCode(task.status ?? 'PENDING'),
+    status: normalizeStatusCode(task.status ?? 'DESIGN_NEW'),
     priority: task.priority ?? '-',
     reviewerHod,
     providedAssets,
@@ -880,7 +880,11 @@ function DisciplinePill({ type }) {
   )
 }
 
-function ProjectTaskList({ tasks, loading, onView }) {
+function ProjectTaskList({ tasks, loading, onView, isRetail = false }) {
+  const gridCols = isRetail
+    ? 'grid-cols-[1.2fr_0.5fr_0.9fr_1fr_1fr_80px_44px]'
+    : 'grid-cols-[1.2fr_0.5fr_1fr_0.9fr_1fr_1fr_80px_44px]'
+
   return (
     <div className="mt-3">
       <div className="mb-1.5 flex items-center justify-between">
@@ -888,10 +892,10 @@ function ProjectTaskList({ tasks, loading, onView }) {
         <span className="text-[11px] text-slate-400">{tasks.length} task{tasks.length !== 1 ? 's' : ''}</span>
       </div>
       <div className="overflow-hidden rounded-md border border-slate-200">
-        <div className="grid grid-cols-[1.2fr_0.5fr_1fr_0.9fr_1fr_1fr_80px_44px] bg-slate-100 px-2.5 py-1.5 text-[11px] font-semibold text-slate-600">
+        <div className={`grid ${gridCols} bg-slate-100 px-2.5 py-1.5 text-[11px] font-semibold text-slate-600`}>
           <div>Task No</div>
           <div>Revision</div>
-          <div>Sign Family</div>
+          {!isRetail ? <div>Sign Family</div> : null}
           <div>Type</div>
           <div>Status</div>
           <div>Designer</div>
@@ -912,14 +916,14 @@ function ProjectTaskList({ tasks, loading, onView }) {
               return (
                 <li
                   key={task.id}
-                  className="grid grid-cols-[1.2fr_0.5fr_1fr_0.9fr_1fr_1fr_80px_44px] items-center px-2.5 py-2 text-xs text-slate-700 hover:bg-slate-50"
+                  className={`grid ${gridCols} items-center px-2.5 py-2 text-xs text-slate-700 hover:bg-slate-50`}
                 >
                   <span className="min-w-0">
                     <span className="block truncate font-medium text-slate-900">{task.taskNo || '—'}</span>
                     {task.signType && <span className="block truncate text-[10px] text-slate-400">{task.signType}</span>}
                   </span>
                   <span>{task.revisionCode || '—'}</span>
-                  <span className="truncate text-slate-600">{task.signFamily || '—'}</span>
+                  {!isRetail ? <span className="truncate text-slate-600">{task.signFamily || '—'}</span> : null}
                   <span><DisciplinePill type={task.disciplineType} /></span>
                   <span>
                     <span className={`inline-block rounded-full px-2 py-0.5 text-[10px] font-semibold ${getTaskStatusBadgeClass(normalized)}`}>
@@ -2042,7 +2046,7 @@ export function TaskDetailsPage() {
                           <DetailRow label="Task Status" value={record.status ?? '-'} />
                           <DetailRow label="Priority Level" value={record.priority ?? '-'} />
                           <DetailRow
-                            label="Assigned Hours"
+                            label="Assigned Time"
                             value={(() => {
                               const viewerId = _session?.designerId ?? _session?.id ?? null;
                               const fromScheduler = formatSchedulerAssignedHours(record.schedulerHours, {
@@ -2059,6 +2063,38 @@ export function TaskDetailsPage() {
                               return total > 0 ? formatHoursAsHm(total) : '-';
                             })()}
                           />
+                          <DetailRow
+                            label="Logged Time"
+                            value={(() => {
+                              const sh = record.schedulerHours;
+                              if (!sh) return '-';
+                              if (isHod) {
+                                const logged = sh.totalLoggedHours ?? 0;
+                                return logged > 0 ? formatHoursAsHm(logged) : '-';
+                              }
+                              const mine = sh.myLoggedHours ?? 0;
+                              return mine > 0 ? formatHoursAsHm(mine) : '-';
+                            })()}
+                          />
+                          <DetailRow
+                            label="Remaining"
+                            value={(() => {
+                              const sh = record.schedulerHours;
+                              if (!sh) return '-';
+                              const viewerId = _session?.designerId ?? _session?.id ?? null;
+                              const assigned = isHod ? (sh.totalAssignedHours ?? sh.totalHours) : (sh.myAssignedHours ?? sh.myHours);
+                              const logged = isHod ? (sh.totalLoggedHours ?? 0) : (sh.myLoggedHours ?? 0);
+                              if (assigned == null || assigned <= 0) return '-';
+                              const rem = Math.max(0, assigned - logged);
+                              return formatHoursAsHm(rem);
+                            })()}
+                          />
+                          {!isHod && (record.schedulerHours?.myApprovedOvertimeHours ?? 0) > 0 ? (
+                            <DetailRow
+                              label="Approved OT (today)"
+                              value={formatHoursAsHm(record.schedulerHours.myApprovedOvertimeHours)}
+                            />
+                          ) : null}
                         </div>
                         <div className="space-y-0.5">
                           <DetailRow label="Created Date" value={record.created ?? '-'} />
@@ -2108,6 +2144,9 @@ export function TaskDetailsPage() {
                         <ProjectTaskTimer
                           taskId={taskId}
                           taskStatus={taskStatus}
+                          assignedHours={record.schedulerHours?.myAssignedHours ?? record.schedulerHours?.myHours ?? null}
+                          approvedOvertimeHours={record.schedulerHours?.myApprovedOvertimeHours ?? null}
+                          pendingOvertimeHours={record.schedulerHours?.myPendingOvertimeHours ?? null}
                           launchAutostart={launchAutostart}
                           launchPauseModal={launchPauseModal}
                           launchCompleteModal={launchCompleteModal}
@@ -2517,23 +2556,11 @@ export function TaskDetailsPage() {
                     </div>
                   ) : null}
 
-                  {(isCreationRoute || !hasExistingTask) && isRetail ? (
-                    <div className="mt-3 overflow-hidden rounded-md border border-slate-200">
-                      <div className="grid grid-cols-5 bg-slate-100 px-2.5 py-1.5 text-[11px] font-semibold text-slate-600">
-                        <div>Sign Family</div>
-                        <div>Sign Type</div>
-                        <div>Plan Code</div>
-                        <div>Contract Reference</div>
-                        <div>Quantity</div>
-                      </div>
-                      <div className="px-3 py-6 text-center text-xs text-slate-500">No rows yet.</div>
-                    </div>
-                  ) : null}
-
                   {isCreationRoute && projectId ? (
                     <ProjectTaskList
                       tasks={projectTasks}
                       loading={tasksLoading}
+                      isRetail={isRetail}
                       onView={(task) =>
                         router.push(taskViewPathForRecord({ id: task.id, designType: task.designType ?? task.project?.category }))
                       }

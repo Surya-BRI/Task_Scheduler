@@ -1043,17 +1043,6 @@ export function RetailProjectPage() {
                     </div>
                   </div>
 
-                  <div className="mt-3 overflow-hidden rounded-md border border-slate-200">
-                    <div className="grid grid-cols-5 bg-slate-100 px-2.5 py-1.5 text-[11px] font-semibold text-slate-600">
-                      <div>Sign Family</div>
-                      <div>Sign Type</div>
-                      <div>Plan Code</div>
-                      <div>Contract Reference</div>
-                      <div>Quantity</div>
-                    </div>
-                    <div className="px-3 py-6 text-center text-xs text-slate-500">No rows yet.</div>
-                  </div>
-
                   <ProjectTaskList
                     tasks={projectTasks}
                     loading={tasksLoading}

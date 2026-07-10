@@ -122,6 +122,13 @@ export class TasksController {
     return this.tasksService.findSchedulerQueue();
   }
 
+  /** GET /tasks/running-timer — designer's currently running draft timer (if any) */
+  @Get('running-timer')
+  @Roles(UserRole.DESIGNER, UserRole.HOD)
+  getRunningTimer(@CurrentUser() user: JwtPayload) {
+    return this.tasksService.getRunningTimerForDesigner(user.sub);
+  }
+
   /** GET /tasks/:id */
   @Get(':id')
   @Roles(UserRole.HOD, UserRole.DESIGNER, UserRole.SALESPERSON, UserRole.QS)
@@ -186,7 +193,19 @@ export class TasksController {
     @Param('id') id: string,
     @Body() dto: FreezeDraftWorkSessionDto,
   ) {
-    return this.tasksService.freezeDraftWorkSession(id, dto.designerId);
+    return this.tasksService.freezeDraftWorkSession(id, dto.designerId, dto.closeSession ?? true);
+  }
+
+  /** GET /tasks/:id/draft-work-peek?designerId= — read logged time without mutating session */
+  @Get(':id/draft-work-peek')
+  @Roles(UserRole.HOD, UserRole.DESIGNER)
+  peekDraftWorkSession(
+    @Param('id') id: string,
+    @Query('designerId') designerId: string,
+    @CurrentUser() user: JwtPayload,
+  ) {
+    const targetDesigner = user.role === UserRole.HOD && designerId ? designerId : user.sub;
+    return this.tasksService.peekDraftWorkSession(id, targetDesigner);
   }
 
   /** POST /tasks/:id/submit-work — all authenticated roles (designer submits their timer work) */

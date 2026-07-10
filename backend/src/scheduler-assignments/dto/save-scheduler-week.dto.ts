@@ -48,6 +48,11 @@ export class SchedulerAssignmentInputDto {
   @IsOptional()
   @IsBoolean()
   isPinned?: boolean;
+
+  /** Logged-time remainder after partial handoff — non-draggable audit slice. */
+  @IsOptional()
+  @IsBoolean()
+  isLocked?: boolean;
 }
 
 export class SaveSchedulerWeekDto {

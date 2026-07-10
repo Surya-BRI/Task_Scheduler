@@ -14,6 +14,7 @@ import { SubmitWorkDto } from './dto/submit-work.dto';
 import { SaveTimerStateDto } from './dto/save-timer-state.dto';
 import { DashboardRealtimeService } from '../dashboard/dashboard-realtime.service';
 import { COMPLETED_STATUS_FILTER } from '../dashboard/task-status-buckets.util';
+import { toApiTaskStatus, toDbTaskStatus } from './task-status.util';
 import { NotificationsService } from '../notifications/notifications.service';
 import {
   mapSchedulerTaskSummary,
@@ -26,6 +27,8 @@ import {
   roundWorkSecondsUpTo5Min,
   workedHoursFromSeconds,
 } from '../common/utils/task-work-session-time.util';
+import { utcDateOnlyString } from '../common/utils/date-window.util';
+import { summarizeViewerOvertimeHours } from './scheduler-overtime-hours.util';
 
 const TASK_SELECT = {
   id: true,
@@ -226,21 +229,10 @@ export class TasksService {
     @Optional() private readonly dashboardRealtime?: DashboardRealtimeService,
   ) {}
 
-  private toDbTaskStatus(status?: string | null) {
-    return String(status ?? '').trim().toUpperCase();
-  }
-
-  private toApiTaskStatus(status?: string | null) {
-    const value = String(status ?? '').trim().toUpperCase();
-    if (!value) return value;
-    if (value === 'ON-HOLD') return 'ON_HOLD';
-    return value;
-  }
-
   private normalizeTaskForApi<T extends { status?: string | null }>(task: T): T {
     return {
       ...task,
-      status: this.toApiTaskStatus(task.status),
+      status: toApiTaskStatus(task.status),
     };
   }
 
@@ -1013,11 +1005,11 @@ export class TasksService {
     }
 
     if (projectId) baseWhere.projectId = projectId;
-    if (status) baseWhere.status = this.toDbTaskStatus(status);
+    if (status) baseWhere.status = toDbTaskStatus(status);
     if (excludeStatuses) {
       const excluded = excludeStatuses
         .split(',')
-        .map((s) => this.toDbTaskStatus(s))
+        .map((s) => toDbTaskStatus(s))
         .filter(Boolean);
       if (excluded.length > 0) addAndFilter({ status: { notIn: excluded } });
     }
@@ -1086,41 +1078,147 @@ export class TasksService {
       where: { taskId },
       select: {
         designerId: true,
+        dayIndex: true,
         assignedHours: true,
+        isLocked: true,
         designer: { select: { fullName: true } },
       },
+      orderBy: [{ designerId: 'asc' }, { dayIndex: 'asc' }],
     });
 
-    const partsByDesigner = new Map<string, { designerId: string; designerName: string; hours: number }>();
+    const sessions = await this.prisma.taskWorkSession.findMany({
+      where: {
+        taskId,
+        status: { in: ['Draft', 'HandedOff', 'Submitted'] },
+      },
+      select: { designerId: true, durationSeconds: true, runStartedAt: true, status: true },
+    });
+
+    const loggedSecondsByDesigner = new Map<string, number>();
+    for (const session of sessions) {
+      const key = session.designerId;
+      const seconds =
+        session.status === 'Draft'
+          ? effectiveWorkSessionSeconds(session.durationSeconds, session.runStartedAt)
+          : session.durationSeconds;
+      loggedSecondsByDesigner.set(key, (loggedSecondsByDesigner.get(key) ?? 0) + seconds);
+    }
+
+    const partsByDesigner = new Map<
+      string,
+      { designerId: string; designerName: string; assignedHours: number; loggedHours: number; sliceCount: number }
+    >();
     for (const row of rows) {
       if (!row.designerId) continue;
       const hours = Number(row.assignedHours) || 0;
       if (hours <= 0) continue;
       const existing = partsByDesigner.get(row.designerId);
       if (existing) {
-        existing.hours += hours;
+        existing.assignedHours += hours;
+        existing.sliceCount += 1;
       } else {
         partsByDesigner.set(row.designerId, {
           designerId: row.designerId,
           designerName: row.designer?.fullName?.trim() || 'Designer',
-          hours,
+          assignedHours: hours,
+          loggedHours: 0,
+          sliceCount: 1,
         });
       }
     }
 
     const parts = Array.from(partsByDesigner.values())
-      .map((part) => ({ ...part, hours: Math.round(part.hours * 100) / 100 }))
-      .filter((part) => part.hours > 0)
-      .sort((a, b) => b.hours - a.hours);
+      .map((part) => {
+        const loggedSeconds = loggedSecondsByDesigner.get(part.designerId) ?? 0;
+        const loggedHours = workedHoursFromSeconds(loggedSeconds);
+        const assignedHours = Math.round(part.assignedHours * 100) / 100;
+        return {
+          designerId: part.designerId,
+          designerName: part.designerName,
+          hours: assignedHours,
+          assignedHours,
+          loggedHours,
+          sliceCount: part.sliceCount,
+          overAssignedHours: Math.round(Math.max(0, loggedHours - assignedHours) * 100) / 100,
+        };
+      })
+      .filter((part) => part.assignedHours > 0)
+      .sort((a, b) => b.assignedHours - a.assignedHours);
 
-    const totalHours = Math.round(parts.reduce((sum, part) => sum + part.hours, 0) * 100) / 100;
+    const totalAssignedHours = Math.round(parts.reduce((sum, part) => sum + part.assignedHours, 0) * 100) / 100;
+    const totalLoggedHours = Math.round(
+      parts.reduce((sum, part) => sum + part.loggedHours, 0) * 100,
+    ) / 100;
     const myPart = viewerUserId ? parts.find((part) => part.designerId === viewerUserId) : undefined;
 
+    let myApprovedOvertimeHours: number | null = null;
+    let myPendingOvertimeHours: number | null = null;
+    if (viewerUserId) {
+      const todayDate = new Date(`${utcDateOnlyString()}T00:00:00.000Z`);
+      const overtimeRows = await this.prisma.overtimeRequest.findMany({
+        where: {
+          taskId,
+          designerId: viewerUserId,
+          date: todayDate,
+        },
+        select: {
+          status: true,
+          approvedHours: true,
+          requestedHours: true,
+          totalHours: true,
+        },
+      });
+      const otSummary = summarizeViewerOvertimeHours(overtimeRows);
+      myApprovedOvertimeHours =
+        otSummary.myApprovedOvertimeHours > 0 ? otSummary.myApprovedOvertimeHours : null;
+      myPendingOvertimeHours =
+        otSummary.myPendingOvertimeHours > 0 ? otSummary.myPendingOvertimeHours : null;
+    }
+
     return {
-      totalHours,
-      myHours: myPart?.hours ?? null,
+      totalHours: totalAssignedHours,
+      totalAssignedHours,
+      totalLoggedHours,
+      myHours: myPart?.assignedHours ?? null,
+      myAssignedHours: myPart?.assignedHours ?? null,
+      myLoggedHours: myPart?.loggedHours ?? null,
+      myOverAssignedHours: myPart?.overAssignedHours ?? null,
+      myApprovedOvertimeHours,
+      myPendingOvertimeHours,
       parts,
     };
+  }
+
+  async peekDraftWorkSession(taskId: string, designerId: string) {
+    if (!this.isUuid(taskId)) throw new BadRequestException('Invalid task id');
+    if (!this.isUuid(designerId)) throw new BadRequestException('Invalid designer id');
+    const peek = await this.readDesignerWorkSeconds(taskId, designerId);
+    return {
+      workedSeconds: peek.totalSeconds,
+      workedHours: workedHoursFromSeconds(peek.totalSeconds),
+      hadRunningTimer: peek.hadRunningTimer,
+    };
+  }
+
+  private async readDesignerWorkSeconds(taskId: string, designerId: string) {
+    const sessions = await this.prisma.taskWorkSession.findMany({
+      where: { taskId, designerId, status: { in: ['Draft', 'HandedOff'] } },
+      select: { durationSeconds: true, runStartedAt: true, status: true },
+      orderBy: { createdAt: 'desc' },
+    });
+
+    let totalSeconds = 0;
+    let hadRunningTimer = false;
+    for (const session of sessions) {
+      if (session.status === 'Draft') {
+        totalSeconds += effectiveWorkSessionSeconds(session.durationSeconds, session.runStartedAt);
+        hadRunningTimer = hadRunningTimer || session.runStartedAt != null;
+      } else {
+        totalSeconds += session.durationSeconds;
+      }
+    }
+    const rounded = roundWorkSecondsUpTo5Min(totalSeconds);
+    return { totalSeconds: rounded, hadRunningTimer };
   }
 
   async update(id: string, dto: UpdateTaskDto) {
@@ -1249,14 +1347,14 @@ export class TasksService {
     }
 
     // Only SALESPERSON and ADMIN can issue rework
-    const newStatusApi = this.toApiTaskStatus(dto.status);
+    const newStatusApi = toApiTaskStatus(dto.status);
     if (newStatusApi === 'REWORK' && role !== UserRole.SALESPERSON && role !== UserRole.ADMIN) {
       throw new ForbiddenException('Only SALESPERSON or ADMIN can issue rework');
     }
 
     // Auto-track startedAt / completedAt timestamps
     const now = new Date();
-    let newStatusDb = this.toDbTaskStatus(dto.status);
+    let newStatusDb = toDbTaskStatus(dto.status);
     const extraData: Record<string, unknown> = {};
 
     // Going INTO ON_HOLD — store current status so it can be restored later
@@ -1265,14 +1363,14 @@ export class TasksService {
     }
 
     // Coming OUT of ON_HOLD — restore the previously stored status regardless of what was sent
-    const currentStatusApi = this.toApiTaskStatus(existing.status);
+    const currentStatusApi = toApiTaskStatus(existing.status);
     if (currentStatusApi === 'ON_HOLD' && newStatusApi !== 'ON_HOLD') {
       newStatusDb = existing.holdPreviousStatus ?? newStatusDb;
       extraData.holdPreviousStatus = null;
     }
 
     // Use the effective status (after ON_HOLD restore) for timestamps, logging, and notifications
-    const effectiveStatusApi = this.toApiTaskStatus(newStatusDb);
+    const effectiveStatusApi = toApiTaskStatus(newStatusDb);
 
     if (effectiveStatusApi === 'IN_PROGRESS' && !existing.startedAt) extraData.startedAt = now;
     if (COMPLETED_STATUS_FILTER.includes(effectiveStatusApi)) extraData.completedAt = now;
@@ -1328,7 +1426,7 @@ export class TasksService {
           name: (updatedTask as any).project?.name,
         },
         changes: {
-          oldStatus: this.toApiTaskStatus(existing.status),
+          oldStatus: toApiTaskStatus(existing.status),
           newStatus: effectiveStatusApi,
         },
         context: { source: 'tasks.updateStatus' },
@@ -1705,7 +1803,7 @@ export class TasksService {
 
     return tasks.reduce(
       (acc, row) => {
-        acc[this.toApiTaskStatus(row.status)] = row._count.status;
+        acc[toApiTaskStatus(row.status)] = row._count.status;
         return acc;
       },
       {} as Record<string, number>,
@@ -1746,7 +1844,7 @@ export class TasksService {
     // Create/promote work session + files in a transaction, then update task status
     const session = await this.prisma.$transaction(async (tx) => {
       const draft = await tx.taskWorkSession.findFirst({
-        where: { taskId, designerId: userId, status: 'Draft' },
+        where: { taskId, designerId: userId, status: { in: ['Draft', 'HandedOff'] } },
       });
 
       let session;
@@ -1799,7 +1897,7 @@ export class TasksService {
       return session;
     });
 
-    const previousStatusApi = this.toApiTaskStatus(task.status);
+    const previousStatusApi = toApiTaskStatus(task.status);
     const submittedTaskSnapshot = {
       id: task.id,
       taskNo: task.taskNo,
@@ -1916,17 +2014,67 @@ export class TasksService {
     };
   }
 
+  async getRunningTimerForDesigner(designerId: string) {
+    if (!this.isUuid(designerId)) throw new BadRequestException('Invalid designer id');
+    const drafts = await this.prisma.taskWorkSession.findMany({
+      where: {
+        designerId,
+        status: 'Draft',
+        runStartedAt: { not: null },
+      },
+      orderBy: { createdAt: 'desc' },
+      select: { id: true, taskId: true, runStartedAt: true },
+    });
+    if (drafts.length === 0) return null;
+
+    const canonical = drafts[0];
+    if (drafts.length > 1) {
+      await this.prisma.taskWorkSession.updateMany({
+        where: {
+          designerId,
+          status: 'Draft',
+          runStartedAt: { not: null },
+          NOT: { id: canonical.id },
+        },
+        data: { runStartedAt: null },
+      });
+    }
+
+    return {
+      taskId: canonical.taskId,
+      runStartedAt: canonical.runStartedAt!.toISOString(),
+    };
+  }
+
   async getTimerState(taskId: string, userId: string) {
     if (!this.isUuid(taskId)) throw new BadRequestException('Invalid task id');
     const draft = await this.prisma.taskWorkSession.findFirst({
-      where: { taskId, designerId: userId, status: 'Draft' },
+      where: { taskId, designerId: userId, status: { in: ['Draft', 'HandedOff'] } },
       orderBy: { createdAt: 'desc' },
     });
     if (!draft) return null;
+    const handedOff = draft.status === 'HandedOff';
+    let runStartedAt: string | null = handedOff ? null : (draft.runStartedAt?.toISOString() ?? null);
+
+    if (runStartedAt) {
+      const active = await this.getRunningTimerForDesigner(userId);
+      if (!active || active.taskId !== taskId) {
+        runStartedAt = null;
+        if (draft.runStartedAt && draft.status === 'Draft') {
+          await this.prisma.taskWorkSession.update({
+            where: { id: draft.id },
+            data: { runStartedAt: null },
+          });
+        }
+      }
+    }
+
     return {
       accumulatedSeconds: draft.durationSeconds,
       pauseLog: draft.pauseLog ?? null,
-      runStartedAt: draft.runStartedAt?.toISOString() ?? null,
+      runStartedAt,
+      locked: handedOff,
+      handedOff,
     };
   }
 
@@ -1948,8 +2096,54 @@ export class TasksService {
     const runStartedAt = this.resolveRunStartedAtFromDto(dto);
 
     return this.prisma.$transaction(async (tx) => {
+      const handedOff = await tx.taskWorkSession.findFirst({
+        where: { taskId, designerId: userId, status: 'HandedOff' },
+      });
+      if (handedOff) {
+        throw new ForbiddenException(
+          'Your work on this task was handed off to another designer — the timer is closed for your slice.',
+        );
+      }
+
+      if (runStartedAt) {
+        const otherRunning = await tx.taskWorkSession.findFirst({
+          where: {
+            designerId: userId,
+            status: 'Draft',
+            runStartedAt: { not: null },
+            NOT: { taskId },
+          },
+          orderBy: { createdAt: 'desc' },
+          select: { taskId: true },
+        });
+        if (otherRunning) {
+          throw new ForbiddenException(
+            'Pause or complete the task that is currently running before starting another.',
+          );
+        }
+      }
+
+      // Pause: clear runStartedAt on every draft row for this task (handles duplicate drafts).
+      if (runStartedAt === null && 'runStartedAt' in dto) {
+        await tx.taskWorkSession.updateMany({
+          where: { taskId, designerId: userId, status: 'Draft' },
+          data: {
+            runStartedAt: null,
+            durationSeconds: dto.accumulatedSeconds,
+            ...(dto.pauseLog !== undefined ? { pauseLog: dto.pauseLog } : {}),
+          },
+        });
+        const latest = await tx.taskWorkSession.findFirst({
+          where: { taskId, designerId: userId, status: 'Draft' },
+          orderBy: { createdAt: 'desc' },
+          select: { id: true },
+        });
+        return { sessionId: latest?.id ?? null };
+      }
+
       const existing = await tx.taskWorkSession.findFirst({
         where: { taskId, designerId: userId, status: 'Draft' },
+        orderBy: { createdAt: 'desc' },
       });
 
       if (existing) {
@@ -1978,7 +2172,7 @@ export class TasksService {
     });
   }
 
-  async freezeDraftWorkSession(taskId: string, designerId: string) {
+  async freezeDraftWorkSession(taskId: string, designerId: string, closeSession = true) {
     if (!this.isUuid(taskId)) throw new BadRequestException('Invalid task id');
     if (!this.isUuid(designerId)) throw new BadRequestException('Invalid designer id');
 
@@ -1990,24 +2184,43 @@ export class TasksService {
       orderBy: { createdAt: 'desc' },
     });
 
+    const handedOff = await this.prisma.taskWorkSession.findMany({
+      where: { taskId, designerId, status: 'HandedOff' },
+      select: { durationSeconds: true },
+    });
+    const handedOffSeconds = handedOff.reduce((sum, row) => sum + row.durationSeconds, 0);
+
     if (!draft) {
+      const totalSeconds = roundWorkSecondsUpTo5Min(handedOffSeconds);
       return {
-        workedSeconds: 0,
-        workedHours: 0,
+        workedSeconds: totalSeconds,
+        workedHours: workedHoursFromSeconds(totalSeconds),
         frozen: false,
         hadRunningTimer: false,
+        sessionClosed: false,
       };
     }
 
     const effectiveSeconds = effectiveWorkSessionSeconds(draft.durationSeconds, draft.runStartedAt);
-    const frozenSeconds = roundWorkSecondsUpTo5Min(effectiveSeconds);
+    const totalEffective = handedOffSeconds + effectiveSeconds;
+    const frozenSeconds = roundWorkSecondsUpTo5Min(totalEffective);
+    const draftFrozenOnly = roundWorkSecondsUpTo5Min(effectiveSeconds);
     const hadRunningTimer = draft.runStartedAt != null;
 
-    if (frozenSeconds !== draft.durationSeconds || hadRunningTimer) {
+    if (closeSession) {
       await this.prisma.taskWorkSession.update({
         where: { id: draft.id },
         data: {
-          durationSeconds: frozenSeconds,
+          durationSeconds: draftFrozenOnly,
+          runStartedAt: null,
+          status: 'HandedOff',
+        },
+      });
+    } else if (hadRunningTimer || draftFrozenOnly !== draft.durationSeconds) {
+      await this.prisma.taskWorkSession.update({
+        where: { id: draft.id },
+        data: {
+          durationSeconds: draftFrozenOnly,
           runStartedAt: null,
         },
       });
@@ -2018,6 +2231,7 @@ export class TasksService {
       workedHours: workedHoursFromSeconds(frozenSeconds),
       frozen: frozenSeconds > 0 || hadRunningTimer,
       hadRunningTimer,
+      sessionClosed: closeSession,
     };
   }
 

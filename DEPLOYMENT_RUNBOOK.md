@@ -86,6 +86,8 @@ Task status constraint must include:
 - `APPROVED`
 - `ON_HOLD`
 
+**Pending migration (not yet deployed):** `backend/src/tasks/task-status.util.ts` introduces a unified lifecycle vocabulary (`DESIGN_NEW`, `DESIGN_PLANNED`, `IN_PROGRESS`, `DESIGN_COMPLETED`, `HOD_REVIEW`, `SALES_REVIEW`, `REWORK`, `CLIENT_ACCEPTED`, `CLIENT_REJECTED`, `ON_HOLD`) replacing the legacy values above. Once that code deploys, run `backend/prisma/sql/migrate-all-legacy-task-statuses.sql` — it rewrites legacy `status`/`holdPreviousStatus` values on `ErpTSTask` and tightens `CK_Task_status` to the unified list in one script. Do not run it before the code deploys (API would then write legacy values against a tightened constraint).
+
 ### Verify constraint
 ```sql
 SELECT cc.name, cc.definition
@@ -93,7 +95,7 @@ FROM sys.check_constraints cc
 WHERE cc.name = 'CK_Task_status';
 ```
 
-### Update constraint
+### Update constraint (legacy — superseded by the migration script above once run)
 ```sql
 ALTER TABLE [dbo].[ErpTSTask] DROP CONSTRAINT [CK_Task_status];
 ALTER TABLE [dbo].[ErpTSTask] WITH CHECK ADD CONSTRAINT [CK_Task_status]

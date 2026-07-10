@@ -57,6 +57,8 @@ export type SaveSchedulerAssignmentInput = {
   totalParts?: number | null;
   notes?: string | null;
   isPinned?: boolean;
+  /** Logged-time remainder after partial handoff. */
+  isLocked?: boolean;
 };
 
 export function listSchedulerAssignmentsForWeek(weekStart: string, designerId?: string) {

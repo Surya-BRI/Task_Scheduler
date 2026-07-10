@@ -21,7 +21,12 @@ import {
     updateFragmentStatus,
     updateOvertimeRequestSchedulerAction,
 } from "../services/scheduler-assignments.api";
-import { freezeDraftWorkSession } from "../services/task-timer.api";
+import { freezeDraftWorkSession, peekDraftWorkSession } from "../services/task-timer.api";
+import {
+    allocateLoggedHoursFifo,
+    collectDesignerTaskSlices,
+    countOtherActiveSlices,
+} from "../utils/task-time-allocation";
 import {
     DEFAULT_SCHEDULER_REFERENCE_DATE,
     formatSchedulerDateRangeText,
@@ -275,7 +280,7 @@ function buildPreparedDropAssignment({
 // they logged, and locks it so it can no longer be dragged. Called after a partial
 // handoff so the source designer's calendar keeps a real, visible, persisted record
 // instead of the task simply vanishing from their day.
-function applyLoggedCardPatch(preparedAssignment, patch) {
+function applyLoggedCardPatch(preparedAssignment, patch, sourceId, sourceDay) {
     if (!preparedAssignment || !patch) return preparedAssignment;
     const existing = preparedAssignment.updatedTasks[patch.taskId];
     if (!existing) return preparedAssignment;
@@ -287,6 +292,15 @@ function applyLoggedCardPatch(preparedAssignment, patch) {
         isLoggedRemainder: true,
         status: "assigned",
     };
+    if (sourceId && sourceDay != null && sourceId !== "unassigned" && sourceId !== "ON_HOLD") {
+        if (!preparedAssignment.updatedSchedules[sourceId])
+            preparedAssignment.updatedSchedules[sourceId] = {};
+        const dayKey = String(sourceDay);
+        const dayList = preparedAssignment.updatedSchedules[sourceId][dayKey] ?? [];
+        if (!dayList.includes(patch.taskId)) {
+            preparedAssignment.updatedSchedules[sourceId][dayKey] = [...dayList, patch.taskId];
+        }
+    }
     return preparedAssignment;
 }
 
@@ -1094,6 +1108,7 @@ export function DesignSchedulerScreen() {
                         position: positionIndex,
                         notes: null,
                         isPinned: Boolean(task.isPinned),
+                        isLocked: Boolean(task.isLocked || task.isLoggedRemainder),
                     });
                 });
             });
@@ -1843,46 +1858,57 @@ export function DesignSchedulerScreen() {
         let handoffHadRunningTimer = false;
         if (sourceId !== targetDesignerId && sourceId !== "unassigned" && sourceId !== "ON_HOLD") {
             const canonicalTaskId = droppedTask.parentId ?? taskId;
-            let loggedHours = Math.round(toPositiveHours(droppedTask.workedHours) * 100) / 100;
+            const designerSlices = collectDesignerTaskSlices(schedules, tasks, sourceId, canonicalTaskId);
+            const otherActiveSlices = countOtherActiveSlices(designerSlices, taskId);
+            let totalLoggedHours = Math.round(toPositiveHours(droppedTask.workedHours) * 100) / 100;
             try {
-                const freeze = await freezeDraftWorkSession(canonicalTaskId, sourceId);
-                if (freeze?.workedHours != null) {
-                    loggedHours = Math.round(toPositiveHours(freeze.workedHours) * 100) / 100;
+                const peek = await peekDraftWorkSession(canonicalTaskId, sourceId);
+                if (peek?.workedHours != null) {
+                    totalLoggedHours = Math.round(toPositiveHours(peek.workedHours) * 100) / 100;
                 }
-                handoffHadRunningTimer = Boolean(freeze?.hadRunningTimer);
+                handoffHadRunningTimer = Boolean(peek?.hadRunningTimer);
             }
             catch (error) {
-                console.warn("Unable to freeze draft timer before handoff", { canonicalTaskId, sourceId, error });
+                console.warn("Unable to peek draft timer before handoff", { canonicalTaskId, sourceId, error });
             }
-            if (loggedHours > 0) {
-                const consumeKey = `${sourceId}|${canonicalTaskId}`;
-                if (!consumedWorkedHoursRef.current.has(consumeKey)) {
-                    const scheduledForThisBlock = toPositiveHours(droppedTask.estimatedHours);
-                    const remainingHours = Math.round(Math.max(0, scheduledForThisBlock - loggedHours) * 100) / 100;
-                    if (remainingHours <= 0) {
-                        toast.info(`${droppedTask.baseName ?? droppedTask.name} — all ${formatHoursAsHm(scheduledForThisBlock)} already logged. Nothing left to reassign.`);
-                        return;
+            const allocation = allocateLoggedHoursFifo(designerSlices, totalLoggedHours);
+            const sliceLoggedHours = Math.round(toPositiveHours(allocation.get(taskId)) * 100) / 100;
+            const scheduledForThisBlock = toPositiveHours(droppedTask.estimatedHours);
+
+            if (sliceLoggedHours > 0) {
+                const remainingHours = Math.round(Math.max(0, scheduledForThisBlock - sliceLoggedHours) * 100) / 100;
+                if (remainingHours <= 0) {
+                    toast.info(`${droppedTask.baseName ?? droppedTask.name} — all ${formatHoursAsHm(scheduledForThisBlock)} on this slice already logged. Nothing left to reassign.`);
+                    return;
+                }
+                if (remainingHours < scheduledForThisBlock) {
+                    try {
+                        await freezeDraftWorkSession(canonicalTaskId, sourceId, {
+                            closeSession: otherActiveSlices === 0,
+                        });
                     }
-                    if (remainingHours < scheduledForThisBlock) {
-                        consumedWorkedHoursRef.current.add(consumeKey);
-                        const remainderId = getNextTaskId();
-                        effectiveDroppedTask = {
-                            ...droppedTask,
-                            id: remainderId,
-                            parentId: canonicalTaskId,
-                            estimatedHours: remainingHours,
-                            scheduledHours: remainingHours,
-                            workedHours: 0,
-                        };
-                        dropTaskId = remainderId;
-                        loggedCardPatch = { taskId, loggedHours };
-                        toast.warning(
-                            `${formatHoursAsHm(loggedHours)} logged by the previous designer stays on their day — assigning the remaining ${formatHoursAsHm(remainingHours)}.`,
-                            handoffHadRunningTimer
-                                ? { description: "Their running timer was finalized at handoff." }
-                                : undefined,
-                        );
+                    catch (error) {
+                        console.warn("Unable to freeze draft timer before handoff", { canonicalTaskId, sourceId, error });
                     }
+                    const remainderId = getNextTaskId();
+                    effectiveDroppedTask = {
+                        ...droppedTask,
+                        id: remainderId,
+                        parentId: canonicalTaskId,
+                        estimatedHours: remainingHours,
+                        scheduledHours: remainingHours,
+                        workedHours: 0,
+                    };
+                    dropTaskId = remainderId;
+                    loggedCardPatch = { taskId, loggedHours: sliceLoggedHours };
+                    toast.warning(
+                        `${formatHoursAsHm(sliceLoggedHours)} logged on this slice stays on ${designers.find((d) => d.id === sourceId)?.name ?? "the previous designer"}'s day — assigning the remaining ${formatHoursAsHm(remainingHours)}.`,
+                        handoffHadRunningTimer
+                            ? { description: otherActiveSlices > 0
+                                ? "Their timer stays open for other scheduled slices on this task."
+                                : "Their running timer was finalized at handoff." }
+                            : undefined,
+                    );
                 }
             }
         }
@@ -1944,7 +1970,7 @@ export function DesignSchedulerScreen() {
             const fullResult = buildPreparedDropAssignment({ ...assignArgs, allowOvertime: true });
             if (!fullResult?.preparedAssignment)
                 return;
-            if (loggedCardPatch) applyLoggedCardPatch(fullResult.preparedAssignment, loggedCardPatch);
+            if (loggedCardPatch) applyLoggedCardPatch(fullResult.preparedAssignment, loggedCardPatch, sourceId, sourceDay);
             stampPin(fullResult.preparedAssignment);
             if (!fullResult.hasOvertime) {
                 applyPreparedAssignment(fullResult.preparedAssignment);
@@ -1956,7 +1982,7 @@ export function DesignSchedulerScreen() {
             const splitResult = buildPreparedDropAssignment({ ...assignArgs, allowOvertime: false });
             if (!splitResult?.preparedAssignment)
                 return;
-            if (loggedCardPatch) applyLoggedCardPatch(splitResult.preparedAssignment, loggedCardPatch);
+            if (loggedCardPatch) applyLoggedCardPatch(splitResult.preparedAssignment, loggedCardPatch, sourceId, sourceDay);
             stampPin(splitResult.preparedAssignment);
             const splitIdAfterSplit = splitIdCounterRef.current;
             splitIdCounterRef.current = splitIdBaseline;
@@ -1999,14 +2025,9 @@ export function DesignSchedulerScreen() {
         }
         proceedWithPlacement(targetDayIndex, { isPinned: false });
     };
-    const LEGACY_STATUS_MAP = { PENDING: 'DESIGN_NEW', WIP: 'IN_PROGRESS', COMPLETED: 'DESIGN_COMPLETED', REVISION: 'REWORK', APPROVED: 'CLIENT_ACCEPTED' };
-    const normalizeBackendStatus = (s) => LEGACY_STATUS_MAP[s] ?? s ?? 'DESIGN_NEW';
-    // Scheduling an ON_HOLD task onto a designer is the HOD's explicit signal to take it off
-    // hold — without this, the task's real backend status stays ON_HOLD forever and it silently
-    // reappears in the sidebar's hold list on the next week navigation/reload.
     const clearOnHoldStatus = (taskId, holdPreviousStatus) => {
         if (!taskId || !isUuid(taskId)) return;
-        const backendStatus = normalizeBackendStatus(holdPreviousStatus ?? "DESIGN_NEW");
+        const backendStatus = holdPreviousStatus ?? "DESIGN_NEW";
         apiClient.patch(`/tasks/${taskId}/status`, { status: backendStatus }).catch((error) => {
             console.warn("Unable to clear on-hold status after scheduling", { taskId, error });
             toast.error("Task was scheduled, but its on-hold status couldn't be cleared — it may reappear as on-hold.");
@@ -2239,7 +2260,7 @@ export function DesignSchedulerScreen() {
 
         const backendStatus = newStatus === "ON_HOLD"
             ? "ON_HOLD"
-            : normalizeBackendStatus(taskBefore?.holdPreviousStatus ?? "DESIGN_NEW");
+            : (taskBefore?.holdPreviousStatus ?? "DESIGN_NEW");
         setTasks(nextTasks);
         // For split consolidation, the canonical UUID is parentId (not the split fragment's temp ID)
         const apiTaskId = (isSplitPart && isUuid(parentId)) ? parentId : taskId;

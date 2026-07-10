@@ -19,7 +19,7 @@ import {
 import { Navbar } from "@/components/Navbar";
 import { apiClient } from "@/lib/api-client";
 import { FROM_DESIGN_LIST, taskSummaryPath, taskViewPathForRecord } from "@/lib/design-list-routes";
-import { getStatusLabel, mapTaskToDesignRow, matchDateRange, toBackendStatus } from "../task-view-model";
+import { getStatusLabel, mapTaskToDesignRow, matchDateRange } from "../task-view-model";
 
 const getStatusColor = (status) => {
   switch (status) {
@@ -211,7 +211,7 @@ export function DesignListScreen({ workflowFrom = FROM_DESIGN_LIST }) {
     params.set("page", "1");
     params.set("limit", "500");
     if (filters.searchQuery.trim()) params.set("search", filters.searchQuery.trim());
-    if (filters.status) params.set("status", toBackendStatus(filters.status).toUpperCase());
+    if (filters.status) params.set("status", filters.status);
     apiClient.get(`/tasks?${params.toString()}`).then((res) => {
       if (!mounted) return;
       const rows = Array.isArray(res?.data) ? res.data.map(mapTaskToDesignRow) : [];

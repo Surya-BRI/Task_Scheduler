@@ -18,6 +18,11 @@ import {
   minRegularizationDate,
   utcDateOnlyString,
 } from "@/lib/date-window";
+import {
+  MAX_OVERTIME_HOURS_PER_DAY,
+  OVERTIME_REQUESTED_HOURS_OPTIONS,
+  parseRequestedHoursLabel,
+} from "@/lib/overtime-constants";
 import { apiClient } from "@/lib/api-client";
 import {
   createRegularizationRequest,
@@ -913,9 +918,9 @@ export default function RequestsClient() {
       toast.warning("Please select a reason for overtime.");
       return;
     }
-    const m = /^(\d+)/.exec(otForm.requestedHours);
-    if (m && Number(m[1]) > 4) {
-      toast.warning("Cannot exceed 4 hours allowed limit.");
+    const requestedHours = parseRequestedHoursLabel(otForm.requestedHours);
+    if (requestedHours > MAX_OVERTIME_HOURS_PER_DAY) {
+      toast.warning(`Cannot exceed ${MAX_OVERTIME_HOURS_PER_DAY} hours allowed limit.`);
       return;
     }
     const requestDate = utcDateOnlyString();
@@ -1531,10 +1536,9 @@ export default function RequestsClient() {
                   <div>
                     <label className="mb-1.5 block text-sm font-medium text-slate-700">Requested Extra Hours</label>
                     <select value={otForm.requestedHours} onChange={(e) => setOtForm({ ...otForm, requestedHours: e.target.value })} className={inputClass}>
-                      <option>1 hour</option>
-                      <option>2 hours</option>
-                      <option>3 hours</option>
-                      <option>4 hours</option>
+                      {OVERTIME_REQUESTED_HOURS_OPTIONS.map((option) => (
+                        <option key={option}>{option}</option>
+                      ))}
                     </select>
                   </div>
                 </div>

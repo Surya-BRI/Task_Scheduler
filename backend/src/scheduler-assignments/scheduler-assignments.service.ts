@@ -1827,7 +1827,7 @@ export class SchedulerAssignmentsService implements OnModuleInit {
       const workedSecondsByKey = new Map<string, number>();
       if (taskIds.length > 0 && designerIdsForWork.length > 0) {
         const draftSessions = await this.prisma.taskWorkSession.findMany({
-          where: { status: 'Draft', taskId: { in: taskIds }, designerId: { in: designerIdsForWork } },
+          where: { status: { in: ['Draft', 'HandedOff'] }, taskId: { in: taskIds }, designerId: { in: designerIdsForWork } },
           select: { taskId: true, designerId: true, durationSeconds: true, runStartedAt: true },
         });
         for (const session of draftSessions) {
@@ -2388,7 +2388,7 @@ export class SchedulerAssignmentsService implements OnModuleInit {
             weekStartDate,
             weekEndDate,
             notes: a.notes ?? null,
-            isLocked: false,
+            isLocked: a.isLocked ?? false,
             isPinned: a.isPinned ?? false,
             assignedBy: userId,
           })),
