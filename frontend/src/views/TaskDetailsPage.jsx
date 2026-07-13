@@ -1311,6 +1311,8 @@ export function TaskDetailsPage() {
   const _session = getSession()
   const isHod = hasHodWorkflowAccess(_session?.role ?? '')
   const isSales = _session?.role === 'SALESPERSON'
+  const isAdmin = _session?.role === 'ADMIN'
+  const canSalesReview = isSales || isAdmin
   const isDesigner = _session?.role === 'DESIGNER'
   const isDesignerWorkMode = isDesigner || (isHod && from === FROM_DESIGNER_QUEUE)
   const isHodManagementMode = isHod && !isDesignerWorkMode
@@ -2351,8 +2353,8 @@ export function TaskDetailsPage() {
                           </div>
                         </div>
                       )}
-                      {/* Salesperson action panel — SALES_REVIEW and ON_HOLD parked from SALES_REVIEW */}
-                      {isSales && (
+                      {/* Sales / Admin action panel — SALES_REVIEW and ON_HOLD parked from SALES_REVIEW */}
+                      {canSalesReview && (
                         taskStatus === 'SALES_REVIEW' ||
                         (taskStatus === 'ON_HOLD' && record?.holdPreviousStatus === 'SALES_REVIEW')
                       ) && (

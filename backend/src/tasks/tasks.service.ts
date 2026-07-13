@@ -1725,14 +1725,18 @@ export class TasksService {
       }
     }
 
-    // CLIENT_REJECTED — notify designers, then create the next revision task
+    // CLIENT_REJECTED — create next revision first, then notify designers with link to the new task
     let revisionResult: { id: string; taskNo: string } | null = null;
     if (effectiveStatusApi === 'CLIENT_REJECTED') {
+      revisionResult = await this.createRevisionFromClientReject(existing, dto, userId);
+
       const linkUrlClientRejected =
         (updatedTask as any).designType?.toLowerCase() === 'retail'
-          ? `/retail-task-view/${id}`
-          : `/project-task-view/${id}`;
-      const clientRejectedMessage = `${(updatedTask as any).taskNo} — ${(updatedTask as any).project?.name ?? 'Unknown Project'} was rejected by the client.`;
+          ? `/retail-task-view/${revisionResult.id}`
+          : `/project-task-view/${revisionResult.id}`;
+      const clientRejectedMessage =
+        `${(updatedTask as any).taskNo} — ${(updatedTask as any).project?.name ?? 'Unknown Project'} was rejected by the client. ` +
+        `New revision ${revisionResult.taskNo} created and is awaiting assignment.`;
       if ((updatedTask as any).assigneeId) {
         this.notificationsService
           .create({ userId: (updatedTask as any).assigneeId, title: 'Client Rejected Task', message: clientRejectedMessage, linkUrl: linkUrlClientRejected })
@@ -1754,8 +1758,6 @@ export class TasksService {
           .catch((err) => this.logger.error('Failed to send client-rejected notification to split designer', err));
         this.dashboardRealtime?.notifyUserNotificationRefresh(designerId);
       }
-
-      revisionResult = await this.createRevisionFromClientReject(existing, dto, userId);
     }
 
     // ON_HOLD — notify the assignee and split designers whichever direction the transition goes
@@ -1793,43 +1795,47 @@ export class TasksService {
       }
     }
 
-    // SALES_REVIEW — notify all salesperson users that a task is waiting for their decision
+    // SALES_REVIEW — notify sales + admin that a task is waiting for their decision
     if (effectiveStatusApi === 'SALES_REVIEW') {
       const linkUrlSales =
         (updatedTask as any).designType?.toLowerCase() === 'retail'
           ? `/retail-task-view/${id}`
           : `/project-task-view/${id}`;
       const salesMessage = `${(updatedTask as any).taskNo} — ${(updatedTask as any).project?.name ?? 'Unknown Project'} is ready for your review.`;
-      const salespersons = await this.prisma.user.findMany({
-        where: { role: { name: 'SALESPERSON' } },
+      const salesReviewers = await this.prisma.user.findMany({
+        where: { role: { name: { in: ['SALESPERSON', 'ADMIN'] } } },
         select: { id: true },
       });
-      for (const sp of salespersons) {
+      for (const sp of salesReviewers) {
         this.notificationsService
           .create({ userId: sp.id, title: `Task Ready for Review — ${(updatedTask as any).taskNo}`, message: salesMessage, linkUrl: linkUrlSales })
-          .catch((err) => this.logger.error('Failed to send sales-review notification to salesperson', err));
+          .catch((err) => this.logger.error('Failed to send sales-review notification', err));
         this.dashboardRealtime?.notifyUserNotificationRefresh(sp.id);
       }
     }
 
-    // REWORK — same task stays with current designer(s); notify and post instructions
+    // REWORK — same task stays with current designer(s); notify designers + stakeholders
     if (effectiveStatusApi === 'REWORK') {
       const taskLink =
         (updatedTask as any).designType?.toLowerCase() === 'retail'
           ? `/retail-task-view/${id}`
           : `/project-task-view/${id}`;
       const note = dto.reworkNote?.trim() ?? '';
+      const reworkTitle = `Rework Issued — ${(updatedTask as any).taskNo}`;
+      const reworkMessage = note || 'Task has been sent for rework.';
+      const notifiedUserIds = new Set<string>();
 
       if ((updatedTask as any).assigneeId) {
         this.notificationsService
           .create({
             userId: (updatedTask as any).assigneeId,
-            title: `Rework Issued — ${(updatedTask as any).taskNo}`,
-            message: note || 'Task has been sent for rework.',
+            title: reworkTitle,
+            message: reworkMessage,
             linkUrl: taskLink,
           })
           .catch((err) => this.logger.error('Failed to send rework notification', err));
         this.dashboardRealtime?.notifyUserNotificationRefresh((updatedTask as any).assigneeId);
+        notifiedUserIds.add((updatedTask as any).assigneeId);
       }
       const splitDesignersRework = await this.prisma.taskDesigner.findMany({
         where: {
@@ -1844,12 +1850,34 @@ export class TasksService {
         this.notificationsService
           .create({
             userId: designerId,
-            title: `Rework Issued — ${(updatedTask as any).taskNo}`,
-            message: note || 'Task has been sent for rework.',
+            title: reworkTitle,
+            message: reworkMessage,
             linkUrl: taskLink,
           })
           .catch((err) => this.logger.error('Failed to send rework notification to split designer', err));
         this.dashboardRealtime?.notifyUserNotificationRefresh(designerId);
+        notifiedUserIds.add(designerId);
+      }
+
+      // HOD / Sales / Admin (skip actor + anyone already notified as designer)
+      const reworkStakeholders = await this.prisma.user.findMany({
+        where: { role: { name: { in: ['HOD', 'SALESPERSON', 'ADMIN'] } } },
+        select: { id: true },
+      });
+      const stakeholderMessage =
+        `${(updatedTask as any).taskNo} — ${(updatedTask as any).project?.name ?? 'Unknown Project'} was sent for rework.` +
+        (note ? ` ${note}` : '');
+      for (const stakeholder of reworkStakeholders) {
+        if (stakeholder.id === userId || notifiedUserIds.has(stakeholder.id)) continue;
+        this.notificationsService
+          .create({
+            userId: stakeholder.id,
+            title: reworkTitle,
+            message: stakeholderMessage,
+            linkUrl: taskLink,
+          })
+          .catch((err) => this.logger.error('Failed to send rework notification to stakeholder', err));
+        this.dashboardRealtime?.notifyUserNotificationRefresh(stakeholder.id);
       }
 
       if (note) {
@@ -2063,41 +2091,24 @@ export class TasksService {
       },
     }).catch((err) => this.logger.error('Failed to log client-reject revision activity', err));
 
-    // Notify HODs
-    const hodUsers = await this.prisma.user.findMany({
+    // Notify HOD / Sales / Admin once (sales were previously double-notified)
+    const stakeholders = await this.prisma.user.findMany({
       where: { role: { name: { in: ['HOD', 'SALESPERSON', 'ADMIN'] } } },
       select: { id: true },
     });
     const taskLink = designType?.toLowerCase() === 'retail'
       ? `/retail-task-view/${result.id}`
       : `/project-task-view/${result.id}`;
-    for (const hod of hodUsers) {
+    for (const stakeholder of stakeholders) {
       this.notificationsService
         .create({
-          userId: hod.id,
+          userId: stakeholder.id,
           title: `New Revision Created — ${result.taskNo}`,
           message: `Revision ${result._revision} created after client reject. Awaiting assignment.`,
           linkUrl: taskLink,
         })
-        .catch((err) => this.logger.error('Failed to send new revision notification to HOD', err));
-      this.dashboardRealtime?.notifyUserNotificationRefresh(hod.id);
-    }
-
-    // Notify salesperson users so they can track the revision they triggered
-    const salespersonsRevision = await this.prisma.user.findMany({
-      where: { role: { name: 'SALESPERSON' } },
-      select: { id: true },
-    });
-    for (const sp of salespersonsRevision) {
-      this.notificationsService
-        .create({
-          userId: sp.id,
-          title: `New Revision Created — ${result.taskNo}`,
-          message: `Revision ${result._revision} created after client reject. Awaiting designer assignment.`,
-          linkUrl: taskLink,
-        })
-        .catch((err) => this.logger.error('Failed to send new revision notification to salesperson', err));
-      this.dashboardRealtime?.notifyUserNotificationRefresh(sp.id);
+        .catch((err) => this.logger.error('Failed to send new revision notification', err));
+      this.dashboardRealtime?.notifyUserNotificationRefresh(stakeholder.id);
     }
 
     return { id: result.id, taskNo: result.taskNo };
@@ -2292,8 +2303,9 @@ export class TasksService {
             ? (submittedTask as any).taskDesigners.map((d: any) => d.designer.fullName).join(', ')
             : 'Designer');
         const submitMsg = `${submittedTask.taskNo} — ${submittedTask.project?.name ?? 'Unknown Project'} work submitted by ${submitterName}. Ready for review.`;
+        // Sales wait for SALES_REVIEW — avoid early "Work Submitted" noise
         const hodUsers = await this.prisma.user.findMany({
-          where: { role: { name: { in: ['HOD', 'SALESPERSON', 'ADMIN'] } } },
+          where: { role: { name: { in: ['HOD', 'ADMIN'] } } },
           select: { id: true },
         });
         for (const hod of hodUsers) {

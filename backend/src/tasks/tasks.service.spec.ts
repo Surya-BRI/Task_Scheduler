@@ -357,7 +357,7 @@ describe('TasksService', () => {
       expect(dashboardRealtime.notifyUserNotificationRefresh).toHaveBeenCalledWith('hod-1');
     });
 
-    it('CLIENT_REJECTED notifies the assignee and creates the next revision task', async () => {
+    it('CLIENT_REJECTED creates the next revision, notifies designers with the new-task link, and notifies stakeholders once', async () => {
       const revisionTask = { id: 'rev-task-1', taskNo: 'T-101' };
       prisma.task.update
         .mockResolvedValueOnce({ ...updatedTask, status: 'CLIENT_REJECTED' })
@@ -367,15 +367,13 @@ describe('TasksService', () => {
         .mockResolvedValueOnce({ retailDetails: [], projectDetails: [] });
       prisma.task.create.mockResolvedValue(revisionTask);
       prisma.task.findMany.mockResolvedValue([{ revisionCode: 'R0' }]);
+      prisma.user.findMany.mockResolvedValue([{ id: 'hod-1' }, { id: 'sales-1' }]);
 
       const result = await service.updateStatus(TASK_ID, 'sales-1', UserRole.SALESPERSON, {
         status: 'CLIENT_REJECTED',
         reworkNote: 'Client wants new pack',
       } as any);
 
-      expect(notificationsService.create).toHaveBeenCalledWith(
-        expect.objectContaining({ userId: 'designer-1', title: 'Client Rejected Task' }),
-      );
       expect(prisma.task.create).toHaveBeenCalledWith(
         expect.objectContaining({
           data: expect.objectContaining({
@@ -395,6 +393,19 @@ describe('TasksService', () => {
           }),
         }),
       );
+      expect(notificationsService.create).toHaveBeenCalledWith(
+        expect.objectContaining({
+          userId: 'designer-1',
+          title: 'Client Rejected Task',
+          linkUrl: expect.stringContaining(revisionTask.id),
+          message: expect.stringContaining(revisionTask.taskNo),
+        }),
+      );
+      const newRevisionNotifs = notificationsService.create.mock.calls.filter(
+        ([payload]: any[]) => payload?.title === `New Revision Created — ${revisionTask.taskNo}`,
+      );
+      expect(newRevisionNotifs).toHaveLength(2);
+      expect(newRevisionNotifs.map(([p]: any[]) => p.userId).sort()).toEqual(['hod-1', 'sales-1']);
       expect(result.newRevisionTaskId).toBe(revisionTask.id);
       expect(result.newRevisionTaskNo).toBe(revisionTask.taskNo);
     });
@@ -426,6 +437,7 @@ describe('TasksService', () => {
         assigneeId: 'designer-1',
         reworkNote: 'Fix sheet 3',
       });
+      prisma.user.findMany.mockResolvedValue([{ id: 'hod-1' }, { id: 'sales-other' }, { id: 'sales-1' }]);
 
       const result = await service.updateStatus(TASK_ID, 'sales-1', UserRole.SALESPERSON, {
         status: 'REWORK',
@@ -446,10 +458,34 @@ describe('TasksService', () => {
       expect(notificationsService.create).toHaveBeenCalledWith(
         expect.objectContaining({ userId: 'designer-1', title: expect.stringContaining('Rework Issued') }),
       );
+      expect(notificationsService.create).toHaveBeenCalledWith(
+        expect.objectContaining({ userId: 'hod-1', title: expect.stringContaining('Rework Issued') }),
+      );
+      expect(notificationsService.create).toHaveBeenCalledWith(
+        expect.objectContaining({ userId: 'sales-other', title: expect.stringContaining('Rework Issued') }),
+      );
+      // Actor who issued rework is not re-notified as a stakeholder
+      expect(notificationsService.create).not.toHaveBeenCalledWith(
+        expect.objectContaining({ userId: 'sales-1', title: expect.stringContaining('Rework Issued') }),
+      );
       expect(prisma.chatterPost.create).toHaveBeenCalledWith(
         expect.objectContaining({
           data: expect.objectContaining({ taskId: TASK_ID, title: 'Rework Instructions' }),
         }),
+      );
+    });
+
+    it('SALES_REVIEW notifies salesperson and admin', async () => {
+      prisma.task.update.mockResolvedValue({ ...updatedTask, status: 'SALES_REVIEW' });
+      prisma.user.findMany.mockResolvedValue([{ id: 'sales-1' }, { id: 'admin-1' }]);
+
+      await service.updateStatus(TASK_ID, 'hod-1', UserRole.HOD, { status: 'SALES_REVIEW' } as any);
+
+      expect(notificationsService.create).toHaveBeenCalledWith(
+        expect.objectContaining({ userId: 'sales-1', title: expect.stringContaining('Ready for Review') }),
+      );
+      expect(notificationsService.create).toHaveBeenCalledWith(
+        expect.objectContaining({ userId: 'admin-1', title: expect.stringContaining('Ready for Review') }),
       );
     });
 
