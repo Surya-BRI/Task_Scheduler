@@ -11,6 +11,7 @@ export const SCHEDULER_TASK_SUMMARY_SELECT = {
   revisionCode: true,
   designType: true,
   disciplineType: true,
+  phase: true,
   status: true,
   priority: true,
   assigneeId: true,
@@ -53,6 +54,7 @@ export type SchedulerTaskSummaryDto = {
   revisionCode: string | null;
   designType: string | null;
   disciplineType: string | null;
+  phase: number | null;
   status: string;
   priority: string | null;
   assigneeId: string | null;
@@ -113,6 +115,7 @@ export function mapSchedulerTaskSummary(task: SchedulerTaskSummaryRow): Schedule
     revisionCode: task.revisionCode,
     designType: task.designType,
     disciplineType: task.disciplineType,
+    phase: task.phase,
     status: mapStatusForApi(task.status),
     priority: task.priority,
     assigneeId: task.assigneeId,

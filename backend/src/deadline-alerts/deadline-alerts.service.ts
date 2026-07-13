@@ -19,12 +19,15 @@ const REMINDER_INTERVALS = [
 
 const SCAN_WINDOW_MS = 5 * 60 * 1000 + 30 * 1000;
 const HORIZON_MS = REMINDER_INTERVALS[0].ms;
+// Tasks in these statuses are not actively being worked and should not generate deadline
+// reminders/overdue nags. Kept in sync with the unified vocabulary in tasks/task-status.util.ts —
+// there is no CANCELLED/CANCELED Task status (that string only applies to LeaveRequest); a
+// paused task is ON_HOLD.
 const ACTIVE_TASK_STATUS_EXCLUSIONS = [
   'CLIENT_ACCEPTED',
   'CLIENT_REJECTED',
   'DESIGN_COMPLETED',
-  'CANCELLED',
-  'CANCELED',
+  'ON_HOLD',
 ];
 
 type DeadlineInterval = (typeof REMINDER_INTERVALS)[number];

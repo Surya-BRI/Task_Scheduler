@@ -55,6 +55,31 @@ export class SchedulerAssignmentInputDto {
   isLocked?: boolean;
 }
 
+/**
+ * Hours that didn't fit anywhere in the week being saved — e.g. a task dropped on a designer's
+ * Friday whose remaining capacity is less than the task's hours. The server finds the next
+ * available working day (skipping weekends/holidays/full-day leave, possibly in a later week)
+ * and creates the SchedulerAssignment row(s) itself, atomically with the rest of this save —
+ * no client-side carry-forward, no dependency on the destination week ever being loaded.
+ */
+export class SchedulerOverflowInputDto {
+  @IsUUID()
+  designerId: string;
+
+  /** Canonical (parent) task id — the same id used across all of this task's split parts. */
+  @IsUUID()
+  taskId: string;
+
+  @Type(() => Number)
+  @IsNumber({ maxDecimalPlaces: 2 })
+  @Min(0.01)
+  hours: number;
+
+  @IsOptional()
+  @IsBoolean()
+  isPinned?: boolean;
+}
+
 export class SaveSchedulerWeekDto {
   @Type(() => Number)
   @IsInt()
@@ -83,4 +108,10 @@ export class SaveSchedulerWeekDto {
   @IsArray()
   @IsUUID(undefined, { each: true })
   affectedTaskIds?: string[];
+
+  @IsOptional()
+  @IsArray()
+  @ValidateNested({ each: true })
+  @Type(() => SchedulerOverflowInputDto)
+  overflow?: SchedulerOverflowInputDto[];
 }

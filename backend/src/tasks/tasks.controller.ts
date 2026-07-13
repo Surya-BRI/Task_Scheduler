@@ -109,6 +109,18 @@ export class TasksController {
     return this.tasksService.getNextRevision({ projectId, projectNo, opNo, designType });
   }
 
+  /** GET /tasks/next-phase — suggested release phase for a project's next Create-Task batch */
+  @Get('next-phase')
+  @Roles(UserRole.HOD, UserRole.DESIGNER, UserRole.SALESPERSON)
+  getNextPhase(
+    @Query('projectId') projectId?: string,
+    @Query('projectNo') projectNo?: string,
+    @Query('opNo') opNo?: string,
+    @Query('designType') designType?: string,
+  ) {
+    return this.tasksService.getNextPhase({ projectId, projectNo, opNo, designType });
+  }
+
   @Get('summary')
   @Roles(UserRole.HOD, UserRole.DESIGNER, UserRole.SALESPERSON)
   getSummary(@CurrentUser() user: JwtPayload) {
@@ -148,6 +160,13 @@ export class TasksController {
   @Roles(UserRole.HOD, UserRole.SALESPERSON)
   assign(@Param('id') id: string, @CurrentUser() user: JwtPayload, @Body() dto: AssignTaskDto) {
     return this.tasksService.assign(id, user.sub, dto);
+  }
+
+  /** GET /tasks/:id/hold-impact — preview of scheduler parts a Hold would remove */
+  @Get(':id/hold-impact')
+  @Roles(UserRole.HOD, UserRole.SALESPERSON)
+  getHoldImpact(@Param('id') id: string) {
+    return this.tasksService.getHoldImpact(id);
   }
 
   /** PATCH /tasks/:id/status — all authenticated roles */

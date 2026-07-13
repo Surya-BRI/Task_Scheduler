@@ -27,11 +27,11 @@ When HOD moves a slice from designer A → B:
 1. **Peek** A's draft session (no DB change).
 2. **FIFO-allocate** logged hours across A's slices for that task.
 3. **Only the dragged slice's allocation** is used — not whole-task total.
-4. If allocation on this slice is **0** → full slice moves to B; timer stays open for A's other slices.
+4. If allocation on this slice is **0** → full slice moves to B. A's draft session is frozen (`freezeDraftWorkSession(closeSession=false)` clears `runStartedAt`) rather than left running; if A still has other active slices, A gets a "Timer Paused" notification and must press Start again to resume tracking.
 5. If allocation **> 0** → A keeps a locked "· logged" card; B gets remainder.
-6. **HandedOff** (timer closed) only when A has **no other active slices** on that task.
+6. **HandedOff** (timer closed) only when A has **no other active slices** on that task; otherwise the session stays `Draft` but paused (step 4).
 
-Example: Mon 2h + Tue 1h, Alex logged 1h 20m on Mon, drag **Tue 1h** to Allen → Tue allocation = **0** → Allen gets **full 1h**, Alex keeps Mon + timer.
+Example: Mon 2h + Tue 1h, Alex logged 1h 20m on Mon, drag **Tue 1h** to Allen → Tue allocation = **0** → Allen gets **full 1h**, Alex keeps Mon; if Alex's timer was running, it's now paused and Alex is notified to press Start again.
 
 ## Overtime
 
@@ -63,5 +63,5 @@ Timer OT is **informational + request path** — it does not auto-approve payrol
 | Endpoint | Purpose |
 |----------|---------|
 | `GET /tasks/:id/draft-work-peek?designerId=` | Read logged seconds without mutating |
-| `POST /tasks/:id/freeze-draft-session` | Finalize on handoff (`closeSession` optional) |
+| `POST /tasks/:id/freeze-draft-session` | Finalize on handoff. `closeSession=true` (default) marks `HandedOff`; `closeSession=false` pauses a running timer without closing the session, and sends a "Timer Paused" notification if the timer was actually running |
 | `GET /tasks/:id` → `schedulerHours` | Assigned slices + logged per designer |

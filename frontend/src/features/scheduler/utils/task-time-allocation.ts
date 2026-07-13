@@ -49,6 +49,7 @@ export function allocateLoggedHoursFifo(
   for (const slice of slices) {
     if (slice.isLoggedRemainder) {
       map.set(slice.id, slice.estimatedHours);
+      pool = Math.round(Math.max(0, pool - slice.estimatedHours) * 100) / 100;
       continue;
     }
     const alloc = Math.round(Math.min(pool, slice.estimatedHours) * 100) / 100;

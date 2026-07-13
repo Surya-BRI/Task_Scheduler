@@ -1,4 +1,4 @@
-import { BadRequestException, ForbiddenException, Injectable, Logger, NotFoundException, Optional } from '@nestjs/common';
+import { BadRequestException, ConflictException, ForbiddenException, Injectable, Logger, NotFoundException, Optional } from '@nestjs/common';
 import { Prisma } from '@prisma/client';
 import { PrismaService } from '../prisma/prisma.service';
 import { CreateTaskDto } from './dto/create-task.dto';
@@ -40,6 +40,7 @@ const TASK_SELECT = {
   signType: true,
   signFamily: true,
   disciplineType: true,
+  phase: true,
   description: true,
   status: true,
   priority: true,
@@ -159,6 +160,7 @@ const TASK_LIST_SELECT = {
   signType: true,
   signFamily: true,
   disciplineType: true,
+  phase: true,
   description: true,
   status: true,
   priority: true,
@@ -217,6 +219,15 @@ export type NextRevisionQuery = {
   opNo?: string;
   designType?: string;
 };
+
+export type NextPhaseQuery = {
+  projectId?: string;
+  projectNo?: string;
+  opNo?: string;
+  designType?: string;
+};
+
+type PhaseContext = { maxPhase: number; bySignType: Map<string, number> };
 
 @Injectable()
 export class TasksService {
@@ -355,6 +366,57 @@ export class TasksService {
     const designType = this.normalizeDesignType(query.designType);
     const revisionCode = await this.resolveNextRevisionCode(this.prisma, { projectId, opNo, designType });
     return { projectId, opNo, designType, revisionCode };
+  }
+
+  /** Project-wide phase history: overall max phase plus each sign type's own last-used phase. */
+  private async getPhaseContext(
+    tx: Prisma.TransactionClient | PrismaService,
+    projectId: string,
+  ): Promise<PhaseContext> {
+    const rows = await tx.task.findMany({
+      where: { projectId, designType: 'PROJECT', phase: { not: null } },
+      select: { phase: true, signType: true },
+    });
+    let maxPhase = 0;
+    const bySignType = new Map<string, number>();
+    for (const row of rows) {
+      const phase = row.phase ?? 0;
+      if (phase > maxPhase) maxPhase = phase;
+      if (row.signType) {
+        const current = bySignType.get(row.signType) ?? 0;
+        if (phase > current) bySignType.set(row.signType, phase);
+      }
+    }
+    return { maxPhase, bySignType };
+  }
+
+  /**
+   * Smart phase suggestion: if any sign type in this submission already has phase
+   * history in the project, continue that lineage (its last phase + 1); otherwise
+   * start a new project-wide phase (maxPhase + 1).
+   */
+  private resolveNextPhase(context: PhaseContext, signTypes: Array<string | null | undefined>): number {
+    const lineages = Array.from(new Set(signTypes.filter((s): s is string => !!s)))
+      .map((signType) => context.bySignType.get(signType))
+      .filter((value): value is number => typeof value === 'number');
+    if (lineages.length > 0) return Math.max(...lineages) + 1;
+    return context.maxPhase + 1;
+  }
+
+  async getNextPhase(query: NextPhaseQuery) {
+    let projectId = String(query.projectId ?? '').trim();
+    if (!projectId) {
+      const project = await this.resolveProjectForCreate({ projectNo: query.projectNo, opNo: query.opNo });
+      projectId = project.id;
+    }
+    const context = await this.getPhaseContext(this.prisma, projectId);
+    return {
+      projectId,
+      maxPhase: context.maxPhase,
+      bySignType: Object.fromEntries(
+        Array.from(context.bySignType.entries()).map(([signType, phase]) => [signType, { maxPhase: phase }]),
+      ),
+    };
   }
 
   private async resolveProjectForCreate(task: { projectId?: string; projectNo?: string; opNo?: string }): Promise<ProjectLookup> {
@@ -760,6 +822,10 @@ export class TasksService {
 
     // ── PROJECT PATH: one ErpTSTask per sign-type detail line ───────────────
     const requestedRevision = this.normalizeRevisionCode(dto.task.revisionCode);
+    const requestedPhase = dto.task.phase != null ? Math.trunc(dto.task.phase) : null;
+    if (requestedPhase != null && requestedPhase < 1) {
+      throw new BadRequestException('phase must be a positive integer (1, 2, 3, ...).');
+    }
 
     // Pre-flight: batch duplicate check outside the transaction (one query instead of N)
     if (requestedRevision) {
@@ -791,6 +857,15 @@ export class TasksService {
     const created = await this.prisma.$transaction(async (tx) => {
       const results: { taskId: string; detailId: string }[] = [];
 
+      // Phase is project-scoped (not per-opNo/signType like revision), so it's
+      // resolved once for the whole submission — every task created here shares it.
+      const phase =
+        requestedPhase ??
+        this.resolveNextPhase(
+          await this.getPhaseContext(tx, project.id),
+          (dto.projectDetails ?? []).map((line) => line.signType ?? null),
+        );
+
       for (const line of dto.projectDetails ?? []) {
         const lineSignType = line.signType ?? null;
         const lineSignFamily = line.signFamily?.trim() ?? null;
@@ -818,6 +893,7 @@ export class TasksService {
                 signType: lineSignType,
                 signFamily: lineSignFamily,
                 disciplineType: lineDiscipline,
+                phase,
                 opNo: normalizedOpNo,
                 description: dto.task.description,
                 priority: dto.task.priority ?? 'Medium',
@@ -1253,11 +1329,24 @@ export class TasksService {
     const existing = await this.prisma.task.findUnique({ where: { id } });
     if (!existing) throw new NotFoundException('Task not found');
 
-    const [assignee, oldAssignee] = await Promise.all([
+    const [assignee, oldAssignee, existingSplitDesigners] = await Promise.all([
       this.prisma.user.findUnique({ where: { id: dto.assigneeId } }),
       existing.assigneeId ? this.prisma.user.findUnique({ where: { id: existing.assigneeId }, select: { fullName: true } }) : null,
+      this.prisma.taskDesigner.findMany({ where: { taskId: id }, select: { designerId: true } }),
     ]);
     if (!assignee) throw new NotFoundException('Assignee not found');
+
+    // Split tasks have assigneeId=null with real designers only in the taskDesigners junction —
+    // read both so reassigning a split task is recognized as a reassignment and the designers
+    // being removed are notified, not just whoever happened to hold the single assigneeId field.
+    const previousDesignerIds = new Set(
+      [existing.assigneeId, ...existingSplitDesigners.map((d) => d.designerId)].filter(
+        (value): value is string => !!value,
+      ),
+    );
+    const isReassignment =
+      previousDesignerIds.size > 0 && !(previousDesignerIds.size === 1 && previousDesignerIds.has(dto.assigneeId));
+    const removedDesignerIds = Array.from(previousDesignerIds).filter((designerId) => designerId !== dto.assigneeId);
 
     const rawStatus = String(existing.status ?? '').toUpperCase();
     const shouldPromote = rawStatus === 'DESIGN_NEW';
@@ -1300,7 +1389,7 @@ export class TasksService {
       },
     });
 
-    if (existing.assigneeId && existing.assigneeId !== dto.assigneeId) {
+    if (isReassignment) {
       this.dashboardRealtime?.notifyOverviewRefresh('task_reassigned', {
         taskId: id,
         changedTaskIds: [id],
@@ -1328,9 +1417,52 @@ export class TasksService {
         this.dashboardRealtime?.notifyUserNotificationRefresh(hod.id);
       }
     }
+    // Tell every designer removed from this task (including former split designers) that
+    // they no longer have it — they'd otherwise get no signal at all.
+    const removedMessage = `${updatedTask.taskNo} — ${updatedTask.project?.name ?? 'Unknown Project'} has been reassigned to ${assignee.fullName}; you are no longer assigned to it.`;
+    for (const removedDesignerId of removedDesignerIds) {
+      this.notificationsService
+        .create({ userId: removedDesignerId, title: 'Removed from Task', message: removedMessage, linkUrl: linkUrlAssign })
+        .catch((err) => this.logger.error('Failed to send removed-from-task notification', err));
+      this.dashboardRealtime?.notifyUserNotificationRefresh(removedDesignerId);
+    }
 
     const withUrls = await this.withSignedAttachmentUrls(updatedTask);
     return this.normalizeTaskForApi(withUrls);
+  }
+
+  /**
+   * Preview of what `updateStatus(..., ON_HOLD)` would remove from the scheduler grid —
+   * every current/future SchedulerAssignment row for this task, grouped by designer. Lets
+   * the "Put On Hold" button warn the user before the unconditional whole-task wipe fires.
+   */
+  async getHoldImpact(taskId: string) {
+    if (!this.isUuid(taskId)) throw new BadRequestException('Invalid task id');
+    const todayMidnight = new Date(new Date().toISOString().split('T')[0] + 'T00:00:00.000Z');
+    const rows = await this.prisma.schedulerAssignment.findMany({
+      where: { taskId, weekStartDate: { gte: todayMidnight } },
+      select: { designerId: true, designer: { select: { fullName: true } } },
+    });
+
+    const countByDesigner = new Map<string, { designerId: string; designerName: string; partCount: number }>();
+    for (const row of rows) {
+      if (!row.designerId) continue;
+      const existing = countByDesigner.get(row.designerId);
+      if (existing) {
+        existing.partCount += 1;
+      } else {
+        countByDesigner.set(row.designerId, {
+          designerId: row.designerId,
+          designerName: row.designer?.fullName?.trim() || 'Designer',
+          partCount: 1,
+        });
+      }
+    }
+
+    return {
+      partCount: rows.length,
+      designers: Array.from(countByDesigner.values()).sort((a, b) => b.partCount - a.partCount),
+    };
   }
 
   async updateStatus(id: string, userId: string, role: UserRole, dto: UpdateTaskStatusDto) {
@@ -1377,6 +1509,24 @@ export class TasksService {
 
     // When issuing REWORK from CLIENT_REJECTED: keep old task as CLIENT_REJECTED — only create the revision
     const skipStatusUpdate = currentStatusApi === 'CLIENT_REJECTED' && newStatusApi === 'REWORK';
+
+    // Scheduler-consolidation guard: reject before mutating anything if a live scheduler
+    // assignment exists that the caller (folding split parts into one whole-task status
+    // change) didn't know about — prevents silently wiping a sibling scheduled in a week
+    // the caller hadn't loaded. Only runs when the caller opts in via expectedAssignmentIds.
+    if (newStatusApi === 'ON_HOLD' && dto.expectedAssignmentIds) {
+      const todayMidnightGuard = new Date(new Date().toISOString().split('T')[0] + 'T00:00:00.000Z');
+      const liveRows = await this.prisma.schedulerAssignment.findMany({
+        where: { taskId: id, weekStartDate: { gte: todayMidnightGuard } },
+        select: { id: true },
+      });
+      const expected = new Set(dto.expectedAssignmentIds);
+      if (liveRows.some((row) => !expected.has(row.id))) {
+        throw new ConflictException(
+          'Another scheduled part of this task changed since this page last loaded. Refresh and try again.',
+        );
+      }
+    }
 
     let updatedTask: Awaited<ReturnType<typeof this.prisma.task.findUniqueOrThrow>>;
     if (skipStatusUpdate) {
@@ -1481,6 +1631,80 @@ export class TasksService {
             .catch((err) => this.logger.error('Failed to send complete notification to HOD', err));
           this.dashboardRealtime?.notifyUserNotificationRefresh(hod.id);
         }
+      }
+    }
+
+    // HOD_REVIEW — notify HOD/ADMIN users that a task is waiting for their review
+    if (effectiveStatusApi === 'HOD_REVIEW') {
+      const linkUrlHodReview =
+        (updatedTask as any).designType?.toLowerCase() === 'retail'
+          ? `/retail-task-view/${id}`
+          : `/project-task-view/${id}`;
+      const hodReviewMessage = `${(updatedTask as any).taskNo} — ${(updatedTask as any).project?.name ?? 'Unknown Project'} is ready for HOD review.`;
+      const hodReviewers = await this.prisma.user.findMany({
+        where: { role: { name: { in: ['HOD', 'ADMIN'] } } },
+        select: { id: true },
+      });
+      for (const hod of hodReviewers) {
+        this.notificationsService
+          .create({ userId: hod.id, title: `Task Ready for HOD Review — ${(updatedTask as any).taskNo}`, message: hodReviewMessage, linkUrl: linkUrlHodReview })
+          .catch((err) => this.logger.error('Failed to send HOD-review notification', err));
+        this.dashboardRealtime?.notifyUserNotificationRefresh(hod.id);
+      }
+    }
+
+    // CLIENT_REJECTED — notify the assignee and split designers that the client rejected the submission
+    if (effectiveStatusApi === 'CLIENT_REJECTED') {
+      const linkUrlClientRejected =
+        (updatedTask as any).designType?.toLowerCase() === 'retail'
+          ? `/retail-task-view/${id}`
+          : `/project-task-view/${id}`;
+      const clientRejectedMessage = `${(updatedTask as any).taskNo} — ${(updatedTask as any).project?.name ?? 'Unknown Project'} was rejected by the client.`;
+      if ((updatedTask as any).assigneeId) {
+        this.notificationsService
+          .create({ userId: (updatedTask as any).assigneeId, title: 'Client Rejected Task', message: clientRejectedMessage, linkUrl: linkUrlClientRejected })
+          .catch((err) => this.logger.error('Failed to send client-rejected notification to designer', err));
+        this.dashboardRealtime?.notifyUserNotificationRefresh((updatedTask as any).assigneeId);
+      }
+      const splitDesignersRejected = await this.prisma.taskDesigner.findMany({
+        where: { taskId: id, NOT: { designerId: (updatedTask as any).assigneeId ?? '' } },
+        select: { designerId: true },
+      });
+      for (const { designerId } of splitDesignersRejected) {
+        this.notificationsService
+          .create({ userId: designerId, title: 'Client Rejected Task', message: clientRejectedMessage, linkUrl: linkUrlClientRejected })
+          .catch((err) => this.logger.error('Failed to send client-rejected notification to split designer', err));
+        this.dashboardRealtime?.notifyUserNotificationRefresh(designerId);
+      }
+    }
+
+    // ON_HOLD — notify the assignee and split designers whichever direction the transition goes
+    const enteredHold = newStatusApi === 'ON_HOLD';
+    const resumedFromHold = currentStatusApi === 'ON_HOLD' && newStatusApi !== 'ON_HOLD';
+    if (enteredHold || resumedFromHold) {
+      const linkUrlHold =
+        (updatedTask as any).designType?.toLowerCase() === 'retail'
+          ? `/retail-task-view/${id}`
+          : `/project-task-view/${id}`;
+      const holdTitle = enteredHold ? 'Task Put On Hold' : 'Task Resumed';
+      const holdMessage = enteredHold
+        ? `${(updatedTask as any).taskNo} — ${(updatedTask as any).project?.name ?? 'Unknown Project'} was put on hold; its scheduled slots were removed.`
+        : `${(updatedTask as any).taskNo} — ${(updatedTask as any).project?.name ?? 'Unknown Project'} has resumed from hold.`;
+      if ((updatedTask as any).assigneeId) {
+        this.notificationsService
+          .create({ userId: (updatedTask as any).assigneeId, title: holdTitle, message: holdMessage, linkUrl: linkUrlHold })
+          .catch((err) => this.logger.error('Failed to send hold-transition notification to designer', err));
+        this.dashboardRealtime?.notifyUserNotificationRefresh((updatedTask as any).assigneeId);
+      }
+      const splitDesignersHold = await this.prisma.taskDesigner.findMany({
+        where: { taskId: id, NOT: { designerId: (updatedTask as any).assigneeId ?? '' } },
+        select: { designerId: true },
+      });
+      for (const { designerId } of splitDesignersHold) {
+        this.notificationsService
+          .create({ userId: designerId, title: holdTitle, message: holdMessage, linkUrl: linkUrlHold })
+          .catch((err) => this.logger.error('Failed to send hold-transition notification to split designer', err));
+        this.dashboardRealtime?.notifyUserNotificationRefresh(designerId);
       }
     }
 
@@ -2176,7 +2400,10 @@ export class TasksService {
     if (!this.isUuid(taskId)) throw new BadRequestException('Invalid task id');
     if (!this.isUuid(designerId)) throw new BadRequestException('Invalid designer id');
 
-    const task = await this.prisma.task.findUnique({ where: { id: taskId }, select: { id: true } });
+    const task = await this.prisma.task.findUnique({
+      where: { id: taskId },
+      select: { id: true, taskNo: true, designType: true },
+    });
     if (!task) throw new NotFoundException('Task not found');
 
     const draft = await this.prisma.taskWorkSession.findFirst({
@@ -2226,6 +2453,22 @@ export class TasksService {
       });
     }
 
+    // Scoped to "other slices remain, timer was running" only — closeSession:true is the
+    // last-slice case (session genuinely done, nothing to resume) and needs no notice.
+    if (!closeSession && hadRunningTimer) {
+      const linkUrl =
+        task.designType?.toLowerCase() === 'retail' ? `/retail-task-view/${taskId}` : `/project-task-view/${taskId}`;
+      this.notificationsService
+        .create({
+          userId: designerId,
+          title: `Timer Paused — ${task.taskNo}`,
+          message: `Your running timer was paused because a slice of this task was reassigned. Press Start to resume tracking your remaining time.`,
+          linkUrl,
+        })
+        .catch((err) => this.logger.error('Failed to send timer-paused notification to designer', err));
+      this.dashboardRealtime?.notifyUserNotificationRefresh(designerId);
+    }
+
     return {
       workedSeconds: frozenSeconds,
       workedHours: workedHoursFromSeconds(frozenSeconds),
@@ -2271,12 +2514,14 @@ export class TasksService {
     const linkUrl = `/project-task-view/${projectId}`;
     const message = `${project.projectNo ? `${project.projectNo} — ` : ''}${project.name} has been assigned to QS for Sign Family review.`;
     for (const qsUser of qsUsers) {
-      await this.notificationsService.create({
-        userId: qsUser.id,
-        title: 'New Project Assigned to QS',
-        message,
-        linkUrl,
-      });
+      this.notificationsService
+        .create({
+          userId: qsUser.id,
+          title: 'New Project Assigned to QS',
+          message,
+          linkUrl,
+        })
+        .catch((err) => this.logger.error('Failed to send QS-assignment notification', err));
       this.dashboardRealtime?.notifyUserNotificationRefresh(qsUser.id);
     }
 

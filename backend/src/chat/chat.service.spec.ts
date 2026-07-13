@@ -3,6 +3,7 @@ import { Test, TestingModule } from '@nestjs/testing';
 import { PrismaService } from '../prisma/prisma.service';
 import { ChatService } from './chat.service';
 import { CreateConversationDto } from './dto/create-conversation.dto';
+import { DashboardRealtimeService } from '../dashboard/dashboard-realtime.service';
 
 
 describe('ChatService', () => {
@@ -20,6 +21,7 @@ describe('ChatService', () => {
       findUnique: jest.fn(),
       findMany: jest.fn(),
       create: jest.fn(),
+      update: jest.fn(),
       delete: jest.fn(),
     },
     message: {
@@ -27,8 +29,13 @@ describe('ChatService', () => {
       create: jest.fn(),
       count: jest.fn(),
     },
+    notification: {
+      create: jest.fn(),
+    },
     $transaction: jest.fn((cb: (tx: any) => any) => cb(mockPrismaService)),
   };
+
+  const mockDashboardRealtime: any = { notifyUserNotificationRefresh: jest.fn() };
 
   beforeEach(async () => {
     const module: TestingModule = await Test.createTestingModule({
@@ -38,12 +45,18 @@ describe('ChatService', () => {
           provide: PrismaService,
           useValue: mockPrismaService,
         },
+        {
+          provide: DashboardRealtimeService,
+          useValue: mockDashboardRealtime,
+        },
       ],
     }).compile();
 
     service = module.get<ChatService>(ChatService);
 
     jest.clearAllMocks();
+    mockPrismaService.conversation.update.mockResolvedValue({});
+    mockPrismaService.notification.create.mockResolvedValue({});
   });
 
   it('should be defined', () => {
@@ -140,6 +153,80 @@ describe('ChatService', () => {
       const result = await service.markAsRead('u1', 'c1');
       expect(result.success).toBe(true);
       expect(mockPrismaService.conversationParticipant.update).toHaveBeenCalled();
+    });
+  });
+
+  describe('sendMessage — notification parity with Chatter', () => {
+    const flush = () => new Promise((resolve) => setImmediate(resolve));
+
+    beforeEach(() => {
+      mockPrismaService.conversationParticipant.findUnique.mockResolvedValue({
+        id: 'p1',
+        userId: 'u1',
+        conversationId: 'c1',
+      });
+      mockPrismaService.message.create.mockResolvedValue({
+        id: 'm1',
+        senderId: 'u1',
+        content: 'hello there',
+        sender: { id: 'u1', fullName: 'Alex Sender' },
+      });
+    });
+
+    it('notifies other participants of a plain message with a generic title', async () => {
+      mockPrismaService.conversationParticipant.findMany.mockResolvedValue([
+        { userId: 'u2', user: { id: 'u2', fullName: 'Ben Receiver' } },
+      ]);
+
+      await service.sendMessage('u1', 'c1', { content: 'hello there' } as any);
+      await flush();
+
+      expect(mockPrismaService.notification.create).toHaveBeenCalledWith(
+        expect.objectContaining({
+          data: expect.objectContaining({ userId: 'u2', title: 'New Message' }),
+        }),
+      );
+      expect(mockDashboardRealtime.notifyUserNotificationRefresh).toHaveBeenCalledWith('u2');
+    });
+
+    it('does not notify the sender themselves', async () => {
+      mockPrismaService.conversationParticipant.findMany.mockResolvedValue([
+        { userId: 'u2', user: { id: 'u2', fullName: 'Ben Receiver' } },
+      ]);
+
+      await service.sendMessage('u1', 'c1', { content: 'hello there' } as any);
+      await flush();
+
+      expect(mockPrismaService.conversationParticipant.findMany).toHaveBeenCalledWith(
+        expect.objectContaining({ where: expect.objectContaining({ userId: { not: 'u1' } }) }),
+      );
+    });
+
+    it('sends a distinct "mentioned" notification to a participant named in the message', async () => {
+      mockPrismaService.message.create.mockResolvedValue({
+        id: 'm2',
+        senderId: 'u1',
+        content: '@Ben Receiver can you check this?',
+        sender: { id: 'u1', fullName: 'Alex Sender' },
+      });
+      mockPrismaService.conversationParticipant.findMany.mockResolvedValue([
+        { userId: 'u2', user: { id: 'u2', fullName: 'Ben Receiver' } },
+        { userId: 'u3', user: { id: 'u3', fullName: 'Casey Other' } },
+      ]);
+
+      await service.sendMessage('u1', 'c1', { content: '@Ben Receiver can you check this?' } as any);
+      await flush();
+
+      expect(mockPrismaService.notification.create).toHaveBeenCalledWith(
+        expect.objectContaining({
+          data: expect.objectContaining({ userId: 'u2', title: 'You were mentioned in a chat message' }),
+        }),
+      );
+      expect(mockPrismaService.notification.create).toHaveBeenCalledWith(
+        expect.objectContaining({
+          data: expect.objectContaining({ userId: 'u3', title: 'New Message' }),
+        }),
+      );
     });
   });
 });

@@ -188,7 +188,7 @@ updatedAt              DateTime
 ```
 Relations: retailDetails[], projectDetails[], chatterPosts[], activityLogs[], regularizationRequests[], overtimeRequests[], schedulerAssignments[], workSessions[], taskDesigners[]
 
-**Status values:** `DESIGN_NEW`, `WIP`, `COMPLETED`, `REVISION`, `APPROVED`, `ON_HOLD`
+**Status values:** `DESIGN_NEW`, `DESIGN_PLANNED`, `IN_PROGRESS`, `DESIGN_COMPLETED`, `HOD_REVIEW`, `SALES_REVIEW`, `REWORK`, `CLIENT_ACCEPTED`, `CLIENT_REJECTED`, `ON_HOLD` (unified vocabulary — see `backend/src/tasks/task-status.util.ts` for the legacy-value mapping and `DEPLOYMENT_RUNBOOK.md` for the DB constraint migration sequencing)
 
 **Split-task rule:** When a task is assigned to multiple designers in the scheduler, `assigneeId` is set to `null`. All assigned designers are in the `ErpTSTaskDesigner` junction table. Any query filtering by designer must check **both** `assigneeId = userId` OR `taskDesigners.some({ designerId: userId })`.
 
@@ -693,11 +693,13 @@ Base URL: `http://localhost:4000/api/v1` (dev) | `https://task-scheduler.app-bri
 | POST | `/tasks/upload-file` | JWT | HOD, SALESPERSON | Upload task file to S3 (20MB max) |
 | GET | `/tasks` | JWT | HOD, DESIGNER, SALESPERSON, QS | List (query: projectId, status, priority, assigneeId, search, page, limit) |
 | GET | `/tasks/next-revision` | JWT | HOD, DESIGNER | Get next revision code (query: projectId, projectNo, opNo, designType) |
+| GET | `/tasks/next-phase` | JWT | HOD, DESIGNER, SALESPERSON | Get suggested release phase for a project's next Create-Task batch (query: projectId, projectNo, opNo, designType) — see `backend/docs/PROJECT_TASK_PHASE.md` |
 | GET | `/tasks/summary` | JWT | HOD, DESIGNER | Task status counts for current user |
 | GET | `/tasks/:id` | JWT | HOD, DESIGNER, SALESPERSON, QS | Get full task details |
 | PATCH | `/tasks/:id` | JWT | HOD | Update task fields |
 | PATCH | `/tasks/:id/assign` | JWT | HOD | Assign to designer `{assigneeId}` |
-| PATCH | `/tasks/:id/status` | JWT | HOD, DESIGNER, SALESPERSON | Update status `{status}` |
+| GET | `/tasks/:id/hold-impact` | JWT | HOD, SALESPERSON | Preview scheduler parts a Hold would remove, grouped by designer (`{partCount, designers[]}`) |
+| PATCH | `/tasks/:id/status` | JWT | HOD, DESIGNER, SALESPERSON | Update status `{status}`; optional `expectedAssignmentIds` (ON_HOLD consolidation guard, see below) |
 | GET | `/tasks/:id/submitted-session` | JWT | HOD, DESIGNER, SALESPERSON | Fetch most recent submitted work session |
 | GET | `/tasks/:id/timer-state` | JWT | HOD, DESIGNER | Fetch draft session for cold-start timer restore |
 | POST | `/tasks/:id/save-timer` | JWT | HOD, DESIGNER | Upsert draft work session on start/pause |
@@ -712,7 +714,9 @@ Base URL: `http://localhost:4000/api/v1` (dev) | `https://task-scheduler.app-bri
 - `dueDate` per task uses `line.deadline` if present, falling back to `dto.task.dueDate`
 - `ProjectDetailInputDto` accepts `signFamily` and `disciplineType` (both optional)
 
-**ON_HOLD rule:** Setting status to ON_HOLD via `PATCH /tasks/:id/status` automatically deletes all future `SchedulerAssignment` rows.
+**Phase rule:** every task created via the Project path carries a `phase` (int, project-wide, shared across all opNo/sign types) — one value per submission, auto-suggested from the project's phase history but overridable. Resolved once per submission (unlike `revisionCode`, which can differ per line). Full detail, smart-suggestion algorithm, and known gaps: **`backend/docs/PROJECT_TASK_PHASE.md`**.
+
+**ON_HOLD rule:** Setting status to ON_HOLD via `PATCH /tasks/:id/status` automatically deletes all future `SchedulerAssignment` rows. `GET /tasks/:id/hold-impact` previews this (grouped by designer, part counts only — no assignment ids) so the UI can warn first; `TaskDetailsPage.jsx`'s Hold button always does the plain unconditional wipe after that preview (intentional, no `expectedAssignmentIds` — the preview is informational only). Only the scheduler's drag-to-hold path passes `expectedAssignmentIds` to guard against wiping an unexpected sibling row (see Split-Task Architecture below).
 
 ### Design List (`/design-list`) — No auth required
 | Method | Route | Query Params | Description |
@@ -734,11 +738,15 @@ Chatter list responses include `authorName` and `authorRole`.
 ### Scheduler Assignments (`/scheduler-assignments`)
 | Method | Route | Auth | Roles | Description |
 |--------|-------|------|-------|-------------|
-| GET | `/scheduler-assignments` | JWT | Any | Get assignments (query: weekStart YYYY-MM-DD) |
-| GET | `/scheduler-assignments/week/:weekStart/meta` | JWT | Any | Week metadata (isLocked, version) |
-| PUT | `/scheduler-assignments/week/:weekStart` | JWT | HOD | Save week snapshot (full replace; optimistic concurrency via `version`) |
+| GET | `/scheduler-assignments` | JWT | HOD, DESIGNER | Get assignments (query: weekStart YYYY-MM-DD, designerId — HOD omitting designerId gets the whole week) |
+| GET | `/scheduler-assignments/week/:weekStart/meta` | JWT | HOD, DESIGNER | Week metadata (isLocked, version) |
+| PUT | `/scheduler-assignments/week/:weekStart` | JWT | HOD | Save week snapshot (optimistic concurrency via `version`; accepts optional `overflow[]` — see Scheduler Week Save below) |
 | POST | `/scheduler-assignments/week/:weekStart/lock` | JWT | HOD | Lock week |
 | DELETE | `/scheduler-assignments/week/:weekStart/lock` | JWT | HOD | Unlock week |
+| DELETE | `/scheduler-assignments/task/:taskId` | JWT | HOD, ADMIN, PROJECT_MANAGER | Clear all future assignment rows for a task (query: `expectedAssignmentIds` comma-separated — optional stale-consolidation guard, 409 if a live row outside the set exists) |
+| POST | `/scheduler-assignments/:id/detach` | JWT | HOD | Detach one split part into its own fragment with a given status |
+| POST | `/scheduler-assignments/fragments/:id/status` | JWT | HOD | Update a detached fragment's status |
+| POST | `/scheduler-assignments/overtime-requests/:requestId/action` | JWT | HOD | Approve/reject an overtime request from the scheduler view |
 
 ### Regularization Requests (`/regularization-requests`)
 | Method | Route | Auth | Description |
@@ -910,7 +918,7 @@ TaskAttachmentInputDto: { fileKey: string, fileName: string, mimeType: string, s
 
 UpdateTaskDto:          { title? (min 2), description?, priority?, dueDate? }
 AssignTaskDto:          { assigneeId: UUID }
-UpdateTaskStatusDto:    { status: 'DESIGN_NEW'|'WIP'|'COMPLETED'|'REVISION'|'APPROVED'|'ON_HOLD' }
+UpdateTaskStatusDto:    { status: 'DESIGN_NEW'|'DESIGN_PLANNED'|'IN_PROGRESS'|'DESIGN_COMPLETED'|'HOD_REVIEW'|'SALES_REVIEW'|'REWORK'|'CLIENT_ACCEPTED'|'CLIENT_REJECTED'|'ON_HOLD', expectedAssignmentIds?: UUID[] (ON_HOLD-only consolidation guard), reworkNote?, reworkAttachmentUrl?, reworkAttachmentName?, reworkLinkUrl?, reworkLinkName? }
 
 SubmitWorkDto:          { durationSeconds: number, submissionLink?: string, pauseLog?: string }
 SaveTimerStateDto:      { durationSeconds: number, pauseLog?: string }
@@ -933,7 +941,15 @@ SaveSchedulerWeekDto: {
     designerId: UUID, taskId: UUID, dayIndex: 0-6,
     assignedHours: number (min 0.01, 2 decimal places),
     parentId?: UUID, splitIndex?: number (min 1),
-    totalParts?: number (min 1), notes?: string
+    totalParts?: number (min 1), position?: number,
+    notes?: string, isPinned?: boolean,
+    isLocked?: boolean   // logged-time remainder after partial handoff — non-draggable audit slice
+  }],
+  resolvedFragmentIds?: UUID[],   // fragment rows this save resolves; deleted server-side in the same transaction
+  affectedTaskIds?: UUID[],       // when set, only these tasks' rows in this week are replaced (partial/merge save)
+  overflow?: [{                  // hours that didn't fit in the saved week — placed server-side (Rule 3)
+    designerId: UUID, taskId: UUID,
+    hours: number (min 0.01, 2 decimal places), isPinned?: boolean
   }]
 }
 ```
@@ -1220,6 +1236,8 @@ NEXT_PUBLIC_API_BASE_URL=http://localhost:4000/api/v1
 - A task split across multiple designers in the scheduler sets `assigneeId = null`. All designers are in `ErpTSTaskDesigner`.
 - **Any query filtering by designer must check both:** `assigneeId = userId` OR `taskDesigners.some({ designerId: userId })`.
 - Setting ON_HOLD auto-deletes all future `SchedulerAssignment` rows for the task.
+- **Stale-consolidation guard:** both `PATCH /tasks/:id/status` (ON_HOLD) and `DELETE /scheduler-assignments/task/:taskId` accept an optional `expectedAssignmentIds` list of the caller's known-live row ids; if the server finds a live row outside that set it throws `ConflictException` instead of silently deleting it. `scheduler-assignments.service.ts`'s `clearTaskSchedule` wraps the check+delete in a transaction; `tasks.service.ts`'s `updateStatus` ON_HOLD path currently does **not** (two separate non-transactional Prisma calls with a mutation in between) — the two implementations are not equally atomic despite similar guard comments.
+- Cross-designer handoff pauses the origin designer's running timer (`freezeDraftWorkSession(closeSession=false)` clears `runStartedAt`) and sends a "Timer Paused" notification when other slices remain — see `backend/docs/SCHEDULER_TIME_MODEL.md`.
 - Notifications for status changes (COMPLETED, REWORK) and scheduler saves are sent to all junction-table designers, not just `assigneeId`.
 - Work submission (`POST /tasks/:id/submit-work`) builds submitter display name from junction when `assigneeId` is null.
 - SQL migration: `backend/prisma/sql/add-task-designer-junction.sql`
@@ -1250,10 +1268,12 @@ Cursor-based pagination used for activities: `{ data: [], pageInfo: { hasMore, n
 Full coverage list: `backend/docs/ACTIVITY_LOG_COVERAGE.md`
 
 ### Scheduler Week Save (Optimistic Concurrency)
-- `PUT /scheduler-assignments/week/:weekStart` — full snapshot replace
+- `PUT /scheduler-assignments/week/:weekStart` — full snapshot replace (or partial, when `affectedTaskIds` is set)
 - `version` field prevents lost updates: backend rejects if client `version` < current `version`
 - History recorded in `SchedulerAssignmentHistory` (versionFrom, versionTo, before/after JSON)
 - Week can be locked (`isLocked: true`); locked weeks reject PUT operations
+- Optional `overflow[]` in the request is placed server-side via `placeOverflowCapacity` (see `SCHEDULER_RULES.md` Rule 3); response includes `overflowPlacements` and `unplacedOverflow`, and `dashboardRealtime` notifications gain `affectedWeekStarts` when overflow touched a week other than the one being saved
+- ⚠️ `placeOverflowCapacity` does not check the destination week's `isLocked` flag before writing to it — see `backend/docs/SCHEDULER_FIXES_NEEDED.md` item 11
 
 ### Route Building (Frontend)
 `frontend/src/lib/design-list-routes.js` — helper to build correct routes:

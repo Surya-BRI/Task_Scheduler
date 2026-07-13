@@ -1,7 +1,6 @@
 import { UserRole } from '../common/constants/roles.enum';
 import { CreateRegularizationRequestDto } from './dto/create-regularization-request.dto';
 import { ReviewRegularizationRequestDto } from './dto/review-regularization-request.dto';
-import { UpdateRegularizationStatusDto } from './dto/update-regularization-status.dto';
 import type {
   RegularizationRequestView,
   RegularizationTaskOption,
@@ -28,11 +27,5 @@ export interface RegularizationRequestsContract {
     reviewerId: string,
     role: UserRole,
     dto: ReviewRegularizationRequestDto,
-  ): Promise<RegularizationRequestView>;
-  updateStatus(
-    id: string,
-    dto: UpdateRegularizationStatusDto,
-    reviewerId?: string,
-    role?: UserRole,
   ): Promise<RegularizationRequestView>;
 }

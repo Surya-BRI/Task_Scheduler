@@ -34,6 +34,14 @@ describe('NotificationsService', () => {
     );
   });
 
+  it('findForUser treats an explicit limit of 0 as 0, not the 30 default', async () => {
+    prisma.notification.findMany.mockResolvedValue([]);
+    await service.findForUser(userId, '0');
+    expect(prisma.notification.findMany).toHaveBeenCalledWith(
+      expect.objectContaining({ take: 1 }),
+    );
+  });
+
   it('markRead updates only notifications owned by the user', async () => {
     const row = { id: 'n1', userId };
     prisma.notification.findFirst.mockResolvedValue(row);

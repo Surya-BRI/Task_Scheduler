@@ -7,7 +7,8 @@ export class NotificationsService {
   constructor(private readonly prisma: PrismaService) {}
 
   async findForUser(userId: string, limitParam?: string) {
-    const limit = Math.min(100, Math.max(1, Number.parseInt(limitParam ?? '30', 10) || 30));
+    const parsed = Number.parseInt(limitParam ?? '30', 10);
+    const limit = Math.min(100, Math.max(1, Number.isNaN(parsed) ? 30 : parsed));
     return this.prisma.notification.findMany({
       where: { userId },
       orderBy: { createdAt: 'desc' },
@@ -55,10 +56,11 @@ export class NotificationsService {
     return this.prisma.notification.create({ data: { id: randomUUID(), ...data } });
   }
 
-  // Returns true if the same userId+title+linkUrl notification was already sent today (midnight reset)
+  // Returns true if the same userId+title+linkUrl notification was already sent today (UTC midnight reset —
+  // createdAt is stored/compared in UTC throughout this codebase, so the boundary must match).
   async existsToday(userId: string, title: string, linkUrl: string): Promise<boolean> {
     const startOfDay = new Date();
-    startOfDay.setHours(0, 0, 0, 0);
+    startOfDay.setUTCHours(0, 0, 0, 0);
     const count = await this.prisma.notification.count({
       where: { userId, title, linkUrl, createdAt: { gte: startOfDay } },
     });

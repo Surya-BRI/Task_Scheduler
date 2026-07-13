@@ -46,12 +46,15 @@ Triggered when `allowOvertime=true` assignment uses hours beyond 8h/day on any p
 
 ## Rule 3 — Overflow to Next Week
 
-> When "Assign Available Only" leaves an overflow fragment, it carries to next week.
+> When "Assign Available Only" leaves an overflow fragment, the **server** places it — no client-side carry-forward.
 
-- `persistWeekSnapshot` writes overflow fragments to `localStorage` key `scheduler_overflow_v1_YYYY-MM-DD` (next Monday's date)
-- When next week loads, overflow tasks are placed starting at the **first weekday with < 8h capacity** (sequential, not blindly Monday)
-- After placement, the backend is persisted immediately
-- Overflow localStorage is cleared after reading
+- `buildPreparedDropAssignment` returns an `overflow: {designerId, taskId, hours}` descriptor instead of creating a local unassigned fragment
+- `persistWeekSnapshot` batches pending overflow descriptors (`pendingOverflowRef`) and sends them as `overflow[]` on the next `PUT /scheduler-assignments/week/:weekStart` save
+- Backend `placeOverflowCapacity` (`scheduler-assignments.service.ts`) walks forward day-by-day from the day after the saved week, skipping weekends/holidays/full-day approved leave, and live-checks each candidate day's actual remaining capacity **inside the same save transaction** — it never trusts an assumption about a week the client hasn't loaded
+- Splits across multiple days/weeks if one day isn't enough, bounded by a 56-day lookahead (`maxLookaheadDays`)
+- The save response includes `overflowPlacements` (where hours landed) and `unplacedOverflow` (hours that didn't fit within the lookahead — reported to the user via toast, never silently dropped)
+- This replaced the old `localStorage` key `scheduler_overflow_v1_YYYY-MM-DD` mechanism entirely (`SCHEDULER_OVERFLOW_KEY`, `addDaysToDateStr`, `pruneOldOverflowKeys`, and the Monday-restore-on-load effect were all removed)
+- ⚠️ Known gap: `placeOverflowCapacity` does not check whether the destination week is `isLocked` before writing to it (the primary week-save path does check this for the week being saved) — see `backend/docs/SCHEDULER_FIXES_NEEDED.md` item 11
 
 ---
 
@@ -93,7 +96,8 @@ Runs as a React effect whenever `schedules` reference changes and `loadedFromErp
 - `splitIndex` and `totalParts` are **globally sequential across all weeks** — if week 1 has parts 1 and 2, week 2's part is 3 (totalParts=3 on all rows)
 - The backend recomputes global indices on every `PUT /scheduler-assignments/week/:weekStart`. Parts in other weeks are updated in the same transaction
 - `buildWeekSnapshotPayload` normalises within-week ordering before sending to backend; the backend then applies the global offset
-- When any part is dragged to unassigned or ON_HOLD: **all sibling parts across all weeks** are removed from the scheduler. Current-week parts are consolidated in memory; other-week DB rows are deleted via `DELETE /scheduler-assignments/task/:taskId`. All overflow localStorage entries for this task are also cleared
+- When any part is dragged to unassigned or ON_HOLD: **all sibling parts across all weeks** are removed from the scheduler. Current-week parts are consolidated in memory; other-week DB rows are deleted via `DELETE /scheduler-assignments/task/:taskId`
+- **Stale-consolidation guard:** the frontend computes `expectedAssignmentIds` from the task's known `assignmentRowId` plus its in-memory siblings, and sends it as a query param on that DELETE (or as `expectedAssignmentIds` on `PATCH /tasks/:id/status` for ON_HOLD). The server check-then-deletes and throws `ConflictException` if a live row exists outside that set, instead of silently wiping a sibling the caller didn't know about (e.g. a part scheduled into a week the caller never loaded). Omitting the param preserves the old unconditional-wipe behavior — `TaskDetailsPage.jsx`'s own Hold button still omits it intentionally (see `backend/docs/SCHEDULER_FIXES_NEEDED.md` for a possible false-positive gotcha with this guard)
 
 ---
 
@@ -192,6 +196,6 @@ Runs as a React effect whenever `schedules` reference changes and `loadedFromErp
 |---|---|
 | Pulling tasks across designers | Supported for hours (Rule 11); optimizer itself still only packs within each designer |
 | Splitting a task manually by hours | Not supported — only drag-based and optimizer splitting |
-| Fractional hours (< 1h granularity) | No practical floor — `MIN_SPLIT_HOURS = 0.01h`, matching backend validation |
+| Fractional hours (< 1h granularity) | No practical floor at the optimizer level (`MIN_SPLIT_HOURS = 5min/0.0833h`, see Constants); the backend DTO's `assignedHours`/`hours` fields separately enforce `@Min(0.01)` (2-decimal precision) — a lower-level "must be positive" guard, not the same threshold as `MIN_SPLIT_HOURS` |
 | Re-assigning overflow if next week is also full | Overflow lands on the last available day or Monday as fallback |
 | Partial work submission | `POST /tasks/:id/submit-work` always marks the task fully `DESIGN_COMPLETED` — there's no "submit partial, keep in progress" flow yet |

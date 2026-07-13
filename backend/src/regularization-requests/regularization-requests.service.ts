@@ -16,7 +16,6 @@ import { hasDepartmentManagerAccess } from '../common/utils/workflow-roles.util'
 import { assertRegularizationDateAllowed } from '../common/utils/date-window.util';
 import { CreateRegularizationRequestDto } from './dto/create-regularization-request.dto';
 import { ReviewRegularizationRequestDto } from './dto/review-regularization-request.dto';
-import { UpdateRegularizationStatusDto } from './dto/update-regularization-status.dto';
 import { isUuidString } from './sql-uuid.util';
 import type { RegularizationRequestsContract } from './regularization-requests.contract';
 import { DashboardRealtimeService } from '../dashboard/dashboard-realtime.service';
@@ -120,18 +119,18 @@ export class RegularizationRequestsService implements RegularizationRequestsCont
     return date;
   }
 
-  private async assertTaskScheduledForDate(
+  private async findSchedulerAssignmentForDate(
     designerId: string,
     taskId: string,
     dateStr: string,
-  ): Promise<void> {
+  ): Promise<{ id: string } | null> {
     const requestDate = new Date(`${dateStr}T00:00:00.000Z`);
     if (Number.isNaN(requestDate.getTime())) {
       throw new BadRequestException('Invalid regularization date.');
     }
     const weekStartDate = this.getStartOfWeek(requestDate);
     const dayIndex = this.dayIndexForDate(requestDate, weekStartDate);
-    const assignment = await this.prisma.schedulerAssignment.findFirst({
+    return this.prisma.schedulerAssignment.findFirst({
       where: {
         designerId,
         taskId,
@@ -140,6 +139,14 @@ export class RegularizationRequestsService implements RegularizationRequestsCont
       },
       select: { id: true },
     });
+  }
+
+  private async assertTaskScheduledForDate(
+    designerId: string,
+    taskId: string,
+    dateStr: string,
+  ): Promise<void> {
+    const assignment = await this.findSchedulerAssignmentForDate(designerId, taskId, dateStr);
     if (!assignment) {
       throw new ForbiddenException(
         'You can only submit regularization for tasks assigned to you on the selected date.',
@@ -280,6 +287,7 @@ export class RegularizationRequestsService implements RegularizationRequestsCont
             linkUrl: this.regularizationLink(request.id, request.designerId),
           },
         });
+        this.dashboardRealtime?.notifyUserNotificationRefresh(hod.id);
       } catch (err) {
         this.logger.warn(
           `Failed to notify HOD ${hod.id}: ${err instanceof Error ? err.message : err}`,
@@ -670,6 +678,21 @@ export class RegularizationRequestsService implements RegularizationRequestsCont
       throw new BadRequestException('Rejection remarks are required');
     }
 
+    // The scheduler assignment this request was validated against at submission time may
+    // have since moved/been deleted (the two systems aren't re-synced between submission
+    // and review). Approving is still correct — the work happened regardless of where the
+    // task sits in the scheduler now — but the drift should be visible in the audit trail
+    // rather than silently treated as if the link still holds.
+    let schedulerLinkStale = false;
+    if (dto.status === 'Approved' && existing.taskId) {
+      const stillLinked = await this.findSchedulerAssignmentForDate(
+        existing.designerId,
+        existing.taskId,
+        existing.date,
+      );
+      schedulerLinkStale = !stillLinked;
+    }
+
     const updatedRow = await this.prisma.regularizationRequest.update({
       where: { id },
       data: {
@@ -709,6 +732,7 @@ export class RegularizationRequestsService implements RegularizationRequestsCont
           approverId: reviewerId,
           remarks: remarks || null,
           reviewedAt: updated.reviewedAt,
+          ...(schedulerLinkStale ? { schedulerLinkStale: true } : {}),
         },
         taskSnapshot: reviewTask
           ? { id: reviewTask.id, taskNo: reviewTask.taskNo, title: reviewTask.title ?? undefined }
@@ -740,35 +764,5 @@ export class RegularizationRequestsService implements RegularizationRequestsCont
     this.dashboardRealtime?.notifyUserNotificationRefresh(updated.designerId);
 
     return updated;
-  }
-
-  /** @deprecated Use review() — kept for backward compatibility */
-  async updateStatus(
-    id: string,
-    dto: UpdateRegularizationStatusDto,
-    reviewerId?: string,
-    role?: UserRole,
-  ): Promise<RegularizationRequestView> {
-    if (reviewerId && role && (dto.status === 'Approved' || dto.status === 'Rejected')) {
-      return this.review(id, reviewerId, role, { status: dto.status, remarks: undefined });
-    }
-
-    if (!isUuidString(id)) throw new BadRequestException('id must be a UUID.');
-
-    const defaultApprover = process.env.REGULARIZATION_DEFAULT_APPROVER_ID?.trim();
-    const approverGuid =
-      dto.approverId?.trim() ??
-      (defaultApprover && isUuidString(defaultApprover) ? defaultApprover : null);
-
-    const updatedRow = await this.prisma.regularizationRequest.update({
-      where: { id },
-      data: {
-        status: dto.status,
-        ...(approverGuid ? { approverId: approverGuid } : {}),
-      },
-      include: INCLUDE,
-    });
-
-    return this.mapRow(updatedRow);
   }
 }
