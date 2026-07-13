@@ -39,10 +39,15 @@ function fmt(isoString) {
   return new Date(isoString).toLocaleDateString('en-GB', { day: '2-digit', month: 'short', year: 'numeric' });
 }
 
-function CompactCard({ title, children, className = '', state = 'ready' }) {
+function CompactCard({ title, subtitle, children, className = '', state = 'ready' }) {
   return (
     <section className={`ui-surface ui-card-pad flex min-w-0 flex-col ${className}`}>
-      <h2 className="mb-3 shrink-0 text-sm font-semibold text-slate-900">{title}</h2>
+      <div className="mb-3 flex shrink-0 items-baseline justify-between gap-2">
+        <h2 className="text-sm font-semibold text-slate-900">{title}</h2>
+        {subtitle ? (
+          <span className="text-[10px] font-medium uppercase tracking-wide text-slate-400">{subtitle}</span>
+        ) : null}
+      </div>
       <div className="min-w-0 flex-1">
         {state === 'loading' ? (
           <div className="flex h-32 animate-pulse flex-col gap-2">
@@ -625,14 +630,18 @@ export function ProjectsOverviewScreen() {
           ) : null}
 
           <div className="grid min-w-0 grid-cols-1 gap-3 md:grid-cols-2 xl:grid-cols-3 xl:grid-rows-2 xl:auto-rows-[minmax(280px,1fr)]">
-            <CompactCard title="Scheduled Tasks" className="h-full min-h-[280px]" state={cardState}>
+            <CompactCard title="Scheduled Tasks" subtitle="This week" className="h-full min-h-[280px]" state={cardState}>
               <ResponsiveTable
                 headers={['Task No', 'Project', 'Rev', 'Assignee', 'Due']}
                 rows={data?.scheduledTasks ?? []}
                 emptyMessage="No scheduled tasks this week"
                 errorMessage={tableError}
                 renderRow={(row) => (
-                  <tr key={row.taskNo}>
+                  <tr
+                    key={row.id ?? row.taskNo}
+                    className={row.linkUrl ? 'cursor-pointer hover:bg-slate-50' : undefined}
+                    onClick={() => { if (row.linkUrl) router.push(row.linkUrl); }}
+                  >
                     <td className="truncate px-2 py-2 font-mono sm:px-3">{row.taskNo}</td>
                     <td className="truncate px-2 py-2 sm:px-3" title={row.projectName}>{row.projectName || '—'}</td>
                     <td className="truncate px-2 py-2 font-mono text-slate-500 sm:px-3">{row.revisionCode || '—'}</td>
@@ -643,14 +652,18 @@ export function ProjectsOverviewScreen() {
               />
             </CompactCard>
 
-            <CompactCard title="Completed Tasks" className="h-full min-h-[280px]" state={cardState}>
+            <CompactCard title="Completed Tasks" subtitle="This week" className="h-full min-h-[280px]" state={cardState}>
               <ResponsiveTable
                 headers={['Task No', 'Project', 'Rev', 'Completed', '']}
                 rows={data?.completedTasks ?? []}
                 emptyMessage="No completions this week"
                 errorMessage={tableError}
                 renderRow={(row) => (
-                  <tr key={row.taskNo}>
+                  <tr
+                    key={row.id ?? row.taskNo}
+                    className={row.linkUrl ? 'cursor-pointer hover:bg-slate-50' : undefined}
+                    onClick={() => { if (row.linkUrl) router.push(row.linkUrl); }}
+                  >
                     <td className="truncate px-2 py-2 font-mono sm:px-3">{row.taskNo}</td>
                     <td className="truncate px-2 py-2 sm:px-3" title={row.projectName}>{row.projectName || '—'}</td>
                     <td className="truncate px-2 py-2 font-mono text-slate-500 sm:px-3">{row.revisionCode || '—'}</td>
@@ -673,14 +686,18 @@ export function ProjectsOverviewScreen() {
               isHOD={isHOD}
             />
 
-            <CompactCard title="On Hold Tasks" className="h-full min-h-[280px]" state={cardState}>
+            <CompactCard title="On Hold Tasks" subtitle="Current" className="h-full min-h-[280px]" state={cardState}>
               <ResponsiveTable
                 headers={['Task No', 'Project', 'Rev', 'Hold Date', 'Reason']}
                 rows={data?.onHoldTasks ?? []}
                 emptyMessage="No tasks on hold"
                 errorMessage={tableError}
                 renderRow={(row) => (
-                  <tr key={row.rowKey ?? `${row.taskNo}-${row.reason ?? 'hold'}`}>
+                  <tr
+                    key={row.rowKey ?? `${row.id}-${row.reason ?? 'hold'}`}
+                    className={row.linkUrl ? 'cursor-pointer hover:bg-slate-50' : undefined}
+                    onClick={() => { if (row.linkUrl) router.push(row.linkUrl); }}
+                  >
                     <td className="truncate px-2 py-2 font-mono sm:px-3">{row.taskNo}</td>
                     <td className="truncate px-2 py-2 sm:px-3" title={row.projectName}>{row.projectName || '—'}</td>
                     <td className="truncate px-2 py-2 font-mono text-slate-500 sm:px-3">{row.revisionCode || '—'}</td>
@@ -691,14 +708,18 @@ export function ProjectsOverviewScreen() {
               />
             </CompactCard>
 
-            <CompactCard title="Rework Tasks" className="h-full min-h-[280px]" state={cardState}>
+            <CompactCard title="Rework Tasks" subtitle="Current" className="h-full min-h-[280px]" state={cardState}>
               <ResponsiveTable
                 headers={['Task No', 'Project', 'Rev', 'Assignee', 'Updated']}
                 rows={data?.reworkTasks ?? []}
                 emptyMessage="No tasks in rework"
                 errorMessage={tableError}
                 renderRow={(row) => (
-                  <tr key={row.taskNo}>
+                  <tr
+                    key={row.id ?? row.taskNo}
+                    className={row.linkUrl ? 'cursor-pointer hover:bg-slate-50' : undefined}
+                    onClick={() => { if (row.linkUrl) router.push(row.linkUrl); }}
+                  >
                     <td className="truncate px-2 py-2 font-mono sm:px-3">{row.taskNo}</td>
                     <td className="truncate px-2 py-2 sm:px-3" title={row.projectName}>{row.projectName || '—'}</td>
                     <td className="truncate px-2 py-2 font-mono text-slate-500 sm:px-3">{row.revisionCode || '—'}</td>
@@ -711,7 +732,10 @@ export function ProjectsOverviewScreen() {
 
             <section className="ui-surface ui-card-pad flex h-full min-h-[280px] min-w-0 flex-col space-y-4">
               <div className="flex items-center justify-between">
-                <h2 className="text-sm font-semibold text-slate-900">Task Summary</h2>
+                <div className="flex items-baseline gap-2">
+                  <h2 className="text-sm font-semibold text-slate-900">Task Summary</h2>
+                  <span className="text-[10px] font-medium uppercase tracking-wide text-slate-400">In scope · current</span>
+                </div>
                 {loading ? (
                   <span className="text-[10px] text-slate-400">Refreshing…</span>
                 ) : null}
@@ -749,7 +773,7 @@ export function ProjectsOverviewScreen() {
                 </div>
                 {summary ? (
                   <p className="mt-1 text-[10px] text-slate-400">
-                    {summary.total} tasks · {summary.active} active · {summary.onHold} on hold · {summary.reworkCount ?? 0} rework · {summary.completed} completed
+                    {summary.total} in scope · {summary.active} active · {summary.onHold} on hold · {summary.reworkCount ?? 0} rework · {summary.completed} completed
                   </p>
                 ) : null}
               </div>

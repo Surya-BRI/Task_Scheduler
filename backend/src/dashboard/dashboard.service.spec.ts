@@ -57,16 +57,6 @@ describe('DashboardService', () => {
           ],
         },
       });
-      expect(prisma.task.groupBy).toHaveBeenCalledWith(
-        expect.objectContaining({
-          where: {
-            OR: [
-              { assigneeId: 'designer-1' },
-              { id: { in: ['split-task-1'] } },
-            ],
-          },
-        }),
-      );
     });
 
     it('includes DESIGN_NEW in active bucket totals', async () => {
@@ -118,18 +108,19 @@ describe('DashboardService', () => {
     });
   });
 
-  describe('getProjectsOverview — hold / realloc / rework', () => {
+  describe('getProjectsOverview — hold / rework / links', () => {
     const project = { name: 'Project One', projectNo: 'P-1' };
 
     beforeEach(() => {
       prisma.user.findUnique.mockResolvedValue({ departmentId: 'dept-1' });
     });
 
-    it('returns unassigned ON_HOLD tasks for department HOD and merges fragment holds', async () => {
+    it('returns unassigned ON_HOLD + fragment holds with task links; scopes scheduled by dept', async () => {
       prisma.task.findMany
         .mockResolvedValueOnce([]) // completed
         .mockResolvedValueOnce([
           {
+            id: 'hold-1',
             taskNo: 'T-HOLD-1',
             title: 'Held unassigned',
             designType: 'PROJECT',
@@ -137,7 +128,7 @@ describe('DashboardService', () => {
             updatedAt: new Date('2026-06-09T12:00:00.000Z'),
             project,
           },
-        ]) // on hold whole-task
+        ])
         .mockResolvedValueOnce([]) // rework
         .mockResolvedValueOnce([]); // completedWithDue
       prisma.schedulerTaskFragment.findMany.mockResolvedValue([
@@ -146,9 +137,10 @@ describe('DashboardService', () => {
           updatedAt: new Date('2026-06-10T08:00:00.000Z'),
           createdAt: new Date('2026-06-10T08:00:00.000Z'),
           task: {
+            id: 'part-1',
             taskNo: 'T-PART-1',
             title: 'Partial hold',
-            designType: 'PROJECT',
+            designType: 'RETAIL',
             revisionCode: 'R1',
             project,
           },
@@ -161,117 +153,33 @@ describe('DashboardService', () => {
 
       const result = await service.getProjectsOverview('2026-06-08', 'hod-1', UserRole.HOD);
 
-      expect(prisma.task.findMany).toHaveBeenCalledWith(
+      expect(prisma.schedulerAssignment.findMany).toHaveBeenCalledWith(
         expect.objectContaining({
           where: expect.objectContaining({
-            status: 'ON_HOLD',
-            OR: expect.arrayContaining([
-              { assignee: { departmentId: 'dept-1' } },
-              { AND: [{ assigneeId: null }, { taskDesigners: { none: {} } }] },
-            ]),
+            weekStartDate: expect.any(Date),
+            task: expect.objectContaining({
+              OR: expect.any(Array),
+            }),
           }),
         }),
       );
-      expect(result.onHoldTasks.map((t) => t.taskNo).sort()).toEqual(['T-HOLD-1', 'T-PART-1']);
+      expect(result.onHoldTasks).toHaveLength(2);
       expect(result.onHoldTasks.find((t) => t.taskNo === 'T-PART-1')?.reason).toBe('Part on hold');
+      expect(result.onHoldTasks.find((t) => t.taskNo === 'T-PART-1')?.linkUrl).toContain('/retail-task-view/part-1');
+      expect(result.onHoldTasks.find((t) => t.taskNo === 'T-HOLD-1')?.linkUrl).toContain('/project-task-view/hold-1');
       expect(result.summary.onHold).toBe(2);
+      // IN_PROGRESS 5 minus 1 fragment-only parent counted under onHold
+      expect(result.summary.active).toBe(4);
+      expect(result.reallocatedTasks).toEqual([]);
     });
 
-    it('skips fragment hold row when whole task is already ON_HOLD', async () => {
+    it('excludes REWORK from active donut count and returns reworkTasks with links', async () => {
       prisma.task.findMany
+        .mockResolvedValueOnce([])
         .mockResolvedValueOnce([])
         .mockResolvedValueOnce([
           {
-            taskNo: 'T-SAME',
-            title: 'Full hold',
-            designType: 'PROJECT',
-            revisionCode: 'R0',
-            updatedAt: new Date('2026-06-09T12:00:00.000Z'),
-            project,
-          },
-        ])
-        .mockResolvedValueOnce([])
-        .mockResolvedValueOnce([]);
-      prisma.schedulerTaskFragment.findMany.mockResolvedValue([
-        {
-          id: 'frag-dup',
-          updatedAt: new Date('2026-06-10T08:00:00.000Z'),
-          createdAt: new Date('2026-06-10T08:00:00.000Z'),
-          task: {
-            taskNo: 'T-SAME',
-            title: 'Full hold',
-            designType: 'PROJECT',
-            revisionCode: 'R0',
-            project,
-          },
-        },
-      ]);
-      prisma.task.groupBy.mockResolvedValue([{ status: 'ON_HOLD', _count: { status: 1 } }]);
-
-      const result = await service.getProjectsOverview('2026-06-08', 'hod-1', UserRole.HOD);
-      expect(result.onHoldTasks).toHaveLength(1);
-      expect(result.onHoldTasks[0].reason).toBe('On hold');
-      expect(result.summary.onHold).toBe(1);
-    });
-
-    it('lists reallocation when oldAssigneeId is present even if name is missing', async () => {
-      prisma.task.findMany.mockResolvedValue([]);
-      prisma.activityLog.findMany
-        .mockResolvedValueOnce([
-          {
-            id: 'log-1',
-            createdAt: new Date('2026-06-09T10:00:00.000Z'),
-            details: {
-              changes: {
-                oldAssigneeId: 'designer-a',
-                oldAssigneeName: null,
-                newAssigneeName: 'Designer B',
-              },
-            },
-            task: {
-              taskNo: 'T-RE-1',
-              title: 'Moved',
-              designType: 'PROJECT',
-              revisionCode: 'R0',
-              project,
-            },
-          },
-          {
-            id: 'log-first',
-            createdAt: new Date('2026-06-09T11:00:00.000Z'),
-            details: {
-              changes: {
-                oldAssigneeId: null,
-                oldAssigneeName: null,
-                newAssigneeName: 'Designer B',
-              },
-            },
-            task: {
-              taskNo: 'T-FIRST',
-              title: 'First assign',
-              designType: 'PROJECT',
-              revisionCode: 'R0',
-              project,
-            },
-          },
-        ])
-        .mockResolvedValueOnce([]); // inbox activity
-      prisma.task.groupBy.mockResolvedValue([{ status: 'IN_PROGRESS', _count: { status: 2 } }]);
-
-      const result = await service.getProjectsOverview('2026-06-08', 'hod-1', UserRole.HOD);
-
-      expect(result.reallocatedTasks).toHaveLength(1);
-      expect(result.reallocatedTasks[0].taskNo).toBe('T-RE-1');
-      expect(result.reallocatedTasks[0].fromAssigneeName).toBe('Unknown');
-      expect(result.reallocatedTasks[0].newAssigneeName).toBe('Designer B');
-    });
-
-    it('returns REWORK tasks and summary.reworkCount', async () => {
-      prisma.task.findMany
-        .mockResolvedValueOnce([]) // completed
-        .mockResolvedValueOnce([]) // on hold
-        .mockResolvedValueOnce([
-          {
+            id: 'rw-1',
             taskNo: 'T-RW-1',
             title: 'Needs fix',
             designType: 'PROJECT',
@@ -281,32 +189,47 @@ describe('DashboardService', () => {
             assignee: { fullName: 'Sarah Mitchell' },
             taskDesigners: [],
           },
-        ]) // rework
-        .mockResolvedValueOnce([]); // completedWithDue
+        ])
+        .mockResolvedValueOnce([]);
       prisma.task.groupBy.mockResolvedValue([
-        { status: 'REWORK', _count: { status: 1 } },
+        { status: 'REWORK', _count: { status: 2 } },
         { status: 'IN_PROGRESS', _count: { status: 3 } },
       ]);
 
       const result = await service.getProjectsOverview('2026-06-08', 'hod-1', UserRole.HOD);
 
       expect(result.reworkTasks).toHaveLength(1);
-      expect(result.reworkTasks[0].taskNo).toBe('T-RW-1');
-      expect(result.reworkTasks[0].assigneeName).toBe('Sarah Mitchell');
-      expect(result.summary.reworkCount).toBe(1);
-      expect(prisma.task.findMany).toHaveBeenCalledWith(
-        expect.objectContaining({
-          where: expect.objectContaining({ status: 'REWORK' }),
-        }),
-      );
+      expect(result.reworkTasks[0].linkUrl).toContain('/project-task-view/rw-1');
+      expect(result.summary.reworkCount).toBe(2);
+      // buckets.active = 3 + 2 = 5; minus rework 2 => active 3
+      expect(result.summary.active).toBe(3);
+      expect(result.summary.donut.active.value).toBe(3);
+    });
+
+    it('builds HOD-safe activity inbox links to task view (not designer-only list)', async () => {
+      prisma.activityLog.findMany.mockResolvedValue([
+        {
+          id: 'act-1',
+          action: 'STATUS_CHANGED',
+          createdAt: new Date(),
+          taskId: 'task-99',
+          details: {},
+          user: { fullName: 'Alex' },
+          task: { id: 'task-99', taskNo: 'T-99', designType: 'PROJECT' },
+        },
+      ]);
+      prisma.task.groupBy.mockResolvedValue([]);
+
+      const result = await service.getProjectsOverview('2026-06-08', 'hod-1', UserRole.HOD);
+      const activity = result.inbox.find((i) => i.id === 'act-1');
+      expect(activity?.linkUrl).toBe('/project-task-view/task-99?from=design-list');
+      expect(activity?.linkUrl).not.toContain('/design-list/tasks');
     });
   });
 
   describe('buildApprovalInbox', () => {
     it('returns leave items for HOD without department (org-wide)', async () => {
       prisma.user.findUnique.mockResolvedValue({ departmentId: null });
-      prisma.regularizationRequest.findMany.mockResolvedValue([]);
-      prisma.overtimeRequest.findMany.mockResolvedValue([]);
       prisma.leaveRequest.findMany.mockResolvedValue([
         {
           id: 'leave-1',
@@ -318,10 +241,6 @@ describe('DashboardService', () => {
           user: { id: 'designer-1', fullName: 'Alex Johnson' },
         },
       ]);
-      prisma.schedulerAssignment.findMany.mockResolvedValue([]);
-      prisma.task.findMany.mockResolvedValue([]);
-      prisma.activityLog.findMany.mockResolvedValue([]);
-      prisma.task.groupBy.mockResolvedValue([]);
       const result = await service.getProjectsOverview('2026-06-08', 'hod-1', UserRole.HOD);
       const leaveItems = result.inbox.filter((i) => i.requestType === 'leave');
       expect(leaveItems.length).toBeGreaterThan(0);

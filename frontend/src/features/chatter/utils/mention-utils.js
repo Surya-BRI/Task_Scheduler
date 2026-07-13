@@ -105,6 +105,8 @@ export function applyChatterRichTextFormatting(text) {
     .replace(/~~(.+?)~~/gs, '<del>$1</del>')
     .replace(/__(.+?)__/gs, '<u>$1</u>')
     .replace(/\*(.+?)\*/gs, '<em>$1</em>')
+    // Collapse stacked blank lines (e.g. "Rework Required:\n\nnote") before <br />.
+    .replace(/\n{2,}/g, '\n')
     .replace(/\n/g, '<br />');
 }
 

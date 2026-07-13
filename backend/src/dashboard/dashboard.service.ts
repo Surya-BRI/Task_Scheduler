@@ -8,7 +8,6 @@ import {
   ScheduledTaskItem,
   CompletedTaskItem,
   OnHoldTaskItem,
-  ReallocatedTaskItem,
   ReworkTaskItem,
   InboxItem,
   DonutSegment,
@@ -71,6 +70,7 @@ export class DashboardService {
       : {};
     const hasMetricsFilter = Object.keys(metricsWhere).length > 0;
     const taskScope = hasMetricsFilter ? { task: metricsWhere } : {};
+    const LIST_TAKE = 200;
 
     const [
       assignmentRows,
@@ -78,14 +78,14 @@ export class DashboardService {
       onHoldRows,
       fragmentHoldRows,
       reworkRows,
-      reassignRows,
     ] = await Promise.all([
       this.prisma.schedulerAssignment.findMany({
-        where: { weekStartDate: ws },
+        where: { weekStartDate: ws, ...taskScope },
         select: {
           taskId: true,
           task: {
             select: {
+              id: true,
               taskNo: true,
               title: true,
               designType: true,
@@ -106,6 +106,7 @@ export class DashboardService {
           ...metricsWhere,
         },
         select: {
+          id: true,
           taskNo: true,
           title: true,
           designType: true,
@@ -114,11 +115,12 @@ export class DashboardService {
           project: { select: { name: true, projectNo: true } },
         },
         orderBy: { completedAt: 'desc' },
-        take: 50,
+        take: LIST_TAKE,
       }),
       this.prisma.task.findMany({
         where: { status: 'ON_HOLD', ...metricsWhere },
         select: {
+          id: true,
           taskNo: true,
           title: true,
           designType: true,
@@ -127,7 +129,7 @@ export class DashboardService {
           project: { select: { name: true, projectNo: true } },
         },
         orderBy: { updatedAt: 'desc' },
-        take: 50,
+        take: LIST_TAKE,
       }),
       this.prisma.schedulerTaskFragment.findMany({
         where: { status: 'ON_HOLD', ...taskScope },
@@ -137,6 +139,7 @@ export class DashboardService {
           createdAt: true,
           task: {
             select: {
+              id: true,
               taskNo: true,
               title: true,
               designType: true,
@@ -146,11 +149,12 @@ export class DashboardService {
           },
         },
         orderBy: { updatedAt: 'desc' },
-        take: 50,
+        take: LIST_TAKE,
       }),
       this.prisma.task.findMany({
         where: { status: 'REWORK', ...metricsWhere },
         select: {
+          id: true,
           taskNo: true,
           title: true,
           designType: true,
@@ -164,30 +168,7 @@ export class DashboardService {
           },
         },
         orderBy: { updatedAt: 'desc' },
-        take: 50,
-      }),
-      this.prisma.activityLog.findMany({
-        where: {
-          action: ActivityAction.ASSIGNED_TASK,
-          createdAt: { gte: ws, lte: we },
-          ...taskScope,
-        },
-        select: {
-          id: true,
-          createdAt: true,
-          details: true,
-          task: {
-            select: {
-              taskNo: true,
-              title: true,
-              designType: true,
-              revisionCode: true,
-              project: { select: { name: true, projectNo: true } },
-            },
-          },
-        },
-        orderBy: { createdAt: 'desc' },
-        take: 200,
+        take: LIST_TAKE,
       }),
     ]);
 
@@ -206,7 +187,7 @@ export class DashboardService {
           createdAt: true,
           taskId: true,
           user: { select: { fullName: true } },
-          task: { select: { taskNo: true, id: true } },
+          task: { select: { taskNo: true, id: true, designType: true } },
         },
       }),
       this.prisma.task.groupBy({
@@ -230,8 +211,10 @@ export class DashboardService {
     for (const row of assignmentRows) {
       if (!row.taskId || seenScheduled.has(row.taskId)) continue;
       seenScheduled.add(row.taskId);
+      const taskId = row.task?.id ?? row.taskId;
       const name = row.task?.assignee?.fullName ?? row.designer?.fullName ?? '';
       scheduledTasks.push({
+        id: taskId,
         taskNo: row.task?.taskNo ?? '',
         title: row.task?.title ?? '',
         projectName: this.resolveProjectName(row.task?.project, row.task?.title),
@@ -240,16 +223,19 @@ export class DashboardService {
         assigneeName: name,
         assigneeInitials: this.getInitials(name),
         dueDate: row.task?.dueDate?.toISOString() ?? null,
+        linkUrl: this.buildTaskViewLink(taskId, row.task?.designType),
       });
     }
 
     const completedTasks: CompletedTaskItem[] = completedRows.map((r) => ({
+      id: r.id,
       taskNo: r.taskNo,
       title: r.title ?? '',
       projectName: this.resolveProjectName(r.project, r.title),
       designType: r.designType ?? null,
       revisionCode: r.revisionCode ?? null,
       completedAt: r.completedAt?.toISOString() ?? null,
+      linkUrl: this.buildTaskViewLink(r.id, r.designType),
     }));
 
     const onHoldTasks: OnHoldTaskItem[] = [];
@@ -258,6 +244,7 @@ export class DashboardService {
       if (!r.taskNo || seenWholeHold.has(r.taskNo)) continue;
       seenWholeHold.add(r.taskNo);
       onHoldTasks.push({
+        id: r.id,
         taskNo: r.taskNo,
         title: r.title ?? '',
         projectName: this.resolveProjectName(r.project, r.title),
@@ -265,30 +252,20 @@ export class DashboardService {
         revisionCode: r.revisionCode ?? null,
         holdDate: r.updatedAt?.toISOString() ?? null,
         reason: 'On hold',
-        rowKey: `task-${r.taskNo}`,
+        rowKey: `task-${r.id}`,
+        linkUrl: this.buildTaskViewLink(r.id, r.designType),
       });
     }
-    const seenFragmentHold = new Set<string>();
-    for (const frag of fragmentHoldRows as Array<{
-      id: string;
-      updatedAt?: Date | null;
-      createdAt?: Date | null;
-      task?: {
-        taskNo?: string | null;
-        title?: string | null;
-        designType?: string | null;
-        revisionCode?: string | null;
-        project?: { name?: string | null; projectNo?: string | null } | null;
-      } | null;
-    }>) {
+    const fragmentOnlyTaskIds = new Set<string>();
+    for (const frag of fragmentHoldRows) {
+      const taskId = frag.task?.id ?? '';
       const taskNo = frag.task?.taskNo ?? '';
-      if (!taskNo) continue;
-      // Skip fragment row when the whole task is already listed as ON_HOLD
+      if (!taskId || !taskNo) continue;
       if (seenWholeHold.has(taskNo)) continue;
-      const fragKey = `${taskNo}-frag`;
-      if (seenFragmentHold.has(fragKey)) continue;
-      seenFragmentHold.add(fragKey);
+      if (fragmentOnlyTaskIds.has(taskId)) continue;
+      fragmentOnlyTaskIds.add(taskId);
       onHoldTasks.push({
+        id: taskId,
         taskNo,
         title: frag.task?.title ?? '',
         projectName: this.resolveProjectName(frag.task?.project, frag.task?.title),
@@ -297,6 +274,7 @@ export class DashboardService {
         holdDate: (frag.updatedAt ?? frag.createdAt)?.toISOString() ?? null,
         reason: 'Part on hold',
         rowKey: `frag-${frag.id}`,
+        linkUrl: this.buildTaskViewLink(taskId, frag.task?.designType),
       });
     }
 
@@ -308,6 +286,7 @@ export class DashboardService {
         r.assignee?.fullName
         ?? (splitNames.length > 0 ? splitNames.join(', ') : null);
       return {
+        id: r.id,
         taskNo: r.taskNo,
         title: r.title ?? '',
         projectName: this.resolveProjectName(r.project, r.title),
@@ -315,48 +294,16 @@ export class DashboardService {
         revisionCode: r.revisionCode ?? null,
         updatedAt: r.updatedAt?.toISOString() ?? null,
         assigneeName,
+        linkUrl: this.buildTaskViewLink(r.id, r.designType),
       };
     });
-
-    const seenRealloc = new Set<string>();
-    const reallocatedTasks: ReallocatedTaskItem[] = [];
-    for (const row of reassignRows) {
-      if (!row.task || seenRealloc.has(row.task.taskNo)) continue;
-      const changes = this.parseAssignChanges(row.details);
-      const oldAssigneeId = changes.oldAssigneeId;
-      const oldNameRaw = changes.oldAssigneeName;
-      const hasPriorAssignee =
-        Boolean(oldAssigneeId)
-        || (typeof oldNameRaw === 'string' && oldNameRaw.trim().length > 0);
-      if (!hasPriorAssignee) continue;
-
-      const fromAssigneeName =
-        (typeof oldNameRaw === 'string' && oldNameRaw.trim())
-          ? oldNameRaw.trim()
-          : 'Unknown';
-      const newAssigneeName =
-        (typeof changes.newAssigneeName === 'string' && changes.newAssigneeName.trim())
-          ? changes.newAssigneeName.trim()
-          : 'Unknown';
-
-      seenRealloc.add(row.task.taskNo);
-      reallocatedTasks.push({
-        taskNo: row.task.taskNo,
-        title: row.task.title ?? '',
-        projectName: this.resolveProjectName(row.task.project, row.task.title),
-        designType: row.task.designType ?? null,
-        revisionCode: row.task.revisionCode ?? null,
-        fromAssigneeName,
-        newAssigneeName,
-        reassignedAt: row.createdAt.toISOString(),
-      });
-    }
 
     const approvalInbox = await this.buildApprovalInbox(viewerId, viewerRole);
     const activityInbox: InboxItem[] = activityRows.map((row) => {
       const label = INBOX_ACTION_LABELS[row.action] ?? row.action;
       const actor = row.user?.fullName ?? 'System';
       const itemKey = `activity-${row.id}`;
+      const taskId = row.task?.id ?? row.taskId;
       return {
         id: row.id,
         summary: `${actor} — ${label}`,
@@ -364,7 +311,7 @@ export class DashboardService {
         taskNo: row.task?.taskNo ?? null,
         requestType: 'activity',
         requiresAction: false,
-        linkUrl: this.buildActivityLinkUrl(row.action, row.taskId, row.task?.id),
+        linkUrl: this.buildActivityLinkUrl(row.action, taskId, row.task?.designType),
         itemKey,
       };
     });
@@ -391,10 +338,15 @@ export class DashboardService {
     }, {} as Record<string, number>);
 
     const buckets = aggregateStatusCounts(counts);
-    const { active, completed, total } = buckets;
-    const onHoldUnique = new Set(onHoldTasks.map((t) => t.taskNo)).size;
-    const reworkCount = reworkTasks.length;
-    const safeTotal = total || 1;
+    const { completed, total } = buckets;
+    const reworkCount = counts['REWORK'] ?? 0;
+    const statusOnHold = counts['ON_HOLD'] ?? 0;
+    const fragmentOnlyCount = fragmentOnlyTaskIds.size;
+    // Exclude REWORK from Active (shown separately) and fragment-only holds from Active
+    // (they are counted under onHold).
+    const activeDisplay = Math.max(0, buckets.active - reworkCount - fragmentOnlyCount);
+    const onHoldDisplay = statusOnHold + fragmentOnlyCount;
+    const donutTotal = Math.max(1, activeDisplay + onHoldDisplay + completed);
 
     const onTimeCount = completedWithDue.filter(
       (t) => t.completedAt! <= t.dueDate!,
@@ -403,11 +355,9 @@ export class DashboardService {
       ? Math.round((onTimeCount / completedWithDue.length) * 100)
       : 0;
 
-    const reallocatedPct = Math.round((reallocatedTasks.length / safeTotal) * 100);
-
     const mkSegment = (value: number, color: string): DonutSegment => ({
       value,
-      pct: Math.round((value / safeTotal) * 100),
+      pct: Math.round((value / donutTotal) * 100),
       color,
     });
 
@@ -416,22 +366,22 @@ export class DashboardService {
       scheduledTasks,
       completedTasks,
       onHoldTasks,
-      reallocatedTasks,
+      reallocatedTasks: [],
       reworkTasks,
       inbox: trimmedInbox,
       summary: {
         total,
-        active,
-        onHold: onHoldUnique,
+        active: activeDisplay,
+        onHold: onHoldDisplay,
         completed,
         reworkCount,
         onTimePct,
-        reallocatedPct,
+        reallocatedPct: 0,
         donut: {
-          active: mkSegment(active, '#4f8ef7'),
-          onHold: mkSegment(onHoldUnique, '#f5a623'),
+          active: mkSegment(activeDisplay, '#4f8ef7'),
+          onHold: mkSegment(onHoldDisplay, '#f5a623'),
           completed: mkSegment(completed, '#7ed321'),
-          centerPct: Math.round((completed / safeTotal) * 100),
+          centerPct: Math.round((completed / donutTotal) * 100),
           centerTotal: total,
         },
       },
@@ -504,26 +454,6 @@ export class DashboardService {
       return {};
     }
     return { assigneeId: userId };
-  }
-
-  private parseAssignChanges(details: unknown): {
-    oldAssigneeId?: string | null;
-    oldAssigneeName?: string | null;
-    newAssigneeName?: string | null;
-  } {
-    try {
-      const det = typeof details === 'string'
-        ? JSON.parse(details)
-        : (details as Record<string, unknown> | null);
-      const changes = (det?.changes ?? {}) as Record<string, unknown>;
-      return {
-        oldAssigneeId: (changes.oldAssigneeId as string | null | undefined) ?? null,
-        oldAssigneeName: (changes.oldAssigneeName as string | null | undefined) ?? null,
-        newAssigneeName: (changes.newAssigneeName as string | null | undefined) ?? null,
-      };
-    } catch {
-      return {};
-    }
   }
 
   private async buildApprovalInbox(
@@ -679,17 +609,22 @@ export class DashboardService {
     return [...regItems, ...otItems, ...leaveItems];
   }
 
+  private buildTaskViewLink(taskId: string, designType?: string | null): string {
+    const isRetail = String(designType ?? '').trim().toLowerCase() === 'retail';
+    const path = isRetail ? `/retail-task-view/${taskId}` : `/project-task-view/${taskId}`;
+    return `${path}?from=design-list`;
+  }
+
   private buildActivityLinkUrl(
     action: string,
-    taskId: string | null,
-    taskRowId?: string | null,
+    taskId: string | null | undefined,
+    designType?: string | null,
   ): string | null {
     if (action === ActivityAction.CREATED_CHATTER_POST || action === ActivityAction.CREATED_CHATTER_COMMENT) {
       return '/chatter';
     }
-    const id = taskRowId ?? taskId;
-    if (id) {
-      return `/design-list/tasks?taskId=${encodeURIComponent(id)}`;
+    if (taskId) {
+      return this.buildTaskViewLink(taskId, designType);
     }
     return null;
   }

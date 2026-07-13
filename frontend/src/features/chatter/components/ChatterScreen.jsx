@@ -800,9 +800,18 @@ function SeenByLine({ post, className = "" }) {
   );
 }
 
+function toLocalDateInputValue(date) {
+  const d = date instanceof Date ? date : new Date(date);
+  return `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, "0")}-${String(d.getDate()).padStart(2, "0")}`;
+}
+
 function PrivateChatterEntry({ item, mentionUsersDirectory, onOpen }) {
   const projectName = String(item.projectName ?? "").trim() || "—";
   const isRead = Boolean(item.isRead);
+  const titleLabel = String(item.title ?? "").trim();
+  const taskLabel = String(item.taskName ?? "").trim();
+  const showTaskName =
+    Boolean(taskLabel) && taskLabel.toLowerCase() !== titleLabel.toLowerCase();
 
   return (
     <button
@@ -811,7 +820,7 @@ function PrivateChatterEntry({ item, mentionUsersDirectory, onOpen }) {
       className={isRead ? PRIVATE_CHATTER_READ_ITEM_CLASS : PRIVATE_CHATTER_ITEM_CLASS}
     >
       <p className="break-words text-sm font-semibold text-slate-900">{item.title}</p>
-      {item.taskName ? (
+      {showTaskName ? (
         <p className="mt-0.5 break-words text-xs font-medium text-blue-700">{item.taskName}</p>
       ) : null}
       <ChatterMentionText
@@ -873,23 +882,29 @@ function ChatterCard({
     const element = cardRef.current;
     if (!element || !onBecomeVisible) return undefined;
 
-    const markIfVisible = () => {
-      const rect = element.getBoundingClientRect();
+    const isMostlyVisible = (rect) => {
+      if (rect.height <= 0) return false;
       const viewportHeight = window.innerHeight || document.documentElement.clientHeight;
-      if (rect.top < viewportHeight && rect.bottom > 0) {
+      const visibleHeight = Math.min(rect.bottom, viewportHeight) - Math.max(rect.top, 0);
+      return visibleHeight / rect.height >= 0.5;
+    };
+
+    const markIfVisible = () => {
+      if (isMostlyVisible(element.getBoundingClientRect())) {
         onBecomeVisible(post.id);
       }
     };
 
     markIfVisible();
 
+    // Require ~50% visibility so briefly scrolling past does not inflate Seen by.
     const observer = new IntersectionObserver(
       ([entry]) => {
-        if (entry?.isIntersecting) {
+        if (entry?.isIntersecting && (entry.intersectionRatio ?? 0) >= 0.5) {
           onBecomeVisible(post.id);
         }
       },
-      { threshold: [0, 0.2, 0.5] },
+      { threshold: [0.5, 0.75, 1] },
     );
     observer.observe(element);
     return () => observer.disconnect();
@@ -1149,8 +1164,6 @@ export function ChatterScreen() {
   const [focusedPostId, setFocusedPostId] = useState(null);
   const [currentDate, setCurrentDate] = useState(() => new Date());
   const [activeWeekStart, setActiveWeekStart] = useState(null);
-  const [taskCatalog, setTaskCatalog] = useState([]);
-  const [taskCatalogLoaded, setTaskCatalogLoaded] = useState(false);
   const [isCreatePostOpen, setIsCreatePostOpen] = useState(false);
   const [isSubmitting, setIsSubmitting] = useState(false);
   const [postsLoadError, setPostsLoadError] = useState(null);
@@ -1299,26 +1312,39 @@ export function ChatterScreen() {
     }
   }, [flushSeenPosts]);
 
-  const reloadPrivateFeeds = useCallback(async () => {
+  const reloadPrivateFeeds = useCallback(async (weekStartOverride) => {
     if (!currentUserId) {
       setMentionFeedPosts([]);
       setCommentedFeedPosts([]);
       return;
     }
+    const weekStart =
+      weekStartOverride === undefined
+        ? (activeWeekStart ?? undefined)
+        : (weekStartOverride || undefined);
     try {
       const [mentionedRes, commentedRes] = await Promise.all([
-        listChatterPosts({ mentionUserId: currentUserId, limit: 200 }),
-        listChatterPosts({ commentedByUserId: currentUserId, limit: 200 }),
+        listChatterPosts({
+          mentionUserId: currentUserId,
+          limit: 200,
+          ...(weekStart ? { weekStart } : {}),
+        }),
+        listChatterPosts({
+          commentedByUserId: currentUserId,
+          limit: 200,
+          ...(weekStart ? { weekStart } : {}),
+        }),
       ]);
       const mentionedRows = Array.isArray(mentionedRes?.data) ? mentionedRes.data : (Array.isArray(mentionedRes) ? mentionedRes : []);
       const commentedRows = Array.isArray(commentedRes?.data) ? commentedRes.data : (Array.isArray(commentedRes) ? commentedRes : []);
       setMentionFeedPosts(mentionedRows.map((row) => mapChatterPostDtoToFeedPost(row, currentUserId)));
       setCommentedFeedPosts(commentedRows.map((row) => mapChatterPostDtoToFeedPost(row, currentUserId)));
-    } catch {
+    } catch (err) {
       setMentionFeedPosts([]);
       setCommentedFeedPosts([]);
+      toast.error(err instanceof Error ? err.message : "Could not load private chatter.");
     }
-  }, [currentUserId]);
+  }, [currentUserId, activeWeekStart]);
 
   const reloadPosts = useCallback(async (weekStartOverride) => {
     setPostsLoading(true);
@@ -1497,39 +1523,18 @@ export function ChatterScreen() {
     });
   }, [reloadPosts, reloadPrivateFeeds]);
 
-  const loadTaskCatalog = useCallback(() => {
-    if (taskCatalogLoaded) return;
-    setTaskCatalogLoaded(true);
-    apiClient
-      .get("/tasks?limit=500")
-      .then((res) => {
-        const rows = Array.isArray(res) ? res : Array.isArray(res?.data) ? res.data : [];
-        setTaskCatalog(
-          rows.map((task) => ({
-            id: String(task.id),
-            label: formatTaskCatalogLabel(task),
-            projectName: task?.project?.name?.trim() || "—",
-          })),
-        );
-      })
-      .catch(() => setTaskCatalog([]));
-  }, [taskCatalogLoaded]);
-
   const openChatterTab = useCallback(
     (tab) => {
       setActiveTab(tab);
       setFocusedPostId(null);
       setOpenComposerPostId(null);
-      if (tab === "task-updates") {
-        loadTaskCatalog();
-      }
 
       const qs = new URLSearchParams();
       if (tab !== "posts") qs.set("tab", tab);
       const suffix = qs.toString();
       router.push(suffix ? `/chatter?${suffix}` : "/chatter");
     },
-    [loadTaskCatalog, router],
+    [router],
   );
 
   useEffect(() => {
@@ -1540,16 +1545,26 @@ export function ChatterScreen() {
     }
     if (urlTab === "task-updates") {
       setActiveTab("task-updates");
-      loadTaskCatalog();
     }
-  }, [urlPostId, urlTab, loadTaskCatalog]);
+  }, [urlPostId, urlTab]);
 
   const weekLabel = useMemo(() => {
-    const monday = new Date(getMondayOfWeek(currentDate));
+    const weekStartStr = getMondayOfWeek(currentDate);
+    const [y, m, d] = weekStartStr.split("-").map(Number);
+    const monday = new Date(y, m - 1, d);
     const sunday = new Date(monday);
     sunday.setDate(monday.getDate() + 6);
     return `${monday.toLocaleDateString("en-US", { month: "short", day: "numeric" })} — ${sunday.toLocaleDateString("en-US", { month: "short", day: "numeric", year: "numeric" })}`;
   }, [currentDate]);
+
+  const activeWeekLabel = useMemo(() => {
+    if (!activeWeekStart) return weekLabel;
+    const [y, m, d] = activeWeekStart.split("-").map(Number);
+    const monday = new Date(y, m - 1, d);
+    const sunday = new Date(monday);
+    sunday.setDate(monday.getDate() + 6);
+    return `${monday.toLocaleDateString("en-US", { month: "short", day: "numeric" })} — ${sunday.toLocaleDateString("en-US", { month: "short", day: "numeric", year: "numeric" })}`;
+  }, [activeWeekStart, weekLabel]);
 
   const sortedPosts = useMemo(
     () =>
@@ -1630,17 +1645,7 @@ export function ChatterScreen() {
         ),
       });
     }
-    for (const task of taskCatalog) {
-      if (!byTask.has(task.id)) {
-        byTask.set(task.id, {
-          id: task.id,
-          taskId: task.id,
-          taskName: task.label,
-          projectName: task.projectName,
-          chats: [],
-        });
-      }
-    }
+    // Only tasks that already have chatter — do not dump the full task catalog.
     return [...byTask.values()]
       .map((task) => ({
         ...task,
@@ -1649,7 +1654,7 @@ export function ChatterScreen() {
         ),
       }))
       .sort((a, b) => a.taskName.localeCompare(b.taskName));
-  }, [sortedPosts, taskCatalog]);
+  }, [sortedPosts]);
 
   const openComposer = (postId) => {
     setOpenComposerPostId((current) => (current === postId ? null : postId));
@@ -1670,7 +1675,8 @@ export function ChatterScreen() {
     const postId = typeof itemOrPostId === "string" ? itemOrPostId : itemOrPostId?.postId;
     if (!postId) return;
     const commentId = typeof itemOrPostId === "string" ? null : itemOrPostId?.commentId;
-    if (typeof itemOrPostId !== "string") {
+    const fromPrivate = typeof itemOrPostId !== "string";
+    if (fromPrivate) {
       markPrivateEntryViewed(itemOrPostId.id);
     }
     const qs = new URLSearchParams({ postId });
@@ -1678,7 +1684,8 @@ export function ChatterScreen() {
     router.push(`/chatter?${qs.toString()}`);
     setFocusedPostId(postId);
     setActiveTab("posts");
-    setOpenComposerPostId(commentId ? postId : null);
+    // Always open the composer for Private rows (post-level mentions have no commentId).
+    setOpenComposerPostId(fromPrivate || commentId ? postId : null);
   };
 
   const resolveMentionUserIds = (message) =>
@@ -1843,12 +1850,9 @@ export function ChatterScreen() {
       }
       setPosts((prev) => [newFeedPost, ...prev]);
       setIsCreatePostOpen(false);
-      const targetTab =
-        postData.postType === "Private"
-          ? "private"
-          : postData.postType === "Task Updates"
-            ? "task-updates"
-            : "posts";
+      // "Private" post type is visibility metadata — stay on Posts so the new post stays visible.
+      // Private tab is an @mention / my-comments inbox, not the destination for drafts of that type.
+      const targetTab = postData.postType === "Task Updates" ? "task-updates" : "posts";
       setActiveTab(targetTab);
       emitChatterRefresh({
         taskId: createdDto.taskId,
@@ -1900,7 +1904,7 @@ export function ChatterScreen() {
                 type="date"
                 aria-label="Select chatter date range reference"
                 className="absolute inset-0 h-full w-full cursor-pointer opacity-0"
-                value={currentDate.toISOString().split("T")[0]}
+                value={toLocalDateInputValue(currentDate)}
                 onChange={handleDateChange}
                 onClick={(event) => {
                   if ("showPicker" in event.currentTarget) {
@@ -1914,11 +1918,12 @@ export function ChatterScreen() {
             <button
               type="button"
               className="ui-icon-button h-8 w-8 border border-slate-300 bg-white"
-              title="Filter posts for selected week"
+              title="Apply week filter to Posts and Private"
               onClick={() => {
                 const weekStart = getMondayOfWeek(currentDate);
                 setActiveWeekStart(weekStart);
                 void reloadPosts(weekStart);
+                void reloadPrivateFeeds(weekStart);
               }}
             >
               <Search className="h-4 w-4 text-slate-500" />
@@ -1944,13 +1949,14 @@ export function ChatterScreen() {
             ) : null}
             {activeWeekStart ? (
               <div className="mb-3 flex items-center justify-between rounded-lg border border-blue-100 bg-blue-50 px-3 py-2 text-xs text-blue-800">
-                <span>Showing posts for week of {weekLabel}</span>
+                <span>Showing posts for week of {activeWeekLabel} (Search applies this filter)</span>
                 <button
                   type="button"
                   className="font-semibold underline"
                   onClick={() => {
                     setActiveWeekStart(null);
                     void reloadPosts(null);
+                    void reloadPrivateFeeds(null);
                   }}
                 >
                   Clear filter
@@ -2022,12 +2028,33 @@ export function ChatterScreen() {
         ) : null}
 
         {activeTab === "private" ? (
-          <section className="mt-3 grid min-w-0 gap-3 md:grid-cols-2">
+          <section className="mt-3 space-y-3">
+            {activeWeekStart ? (
+              <div className="flex items-center justify-between rounded-lg border border-blue-100 bg-blue-50 px-3 py-2 text-xs text-blue-800">
+                <span>Private inbox filtered to week of {activeWeekLabel}</span>
+                <button
+                  type="button"
+                  className="font-semibold underline"
+                  onClick={() => {
+                    setActiveWeekStart(null);
+                    void reloadPosts(null);
+                    void reloadPrivateFeeds(null);
+                  }}
+                >
+                  Clear filter
+                </button>
+              </div>
+            ) : null}
+            <div className="grid min-w-0 gap-3 md:grid-cols-2">
             <div className="ui-surface min-w-0 p-3">
               <h2 className="mb-2 text-sm font-semibold text-slate-900">Mentioned You</h2>
               <div className="space-y-2">
                 {privateMentions.length === 0 ? (
-                  <p className="text-sm text-slate-500">No mentions for you yet.</p>
+                  <p className="text-sm text-slate-500">
+                    {activeWeekStart
+                      ? "No mentions for you in this week."
+                      : "No mentions for you yet."}
+                  </p>
                 ) : (
                   privateMentions.map((item) => (
                     <PrivateChatterEntry
@@ -2045,7 +2072,11 @@ export function ChatterScreen() {
               <h2 className="mb-2 text-sm font-semibold text-slate-900">Your Posted Comments</h2>
               <div className="space-y-2">
                 {privateComments.length === 0 ? (
-                  <p className="text-sm text-slate-500">No comments posted yet.</p>
+                  <p className="text-sm text-slate-500">
+                    {activeWeekStart
+                      ? "No comments posted by you in this week."
+                      : "No comments posted yet."}
+                  </p>
                 ) : (
                   privateComments.map((item) => (
                     <PrivateChatterEntry
@@ -2057,6 +2088,7 @@ export function ChatterScreen() {
                   ))
                 )}
               </div>
+            </div>
             </div>
           </section>
         ) : null}
