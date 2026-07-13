@@ -1,5 +1,6 @@
-import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
+import { describe, it, expect } from 'vitest';
 import {
+  formatMessageHtml,
   parseMentionUserIdsFromMessage,
   sanitizeChatterHtml,
 } from './mention-utils';
@@ -25,5 +26,14 @@ describe('mention-utils', () => {
     expect(clean).toContain('<strong>Hi</strong>');
     expect(clean).not.toContain('script');
     expect(clean).not.toContain('onerror');
+  });
+
+  it('renders styled non-clickable mentions', () => {
+    const html = formatMessageHtml('Hey @Alex Johnson please review', users);
+    expect(html).not.toContain('<a ');
+    expect(html).not.toContain('href=');
+    expect(html).toContain('<span class="font-semibold text-blue-600"');
+    expect(html).toContain('data-mention-user="u1"');
+    expect(html).toContain('@Alex Johnson');
   });
 });

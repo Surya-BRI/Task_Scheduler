@@ -275,7 +275,14 @@ export class SchedulerAssignmentsService implements OnModuleInit {
     const numberMatch = text.match(/(\d+(?:\.\d+)?)/);
     if (!numberMatch) return 0;
     const parsed = Number(numberMatch[1]);
-    return Number.isFinite(parsed) ? parsed : 0;
+    if (!Number.isFinite(parsed)) return 0;
+
+    const isMinutes =
+      /\b(?:min|mins|minute|minutes)\b/.test(text) ||
+      (/\bm\b/.test(text) && !/\b(?:hr|hrs|hour|hours|h)\b/.test(text));
+    if (isMinutes) return parsed / 60;
+
+    return parsed;
   }
 
   private weekStartForDate(date: Date): Date {
@@ -371,6 +378,7 @@ export class SchedulerAssignmentsService implements OnModuleInit {
     assignments: Array<{ taskId?: string | null }>;
     reassignedTasks?: Array<{ taskId: string }>;
     splitTasks?: Array<{ taskId: string }>;
+    overflowPlacements?: Array<{ taskId: string }>;
   }): string[] {
     const ids = new Set<string>();
     for (const row of result.assignments) {
@@ -381,6 +389,9 @@ export class SchedulerAssignmentsService implements OnModuleInit {
       if (this.isUuid(row.taskId)) ids.add(row.taskId);
     }
     for (const row of result.splitTasks ?? []) {
+      if (this.isUuid(row.taskId)) ids.add(row.taskId);
+    }
+    for (const row of result.overflowPlacements ?? []) {
       if (this.isUuid(row.taskId)) ids.add(row.taskId);
     }
     return [...ids];
@@ -1161,6 +1172,15 @@ export class SchedulerAssignmentsService implements OnModuleInit {
       this.dashboardRealtime?.notifyOverviewRefresh('scheduler_leave_rescheduled', {
         affectedWeekStarts: result.affectedWeeks,
       });
+      const weeksLabel = result.affectedWeeks.join(', ');
+      this.notificationsService
+        .create({
+          userId: leave.userId,
+          title: 'Schedule Updated for Your Leave',
+          message: `${result.movedCount} scheduled ${result.movedCount === 1 ? 'task was' : 'tasks were'} moved because of your approved leave (week${result.affectedWeeks.length === 1 ? '' : 's'} ${weeksLabel}). Check the scheduler to see where they landed.`,
+          linkUrl: '/scheduler',
+        })
+        .catch((err) => this.logger.error('Failed to send leave-reschedule notification', err));
       this.dashboardRealtime?.notifyUserNotificationRefresh(leave.userId);
     }
 
@@ -1592,6 +1612,15 @@ export class SchedulerAssignmentsService implements OnModuleInit {
       this.dashboardRealtime?.notifyOverviewRefresh('scheduler_leave_rescheduled', {
         affectedWeekStarts: result.affectedWeeks,
       });
+      const weeksLabelRevoked = result.affectedWeeks.join(', ');
+      this.notificationsService
+        .create({
+          userId: leave.userId,
+          title: 'Schedule Updated After Leave Revocation',
+          message: `${result.movedCount} scheduled ${result.movedCount === 1 ? 'task was' : 'tasks were'} moved back because your leave was revoked (week${result.affectedWeeks.length === 1 ? '' : 's'} ${weeksLabelRevoked}). Check the scheduler to see where they landed.`,
+          linkUrl: '/scheduler',
+        })
+        .catch((err) => this.logger.error('Failed to send leave-revocation reschedule notification', err));
       this.dashboardRealtime?.notifyUserNotificationRefresh(leave.userId);
     }
 
@@ -1827,7 +1856,7 @@ export class SchedulerAssignmentsService implements OnModuleInit {
       const workedSecondsByKey = new Map<string, number>();
       if (taskIds.length > 0 && designerIdsForWork.length > 0) {
         const draftSessions = await this.prisma.taskWorkSession.findMany({
-          where: { status: 'Draft', taskId: { in: taskIds }, designerId: { in: designerIdsForWork } },
+          where: { status: { in: ['Draft', 'HandedOff'] }, taskId: { in: taskIds }, designerId: { in: designerIdsForWork } },
           select: { taskId: true, designerId: true, durationSeconds: true, runStartedAt: true },
         });
         for (const session of draftSessions) {
@@ -2080,10 +2109,38 @@ export class SchedulerAssignmentsService implements OnModuleInit {
     };
   }
 
-  async clearTaskSchedule(taskId: string): Promise<void> {
+  /**
+   * Wipes all future scheduler assignments for a task (whole-task unassign flow).
+   *
+   * When `expectedAssignmentIds` is passed (scheduler consolidation folding split parts into
+   * one whole-task card), the check-then-delete runs atomically in one transaction: if a live
+   * row exists that isn't in the expected set — e.g. a sibling scheduled in a week the caller
+   * never loaded — the whole call is rejected instead of silently deleting that sibling.
+   * Omit the param to preserve the old unconditional-wipe behavior for other callers.
+   */
+  async clearTaskSchedule(taskId: string, expectedAssignmentIds?: string[]): Promise<void> {
     const todayMidnight = new Date(new Date().toISOString().split('T')[0] + 'T00:00:00.000Z');
-    await this.prisma.schedulerAssignment.deleteMany({
-      where: { taskId, weekStartDate: { gte: todayMidnight } },
+    if (!expectedAssignmentIds) {
+      await this.prisma.schedulerAssignment.deleteMany({
+        where: { taskId, weekStartDate: { gte: todayMidnight } },
+      });
+      return;
+    }
+
+    await this.prisma.$transaction(async (tx) => {
+      const liveRows = await tx.schedulerAssignment.findMany({
+        where: { taskId, weekStartDate: { gte: todayMidnight } },
+        select: { id: true },
+      });
+      const expected = new Set(expectedAssignmentIds);
+      if (liveRows.some((row) => !expected.has(row.id))) {
+        throw new ConflictException(
+          'Another scheduled part of this task changed since this page last loaded. Refresh and try again.',
+        );
+      }
+      await tx.schedulerAssignment.deleteMany({
+        where: { taskId, weekStartDate: { gte: todayMidnight } },
+      });
     });
   }
 
@@ -2164,6 +2221,159 @@ export class SchedulerAssignmentsService implements OnModuleInit {
     await this.prisma.schedulerTaskFragment.update({ where: { id: fragmentId }, data: { status } });
   }
 
+  /**
+   * Places hours that didn't fit anywhere in the week being saved (e.g. a task dropped on a
+   * designer's Friday whose remaining capacity is less than the task's hours). Walks forward
+   * day-by-day from the day after `afterDate`, skipping weekends/holidays/full-day approved
+   * leave, live-checking each candidate day's actual remaining capacity inside this same
+   * transaction (never trusting a client assumption about a week it never loaded — the same
+   * principle as the `expectedAssignmentIds` guard elsewhere in this file), and creates
+   * SchedulerAssignment row(s) to consume the hours — splitting across multiple days/weeks if
+   * one day isn't enough. Every week actually touched gets its version bumped and a history
+   * entry written, mirroring `rescheduleForApprovedLeave`. Bounded by `maxLookaheadDays`;
+   * whatever can't be placed within that bound is reported back in `unplacedHours`, never
+   * silently dropped.
+   *
+   * Deliberately NOT unified with the near-identical "next available day" loops in
+   * `rescheduleForApprovedLeave`/`rescheduleAfterLeaveRevocation` — those are working,
+   * payroll-adjacent code paths; refactoring them as a side effect of this new, unrelated call
+   * site would add risk without benefit. Revisit unification later if it proves worthwhile.
+   */
+  private async placeOverflowCapacity(
+    tx: Prisma.TransactionClient,
+    params: {
+      designerId: string;
+      taskId: string;
+      hoursNeeded: number;
+      afterDate: Date;
+      assignedBy: string;
+      isPinned?: boolean;
+      maxLookaheadDays?: number;
+    },
+  ): Promise<{
+    placements: Array<{ weekStart: string; dayIndex: number; hours: number }>;
+    unplacedHours: number;
+  }> {
+    const { designerId, taskId, assignedBy } = params;
+    let hoursRemaining = Math.round(params.hoursNeeded * 100) / 100;
+    const maxLookaheadDays = params.maxLookaheadDays ?? 56;
+
+    const rangeStart = this.addUtcDays(this.startOfUtcDay(params.afterDate), 1);
+    const rangeEnd = this.addUtcDays(rangeStart, maxLookaheadDays);
+
+    const [holidayKeys, approvedLeaves] = await Promise.all([
+      this.loadHolidayKeys(tx, rangeStart, rangeEnd),
+      tx.leaveRequest.findMany({
+        where: {
+          userId: designerId,
+          status: { in: ['Approved', 'APPROVED', 'approved'] },
+          revokedAt: null,
+          startDate: { lte: rangeEnd },
+          OR: [{ endDate: null }, { endDate: { gte: rangeStart } }],
+        },
+        select: { type: true, startDate: true, endDate: true },
+      }),
+    ]);
+
+    const leaveHoursForCandidate = (date: Date): number => {
+      let hours = 0;
+      for (const leave of approvedLeaves) {
+        hours += this.leaveHoursForDate(leave, date);
+      }
+      return Math.min(DAILY_CAPACITY, hours);
+    };
+
+    const placements: Array<{ weekStart: string; dayIndex: number; hours: number }> = [];
+    const touchedWeekStarts = new Set<string>();
+
+    let cursor = rangeStart;
+    while (hoursRemaining > 0.001 && cursor < rangeEnd) {
+      const key = this.dateKey(cursor);
+      const leaveBlocked = this.isWeekend(cursor) || holidayKeys.has(key) ? DAILY_CAPACITY : leaveHoursForCandidate(cursor);
+      if (leaveBlocked >= DAILY_CAPACITY) {
+        cursor = this.addUtcDays(cursor, 1);
+        continue;
+      }
+
+      const candidateWeekStart = this.weekStartForDate(cursor);
+      const candidateDayIndex = this.dayIndexForDate(cursor, candidateWeekStart);
+
+      // Live check — never trust a stale assumption about a week the caller never loaded.
+      const existingRows = await tx.schedulerAssignment.findMany({
+        where: { designerId, weekStartDate: candidateWeekStart, dayIndex: candidateDayIndex },
+        select: { assignedHours: true },
+      });
+      const alreadyUsed = existingRows.reduce((sum, row) => sum + this.toHours(row.assignedHours), 0);
+      const available = Math.max(0, DAILY_CAPACITY - alreadyUsed - leaveBlocked);
+
+      if (available <= 0.001) {
+        cursor = this.addUtcDays(cursor, 1);
+        continue;
+      }
+
+      const placeHours = Math.round(Math.min(available, hoursRemaining) * 100) / 100;
+      const weekKey = this.dateKey(candidateWeekStart);
+      if (!touchedWeekStarts.has(weekKey)) {
+        await tx.schedulerWeek.upsert({
+          where: { weekStartDate: candidateWeekStart },
+          create: {
+            weekStartDate: candidateWeekStart,
+            version: 1,
+            isLocked: false,
+            updatedBy: assignedBy,
+            lastPayloadHash: null,
+          },
+          update: { version: { increment: 1 }, updatedBy: assignedBy, lastPayloadHash: null },
+        });
+        touchedWeekStarts.add(weekKey);
+      }
+
+      await tx.schedulerAssignment.create({
+        data: {
+          designerId,
+          taskId,
+          dayIndex: candidateDayIndex,
+          assignedHours: new Prisma.Decimal(placeHours),
+          parentId: taskId,
+          // Provisional — the cross-week split recompute in saveWeekSnapshot runs immediately
+          // after this and relabels every part of this task (including this new row) to the
+          // correct, globally-contiguous splitIndex/totalParts.
+          splitIndex: 1,
+          totalParts: 1,
+          position: 0,
+          weekStartDate: candidateWeekStart,
+          weekEndDate: this.weekEndForWeekStart(candidateWeekStart),
+          notes: null,
+          isLocked: false,
+          isPinned: params.isPinned ?? false,
+          assignedBy,
+        },
+      });
+
+      placements.push({ weekStart: weekKey, dayIndex: candidateDayIndex, hours: placeHours });
+      hoursRemaining = Math.round((hoursRemaining - placeHours) * 100) / 100;
+      cursor = this.addUtcDays(cursor, 1);
+    }
+
+    for (const weekKey of touchedWeekStarts) {
+      const weekStartDate = new Date(`${weekKey}T00:00:00.000Z`);
+      const week = await tx.schedulerWeek.findUnique({ where: { weekStartDate } });
+      const afterRows = await tx.schedulerAssignment.findMany({ where: { weekStartDate, designerId, taskId } });
+      await tx.schedulerAssignmentHistory.create({
+        data: {
+          weekStartDate,
+          versionFrom: (week?.version ?? 1) - 1,
+          versionTo: week?.version ?? 1,
+          changedBy: assignedBy,
+          beforeJson: JSON.stringify([]),
+          afterJson: JSON.stringify(afterRows),
+        },
+      });
+    }
+
+    return { placements, unplacedHours: Math.max(0, hoursRemaining) };
+  }
+
   async saveWeekSnapshot(weekStart: string, userId: string, dto: SaveSchedulerWeekDto) {
     const { weekStartDate, weekEndDate } = this.parseWeekStart(weekStart);
     const incremental = this.isIncrementalSave(dto);
@@ -2172,10 +2382,20 @@ export class SchedulerAssignmentsService implements OnModuleInit {
     }
 
     const result = await this.prisma.$transaction(async (tx) => {
-      const designerIds = Array.from(new Set(dto.assignments.map((a) => a.designerId)));
+      // Overflow entries carry their own designerId/taskId that may not otherwise appear in
+      // dto.assignments — fold them into the same validation lists so an overflow placement
+      // can't schedule for a designer/task that was never verified as valid.
+      const designerIds = Array.from(new Set([
+        ...dto.assignments.map((a) => a.designerId),
+        ...(dto.overflow ?? []).map((o) => o.designerId),
+      ]));
       const taskIds = Array.from(new Set(dto.assignments.map((a) => a.taskId)));
       const incrementalTaskIds = incremental ? Array.from(new Set(dto.affectedTaskIds!)) : [];
-      const lookupTaskIds = Array.from(new Set([...taskIds, ...incrementalTaskIds]));
+      const lookupTaskIds = Array.from(new Set([
+        ...taskIds,
+        ...incrementalTaskIds,
+        ...(dto.overflow ?? []).map((o) => o.taskId),
+      ]));
 
       const [schedulableUsers, tasks, previousRows, weekRows, approvedLeaves] = await Promise.all([
         designerIds.length > 0
@@ -2270,7 +2490,7 @@ export class SchedulerAssignmentsService implements OnModuleInit {
 
       this.assertNoApprovedFullDayLeaveConflicts(dto.assignments, approvedLeaves, weekStartDate);
 
-      if (!incremental && existing.lastPayloadHash && existing.lastPayloadHash === payloadHash) {
+      if (!incremental && existing.lastPayloadHash && existing.lastPayloadHash === payloadHash && !dto.overflow?.length) {
         return {
           version: existing.version,
           changed: false,
@@ -2278,8 +2498,37 @@ export class SchedulerAssignmentsService implements OnModuleInit {
           isLocked: Boolean(existing.isLocked),
           updatedAt: existing.updatedAt,
           updatedBy: existing.updatedBy,
+          overflowPlacements: [],
+          unplacedOverflow: [],
         };
       }
+
+      // --- Cross-week overflow placement ---
+      // Runs BEFORE the cross-week split recompute below so any new row(s) created here are
+      // already in the database by the time that recompute's cross-week query runs — it then
+      // picks them up and relabels splitIndex/totalParts globally for free, no changes needed
+      // to that logic.
+      const overflowPlacements: Array<{ weekStart: string; dayIndex: number; hours: number; taskId: string; designerId: string }> = [];
+      const unplacedOverflow: Array<{ taskId: string; designerId: string; hours: number }> = [];
+      if (dto.overflow?.length) {
+        for (const entry of dto.overflow) {
+          const { placements, unplacedHours } = await this.placeOverflowCapacity(tx, {
+            designerId: entry.designerId,
+            taskId: entry.taskId,
+            hoursNeeded: entry.hours,
+            afterDate: weekEndDate,
+            assignedBy: userId,
+            isPinned: entry.isPinned,
+          });
+          for (const placement of placements) {
+            overflowPlacements.push({ ...placement, taskId: entry.taskId, designerId: entry.designerId });
+          }
+          if (unplacedHours > 0.001) {
+            unplacedOverflow.push({ taskId: entry.taskId, designerId: entry.designerId, hours: unplacedHours });
+          }
+        }
+      }
+      // --- End cross-week overflow placement ---
 
       // --- Cross-week sequential split index recomputation ---
       // If any assignments carry split metadata, recompute splitIndex/totalParts globally
@@ -2388,7 +2637,7 @@ export class SchedulerAssignmentsService implements OnModuleInit {
             weekStartDate,
             weekEndDate,
             notes: a.notes ?? null,
-            isLocked: false,
+            isLocked: a.isLocked ?? false,
             isPinned: a.isPinned ?? false,
             assignedBy: userId,
           })),
@@ -2429,6 +2678,13 @@ export class SchedulerAssignmentsService implements OnModuleInit {
 
       const reassignedTasks: Array<{ taskId: string; oldAssigneeId: string | null; newAssigneeId: string }> = [];
       const splitTasks: Array<{ taskId: string; designerIds: string[] }> = [];
+      // Same designer keeps the task but its day/hours actually changed within this save —
+      // reassignedTasks only fires on an assignee CHANGE, so this covers the "moved to another
+      // day" case that would otherwise notify nobody.
+      const sameDesignerChangedTasks: Array<{ taskId: string; designerId: string }> = [];
+      // Task had an assignee before this save but has zero scheduler rows in this week now
+      // (pulled off the grid entirely) — the former assignee would otherwise get no signal.
+      const unassignedFormerAssignees: Array<{ taskId: string; formerAssigneeId: string }> = [];
       const assignOnlyByDesigner = new Map<string, string[]>();
       const assignPlannedByDesigner = new Map<string, string[]>();
       const unassignOnlyIds: string[] = [];
@@ -2468,6 +2724,9 @@ export class SchedulerAssignmentsService implements OnModuleInit {
             } else if (task.assigneeId !== null) {
               unassignOnlyIds.push(task.id);
             }
+            if (task.assigneeId) {
+              unassignedFormerAssignees.push({ taskId: task.id, formerAssigneeId: task.assigneeId });
+            }
           } else {
             // Split across multiple designers — null out assigneeId so the task
             // doesn't falsely appear assigned to only one person.
@@ -2478,6 +2737,20 @@ export class SchedulerAssignmentsService implements OnModuleInit {
 
           if (assignedDesigner && assignedDesigner !== task.assigneeId) {
             reassignedTasks.push({ taskId: task.id, oldAssigneeId: task.assigneeId ?? null, newAssigneeId: assignedDesigner });
+          } else if (assignedDesigner && assignedDesigner === task.assigneeId) {
+            const sliceKey = (r: { dayIndex: number | null; assignedHours: unknown }) =>
+              `${r.dayIndex}:${this.toHours(r.assignedHours)}`;
+            const oldSlices = previousRows
+              .filter((r: any) => r.taskId === task.id && r.designerId === assignedDesigner)
+              .map(sliceKey)
+              .sort();
+            const newSlices = assigneeSourceRows
+              .filter((r: any) => r.taskId === task.id && r.designerId === assignedDesigner)
+              .map(sliceKey)
+              .sort();
+            if (JSON.stringify(oldSlices) !== JSON.stringify(newSlices)) {
+              sameDesignerChangedTasks.push({ taskId: task.id, designerId: assignedDesigner });
+            }
           }
           if (designerSet.size > 1) {
             splitTasks.push({ taskId: task.id, designerIds: [...designerSet] });
@@ -2585,7 +2858,11 @@ export class SchedulerAssignmentsService implements OnModuleInit {
         updatedBy: updatedWeek.updatedBy,
         reassignedTasks,
         splitTasks,
+        sameDesignerChangedTasks,
+        unassignedFormerAssignees,
         incrementalTaskIds: incremental ? incrementalTaskIds : undefined,
+        overflowPlacements,
+        unplacedOverflow,
       };
     }, { timeout: 30_000 });
 
@@ -2600,11 +2877,14 @@ export class SchedulerAssignmentsService implements OnModuleInit {
       const changedTaskIds = result.incrementalTaskIds?.length
         ? result.incrementalTaskIds
         : this.collectSchedulerChangedTaskIds(result);
+      const overflowWeekStarts = result.overflowPlacements?.map((p) => p.weekStart) ?? [];
+      const affectedWeekStarts = Array.from(new Set([weekStart, ...overflowWeekStarts]));
       this.dashboardRealtime?.notifyOverviewRefresh('scheduler_week_saved', {
         weekStart,
         version: result.version,
         updatedBy: userId,
         changedTaskIds,
+        ...(overflowWeekStarts.length > 0 ? { affectedWeekStarts } : {}),
       });
     }
     void this.notifyAfterWeekSave(result, userId, weekStart).catch((err) =>
@@ -2625,6 +2905,8 @@ export class SchedulerAssignmentsService implements OnModuleInit {
           dayIndex: r.dayIndex ?? 0,
         }),
       ),
+      overflowPlacements: result.overflowPlacements ?? [],
+      unplacedOverflow: result.unplacedOverflow ?? [],
     };
   }
 
@@ -2636,6 +2918,9 @@ export class SchedulerAssignmentsService implements OnModuleInit {
       assignments: unknown[];
       reassignedTasks?: Array<{ taskId: string; oldAssigneeId: string | null; newAssigneeId: string }>;
       splitTasks?: Array<{ taskId: string; designerIds: string[] }>;
+      sameDesignerChangedTasks?: Array<{ taskId: string; designerId: string }>;
+      unassignedFormerAssignees?: Array<{ taskId: string; formerAssigneeId: string }>;
+      overflowPlacements?: Array<{ weekStart: string; dayIndex: number; hours: number; taskId: string; designerId: string }>;
     },
     userId: string,
     weekStart: string,
@@ -2740,6 +3025,79 @@ export class SchedulerAssignmentsService implements OnModuleInit {
             this.dashboardRealtime?.notifyUserNotificationRefresh(hod.id);
           }
         }
+      }
+    }
+
+    // Same designer, but their day/hours for this task actually changed within this save —
+    // reassignedTasks only covers an assignee CHANGE, so this fills the gap where the
+    // designer's calendar shifted with no notification at all.
+    if (result.changed && result.sameDesignerChangedTasks?.length) {
+      const taskIds = Array.from(new Set(result.sameDesignerChangedTasks.map((t) => t.taskId)));
+      const taskDetails = await this.prisma.task.findMany({
+        where: { id: { in: taskIds } },
+        select: { id: true, taskNo: true },
+      });
+      const taskById = new Map(taskDetails.map((t) => [t.id, t]));
+      for (const { taskId, designerId } of result.sameDesignerChangedTasks) {
+        const task = taskById.get(taskId);
+        if (!task) continue;
+        this.notificationsService
+          .create({
+            userId: designerId,
+            title: 'Schedule Changed',
+            message: `${task.taskNo} was rescheduled to a different day/time.`,
+            linkUrl: `/project-task-view/${taskId}`,
+          })
+          .catch((err) => this.logger.error('Failed to notify designer of same-designer schedule change', err));
+        this.dashboardRealtime?.notifyUserNotificationRefresh(designerId);
+      }
+    }
+
+    // Task was pulled off the schedule entirely — the former assignee gets no other signal.
+    if (result.changed && result.unassignedFormerAssignees?.length) {
+      const taskIds = Array.from(new Set(result.unassignedFormerAssignees.map((t) => t.taskId)));
+      const taskDetails = await this.prisma.task.findMany({
+        where: { id: { in: taskIds } },
+        select: { id: true, taskNo: true },
+      });
+      const taskById = new Map(taskDetails.map((t) => [t.id, t]));
+      for (const { taskId, formerAssigneeId } of result.unassignedFormerAssignees) {
+        const task = taskById.get(taskId);
+        if (!task) continue;
+        this.notificationsService
+          .create({
+            userId: formerAssigneeId,
+            title: 'Removed from Schedule',
+            message: `${task.taskNo} was removed from the scheduler grid.`,
+            linkUrl: `/project-task-view/${taskId}`,
+          })
+          .catch((err) => this.logger.error('Failed to notify former assignee of schedule removal', err));
+        this.dashboardRealtime?.notifyUserNotificationRefresh(formerAssigneeId);
+      }
+    }
+
+    // Cross-week overflow placements — group by designer so one save produces one notification
+    // per designer rather than one per placed day.
+    if (result.changed && result.overflowPlacements?.length) {
+      const hoursByDesigner = new Map<string, number>();
+      const weeksByDesigner = new Map<string, Set<string>>();
+      for (const placement of result.overflowPlacements) {
+        hoursByDesigner.set(placement.designerId, (hoursByDesigner.get(placement.designerId) ?? 0) + placement.hours);
+        const weeks = weeksByDesigner.get(placement.designerId) ?? new Set<string>();
+        weeks.add(placement.weekStart);
+        weeksByDesigner.set(placement.designerId, weeks);
+      }
+      for (const [designerId, totalHours] of hoursByDesigner) {
+        const weeks = Array.from(weeksByDesigner.get(designerId) ?? []).sort();
+        this.notificationsService
+          .create({
+            userId: designerId,
+            title: 'Extra Hours Scheduled',
+            message: `${Math.round(totalHours * 100) / 100}h of overflow work was scheduled for you (week${weeks.length === 1 ? '' : 's'} ${weeks.join(', ')}).`,
+            linkUrl: '/scheduler',
+          })
+          .catch((err) => this.logger.error('Failed to notify designer of overflow placement', err));
+        this.dashboardRealtime?.notifyUserNotificationRefresh(designerId);
       }
     }
 

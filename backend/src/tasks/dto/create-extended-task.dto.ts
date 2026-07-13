@@ -4,6 +4,7 @@ import {
   IsBoolean,
   IsDateString,
   IsIn,
+  IsInt,
   IsNumber,
   IsOptional,
   IsString,
@@ -42,6 +43,16 @@ class ExtendedTaskCoreDto {
   @IsString()
   @IsOptional()
   revisionCode?: string;
+
+  /**
+   * Release-batch grouping for PROJECT tasks — every task created in one submission
+   * shares this value. Omit to auto-resolve (see TasksService.resolveNextPhase).
+   */
+  @Type(() => Number)
+  @IsInt()
+  @Min(1)
+  @IsOptional()
+  phase?: number;
 
   @IsString()
   @IsOptional()

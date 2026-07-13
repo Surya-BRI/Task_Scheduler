@@ -21,7 +21,12 @@ import {
     updateFragmentStatus,
     updateOvertimeRequestSchedulerAction,
 } from "../services/scheduler-assignments.api";
-import { freezeDraftWorkSession } from "../services/task-timer.api";
+import { freezeDraftWorkSession, peekDraftWorkSession } from "../services/task-timer.api";
+import {
+    allocateLoggedHoursFifo,
+    collectDesignerTaskSlices,
+    countOtherActiveSlices,
+} from "../utils/task-time-allocation";
 import {
     DEFAULT_SCHEDULER_REFERENCE_DATE,
     formatSchedulerDateRangeText,
@@ -240,30 +245,19 @@ function buildPreparedDropAssignment({
             updatedSchedules[targetDesignerId][dayKey].push(part.id);
         }
     });
-    if (remainingHours > 0) {
-        const overflowId = getNextSplitId();
-        updatedTasks[overflowId] = {
-            ...droppedTask,
-            id: overflowId,
-            parentId,
-            baseName,
-            estimatedHours: remainingHours,
-            scheduledHours: remainingHours, // override inherited scheduledHours
-            splitIndex: totalParts,
-            totalParts,
-            status: "unassigned",
-            // Brand-new leftover, not the resolved fragment itself — must ride the normal
-            // Rule 3 overflow-to-next-week path, not be mistaken for the still-outstanding
-            // fragment row (which the first part above already resolves).
-            fragmentId: undefined,
-        };
-    }
+    // Hours that don't fit anywhere in the currently visible week. The server places these
+    // itself (next available working day, possibly next week) atomically with the rest of
+    // this save — see `overflow` on the save payload and `placeOverflowCapacity` backend-side.
+    const overflow = remainingHours > 0
+        ? { designerId: targetDesignerId, taskId: parentId, hours: remainingHours }
+        : null;
 
     return {
         preparedAssignment: {
             updatedSchedules,
             updatedTasks,
             targetDayIndex,
+            overflow,
         },
         hasOvertime: hasOvertimeFlag,
         hoursAssignableWithinNormal: assignedWithinNormalParts,
@@ -275,7 +269,7 @@ function buildPreparedDropAssignment({
 // they logged, and locks it so it can no longer be dragged. Called after a partial
 // handoff so the source designer's calendar keeps a real, visible, persisted record
 // instead of the task simply vanishing from their day.
-function applyLoggedCardPatch(preparedAssignment, patch) {
+function applyLoggedCardPatch(preparedAssignment, patch, sourceId, sourceDay) {
     if (!preparedAssignment || !patch) return preparedAssignment;
     const existing = preparedAssignment.updatedTasks[patch.taskId];
     if (!existing) return preparedAssignment;
@@ -287,6 +281,15 @@ function applyLoggedCardPatch(preparedAssignment, patch) {
         isLoggedRemainder: true,
         status: "assigned",
     };
+    if (sourceId && sourceDay != null && sourceId !== "unassigned" && sourceId !== "ON_HOLD") {
+        if (!preparedAssignment.updatedSchedules[sourceId])
+            preparedAssignment.updatedSchedules[sourceId] = {};
+        const dayKey = String(sourceDay);
+        const dayList = preparedAssignment.updatedSchedules[sourceId][dayKey] ?? [];
+        if (!dayList.includes(patch.taskId)) {
+            preparedAssignment.updatedSchedules[sourceId][dayKey] = [...dayList, patch.taskId];
+        }
+    }
     return preparedAssignment;
 }
 
@@ -316,8 +319,6 @@ function formatLocalYyyyMmDd(date) {
     return `${y}-${m}-${d}`;
 }
 
-const SCHEDULER_OVERFLOW_KEY = (weekStart) => `scheduler_overflow_v1_${weekStart}`;
-
 // Maps assignment rows (from payload or backend response) back to frontend task IDs
 // so splitIndex/totalParts can be applied to the correct task object.
 // Keys by (designerId, dayIndex, taskId) to handle multiple parts with the same taskId.
@@ -345,29 +346,6 @@ function applySplitIndexFromRows(rows, schedules, tasks) {
         }
     }
     return result;
-}
-
-function addDaysToDateStr(dateStr, days) {
-    const d = new Date(dateStr + "T00:00:00");
-    d.setDate(d.getDate() + days);
-    return formatLocalYyyyMmDd(d);
-}
-
-function pruneOldOverflowKeys(currentWeekStartStr) {
-    try {
-        const cutoff = new Date(currentWeekStartStr + "T00:00:00");
-        cutoff.setDate(cutoff.getDate() - 28);
-        const cutoffStr = formatLocalYyyyMmDd(cutoff);
-        const toDelete = [];
-        for (let i = 0; i < localStorage.length; i++) {
-            const key = localStorage.key(i);
-            if (key?.startsWith("scheduler_overflow_v1_")) {
-                const weekPart = key.replace("scheduler_overflow_v1_", "");
-                if (weekPart < cutoffStr) toDelete.push(key);
-            }
-        }
-        toDelete.forEach((k) => localStorage.removeItem(k));
-    } catch { /* localStorage unavailable */ }
 }
 
 function normalizeParentIdFromErp(value) {
@@ -893,6 +871,10 @@ export function DesignSchedulerScreen() {
     const currentUserIdRef = useRef(null);
     const persistInFlightRef      = useRef(false);
     const pendingPersistRef       = useRef(null);
+    // Overflow entries (hours that didn't fit this week) accumulate here across debounced
+    // persistWeekSnapshot calls — the server places and persists them atomically with the
+    // rest of the next flushPersist save; see placeOverflowCapacity backend-side.
+    const pendingOverflowRef      = useRef([]);
     const flushPersistRef         = useRef(null);
     const pendingReloadRef        = useRef(false);
     const pendingQueueRefreshRef  = useRef(false);
@@ -911,7 +893,6 @@ export function DesignSchedulerScreen() {
     // has no entry for any designer). Only the most recently STARTED call is allowed to apply.
     const reloadSequenceRef = useRef(0);
     const persistDebounceRef      = useRef(null);
-    const persistWeekSnapshotRef  = useRef(null);
     // Fragment ids (Rule 5a) resolved by folding a detached part back into a whole-task
     // consolidation — collected outside the normal per-task status scan in flushPersist
     // since those tasks are deleted from state entirely, not transitioned to "assigned".
@@ -1094,6 +1075,7 @@ export function DesignSchedulerScreen() {
                         position: positionIndex,
                         notes: null,
                         isPinned: Boolean(task.isPinned),
+                        isLocked: Boolean(task.isLocked || task.isLoggedRemainder),
                     });
                 });
             });
@@ -1176,12 +1158,8 @@ export function DesignSchedulerScreen() {
             const locked = Boolean(meta?.isLocked);
             setIsWeekLocked(locked);
             isWeekLockedRef.current = locked;
-            // Capture fetched tasks in a local variable so the overflow restoration
-            // block can use accurate hour data without relying on stale React closure state.
-            let weekTasks = {};
             if (Array.isArray(rows) && rows.length > 0) {
                 const next = buildSchedulerStateFromErpAssignments(freshQueueRecords, rows, designersRef.current);
-                weekTasks = next.tasksObj;
                 setTasks(next.tasksObj);
                 setSchedules(next.schedulesObj);
                 lastSavedAssignmentsRef.current = buildWeekSnapshotPayload(next.schedulesObj, next.tasksObj);
@@ -1190,61 +1168,12 @@ export function DesignSchedulerScreen() {
                 setLoadedFromErp(true);
             } else {
                 const mock = buildMockSchedulerState(freshQueueRecords, designersRef.current);
-                weekTasks = mock.tasksObj;
                 setTasks(mock.tasksObj);
                 setSchedules(mock.schedulesObj);
                 lastSavedAssignmentsRef.current = buildWeekSnapshotPayload(mock.schedulesObj, mock.tasksObj);
                 setLoadedFromErp(false);
             }
 
-            // Restore any overflow hours carried forward from the previous week.
-            // Place each overflow task on the first weekday that still has capacity (sequential fill).
-            try {
-                const stored = localStorage.getItem(SCHEDULER_OVERFLOW_KEY(weekStartStr));
-                if (stored) {
-                    const entries = JSON.parse(stored);
-                    if (Array.isArray(entries) && entries.length > 0) {
-                        const carryTasks = Object.fromEntries(
-                            entries.map(({ task }) => [task.id, { ...task, status: "assigned" }])
-                        );
-                        setTasks((prev) => ({ ...carryTasks, ...prev }));
-                        setSchedules((prev) => {
-                            const next = cloneState(prev);
-                            // Merge fetched week tasks + overflow tasks so capacity checks
-                            // use the real task hours, not stale closure state.
-                            const allTasks = { ...weekTasks, ...carryTasks };
-                            entries.forEach(({ task, designerId }) => {
-                                if (!next[designerId]) next[designerId] = {};
-                                // Find the first weekday that still has room — never place on an elapsed day
-                                const firstAvailable = WEEKDAY_INDICES.find((d) => {
-                                    if (isPastDayIndex(d, currentDate)) return false;
-                                    const dayKey = d.toString();
-                                    const tasksInDay = next[designerId][dayKey] ?? [];
-                                    const usedHours = sumTaskHours(allTasks, tasksInDay);
-                                    return usedHours < DAILY_CAPACITY;
-                                }) ?? getCurrentDayIndex(currentDate); // fallback to today if all non-past days are full
-                                const dayKey = firstAvailable.toString();
-                                if (!next[designerId][dayKey]) next[designerId][dayKey] = [];
-                                if (!next[designerId][dayKey].includes(task.id)) {
-                                    next[designerId][dayKey].push(task.id);
-                                }
-                            });
-                            return next;
-                        });
-                        localStorage.removeItem(SCHEDULER_OVERFLOW_KEY(weekStartStr));
-                        // Persist the Monday placements to backend immediately.
-                        setTimeout(() => {
-                            setTasks((t) => {
-                                setSchedules((s) => {
-                                    persistWeekSnapshotRef.current?.(s, t);
-                                    return s;
-                                });
-                                return t;
-                            });
-                        }, 0);
-                    }
-                }
-            } catch { /* ignore localStorage parse errors */ }
         } catch {
             const mock = buildMockSchedulerState(queueRecordsRef.current, designersRef.current);
             setTasks(mock.tasksObj);
@@ -1298,6 +1227,8 @@ export function DesignSchedulerScreen() {
         persistInFlightRef.current = true;
         const { schedules: s, tasks: t, weekStartStr } = pendingPersistRef.current;
         pendingPersistRef.current = null;
+        const pendingOverflow = pendingOverflowRef.current;
+        pendingOverflowRef.current = [];
         let saveSucceeded = false;
         try {
             // A fragment (Rule 5a) is "resolved" once it's been dragged back onto the grid —
@@ -1321,6 +1252,7 @@ export function DesignSchedulerScreen() {
                 assignments: incrementalAssignments,
                 ...(affectedTaskIds.length > 0 ? { affectedTaskIds } : {}),
                 ...(resolvedFragmentIds.length > 0 ? { resolvedFragmentIds } : {}),
+                ...(pendingOverflow.length > 0 ? { overflow: pendingOverflow } : {}),
             };
 
             // Apply corrected splitIndex/totalParts from the payload immediately so
@@ -1341,6 +1273,21 @@ export function DesignSchedulerScreen() {
             const saved = await saveSchedulerWeekSnapshot(weekStartStr, payload);
             lastSavedAssignmentsRef.current = allAssignments;
             saveSucceeded = true;
+            if (saved.overflowPlacements?.length > 0) {
+                for (const placement of saved.overflowPlacements) {
+                    const designerName = designersRef.current?.find((d) => d.id === placement.designerId)?.name ?? "the designer";
+                    const placedDate = new Date(`${placement.weekStart}T00:00:00`);
+                    placedDate.setDate(placedDate.getDate() + placement.dayIndex);
+                    const dateLabel = placedDate.toLocaleDateString(undefined, { weekday: "short", month: "short", day: "numeric" });
+                    toast.info(`${formatHoursAsHm(placement.hours)} rolled over to ${dateLabel} for ${designerName} — didn't fit this week.`);
+                }
+            }
+            if (saved.unplacedOverflow?.length > 0) {
+                for (const unplaced of saved.unplacedOverflow) {
+                    const designerName = designersRef.current?.find((d) => d.id === unplaced.designerId)?.name ?? "the designer";
+                    toast.warning(`${formatHoursAsHm(unplaced.hours)} for ${designerName} couldn't be auto-scheduled — please place it manually.`);
+                }
+            }
             const currentWeekStr = formatLocalYyyyMmDd(getWeekDays(currentDate)[0]);
             if (weekStartStr === currentWeekStr) {
                 weekVersionWeekStartRef.current = weekStartStr;
@@ -1408,10 +1355,13 @@ export function DesignSchedulerScreen() {
         flushPersistRef.current = flushPersist;
     }, [flushPersist]);
 
-    const persistWeekSnapshot = useCallback((nextSchedules, nextTasks) => {
+    const persistWeekSnapshot = useCallback((nextSchedules, nextTasks, overflow) => {
         const weekStartStr = formatLocalYyyyMmDd(getWeekDays(currentDate)[0]);
         saveGenerationRef.current += 1;
         pendingPersistRef.current = { schedules: nextSchedules, tasks: nextTasks, weekStartStr };
+        // Overflow (hours that didn't fit this week) accumulates across debounced calls — the
+        // server places and persists it atomically with the rest of the next flushPersist save.
+        if (overflow) pendingOverflowRef.current = [...pendingOverflowRef.current, overflow];
         // Debounce: if another change arrives within 600ms, batch it into one save.
         // Rapid sequential drops (moving multiple tasks quickly) → single PUT instead of many.
         if (persistDebounceRef.current) clearTimeout(persistDebounceRef.current);
@@ -1419,47 +1369,7 @@ export function DesignSchedulerScreen() {
             persistDebounceRef.current = null;
             flushPersist();
         }, 600);
-
-        // Carry split-overflow tasks to Monday of next week for the same designer.
-        try {
-            const nextWeekStart = addDaysToDateStr(weekStartStr, 7);
-            const overflowEntries = [];
-            Object.values(nextTasks).forEach((t) => {
-                // Detached fragments (Rule 5a) already persist server-side and are pulled in on
-                // every reload regardless of week — they must never also ride the overflow-carry
-                // mechanism, or the fragment would silently reappear scheduled on next week's grid.
-                if (t.fragmentId != null) return;
-                if (t.status !== "unassigned" || !isUuid(t.parentId)) return;
-                // Find which designer owns a sibling part of this split in the current schedule.
-                let ownerDesignerId = null;
-                for (const [dId, dayMap] of Object.entries(nextSchedules)) {
-                    for (const taskIds of Object.values(dayMap)) {
-                        if (taskIds.some((tid) => {
-                            const st = nextTasks[tid];
-                            return st && (tid === t.parentId || st.parentId === t.parentId);
-                        })) {
-                            ownerDesignerId = dId;
-                            break;
-                        }
-                    }
-                    if (ownerDesignerId) break;
-                }
-                if (ownerDesignerId) {
-                    overflowEntries.push({ task: t, designerId: ownerDesignerId });
-                }
-            });
-
-            if (overflowEntries.length > 0) {
-                localStorage.setItem(SCHEDULER_OVERFLOW_KEY(nextWeekStart), JSON.stringify(overflowEntries));
-            } else {
-                localStorage.removeItem(SCHEDULER_OVERFLOW_KEY(nextWeekStart));
-            }
-            pruneOldOverflowKeys(weekStartStr);
-        } catch { /* localStorage unavailable */ }
     }, [currentDate, flushPersist]);
-    useEffect(() => {
-        persistWeekSnapshotRef.current = persistWeekSnapshot;
-    }, [persistWeekSnapshot]);
 
     const [overtimePrompt, setOvertimePrompt] = useState({
         open: false,
@@ -1769,7 +1679,7 @@ export function DesignSchedulerScreen() {
         setSchedules(preparedAssignment.updatedSchedules);
         setTasks(preparedAssignment.updatedTasks);
         setCurrentDay(preparedAssignment.targetDayIndex);
-        persistWeekSnapshot(preparedAssignment.updatedSchedules, preparedAssignment.updatedTasks);
+        persistWeekSnapshot(preparedAssignment.updatedSchedules, preparedAssignment.updatedTasks, preparedAssignment.overflow);
     };
     const handleDropToDay = async (e, targetDesignerId, targetDayIndex, targetTaskIndex, targetPosition = "after") => {
         e.preventDefault();
@@ -1843,46 +1753,57 @@ export function DesignSchedulerScreen() {
         let handoffHadRunningTimer = false;
         if (sourceId !== targetDesignerId && sourceId !== "unassigned" && sourceId !== "ON_HOLD") {
             const canonicalTaskId = droppedTask.parentId ?? taskId;
-            let loggedHours = Math.round(toPositiveHours(droppedTask.workedHours) * 100) / 100;
+            const designerSlices = collectDesignerTaskSlices(schedules, tasks, sourceId, canonicalTaskId);
+            const otherActiveSlices = countOtherActiveSlices(designerSlices, taskId);
+            let totalLoggedHours = Math.round(toPositiveHours(droppedTask.workedHours) * 100) / 100;
             try {
-                const freeze = await freezeDraftWorkSession(canonicalTaskId, sourceId);
-                if (freeze?.workedHours != null) {
-                    loggedHours = Math.round(toPositiveHours(freeze.workedHours) * 100) / 100;
+                const peek = await peekDraftWorkSession(canonicalTaskId, sourceId);
+                if (peek?.workedHours != null) {
+                    totalLoggedHours = Math.round(toPositiveHours(peek.workedHours) * 100) / 100;
                 }
-                handoffHadRunningTimer = Boolean(freeze?.hadRunningTimer);
+                handoffHadRunningTimer = Boolean(peek?.hadRunningTimer);
             }
             catch (error) {
-                console.warn("Unable to freeze draft timer before handoff", { canonicalTaskId, sourceId, error });
+                console.warn("Unable to peek draft timer before handoff", { canonicalTaskId, sourceId, error });
             }
-            if (loggedHours > 0) {
-                const consumeKey = `${sourceId}|${canonicalTaskId}`;
-                if (!consumedWorkedHoursRef.current.has(consumeKey)) {
-                    const scheduledForThisBlock = toPositiveHours(droppedTask.estimatedHours);
-                    const remainingHours = Math.round(Math.max(0, scheduledForThisBlock - loggedHours) * 100) / 100;
-                    if (remainingHours <= 0) {
-                        toast.info(`${droppedTask.baseName ?? droppedTask.name} — all ${formatHoursAsHm(scheduledForThisBlock)} already logged. Nothing left to reassign.`);
-                        return;
+            const allocation = allocateLoggedHoursFifo(designerSlices, totalLoggedHours);
+            const sliceLoggedHours = Math.round(toPositiveHours(allocation.get(taskId)) * 100) / 100;
+            const scheduledForThisBlock = toPositiveHours(droppedTask.estimatedHours);
+
+            if (sliceLoggedHours > 0) {
+                const remainingHours = Math.round(Math.max(0, scheduledForThisBlock - sliceLoggedHours) * 100) / 100;
+                if (remainingHours <= 0) {
+                    toast.info(`${droppedTask.baseName ?? droppedTask.name} — all ${formatHoursAsHm(scheduledForThisBlock)} on this slice already logged. Nothing left to reassign.`);
+                    return;
+                }
+                if (remainingHours < scheduledForThisBlock) {
+                    try {
+                        await freezeDraftWorkSession(canonicalTaskId, sourceId, {
+                            closeSession: otherActiveSlices === 0,
+                        });
                     }
-                    if (remainingHours < scheduledForThisBlock) {
-                        consumedWorkedHoursRef.current.add(consumeKey);
-                        const remainderId = getNextTaskId();
-                        effectiveDroppedTask = {
-                            ...droppedTask,
-                            id: remainderId,
-                            parentId: canonicalTaskId,
-                            estimatedHours: remainingHours,
-                            scheduledHours: remainingHours,
-                            workedHours: 0,
-                        };
-                        dropTaskId = remainderId;
-                        loggedCardPatch = { taskId, loggedHours };
-                        toast.warning(
-                            `${formatHoursAsHm(loggedHours)} logged by the previous designer stays on their day — assigning the remaining ${formatHoursAsHm(remainingHours)}.`,
-                            handoffHadRunningTimer
-                                ? { description: "Their running timer was finalized at handoff." }
-                                : undefined,
-                        );
+                    catch (error) {
+                        console.warn("Unable to freeze draft timer before handoff", { canonicalTaskId, sourceId, error });
                     }
+                    const remainderId = getNextTaskId();
+                    effectiveDroppedTask = {
+                        ...droppedTask,
+                        id: remainderId,
+                        parentId: canonicalTaskId,
+                        estimatedHours: remainingHours,
+                        scheduledHours: remainingHours,
+                        workedHours: 0,
+                    };
+                    dropTaskId = remainderId;
+                    loggedCardPatch = { taskId, loggedHours: sliceLoggedHours };
+                    toast.warning(
+                        `${formatHoursAsHm(sliceLoggedHours)} logged on this slice stays on ${designers.find((d) => d.id === sourceId)?.name ?? "the previous designer"}'s day — assigning the remaining ${formatHoursAsHm(remainingHours)}.`,
+                        handoffHadRunningTimer
+                            ? { description: otherActiveSlices > 0
+                                ? "Their timer was paused — they'll need to press Start again for their other scheduled slices on this task."
+                                : "Their running timer was finalized at handoff." }
+                            : undefined,
+                    );
                 }
             }
         }
@@ -1944,7 +1865,7 @@ export function DesignSchedulerScreen() {
             const fullResult = buildPreparedDropAssignment({ ...assignArgs, allowOvertime: true });
             if (!fullResult?.preparedAssignment)
                 return;
-            if (loggedCardPatch) applyLoggedCardPatch(fullResult.preparedAssignment, loggedCardPatch);
+            if (loggedCardPatch) applyLoggedCardPatch(fullResult.preparedAssignment, loggedCardPatch, sourceId, sourceDay);
             stampPin(fullResult.preparedAssignment);
             if (!fullResult.hasOvertime) {
                 applyPreparedAssignment(fullResult.preparedAssignment);
@@ -1956,7 +1877,7 @@ export function DesignSchedulerScreen() {
             const splitResult = buildPreparedDropAssignment({ ...assignArgs, allowOvertime: false });
             if (!splitResult?.preparedAssignment)
                 return;
-            if (loggedCardPatch) applyLoggedCardPatch(splitResult.preparedAssignment, loggedCardPatch);
+            if (loggedCardPatch) applyLoggedCardPatch(splitResult.preparedAssignment, loggedCardPatch, sourceId, sourceDay);
             stampPin(splitResult.preparedAssignment);
             const splitIdAfterSplit = splitIdCounterRef.current;
             splitIdCounterRef.current = splitIdBaseline;
@@ -1999,14 +1920,9 @@ export function DesignSchedulerScreen() {
         }
         proceedWithPlacement(targetDayIndex, { isPinned: false });
     };
-    const LEGACY_STATUS_MAP = { PENDING: 'DESIGN_NEW', WIP: 'IN_PROGRESS', COMPLETED: 'DESIGN_COMPLETED', REVISION: 'REWORK', APPROVED: 'CLIENT_ACCEPTED' };
-    const normalizeBackendStatus = (s) => LEGACY_STATUS_MAP[s] ?? s ?? 'DESIGN_NEW';
-    // Scheduling an ON_HOLD task onto a designer is the HOD's explicit signal to take it off
-    // hold — without this, the task's real backend status stays ON_HOLD forever and it silently
-    // reappears in the sidebar's hold list on the next week navigation/reload.
     const clearOnHoldStatus = (taskId, holdPreviousStatus) => {
         if (!taskId || !isUuid(taskId)) return;
-        const backendStatus = normalizeBackendStatus(holdPreviousStatus ?? "DESIGN_NEW");
+        const backendStatus = holdPreviousStatus ?? "DESIGN_NEW";
         apiClient.patch(`/tasks/${taskId}/status`, { status: backendStatus }).catch((error) => {
             console.warn("Unable to clear on-hold status after scheduling", { taskId, error });
             toast.error("Task was scheduled, but its on-hold status couldn't be cleared — it may reappear as on-hold.");
@@ -2176,33 +2092,22 @@ export function DesignSchedulerScreen() {
                         s[dId][dKey] = s[dId][dKey].filter(id => !inMemorySiblingIds.includes(id));
                     }
                 }
-                // Clean this task from ALL overflow localStorage keys (not just next week)
-                try {
-                    const taskIdsToClean = new Set(
-                        [taskId, parentId, ...inMemorySiblingIds].filter(Boolean)
-                    );
-                    for (let i = localStorage.length - 1; i >= 0; i--) {
-                        const key = localStorage.key(i);
-                        if (!key?.startsWith('scheduler_overflow_v1_')) continue;
-                        const stored = localStorage.getItem(key);
-                        if (!stored) continue;
-                        const entries = JSON.parse(stored);
-                        const cleaned = entries.filter(e =>
-                            !taskIdsToClean.has(e.task?.id) &&
-                            !taskIdsToClean.has(e.task?.parentId)
-                        );
-                        if (cleaned.length > 0) {
-                            localStorage.setItem(key, JSON.stringify(cleaned));
-                        } else {
-                            localStorage.removeItem(key);
-                        }
-                    }
-                } catch { /* localStorage unavailable */ }
             }
             return s;
         })();
         setSchedules(newSchedules);
 
+        // Every part's persisted assignment row id, where known — the server compares this
+        // against what's actually still live before wiping the whole task's schedule, so a
+        // sibling scheduled in a week this tab never loaded can't be silently deleted (parts
+        // created in this same gesture have no row yet and are correctly absent from this list).
+        // Applies whether this is a recognized split (multiple parts folding into one) or a
+        // single part that merely LOOKS unsplit to this stale tab — either way, "myself plus
+        // whatever in-memory siblings I know about" is exactly what the whole-task wipe is
+        // about to remove, and nothing else should be live on the server.
+        const expectedAssignmentIds = [taskId, ...inMemorySiblingIds]
+            .map((id) => tasks[id]?.assignmentRowId)
+            .filter(Boolean);
         let nextTasks = { ...tasks };
         if (isSplitPart) {
             // Sum hours across all parts (including this one) to restore original task
@@ -2239,7 +2144,7 @@ export function DesignSchedulerScreen() {
 
         const backendStatus = newStatus === "ON_HOLD"
             ? "ON_HOLD"
-            : normalizeBackendStatus(taskBefore?.holdPreviousStatus ?? "DESIGN_NEW");
+            : (taskBefore?.holdPreviousStatus ?? "DESIGN_NEW");
         setTasks(nextTasks);
         // For split consolidation, the canonical UUID is parentId (not the split fragment's temp ID)
         const apiTaskId = (isSplitPart && isUuid(parentId)) ? parentId : taskId;
@@ -2254,8 +2159,19 @@ export function DesignSchedulerScreen() {
             list.map((r) => (r.id === apiTaskId ? { ...r, status: backendStatus } : r));
         queueRecordsRef.current = patchQueueRecordStatus(queueRecordsRef.current);
         setQueueRecords((prev) => patchQueueRecordStatus(prev));
-        apiClient.patch(`/tasks/${apiTaskId}/status`, { status: backendStatus }).catch((error) => {
+        const handleStaleConsolidationConflict = (error) => {
+            const message = String(error?.message || "");
+            if (!message.includes("scheduled part of this task changed")) return false;
+            toast.error("Another scheduled part of this task changed since this page last loaded. Refreshing…");
+            reloadWeekRef.current();
+            return true;
+        };
+        apiClient.patch(`/tasks/${apiTaskId}/status`, {
+            status: backendStatus,
+            ...(backendStatus === "ON_HOLD" ? { expectedAssignmentIds } : {}),
+        }).catch((error) => {
             console.warn("Unable to persist task status change", { apiTaskId, backendStatus, error });
+            if (handleStaleConsolidationConflict(error)) return;
             toast.error("Failed to update task status. Please try again.");
         });
         // ON_HOLD: the status PATCH above already triggers cross-week scheduler cleanup in tasks.service.ts.
@@ -2263,7 +2179,10 @@ export function DesignSchedulerScreen() {
         if (newStatus !== 'ON_HOLD') {
             const clearId = isUuid(parentId) ? parentId : (isUuid(apiTaskId) ? apiTaskId : null);
             if (clearId) {
-                clearTaskFromSchedule(clearId).catch(() => {/* non-fatal */});
+                clearTaskFromSchedule(clearId, expectedAssignmentIds).catch((error) => {
+                    if (handleStaleConsolidationConflict(error)) return;
+                    /* non-fatal otherwise */
+                });
             }
         }
         persistWeekSnapshot(newSchedules, nextTasks);
@@ -2533,7 +2452,7 @@ export function DesignSchedulerScreen() {
             </button>
             <button
               type="button"
-              onClick={() => router.push("/designer/requests#overtime")}
+              onClick={() => router.push("/designer/requests")}
               className="ui-chip-button border border-[#d2d5f8] bg-[#e6e8fc] font-semibold text-[#5d5baf] hover:bg-[#d8dcfb] whitespace-nowrap"
             >
               Overtime Request

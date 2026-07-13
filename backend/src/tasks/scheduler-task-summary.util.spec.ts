@@ -13,6 +13,7 @@ describe('scheduler-task-summary.util', () => {
     revisionCode: 'R1',
     designType: 'Project',
     disciplineType: 'Artwork',
+    phase: 1,
     status: 'DESIGN_NEW',
     priority: 'HIGH',
     assigneeId: null,

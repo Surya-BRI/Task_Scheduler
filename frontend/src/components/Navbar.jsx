@@ -179,6 +179,7 @@ function NotificationDropdown({ session }) {
   const [deadlineSoundEnabled, setDeadlineSoundEnabled] = useState(readDeadlineSoundEnabled)
   const rootRef = useRef(null)
   const loadingRef = useRef(false)
+  const pendingReloadRef = useRef(false)
   const itemsRef = useRef([])
   const initialLoadRef = useRef(true)
   const deadlineSoundEnabledRef = useRef(deadlineSoundEnabled)
@@ -188,7 +189,14 @@ function NotificationDropdown({ session }) {
   }, [deadlineSoundEnabled])
 
   const loadNotifications = async () => {
-    if (!session || loadingRef.current) return
+    if (!session) return
+    if (loadingRef.current) {
+      // Don't silently drop this refresh — a mark-as-read or another trigger firing while a
+      // fetch is already in flight needs to still be reflected once the current one finishes,
+      // otherwise stale data from the in-flight request can overwrite fresher local state.
+      pendingReloadRef.current = true
+      return
+    }
     if (typeof document !== 'undefined' && document.visibilityState === 'hidden') return
     loadingRef.current = true
     setLoading(true)
@@ -217,6 +225,10 @@ function NotificationDropdown({ session }) {
     } finally {
       loadingRef.current = false
       setLoading(false)
+      if (pendingReloadRef.current) {
+        pendingReloadRef.current = false
+        void loadNotifications()
+      }
     }
   }
 
@@ -258,12 +270,23 @@ function NotificationDropdown({ session }) {
   }, [open])
 
   const handleOpenNotification = async (notification) => {
-    try {
-      if (!notification.isRead) {
+    if (!notification.isRead) {
+      try {
         await markNotificationRead(notification.id)
+        // Update local state immediately so the item/badge reflect the read right away —
+        // don't wait for the next poll/realtime-triggered loadNotifications() to catch up.
+        const updated = itemsRef.current.map((item) =>
+          item.id === notification.id ? { ...item, isRead: true } : item,
+        )
+        itemsRef.current = updated
+        setItems(updated)
+        setUnreadCount((prev) => Math.max(0, prev - 1))
+        // Also queue a real refresh so any request already in flight when we marked this read
+        // (built from pre-read server state) gets superseded by fresh data once it settles.
+        void loadNotifications()
+      } catch {
+        // ignore
       }
-    } catch {
-      // ignore
     }
     setOpen(false)
     if (notification.linkUrl?.trim()) {
@@ -409,12 +432,14 @@ export function Navbar({ currentDate, onCalendarChange, dateRangeText }) {
   }, [pathname])
 
   const isDesigner = session?.role === 'DESIGNER'
+  const isHod = session?.role === 'HOD'
   const isSalesperson = session?.role === 'SALESPERSON'
   const isQs = session?.role === 'QS'
   const canViewOverview = hasDepartmentManagerAccess(session?.role)
   const bottomNavItems = isQs ? [] : NAV_ITEMS
 
   const utilityIconClass = 'ui-icon-button'
+  const onDesignerDashboard = pathname.startsWith('/designer')
   const onTeamActivity =
     pathname === '/team-activity' ||
     pathname.startsWith('/team-activity/') ||
@@ -445,6 +470,8 @@ export function Navbar({ currentDate, onCalendarChange, dateRangeText }) {
       router.push('/designer/dashboard')
     } else if (isQs) {
       router.push('/qs/projects')
+    } else if (onDesignerDashboard && (isHod || isSalesperson)) {
+      router.push('/design-scheduler')
     } else {
       // HOD / guest → master scheduler
       router.push('/design-scheduler')

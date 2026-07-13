@@ -17,11 +17,20 @@ export type SchedulerHoursPart = {
   designerId: string;
   designerName: string;
   hours: number;
+  assignedHours?: number;
+  loggedHours?: number;
+  overAssignedHours?: number;
+  sliceCount?: number;
 };
 
 export type SchedulerHoursSummary = {
   totalHours: number;
+  totalAssignedHours?: number;
+  totalLoggedHours?: number;
   myHours: number | null;
+  myAssignedHours?: number | null;
+  myLoggedHours?: number | null;
+  myOverAssignedHours?: number | null;
   parts: SchedulerHoursPart[];
 };
 

@@ -2,19 +2,47 @@
 
 import { useCallback, useEffect, useReducer, useRef, useState } from 'react'
 import { Pause, Play, Square, X } from 'lucide-react'
+import { toast } from 'sonner'
 import { apiClient } from '@/lib/api-client'
+import {
+  EOD_AUTO_PAUSE_MS,
+  formatEodPromptLabel,
+  isOvernightRunningTimer,
+  localDateKey,
+  markContinuedWorkingToday,
+  markEodPromptDismissed,
+  resolveEodPromptHour,
+} from './timer-end-of-day'
+import {
+  TIMER_SYNC_EVENT,
+  findRunningTimerTaskId,
+} from './design-list-task-timer-storage'
+import { useActiveRunningTaskContext } from './ActiveRunningTaskProvider'
+import { ACTIVE_TIMER_BLOCKED_MESSAGE } from './use-active-running-task-id'
 
-function saveTimerStateToDb(taskId, accumulatedSeconds, pauseLog, runStartedAt) {
-  apiClient
+function saveTimerStateToDb(taskId, accumulatedSeconds, pauseLog, runStartedAt, onForbidden) {
+  return apiClient
     .post(`/tasks/${taskId}/save-timer`, {
       accumulatedSeconds,
       ...(pauseLog !== undefined ? { pauseLog: JSON.stringify(pauseLog) } : {}),
       ...(runStartedAt !== undefined ? { runStartedAt } : {}),
     })
-    .catch(() => {})
+    .catch((err) => {
+      if (
+        runStartedAt &&
+        err instanceof Error &&
+        err.message.includes('currently running')
+      ) {
+        onForbidden?.()
+        return
+      }
+      if (runStartedAt == null && err instanceof Error) {
+        toast.error('Could not save paused timer — try again.')
+      }
+    })
 }
 
-const TIMER_SYNC_EVENT = 'design-list-task-timer-sync'
+const TIMER_SYNC_EVENT_LEGACY = TIMER_SYNC_EVENT
 
 function storageKey(taskId) {
   return `design_list_task_timer_${taskId}`
@@ -43,7 +71,7 @@ function writePersisted(taskId, accumulatedSeconds, runStartAt) {
   if (typeof window === 'undefined') return
   sessionStorage.setItem(storageKey(taskId), JSON.stringify({ accumulatedSeconds, runStartAt }))
   window.dispatchEvent(
-    new CustomEvent(TIMER_SYNC_EVENT, {
+    new CustomEvent(TIMER_SYNC_EVENT_LEGACY, {
       detail: { taskId, accumulatedSeconds, runStartAt },
     }),
   )
@@ -97,6 +125,9 @@ function liveTotalSeconds(accumulatedSeconds, runStartAt) {
 export function ProjectTaskTimer({
   taskId,
   taskStatus,
+  assignedHours = null,
+  approvedOvertimeHours = null,
+  pendingOvertimeHours = null,
   launchAutostart,
   launchPauseModal,
   launchCompleteModal,
@@ -118,8 +149,14 @@ export function ProjectTaskTimer({
   const [selectedFiles, setSelectedFiles] = useState([])
   const [submissionMode, setSubmissionMode] = useState('file')
   const [submissionLink, setSubmissionLink] = useState('')
+  const [timerHandedOff, setTimerHandedOff] = useState(false)
+  const [showEndOfDayPrompt, setShowEndOfDayPrompt] = useState(false)
+  const [endOfDaySlot, setEndOfDaySlot] = useState(null)
+  const activeRunningContext = useActiveRunningTaskContext()
   const completeFileInputRef = useRef(null)
   const launchConsumed = useRef(false)
+  const eodPromptShownAt = useRef(null)
+  const eodAutoPauseTimerRef = useRef(null)
   const pauseReasonOptions = [
     'Break time',
     'Work on other project',
@@ -130,9 +167,19 @@ export function ProjectTaskTimer({
   ]
 
   const isLocked = !['DESIGN_PLANNED', 'IN_PROGRESS', 'REWORK'].includes(taskStatus)
-  const isRunning = runStartAt !== null && !isLocked
+  const playPauseLocked = isLocked || timerHandedOff
+  const isRunning = runStartAt !== null && !playPauseLocked
+
+  const activeRunningTaskId = activeRunningContext?.activeRunningTaskId ?? findRunningTimerTaskId()
+
+  const isStartBlockedByOther =
+    !playPauseLocked &&
+    !isRunning &&
+    activeRunningTaskId != null &&
+    activeRunningTaskId !== String(taskId)
 
   useEffect(() => {
+    setTimerHandedOff(false)
     const locked = !['DESIGN_PLANNED', 'IN_PROGRESS', 'REWORK'].includes(taskStatus)
 
     if (locked) {
@@ -151,36 +198,40 @@ export function ProjectTaskTimer({
     setAccumulatedSeconds(acc)
     setRunStartAt(start)
 
-    // Always try DB restore when sessionStorage has no active run — covers
-    // the case where accumulated is 0 but pauses exist only in the draft session
-    if (start === null) {
-      apiClient
-        .get(`/tasks/${taskId}/timer-state`)
-        .then((data) => {
-          if (!data) return
+    apiClient
+      .get(`/tasks/${taskId}/timer-state`)
+      .then((data) => {
+        if (!data) return
+        if (data.handedOff || data.locked) {
           const restored = data.accumulatedSeconds ?? 0
-          const restoredPauses = data.pauseLog ? JSON.parse(data.pauseLog) : []
-          const restoredRunStartAt = data.runStartedAt ? Date.parse(data.runStartedAt) : null
-          const hasDbRun = restoredRunStartAt != null && !Number.isNaN(restoredRunStartAt)
-          // Only overwrite if DB has more than what sessionStorage has, or an in-progress run anchor
-          if (hasDbRun || restored > acc || (restored === 0 && restoredPauses.length > 0)) {
-            setAccumulatedSeconds(restored)
-            setRunStartAt(hasDbRun ? restoredRunStartAt : null)
-            writePersisted(taskId, restored, hasDbRun ? restoredRunStartAt : null)
+          setTimerHandedOff(true)
+          setAccumulatedSeconds(restored)
+          setRunStartAt(null)
+          writePersisted(taskId, restored, null)
+          return
+        }
+        const restored = data.accumulatedSeconds ?? 0
+        const restoredPauses = data.pauseLog ? JSON.parse(data.pauseLog) : []
+        const restoredRunStartAt = data.runStartedAt ? Date.parse(data.runStartedAt) : null
+        const hasDbRun = restoredRunStartAt != null && !Number.isNaN(restoredRunStartAt)
+        if (start === null && (hasDbRun || restored > acc || (restored === 0 && restoredPauses.length > 0))) {
+          setAccumulatedSeconds(restored)
+          setRunStartAt(hasDbRun ? restoredRunStartAt : null)
+          writePersisted(taskId, restored, hasDbRun ? restoredRunStartAt : null)
+        } else if (start !== null && hasDbRun) {
+          setAccumulatedSeconds(restored)
+          setRunStartAt(restoredRunStartAt)
+          writePersisted(taskId, restored, restoredRunStartAt)
+        }
+        if (restoredPauses.length > 0) {
+          const existing = readPersistedPauses(taskId)
+          if (existing.length === 0) {
+            sessionStorage.setItem(pauseStorageKey(taskId), JSON.stringify(restoredPauses))
           }
-          if (restoredPauses.length > 0) {
-            const existing = readPersistedPauses(taskId)
-            if (existing.length === 0) {
-              sessionStorage.setItem(pauseStorageKey(taskId), JSON.stringify(restoredPauses))
-            }
-          }
-        })
-        .catch(() => {})
-        .finally(() => setIsHydrated(true))
-      return
-    }
-
-    setIsHydrated(true)
+        }
+      })
+      .catch(() => {})
+      .finally(() => setIsHydrated(true))
   }, [taskId, taskStatus])
 
   useEffect(() => {
@@ -216,19 +267,19 @@ export function ProjectTaskTimer({
       syncFromStorage()
     }
 
-    window.addEventListener(TIMER_SYNC_EVENT, onTimerSync)
+    window.addEventListener(TIMER_SYNC_EVENT_LEGACY, onTimerSync)
     window.addEventListener('storage', onStorage)
     return () => {
-      window.removeEventListener(TIMER_SYNC_EVENT, onTimerSync)
+      window.removeEventListener(TIMER_SYNC_EVENT_LEGACY, onTimerSync)
       window.removeEventListener('storage', onStorage)
     }
   }, [taskId])
 
   useEffect(() => {
-    if (!runStartAt || isLocked) return undefined
+    if (!runStartAt || playPauseLocked) return undefined
     const id = window.setInterval(() => tick(), 1000)
     return () => window.clearInterval(id)
-  }, [runStartAt, isLocked])
+  }, [runStartAt, playPauseLocked])
 
   const freezeRunningClock = useCallback(() => {
     if (!runStartAt) return accumulatedSeconds
@@ -239,6 +290,105 @@ export function ProjectTaskTimer({
     return total
   }, [accumulatedSeconds, runStartAt, taskId])
 
+  const closeEndOfDayPrompt = useCallback(() => {
+    if (eodAutoPauseTimerRef.current) {
+      window.clearTimeout(eodAutoPauseTimerRef.current)
+      eodAutoPauseTimerRef.current = null
+    }
+    eodPromptShownAt.current = null
+    setShowEndOfDayPrompt(false)
+    setEndOfDaySlot(null)
+  }, [])
+
+  const pauseForEndOfDay = useCallback(
+    (pauseReason, slot) => {
+      const frozen = freezeRunningClock()
+      if (pauseReason) {
+        appendPause(taskId, pauseReason, 0)
+      }
+      const updatedPauses = readPersistedPauses(taskId)
+      saveTimerStateToDb(taskId, frozen, updatedPauses, null)
+      if (slot != null) {
+        markEodPromptDismissed(taskId, localDateKey(), slot)
+      }
+      closeEndOfDayPrompt()
+      toast.info(pauseReason ? 'Timer paused for today.' : 'Timer paused.')
+    },
+    [closeEndOfDayPrompt, freezeRunningClock, taskId],
+  )
+
+  const handleEndOfDayContinue = useCallback(() => {
+    if (endOfDaySlot == null) {
+      closeEndOfDayPrompt()
+      return
+    }
+    const dateKey = localDateKey()
+    markEodPromptDismissed(taskId, dateKey, endOfDaySlot)
+    if (endOfDaySlot === 18) {
+      markContinuedWorkingToday(taskId, dateKey)
+    }
+    closeEndOfDayPrompt()
+    toast.success('Timer still running.')
+  }, [closeEndOfDayPrompt, endOfDaySlot, taskId])
+
+  const handleEndOfDayPause = useCallback(() => {
+    pauseForEndOfDay('End of day', endOfDaySlot)
+  }, [endOfDaySlot, pauseForEndOfDay])
+
+  useEffect(() => {
+    if (!isHydrated || playPauseLocked || !isRunning) return undefined
+
+    function checkEndOfDay() {
+      const { accumulatedSeconds: acc, runStartAt: start } = readPersisted(taskId)
+      if (!start) return
+
+      if (isOvernightRunningTimer(start)) {
+        const total = roundUpTo5Min(liveTotalSeconds(acc, start))
+        setAccumulatedSeconds(total)
+        setRunStartAt(null)
+        writePersisted(taskId, total, null)
+        appendPause(taskId, 'Overnight — timer paused automatically', 0)
+        saveTimerStateToDb(taskId, total, readPersistedPauses(taskId), null)
+        closeEndOfDayPrompt()
+        toast.warning('Timer was still running from yesterday and has been paused.')
+        return
+      }
+
+      if (showEndOfDayPrompt) return
+
+      const promptHour = resolveEodPromptHour(taskId)
+      if (promptHour == null) return
+
+      eodPromptShownAt.current = Date.now()
+      setEndOfDaySlot(promptHour)
+      setShowEndOfDayPrompt(true)
+    }
+
+    checkEndOfDay()
+    const id = window.setInterval(checkEndOfDay, 60_000)
+    return () => window.clearInterval(id)
+  }, [closeEndOfDayPrompt, isHydrated, isRunning, playPauseLocked, showEndOfDayPrompt, taskId])
+
+  useEffect(() => {
+    if (!showEndOfDayPrompt || endOfDaySlot == null) return undefined
+
+    eodAutoPauseTimerRef.current = window.setTimeout(() => {
+      pauseForEndOfDay('End of day — no response (auto)', endOfDaySlot)
+      toast.warning('Timer paused automatically — no response to end-of-day check.')
+    }, EOD_AUTO_PAUSE_MS)
+
+    document.body.style.overflow = 'hidden'
+    return () => {
+      if (eodAutoPauseTimerRef.current) {
+        window.clearTimeout(eodAutoPauseTimerRef.current)
+        eodAutoPauseTimerRef.current = null
+      }
+      if (!showCompleteModal && !showSubmitConfirm) {
+        document.body.style.overflow = ''
+      }
+    }
+  }, [endOfDaySlot, pauseForEndOfDay, showCompleteModal, showEndOfDayPrompt, showSubmitConfirm])
+
   useEffect(() => {
     if (launchConsumed.current) return
     if (!launchAutostart && !launchPauseModal && !launchCompleteModal) return
@@ -248,7 +398,10 @@ export function ProjectTaskTimer({
     const totalNow = liveTotalSeconds(acc0, start0)
 
     if (launchAutostart) {
-      if (!start0) {
+      const otherRunning = findRunningTimerTaskId(taskId)
+      if (otherRunning) {
+        toast.warning(ACTIVE_TIMER_BLOCKED_MESSAGE)
+      } else if (!start0) {
         setAccumulatedSeconds(acc0)
         setRunStartAt(Date.now())
       }
@@ -297,11 +450,19 @@ export function ProjectTaskTimer({
   }, [showCompleteModal, showSubmitConfirm])
 
   const handleStart = () => {
-    if (isRunning || isLocked) return
+    if (isRunning || playPauseLocked) return
+    if (isStartBlockedByOther) {
+      toast.warning(ACTIVE_TIMER_BLOCKED_MESSAGE)
+      return
+    }
     const startedAt = Date.now()
     setRunStartAt(startedAt)
     writePersisted(taskId, accumulatedSeconds, startedAt)
-    saveTimerStateToDb(taskId, accumulatedSeconds, undefined, new Date(startedAt).toISOString())
+    saveTimerStateToDb(taskId, accumulatedSeconds, undefined, new Date(startedAt).toISOString(), () => {
+      setRunStartAt(null)
+      writePersisted(taskId, accumulatedSeconds, null)
+      toast.warning(ACTIVE_TIMER_BLOCKED_MESSAGE)
+    })
     // Move task to IN_PROGRESS so it reflects active work
     apiClient.patch(`/tasks/${taskId}/status`, { status: 'IN_PROGRESS' })
       .catch(() => {})
@@ -429,6 +590,23 @@ export function ProjectTaskTimer({
     ? (submittedSeconds ?? accumulatedSeconds)
     : liveTotalSeconds(accumulatedSeconds, runStartAt)
 
+  const assignedSeconds = assignedHours != null && Number(assignedHours) > 0
+    ? Math.round(Number(assignedHours) * 3600)
+    : null
+  const isOverAssigned = assignedSeconds != null && displaySeconds > assignedSeconds
+  const excessSeconds = isOverAssigned ? displaySeconds - assignedSeconds : 0
+  const approvedOtSeconds =
+    approvedOvertimeHours != null && Number(approvedOvertimeHours) > 0
+      ? Math.round(Number(approvedOvertimeHours) * 3600)
+      : 0
+  const pendingOtSeconds =
+    pendingOvertimeHours != null && Number(pendingOvertimeHours) > 0
+      ? Math.round(Number(pendingOvertimeHours) * 3600)
+      : 0
+  const uncoveredExcessSeconds = Math.max(0, excessSeconds - approvedOtSeconds)
+  const overtimeRequestHref = `/designer/requests?taskId=${encodeURIComponent(taskId)}#overtime`
+  const approvedOtCoversExcess = isOverAssigned && uncoveredExcessSeconds <= 0 && approvedOtSeconds > 0
+
   const controlBtn = inline
     ? 'grid h-5 w-5 shrink-0 place-items-center rounded transition focus:outline-none focus-visible:ring-2 focus-visible:ring-offset-1 disabled:cursor-not-allowed'
     : 'grid h-10 w-10 shrink-0 place-items-center rounded-xl text-white shadow-sm transition focus:outline-none focus-visible:ring-2 focus-visible:ring-offset-2 disabled:cursor-not-allowed disabled:opacity-40'
@@ -437,6 +615,28 @@ export function ProjectTaskTimer({
     <div className={inline ? '' : 'mt-4 border-t border-slate-200 pt-4'}>
       <div className={inline ? 'flex items-center justify-end' : 'flex flex-col gap-3 sm:flex-row sm:items-center sm:justify-between sm:gap-4'}>
         {inline ? null : <span className="text-sm font-semibold tracking-tight text-blue-600">TIMER:</span>}
+        {timerHandedOff && !inline ? (
+          <span className="text-xs text-amber-700">Your slice was handed off — timer stopped. You can still submit logged work.</span>
+        ) : null}
+        {uncoveredExcessSeconds > 0 && !timerHandedOff && !inline ? (
+          <span className="text-xs text-amber-700">
+            Logged time exceeds assigned ({formatHm(assignedSeconds)} assigned, +{formatHm(uncoveredExcessSeconds)} over approved OT).
+            {' '}
+            <a href={overtimeRequestHref} className="font-semibold underline hover:text-amber-900">
+              Submit overtime request
+            </a>
+          </span>
+        ) : null}
+        {approvedOtCoversExcess && !timerHandedOff && !inline ? (
+          <span className="text-xs text-emerald-700">
+            Approved overtime covers the extra time logged on this task today.
+          </span>
+        ) : null}
+        {isOverAssigned && pendingOtSeconds > 0 && uncoveredExcessSeconds > 0 && !timerHandedOff && !inline ? (
+          <span className="text-xs text-blue-700">
+            Overtime request pending HOD approval ({formatHm(pendingOtSeconds)} requested).
+          </span>
+        ) : null}
 
         <div className={inline ? 'relative flex items-center gap-1' : 'relative flex flex-wrap items-center gap-1.5 sm:justify-end'}>
           <div className={inline
@@ -451,10 +651,10 @@ export function ProjectTaskTimer({
           <>
             <button
               type="button"
-              title="Start"
+              title={isStartBlockedByOther ? ACTIVE_TIMER_BLOCKED_MESSAGE : 'Start'}
               onClick={handleStart}
-              disabled={isRunning || isLocked}
-              className={`${controlBtn} ${inline ? 'text-emerald-500 hover:text-emerald-600 focus-visible:ring-emerald-300 disabled:opacity-30' : 'bg-emerald-500 hover:bg-emerald-600 focus-visible:ring-emerald-400'}`}
+              disabled={isRunning || playPauseLocked}
+              className={`${controlBtn} ${inline ? 'text-emerald-500 hover:text-emerald-600 focus-visible:ring-emerald-300 disabled:opacity-30' : 'bg-emerald-500 hover:bg-emerald-600 focus-visible:ring-emerald-400'} ${isStartBlockedByOther ? 'opacity-30 cursor-not-allowed' : ''}`}
             >
               <Play className={inline ? 'h-3 w-3 fill-current' : 'h-4 w-4 fill-current'} aria-hidden />
             </button>
@@ -462,7 +662,7 @@ export function ProjectTaskTimer({
               type="button"
               title="Pause"
               onClick={handlePauseClick}
-              disabled={!isRunning || isLocked}
+              disabled={!isRunning || playPauseLocked}
               className={`${controlBtn} ${inline ? 'text-amber-400 hover:text-amber-500 focus-visible:ring-amber-200 disabled:opacity-30' : 'bg-amber-400 hover:bg-amber-500 focus-visible:ring-amber-300'}`}
             >
               <Pause className={inline ? 'h-3 w-3' : 'h-4 w-4'} aria-hidden />
@@ -654,6 +854,51 @@ export function ProjectTaskTimer({
                 className="rounded-lg border border-blue-200 bg-blue-50 px-5 py-2 text-sm font-semibold text-blue-800 shadow-sm transition hover:bg-blue-100 focus:outline-none focus-visible:ring-2 focus-visible:ring-blue-300 focus-visible:ring-offset-2 disabled:cursor-not-allowed disabled:opacity-45"
               >
                 Submit
+              </button>
+            </div>
+          </div>
+        </div>
+      ) : null}
+
+      {showEndOfDayPrompt && endOfDaySlot != null ? (
+        <div className="fixed inset-0 z-[120] flex items-center justify-center p-4 sm:p-6">
+          <div className="absolute inset-0 bg-slate-900/50 backdrop-blur-[2px]" aria-hidden />
+          <div
+            role="dialog"
+            aria-modal="true"
+            aria-labelledby="eod-prompt-title"
+            className="ui-surface relative z-10 w-full max-w-md overflow-hidden shadow-xl ring-1 ring-slate-900/5"
+          >
+            <div className="border-b border-slate-200 bg-gradient-to-b from-amber-50/80 to-white px-5 py-4">
+              <h2 id="eod-prompt-title" className="text-base font-semibold text-slate-900">
+                Still working?
+              </h2>
+              <p className="mt-1 text-sm text-slate-600">
+                It&apos;s after {formatEodPromptLabel(endOfDaySlot)} and your timer is still running.
+                {approvedOtCoversExcess
+                  ? ' You are over assigned hours — approved overtime covers the extra time today.'
+                  : isOverAssigned || pendingOtSeconds > 0
+                    ? ' You are over assigned hours — that is fine if you are on approved overtime.'
+                    : ' If you are done for today, pause now so logged time stays accurate.'}
+              </p>
+              <p className="mt-2 text-xs text-slate-500">
+                If you do not respond within 30 minutes, the timer will pause automatically.
+              </p>
+            </div>
+            <div className="flex flex-col-reverse gap-2 bg-slate-50/80 px-5 py-4 sm:flex-row sm:justify-end sm:gap-3">
+              <button
+                type="button"
+                onClick={handleEndOfDayPause}
+                className="rounded-lg border border-slate-200 bg-white px-4 py-2 text-sm font-semibold text-slate-700 shadow-sm transition hover:bg-slate-50"
+              >
+                Pause for today
+              </button>
+              <button
+                type="button"
+                onClick={handleEndOfDayContinue}
+                className="rounded-lg bg-blue-600 px-5 py-2 text-sm font-semibold text-white shadow-sm transition hover:bg-blue-700 focus:outline-none focus-visible:ring-2 focus-visible:ring-blue-400 focus-visible:ring-offset-2"
+              >
+                Yes, still working
               </button>
             </div>
           </div>

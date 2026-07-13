@@ -109,9 +109,8 @@ export function applyChatterRichTextFormatting(text) {
 }
 
 /**
- * Highlight @mentions; link to designer profile when user id is known.
+ * Highlight @mentions as styled, non-clickable text.
  * @param {Array<{ id: string, fullName: string }>} users
- * @param {{ linkMentions?: boolean }} [options]
  */
 const CHATTER_HTML_CONFIG = {
   ALLOWED_TAGS: ['a', 'strong', 'em', 'del', 'u', 'br', 'span'],
@@ -122,8 +121,7 @@ export function sanitizeChatterHtml(html) {
   return DOMPurify.sanitize(String(html ?? ''), CHATTER_HTML_CONFIG);
 }
 
-export function formatMessageHtml(message, users = [], options = {}) {
-  const { linkMentions = true } = options;
+export function formatMessageHtml(message, users = []) {
   const sorted = [...users].sort(
     (a, b) => (b.fullName?.length ?? 0) - (a.fullName?.length ?? 0),
   );
@@ -156,9 +154,7 @@ export function formatMessageHtml(message, users = [], options = {}) {
       }
     }
     if (matched) {
-      const mentionHtml = linkMentions
-        ? `<a href="/designer/${matched.user.id}/requests" class="font-semibold text-blue-600 hover:underline" data-mention-user="${matched.user.id}">@${matched.name}</a>`
-        : `<span class="font-semibold text-blue-600">@${matched.name}</span>`;
+      const mentionHtml = `<span class="font-semibold text-blue-600" data-mention-user="${matched.user.id}">@${matched.name}</span>`;
       replacements.push({
         start: i,
         end: i + matched.len,

@@ -1,11 +1,19 @@
-import { ForbiddenException, Injectable, NotFoundException, BadRequestException } from '@nestjs/common';
+import { ForbiddenException, Injectable, Logger, NotFoundException, BadRequestException, Optional } from '@nestjs/common';
+import { randomUUID } from 'crypto';
 import { PrismaService } from '../prisma/prisma.service';
 import { CreateConversationDto } from './dto/create-conversation.dto';
 import { SendMessageDto } from './dto/send-message.dto';
+import { DashboardRealtimeService } from '../dashboard/dashboard-realtime.service';
+import { parseMentionUserIdsFromMessage, messageSnippet } from '../chatter-posts/chatter-mentions.util';
 
 @Injectable()
 export class ChatService {
-  constructor(private readonly prisma: PrismaService) {}
+  private readonly logger = new Logger(ChatService.name);
+
+  constructor(
+    private readonly prisma: PrismaService,
+    @Optional() private readonly dashboardRealtime?: DashboardRealtimeService,
+  ) {}
 
   /**
    * Helper to verify if a user is a participant in a conversation.
@@ -250,7 +258,50 @@ export class ChatService {
       return msg;
     });
 
+    this.notifyOtherParticipants(conversationId, message).catch((err) =>
+      this.logger.error('Failed to notify conversation participants of new message', err),
+    );
+
     return message;
+  }
+
+  /**
+   * Durable notification-table parity with Chatter's @mention system — without this, a
+   * participant who isn't currently connected to the conversation's socket room (or the app
+   * at all) has no record of a new message beyond the conversation-list unread badge.
+   * Mentioned participants get a distinct "you were mentioned" notification instead of the
+   * generic one.
+   */
+  private async notifyOtherParticipants(
+    conversationId: string,
+    message: { id: string; senderId: string; content: string; sender: { fullName: string } },
+  ): Promise<void> {
+    const participants = await this.prisma.conversationParticipant.findMany({
+      where: { conversationId, userId: { not: message.senderId } },
+      select: { userId: true, user: { select: { id: true, fullName: true } } },
+    });
+    if (participants.length === 0) return;
+
+    const directory = participants.map((p) => ({ id: p.userId, fullName: p.user.fullName ?? '' }));
+    const mentionedIds = new Set(parseMentionUserIdsFromMessage(message.content, directory));
+    const snippet = messageSnippet(message.content);
+    const linkUrl = `/chat?conversationId=${conversationId}`;
+
+    for (const participant of participants) {
+      const isMentioned = mentionedIds.has(participant.userId);
+      const title = isMentioned ? 'You were mentioned in a chat message' : 'New Message';
+      const body = isMentioned
+        ? `${message.sender.fullName} mentioned you: "${snippet}"`
+        : `${message.sender.fullName}: ${snippet}`;
+      try {
+        await this.prisma.notification.create({
+          data: { id: randomUUID(), userId: participant.userId, title, message: body, linkUrl },
+        });
+        this.dashboardRealtime?.notifyUserNotificationRefresh(participant.userId);
+      } catch (err) {
+        this.logger.warn(`Chat message notification failed for ${participant.userId}: ${err}`);
+      }
+    }
   }
 
   /**

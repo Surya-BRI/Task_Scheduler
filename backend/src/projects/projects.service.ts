@@ -1,4 +1,4 @@
-import { BadRequestException, ForbiddenException, Injectable, NotFoundException, Optional } from '@nestjs/common';
+import { BadRequestException, ForbiddenException, Injectable, Logger, NotFoundException, Optional } from '@nestjs/common';
 import { Prisma } from '@prisma/client';
 import { PrismaService } from '../prisma/prisma.service';
 import { CreateProjectDto } from './dto/create-project.dto';
@@ -51,6 +51,8 @@ export type ProjectFilters = {
 
 @Injectable()
 export class ProjectsService {
+  private readonly logger = new Logger(ProjectsService.name);
+
   constructor(
     private readonly prisma: PrismaService,
     private readonly taskFilesService: TaskFilesService,
@@ -615,6 +617,24 @@ END;
     return { ...row, status: this.normalizeQsStatus(row.status) };
   }
 
+  private async notifyHodsOfQsStatusChange(
+    project: { id: string; projectNo: string | null; name: string | null },
+    title: string,
+    message: string,
+  ) {
+    const hodUsers = await this.prisma.user.findMany({
+      where: { role: { name: { in: ['HOD', 'ADMIN'] } } },
+      select: { id: true },
+    });
+    const linkUrl = `/project-task-creation/${project.projectNo}?from=projects-list&projectCode=${project.projectNo}&designType=Project`;
+    for (const hod of hodUsers) {
+      this.notificationsService
+        .create({ userId: hod.id, title, message, linkUrl })
+        .catch((err) => this.logger.error('Failed to notify HOD of QS status change', err));
+      this.dashboardRealtime?.notifyUserNotificationRefresh(hod.id);
+    }
+  }
+
   private async setProjectQsStatus(projectId: string, status: QsStatusValue, userId?: string) {
     await this.ensureQsStatusTable();
     await this.prisma.$executeRaw(Prisma.sql`
@@ -690,6 +710,11 @@ END;
           context: { source: 'projects.updateQsStatus', note: dto.note ?? null },
         },
       });
+      await this.notifyHodsOfQsStatusChange(
+        project,
+        'QS Status Changed',
+        `${project.projectNo ? `${project.projectNo} — ` : ''}${project.name} QS status changed from ${previous.status} to ${next.status}.`,
+      );
     }
     return next;
   }
@@ -742,6 +767,11 @@ END;
     const nextStatus = savedRows.length > 0 ? QS_STATUS_IN_PROGRESS : QS_STATUS_PENDING;
     if (currentStatus.status !== nextStatus) {
       await this.setProjectQsStatus(projectId, nextStatus, userId);
+      await this.notifyHodsOfQsStatusChange(
+        project,
+        'QS Status Changed',
+        `${project.projectNo ? `${project.projectNo} — ` : ''}${project.name} QS status changed from ${currentStatus.status} to ${nextStatus}.`,
+      );
     }
 
     return savedRows;

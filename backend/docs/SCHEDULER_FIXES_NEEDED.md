@@ -60,9 +60,36 @@ Architectural/scalability items found while investigating [SCHEDULER_DISAPPEARIN
 
 ---
 
+### 4. Cross-week overflow carry-forward moved server-side
+
+**Was:** "Assign Available Only" overflow fragments were carried to next week via a client-side `localStorage` key (`scheduler_overflow_v1_YYYY-MM-DD`), restored on next-week load and placed at the first day with capacity — fragile (lost if browser storage was cleared) and never validated against the destination week's actual live state.
+
+**Fix:** `SaveSchedulerWeekDto.overflow[]` plus a new backend `placeOverflowCapacity` place overflow atomically with the week save: walks forward day-by-day (skipping weekends/holidays/full-day leave), live-checks real capacity inside the same save transaction, bounded by a 56-day lookahead. The response returns `overflowPlacements`/`unplacedOverflow` so nothing is silently dropped.
+
+**Files:**
+- `backend/src/scheduler-assignments/dto/save-scheduler-week.dto.ts` — `SchedulerOverflowInputDto`
+- `backend/src/scheduler-assignments/scheduler-assignments.service.ts` — `placeOverflowCapacity`
+- `frontend/src/features/scheduler/components/DesignSchedulerScreen.jsx` — `buildPreparedDropAssignment`, `pendingOverflowRef`
+- `frontend/src/features/scheduler/services/scheduler-assignments.api.ts`
+
+---
+
+### 5. Stale-consolidation guard for whole-task Unassign/Hold
+
+**Was:** dragging a split task's part to Unassigned or Hold deleted **all** sibling assignment rows across all weeks unconditionally — including any part scheduled into a week the caller never loaded (e.g. created by another tab/session between the caller's last reload and this action).
+
+**Fix:** callers may now pass `expectedAssignmentIds` (the ids they believe are still live) to `DELETE /scheduler-assignments/task/:taskId` and `PATCH /tasks/:id/status` (ON_HOLD); if the server finds a live row outside that set, it rejects with `ConflictException` instead of deleting it, and the frontend reloads the week on conflict. Omitting the param preserves the old unconditional-wipe behavior (`TaskDetailsPage.jsx`'s own Hold button still omits it intentionally — see items 9 and 10 below for two gaps found in this guard).
+
+**Files:**
+- `backend/src/scheduler-assignments/scheduler-assignments.service.ts` — `clearTaskSchedule` (transactional check+delete)
+- `backend/src/tasks/tasks.service.ts` — `updateStatus` ON_HOLD path
+- `frontend/src/features/scheduler/components/DesignSchedulerScreen.jsx` — `commitPanelDrop`, `handleStaleConsolidationConflict`
+
+---
+
 ## Not yet done
 
-### 4. No retention/purge policy for `SchedulerAssignmentHistory`
+### 6. No retention/purge policy for `SchedulerAssignmentHistory`
 
 Every save writes a full before/after JSON snapshot to `SchedulerAssignmentHistory`, forever. No cron job, no archival, no deletion.
 
@@ -70,7 +97,7 @@ Every save writes a full before/after JSON snapshot to `SchedulerAssignmentHisto
 
 ---
 
-### 5. Whole-week replace instead of incremental/per-cell saves
+### 7. Whole-week replace instead of incremental/per-cell saves
 
 `saveWeekSnapshot` (`scheduler-assignments.service.ts`) does a full `deleteMany` + `createMany` of *all* assignments for the week on every single `PUT`, even when only one task moved. Combined with the optimistic-concurrency version check, this means:
 
@@ -81,8 +108,34 @@ This doesn't scale past a handful of people actively editing the same week simul
 
 ---
 
-### 6. Cross-week split-index recompute has no time bound
+### 8. Cross-week split-index recompute has no time bound
 
 The recompute in `saveWeekSnapshot` (for tasks split across weeks) queries `SchedulerAssignment` for a task across *every week that ever existed*. It's now backed by an index (`IX_ErpTSSchedulerAssignment_task_week`, added during the disappearing-tasks investigation), so it's an efficient seek rather than a scan — but it's still unbounded by time range. As total history grows over years, this specific query's cost grows with it.
 
 **Fix:** bound the lookback/lookahead to a rolling window of weeks instead of "all time," if/when history actually grows large enough for this to matter. Low urgency now that it's indexed.
+
+---
+
+### 9. Stale-consolidation guard's `tasks.service.ts` path isn't transactional
+
+`SchedulerAssignmentsService.clearTaskSchedule` wraps its expected-ids check and the delete in one `$transaction`. `TasksService.updateStatus`'s equivalent ON_HOLD guard does not — the `findMany` check, `task.update()`, and the later unconditional `schedulerAssignment.deleteMany` are three separate, non-transactional Prisma calls. A sibling assignment created in that window would still be silently deleted even though the guard "passed," despite both implementations' doc comments claiming the check happens "before mutating anything."
+
+**Fix:** wrap `updateStatus`'s ON_HOLD guard check and the scheduler-assignment delete in a single `$transaction`, matching `clearTaskSchedule`.
+
+---
+
+### 10. Possible false-positive conflict from stale `assignmentRowId`
+
+`assignmentRowId` on frontend task objects is populated only from the initial per-page ERP load (`buildSchedulerStateFromErpAssignments`) and is never refreshed afterward — but every save does `deleteMany` + `createMany`, which replaces assignment row ids. A task touched by even one prior save in the current browser session therefore has a stale or empty `assignmentRowId`. Since `expectedAssignmentIds` is derived from it and an empty array (`[]`) is still truthy in JS, the guard is never actually skipped for such a task — it's sent as a present-but-stale/empty expected set, and the backend then rejects the delete for any live row it finds (normally the very row being cleared), throwing a false "Another scheduled part of this task changed" conflict.
+
+**Reproduction:** drag a task onto the grid, let it save, then (same session, no page reload) drag that same task to Unassigned or On Hold.
+
+**Fix:** refresh `assignmentRowId` from each save's response instead of relying on the initial ERP-load snapshot; alternatively, have the frontend omit `expectedAssignmentIds` entirely (rather than sending `[]`) whenever it has no reliable ids for a task.
+
+---
+
+### 11. `placeOverflowCapacity` doesn't check the destination week's lock state
+
+The primary week-save path rejects a `PUT` against a locked week (`isLocked: true`). `placeOverflowCapacity` (item 4 above) walks forward into other weeks and creates/upserts `SchedulerAssignment` rows there without checking whether *those* destination weeks are locked — an overflow placement could silently write into a week that was locked specifically to prevent further edits.
+
+**Fix:** have `placeOverflowCapacity` check each candidate week's `isLocked` flag (same as the primary save path) and skip locked weeks when searching for capacity, reporting any resulting unplaceable hours via `unplacedOverflow` instead.

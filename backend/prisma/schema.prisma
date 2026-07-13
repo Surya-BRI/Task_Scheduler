@@ -157,6 +157,7 @@ model Task {
   signType       String?  @db.NVarChar(255)
   signFamily     String?  @db.NVarChar(255)
   disciplineType String?  @db.NVarChar(50)
+  phase          Int?
   description String?   @db.NVarChar(Max)
   status      String    @default("DESIGN_NEW") @db.NVarChar(20)
   priority    String    @default("Medium") @db.NVarChar(50)

@@ -1,8 +1,12 @@
 import { BadRequestException } from '@nestjs/common';
 
-/** UTC calendar date YYYY-MM-DD */
+/** Asia/Dubai is UTC+4 year-round (no DST) — the server and designers both operate on this clock. */
+const BUSINESS_UTC_OFFSET_MINUTES = 240;
+
+/** Business-local (Dubai) calendar date, as YYYY-MM-DD. Not the server/UTC date — see BUSINESS_UTC_OFFSET_MINUTES. */
 export function utcDateOnlyString(d = new Date()): string {
-  return d.toISOString().split('T')[0];
+  const shifted = new Date(d.getTime() + BUSINESS_UTC_OFFSET_MINUTES * 60_000);
+  return shifted.toISOString().split('T')[0];
 }
 
 function parseUtcDateOnly(dateStr: string): Date {
@@ -13,7 +17,7 @@ function parseUtcDateOnly(dateStr: string): Date {
   return new Date(Date.UTC(Number(match[1]), Number(match[2]) - 1, Number(match[3])));
 }
 
-/** Days from `dateStr` to today (UTC). 0 = today, 1 = yesterday, etc. */
+/** Days from `dateStr` to today (business/Dubai date). 0 = today, 1 = yesterday, etc. */
 export function daysBeforeTodayUtc(dateStr: string): number {
   const today = parseUtcDateOnly(utcDateOnlyString());
   const target = parseUtcDateOnly(dateStr);

@@ -1,5 +1,6 @@
 import { Prisma } from '@prisma/client';
 import { COMPLETED_STATUS_FILTER } from '../dashboard/task-status-buckets.util';
+import { toApiTaskStatus } from './task-status.util';
 
 /** Slim task payload shared by scheduler queue + week-assignment embeds. */
 export const SCHEDULER_TASK_SUMMARY_SELECT = {
@@ -10,6 +11,7 @@ export const SCHEDULER_TASK_SUMMARY_SELECT = {
   revisionCode: true,
   designType: true,
   disciplineType: true,
+  phase: true,
   status: true,
   priority: true,
   assigneeId: true,
@@ -52,6 +54,7 @@ export type SchedulerTaskSummaryDto = {
   revisionCode: string | null;
   designType: string | null;
   disciplineType: string | null;
+  phase: number | null;
   status: string;
   priority: string | null;
   assigneeId: string | null;
@@ -72,11 +75,8 @@ export type SchedulerTaskSummaryDto = {
   } | null;
 };
 
-function toApiTaskStatus(status?: string | null): string {
-  const value = String(status ?? '').trim().toUpperCase();
-  if (!value) return value;
-  if (value === 'ON-HOLD') return 'ON_HOLD';
-  return value;
+function mapStatusForApi(status?: string | null): string {
+  return toApiTaskStatus(status);
 }
 
 export function computeSchedulerEstimatedHours(task: SchedulerTaskSummaryRow): number {
@@ -115,7 +115,8 @@ export function mapSchedulerTaskSummary(task: SchedulerTaskSummaryRow): Schedule
     revisionCode: task.revisionCode,
     designType: task.designType,
     disciplineType: task.disciplineType,
-    status: toApiTaskStatus(task.status),
+    phase: task.phase,
+    status: mapStatusForApi(task.status),
     priority: task.priority,
     assigneeId: task.assigneeId,
     holdPreviousStatus: task.holdPreviousStatus,

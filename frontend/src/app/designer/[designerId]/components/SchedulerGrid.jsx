@@ -1,5 +1,6 @@
 "use client";
 import { useRouter } from "next/navigation";
+import { formatHoursAsHm } from "@/lib/format-duration";
 
 const HOUR_COLS = [
   "0-1 HR", "1-2 HR", "2-3 HR", "3-4 HR",
@@ -11,6 +12,21 @@ const DAYS = ["Monday", "Tuesday", "Wednesday", "Thursday", "Friday", "Saturday"
 const NORMAL_COL_COUNT = 8;
 const TOTAL_COLS = HOUR_COLS.length; // 12
 
+const UUID_RE = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
+
+function resolveSchedulerTaskRecord(task) {
+  if (!task || task.isSystemBlock) return null;
+  let id = task.parentId || task.id;
+  if (!id) return null;
+  const idStr = String(id);
+  if (!UUID_RE.test(idStr)) {
+    const splitMatch = idStr.match(/^([0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12})/i);
+    if (splitMatch) id = splitMatch[1];
+    else return null;
+  }
+  return { id, designType: task.designType ?? null };
+}
+
 const TASK_BG = {
   "#3b82f6": "bg-blue-100 border border-blue-300 text-blue-800",
   "#ef4444": "bg-red-100 border border-red-300 text-red-800",
@@ -20,17 +36,34 @@ const TASK_BG = {
   "#1e3a5f": "bg-slate-100 border border-slate-300 text-slate-800",
 };
 
-function TaskBlock({ task, onOtClick }) {
+function TaskBlock({ task, onOtClick, onOpenTask }) {
   const bgClass = task.isOvertime
     ? "bg-red-100 border border-red-300 text-red-800"
     : task.colorClass || TASK_BG[task.color] || "bg-slate-100 border border-slate-300 text-slate-800";
   const canRequestOvertime = onOtClick && !task.isSystemBlock && !task.isOvertime;
+  const canOpenTask = onOpenTask && !task.isSystemBlock;
   return (
     <div className="h-full flex items-center w-full relative z-10 px-0.5 group/task">
-      <div className={`h-[24px] w-full min-w-0 rounded flex items-center justify-between px-1 shadow-sm transition-shadow truncate ${bgClass}`}>
+      <div
+        className={`h-[24px] w-full min-w-0 rounded flex items-center justify-between px-1 shadow-sm transition-shadow truncate ${bgClass} ${canOpenTask ? "cursor-pointer hover:shadow-md" : ""}`}
+        onClick={canOpenTask ? () => {
+          const record = resolveSchedulerTaskRecord(task);
+          if (!record) return;
+          onOpenTask(record);
+        } : undefined}
+        onKeyDown={canOpenTask ? (e) => {
+          if (e.key !== "Enter" && e.key !== " ") return;
+          e.preventDefault();
+          const record = resolveSchedulerTaskRecord(task);
+          if (!record) return;
+          onOpenTask(record);
+        } : undefined}
+        role={canOpenTask ? "button" : undefined}
+        tabIndex={canOpenTask ? 0 : undefined}
+      >
         <div className="text-[9px] font-semibold truncate leading-none mr-1 select-none pointer-events-none">{task.label}</div>
         <div className="flex items-center gap-0.5 shrink-0">
-          <span className="text-[8px] font-bold opacity-70">{task.estimatedHours || (task.endHr - task.startHr)}h</span>
+          <span className="text-[8px] font-bold opacity-70">{formatHoursAsHm(task.estimatedHours || (task.endHr - task.startHr))}</span>
           {task.isOvertime && (
             <span className="text-[7px] font-bold bg-red-500 text-white rounded px-0.5 py-px leading-none ml-0.5">OT</span>
           )}
@@ -48,7 +81,7 @@ function TaskBlock({ task, onOtClick }) {
   );
 }
 
-function SchedulerRow({ day, daySlot, dayDate, onOtClick }) {
+function SchedulerRow({ day, daySlot, dayDate, onOtClick, onOpenTask }) {
   const isWeekend = day === "Saturday" || day === "Sunday";
   const dayLabel = dayDate
     ? `${dayDate.toLocaleDateString("en-US", { weekday: "short" })} ${dayDate.getDate()}`
@@ -125,7 +158,7 @@ function SchedulerRow({ day, daySlot, dayDate, onOtClick }) {
                     className="absolute top-1 bottom-1 pointer-events-auto"
                     style={{ left: `${leftPct}%`, width: `${widthPct}%` }}
                   >
-                    <TaskBlock task={task} onOtClick={onOtClick} />
+                    <TaskBlock task={task} onOtClick={onOtClick} onOpenTask={onOpenTask} />
                   </div>
                 );
               })}
@@ -137,7 +170,7 @@ function SchedulerRow({ day, daySlot, dayDate, onOtClick }) {
   );
 }
 
-export default function SchedulerGrid({ schedule, weekDates = [], designerId, isDesignerMode, visibleDays }) {
+export default function SchedulerGrid({ schedule, weekDates = [], designerId, isDesignerMode, visibleDays, onOpenTask }) {
   const router = useRouter();
   const effectiveVisibleDays = visibleDays ?? [0, 1, 2, 3, 4, 5, 6];
 
@@ -189,6 +222,7 @@ export default function SchedulerGrid({ schedule, weekDates = [], designerId, is
             dayDate={weekDates[dayIndex]}
             daySlot={schedule[day] || { tasks: [], assignedStartHr: 0, assignedEndHr: 0 }}
             onOtClick={handleOtClick}
+            onOpenTask={onOpenTask}
           />
         );
       })}

@@ -2,7 +2,7 @@
 
 import { useState, useEffect, useRef, useMemo } from "react";
 import { toast } from "sonner";
-import { useRouter, useSearchParams } from "next/navigation";
+import { usePathname, useRouter, useSearchParams } from "next/navigation";
 import { Navbar } from "@/components/Navbar";
 import StatsBar from "../components/StatsBar";
 import { Clock3, FileClock, TimerReset } from "lucide-react";
@@ -18,6 +18,11 @@ import {
   minRegularizationDate,
   utcDateOnlyString,
 } from "@/lib/date-window";
+import {
+  MAX_OVERTIME_HOURS_PER_DAY,
+  OVERTIME_REQUESTED_HOURS_OPTIONS,
+  parseRequestedHoursLabel,
+} from "@/lib/overtime-constants";
 import { apiClient } from "@/lib/api-client";
 import {
   createRegularizationRequest,
@@ -173,6 +178,7 @@ function matchesActiveDesigner(record, activeDesignerId) {
 
 export default function RequestsClient() {
   const router = useRouter();
+  const pathname = usePathname();
   const searchParams = useSearchParams();
   const prefillApplied = useRef(false);
   const resolvedInboxOvertimeRef = useRef(null);
@@ -191,53 +197,41 @@ export default function RequestsClient() {
   ];
 
   const [stats, setStats] = useState(DEFAULT_STATS);
-  const [activeTab, setActiveTab] = useState("overtime");
 
-  // Handle active tab state synchronisation with hash and query parameters
+  // `tab` query param is the single source of truth (default "overtime" omits the param,
+  // matching the convention in TaskDetailsPage/RetailProjectPage/DesignListRecordPage).
+  // A notification deep-link's overtimeId/regularizationId takes priority when present.
+  const rawTab = searchParams.get("tab");
+  const activeTab = searchParams.get("regularizationId")
+    ? "regularization"
+    : searchParams.get("overtimeId")
+      ? "overtime"
+      : rawTab === "regularization"
+        ? "regularization"
+        : "overtime";
+
   useEffect(() => {
-    const handleHashChange = () => {
-      const hash = typeof window !== "undefined" ? window.location.hash : "";
-      if (hash === "#regularization") {
-        setActiveTab("regularization");
-      } else if (hash === "#overtime") {
-        setActiveTab("overtime");
-      }
-    };
-
-    if (typeof window !== "undefined") {
-      window.addEventListener("hashchange", handleHashChange);
-      handleHashChange(); // initial check
-    }
-
-    return () => {
-      if (typeof window !== "undefined") {
-        window.removeEventListener("hashchange", handleHashChange);
-      }
-    };
-  }, []);
-
-  // Sync tab with search params when notification link loads (overtimeId or regularizationId)
-  useEffect(() => {
-    const regularizationId = searchParams.get("regularizationId");
-    const overtimeId = searchParams.get("overtimeId");
-    if (regularizationId) {
-      setActiveTab("regularization");
+    if (searchParams.get("regularizationId")) {
       setTimeout(() => {
         document.getElementById("regularization")?.scrollIntoView({ behavior: "smooth", block: "start" });
       }, 100);
-    } else if (overtimeId) {
-      setActiveTab("overtime");
+    } else if (searchParams.get("overtimeId")) {
       setTimeout(() => {
         document.getElementById("overtime")?.scrollIntoView({ behavior: "smooth", block: "start" });
       }, 100);
     }
+    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [searchParams]);
 
   const handleTabChange = (tab) => {
-    setActiveTab(tab);
-    if (typeof window !== "undefined") {
-      window.location.hash = tab;
+    const next = new URLSearchParams(searchParams.toString());
+    if (tab === "overtime") {
+      next.delete("tab");
+    } else {
+      next.set("tab", tab);
     }
+    const qs = next.toString();
+    router.replace(qs ? `${pathname}?${qs}` : pathname, { scroll: false });
   };
 
   const [isHOD, setIsHOD] = useState(false);
@@ -368,8 +362,8 @@ export default function RequestsClient() {
     } else {
       params.delete("forDesignerId");
     }
-    const hash = typeof window !== "undefined" ? window.location.hash : "";
-    const path = `/designer/requests?${params.toString()}${hash}`;
+    const qs = params.toString();
+    const path = qs ? `${pathname}?${qs}` : pathname;
     if (preserveInboxParams) {
       router.replace(path);
     } else {
@@ -676,10 +670,7 @@ export default function RequestsClient() {
     }
 
     setHighlightedRequestId(targetId);
-    const hash = window.location.hash;
-    if (hash === "#regularization" || hash === "") {
-      document.getElementById("regularization")?.scrollIntoView({ behavior: "smooth", block: "start" });
-    }
+    document.getElementById("regularization")?.scrollIntoView({ behavior: "smooth", block: "start" });
 
     if (!isHOD) return;
     if (resolvedInboxRegularizationRef.current === targetId && isUuidString(forDesignerParam)) return;
@@ -913,9 +904,9 @@ export default function RequestsClient() {
       toast.warning("Please select a reason for overtime.");
       return;
     }
-    const m = /^(\d+)/.exec(otForm.requestedHours);
-    if (m && Number(m[1]) > 4) {
-      toast.warning("Cannot exceed 4 hours allowed limit.");
+    const requestedHours = parseRequestedHoursLabel(otForm.requestedHours);
+    if (requestedHours > MAX_OVERTIME_HOURS_PER_DAY) {
+      toast.warning(`Cannot exceed ${MAX_OVERTIME_HOURS_PER_DAY} hours allowed limit.`);
       return;
     }
     const requestDate = utcDateOnlyString();
@@ -1531,10 +1522,9 @@ export default function RequestsClient() {
                   <div>
                     <label className="mb-1.5 block text-sm font-medium text-slate-700">Requested Extra Hours</label>
                     <select value={otForm.requestedHours} onChange={(e) => setOtForm({ ...otForm, requestedHours: e.target.value })} className={inputClass}>
-                      <option>1 hour</option>
-                      <option>2 hours</option>
-                      <option>3 hours</option>
-                      <option>4 hours</option>
+                      {OVERTIME_REQUESTED_HOURS_OPTIONS.map((option) => (
+                        <option key={option}>{option}</option>
+                      ))}
                     </select>
                   </div>
                 </div>

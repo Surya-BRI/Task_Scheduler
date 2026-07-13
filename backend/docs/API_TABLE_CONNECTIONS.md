@@ -114,6 +114,10 @@ Prisma schema models (and mapped SQL tables) in `backend/prisma/schema.prisma`: 
 - File endpoint: `POST /tasks/upload-file` uploads to S3 and logs activity.
 - Timer state endpoints: `GET /tasks/:id/timer-state` and `POST /tasks/:id/save-timer` upsert a Draft `ErpTSTaskWorkSession` for cold-start restore.
 - Work submission endpoint: `POST /tasks/:id/submit-work` promotes session to Submitted status, uploads files to S3 into `ErpTSTaskWorkSessionFile`, and logs `TASK_WORK_SUBMITTED` activity.
+- `GET /tasks/:id/hold-impact` — read-only preview of how many live/future `SchedulerAssignment` rows an ON_HOLD would delete, grouped by designer (`{partCount, designers[]}`); does not return assignment ids, so it can't itself be used to build `expectedAssignmentIds` below.
+- `PATCH /tasks/:id/status` (ON_HOLD) accepts an optional `expectedAssignmentIds: UUID[]` consolidation guard — if a live `SchedulerAssignment` row exists for the task outside that set, the update is rejected with `ConflictException`. **Not wrapped in a transaction** (check, `task.update()`, and the later `schedulerAssignment.deleteMany` are separate calls) — see `SCHEDULER_FIXES_NEEDED.md` item 9.
+- `freezeDraftWorkSession(taskId, designerId, closeSession)`: when `closeSession=false` and the designer had a running timer, the timer is now paused (`runStartedAt` cleared) and a "Timer Paused" notification + realtime refresh is sent — previously the timer was just left running.
+- `GET /tasks/next-phase` — suggested release `phase` (int) for a project's next Create-Task batch, project-wide (not per-opNo), with a smart per-sign-type lineage suggestion. Full detail: `PROJECT_TASK_PHASE.md`.
 
 ### `activities`
 - Controller: `backend/src/activities/activities.controller.ts`
@@ -180,6 +184,8 @@ Prisma schema models (and mapped SQL tables) in `backend/prisma/schema.prisma`: 
 - Connected tables: `ErpTSSchedulerAssignment`, `ErpTSSchedulerWeek`, `ErpTSSchedulerAssignmentHistory`, `ErpTSHoliday`, `ErpTSLeaveRescheduleSnapshot` (raw SQL)
 - **Leave rescheduling:** `rescheduleForApprovedLeave(leave)` — displaces assignments overlapping the leave window, snapshots each to `ErpTSLeaveRescheduleSnapshot`, and reschedules them to next available working days (skips weekends + `ErpTSHoliday` entries). Capacity cap is `DAILY_CAPACITY (8h)`, not `MAX_DAILY_HOURS (12h)`.
 - **Leave revocation:** `revokeLeaveReschedule(leaveId)` — loads unrestored snapshots, restores assignment rows, stamps `restoredAt`.
+- **Cross-week overflow placement:** `PUT /scheduler-assignments/week/:weekStart` accepts an optional `overflow[]` (`SchedulerOverflowInputDto[]`); `placeOverflowCapacity` walks forward day-by-day from the day after the saved week (skip weekends/holidays/full-day leave), live-checks capacity inside the same save transaction, bounded by a 56-day lookahead. Replaces the old client-side `localStorage` overflow carry-forward. Response adds `overflowPlacements`/`unplacedOverflow`. Does **not** check the destination week's `isLocked` flag before writing — see `SCHEDULER_FIXES_NEEDED.md` item 11.
+- `DELETE /scheduler-assignments/task/:taskId` (`clearTaskSchedule`) accepts an optional `expectedAssignmentIds` query param (comma-separated); when given, the check-then-delete runs inside one `$transaction` and throws `ConflictException` on any live row outside the set. Omitting it preserves the old unconditional wipe.
 
 ### `design-list`
 - Controller: `backend/src/design-list/design-list.controller.ts`

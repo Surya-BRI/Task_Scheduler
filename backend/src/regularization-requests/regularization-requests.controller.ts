@@ -5,14 +5,12 @@ import {
   ForbiddenException,
   Get,
   Param,
-  Patch,
   Post,
   Query,
   UseGuards,
 } from '@nestjs/common';
 import { CreateRegularizationRequestDto } from './dto/create-regularization-request.dto';
 import { ReviewRegularizationRequestDto } from './dto/review-regularization-request.dto';
-import { UpdateRegularizationStatusDto } from './dto/update-regularization-status.dto';
 import { RegularizationRequestsService } from './regularization-requests.service';
 import { isUuidString } from './sql-uuid.util';
 import { JwtAuthGuard } from '../common/guards/jwt-auth.guard';
@@ -95,15 +93,5 @@ export class RegularizationRequestsController {
     @Body() dto: ReviewRegularizationRequestDto,
   ) {
     return this.regularizationRequestsService.review(id, user.sub, user.role, dto);
-  }
-
-  @Patch(':id')
-  @Roles(UserRole.HOD, UserRole.SALESPERSON)
-  updateStatus(
-    @Param('id') id: string,
-    @CurrentUser() user: JwtPayload,
-    @Body() dto: UpdateRegularizationStatusDto,
-  ) {
-    return this.regularizationRequestsService.updateStatus(id, dto, user.sub, user.role);
   }
 }

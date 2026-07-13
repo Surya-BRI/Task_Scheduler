@@ -78,6 +78,7 @@ const buildDaySlot = (taskIds, tasksMap) => {
       rawTasks.push({
         id: `${task.id}-ot`,
         parentId: task.parentId ?? task.id,
+        designType: task.designType ?? null,
         label: `${toTaskLabel(task)} (OT)`,
         estimatedHours: overtimeHours,
         colorClass: task.overtimeColorClass ?? "bg-red-100 border border-red-300 text-red-800",
@@ -103,6 +104,8 @@ const buildDaySlot = (taskIds, tasksMap) => {
 
       rawTasks.push({
         id: task.id,
+        parentId: task.parentId ?? task.id,
+        designType: task.designType ?? null,
         label: toTaskLabel(task),
         estimatedHours: regularHours,
         colorClass: task.colorClass,

@@ -434,6 +434,7 @@ export class RequestsService implements OnModuleInit {
             linkUrl: this.leaveLink(view.id, view.designerId),
           },
         });
+        this.dashboardRealtime?.notifyUserNotificationRefresh(approver.id);
       } catch (err) {
         this.logger.warn(`Leave approver notification failed for ${approver.id}: ${err}`);
       }
@@ -471,6 +472,7 @@ export class RequestsService implements OnModuleInit {
             linkUrl: this.leaveLink(view.id, view.designerId),
           },
         });
+        this.dashboardRealtime?.notifyUserNotificationRefresh(approver.id);
       } catch (err) {
         this.logger.warn(`Leave HOD notification failed for ${approver.id}: ${err}`);
       }
