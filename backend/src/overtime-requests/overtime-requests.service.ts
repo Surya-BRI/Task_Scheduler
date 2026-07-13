@@ -1,5 +1,6 @@
 import { BadRequestException, ForbiddenException, Injectable, Logger, NotFoundException, Optional } from '@nestjs/common';
 import { randomUUID } from 'crypto';
+import { Prisma } from '@prisma/client';
 import { PrismaService } from '../prisma/prisma.service';
 import { TaskFilesService } from '../tasks/task-files.service';
 import { ActivityLoggerService } from '../activities/activity-logger.service';
@@ -25,6 +26,8 @@ export type OvertimeTaskOption = {
   projectName: string;
   label: string;
 };
+
+type OvertimeDbClient = PrismaService | Prisma.TransactionClient;
 
 @Injectable()
 export class OvertimeRequestsService {
@@ -102,9 +105,13 @@ export class OvertimeRequestsService {
     return { dayStart, dayEnd };
   }
 
-  private async assertNoApprovedLeaveBlockingOvertime(designerId: string, date: Date): Promise<void> {
+  private async assertNoApprovedLeaveBlockingOvertime(
+    client: OvertimeDbClient,
+    designerId: string,
+    date: Date,
+  ): Promise<void> {
     const { dayStart, dayEnd } = this.getDayWindow(date);
-    const leaves = await this.prisma.leaveRequest.findMany({
+    const leaves = await client.leaveRequest.findMany({
       where: {
         userId: designerId,
         status: { in: ['Approved', 'APPROVED', 'approved'] },
@@ -192,6 +199,7 @@ export class OvertimeRequestsService {
    * Core policy validations for Overtime request creation or updates.
    */
   private async validatePolicyRules(
+    client: OvertimeDbClient,
     designerId: string,
     dateStr: string,
     startTime: string,
@@ -203,7 +211,7 @@ export class OvertimeRequestsService {
     const startMinutes = this.timeToMinutes(startTime);
     const endMinutes = this.timeToMinutes(endTime);
 
-    await this.assertNoApprovedLeaveBlockingOvertime(designerId, requestDate);
+    await this.assertNoApprovedLeaveBlockingOvertime(client, designerId, requestDate);
 
     // 1. Start/End Time Validation
     if (endMinutes <= startMinutes) {
@@ -217,7 +225,7 @@ export class OvertimeRequestsService {
     }
 
     // 2. One OT submission per designer per day (single project/day)
-    const duplicateDay = await this.prisma.overtimeRequest.findFirst({
+    const duplicateDay = await client.overtimeRequest.findFirst({
       where: {
         id: excludeRequestId ? { not: excludeRequestId } : undefined,
         designerId,
@@ -232,7 +240,7 @@ export class OvertimeRequestsService {
     }
 
     // Prevent duplicate for same date & task
-    const duplicate = await this.prisma.overtimeRequest.findFirst({
+    const duplicate = await client.overtimeRequest.findFirst({
       where: {
         id: excludeRequestId ? { not: excludeRequestId } : undefined,
         designerId,
@@ -246,7 +254,7 @@ export class OvertimeRequestsService {
     }
 
     // 3. Overlap Check
-    const activeRequests = await this.prisma.overtimeRequest.findMany({
+    const activeRequests = await client.overtimeRequest.findMany({
       where: {
         id: excludeRequestId ? { not: excludeRequestId } : undefined,
         designerId,
@@ -270,7 +278,7 @@ export class OvertimeRequestsService {
     const weekStart = this.getStartOfWeek(requestDate);
     const weekEnd = this.getEndOfWeek(requestDate);
 
-    const weeklyRequests = await this.prisma.overtimeRequest.findMany({
+    const weeklyRequests = await client.overtimeRequest.findMany({
       where: {
         id: excludeRequestId ? { not: excludeRequestId } : undefined,
         designerId,
@@ -627,14 +635,6 @@ export class OvertimeRequestsService {
 
     const schedule = this.resolveSchedule(dto);
 
-    await this.validatePolicyRules(
-      designerId,
-      dto.date,
-      schedule.startTime,
-      schedule.endTime,
-      dto.taskId,
-    );
-
     const totalHours = new Decimal(
       (this.timeToMinutes(schedule.endTime) - this.timeToMinutes(schedule.startTime)) / 60,
     );
@@ -644,6 +644,18 @@ export class OvertimeRequestsService {
     const now = new Date();
 
     const request = await this.prisma.$transaction(async (tx) => {
+      // Duplicate/overlap/weekly-limit reads happen inside the same serializable
+      // transaction as the insert below, so two concurrent submissions can't both
+      // pass validation before either write lands.
+      await this.validatePolicyRules(
+        tx,
+        designerId,
+        dto.date,
+        schedule.startTime,
+        schedule.endTime,
+        dto.taskId,
+      );
+
       const created = await tx.overtimeRequest.create({
         data: {
           designerId,
@@ -697,7 +709,7 @@ export class OvertimeRequestsService {
       }
 
       return created;
-    });
+    }, { isolationLevel: Prisma.TransactionIsolationLevel.Serializable });
 
     if (hodAutoApprove) {
       await this.logOvertimeActivity({
@@ -771,9 +783,6 @@ export class OvertimeRequestsService {
     }
 
     const nextDate = dto.date || request.date?.toISOString().split('T')[0];
-    if (dto.date) {
-      assertOvertimeDateIsToday(dto.date);
-    }
     const nextStart = dto.startTime || request.startTime;
     const nextEnd = dto.endTime || request.endTime;
     const nextTaskId = dto.taskId || request.taskId;
@@ -782,40 +791,50 @@ export class OvertimeRequestsService {
       throw new BadRequestException('Missing date, startTime, endTime, or taskId');
     }
 
-    // Validate rules
-    await this.validatePolicyRules(request.designerId!, nextDate, nextStart, nextEnd, nextTaskId, request.id);
+    // Re-validate eligibility every edit, not just on initial create — a draft/rejected
+    // request can otherwise be edited days later, or onto a task/day the designer was
+    // never scheduled for, without ever re-checking either invariant.
+    assertOvertimeDateIsToday(nextDate);
+    await this.assertTaskScheduledForDate(request.designerId!, nextTaskId, nextDate);
 
     const totalHours = new Decimal((this.timeToMinutes(nextEnd) - this.timeToMinutes(nextStart)) / 60);
     const status = dto.status || request.status;
 
-    const updated = await this.prisma.overtimeRequest.update({
-      where: { id },
-      data: {
-        taskId: dto.taskId,
-        date: dto.date ? new Date(dto.date) : undefined,
-        startTime: dto.startTime,
-        endTime: dto.endTime,
-        totalHours,
-        requestedHours: dto.requestedHours ? new Decimal(dto.requestedHours) : undefined,
-        reason: dto.reason,
-        status,
-      },
-      include: {
-        designer: { select: { id: true, fullName: true, email: true, departmentId: true } },
-        task: { select: this.overtimeActivityTaskSelect },
-        attachments: true,
-      },
-    });
+    const updated = await this.prisma.$transaction(async (tx) => {
+      // Same race-closing pattern as create(): validate and write inside one
+      // serializable transaction so a concurrent edit can't slip past the checks.
+      await this.validatePolicyRules(tx, request.designerId!, nextDate, nextStart, nextEnd, nextTaskId, request.id);
 
-    // Log history
-    await this.prisma.overtimeApprovalHistory.create({
-      data: {
-        requestId: updated.id,
-        action: status || 'UPDATED',
-        actionById: userId,
-        comments: 'Request details updated',
-      },
-    });
+      const row = await tx.overtimeRequest.update({
+        where: { id },
+        data: {
+          taskId: dto.taskId,
+          date: dto.date ? new Date(dto.date) : undefined,
+          startTime: dto.startTime,
+          endTime: dto.endTime,
+          totalHours,
+          requestedHours: dto.requestedHours ? new Decimal(dto.requestedHours) : undefined,
+          reason: dto.reason,
+          status,
+        },
+        include: {
+          designer: { select: { id: true, fullName: true, email: true, departmentId: true } },
+          task: { select: this.overtimeActivityTaskSelect },
+          attachments: true,
+        },
+      });
+
+      await tx.overtimeApprovalHistory.create({
+        data: {
+          requestId: row.id,
+          action: status || 'UPDATED',
+          actionById: userId,
+          comments: 'Request details updated',
+        },
+      });
+
+      return row;
+    }, { isolationLevel: Prisma.TransactionIsolationLevel.Serializable });
 
     if (status === 'SUBMITTED' && request.status !== 'SUBMITTED') {
       const recipientName = await this.resolveOvertimeApproverName(updated.designer?.departmentId);
@@ -858,9 +877,16 @@ export class OvertimeRequestsService {
     if (!request) throw new NotFoundException('Overtime request not found');
     if (request.designerId !== userId) throw new ForbiddenException('Access denied');
     if (request.status !== 'DRAFT') throw new BadRequestException('Request is already submitted');
-    if (request.designerId && request.date) {
-      await this.assertNoApprovedLeaveBlockingOvertime(request.designerId, new Date(request.date));
+    if (!request.taskId || !request.date) {
+      throw new BadRequestException('Request is missing a task or date');
     }
+
+    // A draft can sit for days before being submitted — re-check both invariants at
+    // submission time instead of trusting the state from whenever it was drafted.
+    const dateStr = request.date.toISOString().split('T')[0];
+    assertOvertimeDateIsToday(dateStr);
+    await this.assertTaskScheduledForDate(request.designerId!, request.taskId, dateStr);
+    await this.assertNoApprovedLeaveBlockingOvertime(this.prisma, request.designerId, new Date(request.date));
 
     const updated = await this.prisma.overtimeRequest.update({
       where: { id },
@@ -1052,7 +1078,7 @@ export class OvertimeRequestsService {
         throw new BadRequestException('Request is not in a submittable state for review');
       }
       if (dto.status === 'APPROVED_BY_MANAGER' && request.designerId && request.date) {
-        await this.assertNoApprovedLeaveBlockingOvertime(request.designerId, new Date(request.date));
+        await this.assertNoApprovedLeaveBlockingOvertime(this.prisma, request.designerId, new Date(request.date));
       }
 
       const updateData: any = {
@@ -1353,6 +1379,7 @@ export class OvertimeRequestsService {
             linkUrl: this.overtimeLink(request.id, request.designerId),
           },
         });
+        this.dashboardRealtime?.notifyUserNotificationRefresh(hod.id);
       } catch (err) {
         this.logger.warn(`Failed to notify HOD ${hod.id}: ${err instanceof Error ? err.message : err}`);
       }

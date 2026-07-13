@@ -13,8 +13,7 @@ describe('task-status-buckets.util', () => {
 
   it('aggregates counts so total equals sum of buckets', () => {
     const counts = {
-      PENDING: 5,
-      DESIGN_NEW: 17,
+      DESIGN_NEW: 22,
       ON_HOLD: 1,
       DESIGN_COMPLETED: 2,
     };

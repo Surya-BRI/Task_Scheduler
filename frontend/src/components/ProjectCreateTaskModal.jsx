@@ -94,6 +94,7 @@ function TickBox({ checked, onChange }) {
 export function ProjectCreateTaskModal({ open, onClose, onCreated, submissionDate, record, signRows, isQsSignRegisterComplete }) {
   const titleId = useId()
   const revisionFetched = useRef(false)
+  const phaseFetched = useRef(false)
   const fileInputRef = useRef(null)
   const [rows, setRows] = useState([])
   const [expanded, setExpanded] = useState(() => new Set())
@@ -102,6 +103,10 @@ export function ProjectCreateTaskModal({ open, onClose, onCreated, submissionDat
   const [priorityLevel, setPriorityLevel] = useState('Medium')
   const [localDeadline, setLocalDeadline] = useState(null)
   const [revisionCode, setRevisionCode] = useState('')
+  const [phaseContext, setPhaseContext] = useState({ maxPhase: 0, bySignType: {} })
+  const [phaseContextFailed, setPhaseContextFailed] = useState(false)
+  const [phase, setPhase] = useState(1)
+  const [phaseTouched, setPhaseTouched] = useState(false)
   const [submitting, setSubmitting] = useState(false)
   const [error, setError] = useState('')
   const [fieldErrors, setFieldErrors] = useState({})
@@ -141,7 +146,12 @@ export function ProjectCreateTaskModal({ open, onClose, onCreated, submissionDat
   useEffect(() => {
     if (!open) return
     revisionFetched.current = false
+    phaseFetched.current = false
     setRevisionCode('')
+    setPhaseContext({ maxPhase: 0, bySignType: {} })
+    setPhaseContextFailed(false)
+    setPhase(1)
+    setPhaseTouched(false)
     setPriorityLevel('Medium')
     setLocalDeadline(submissionDate instanceof Date && !Number.isNaN(submissionDate.getTime()) ? submissionDate : null)
     setSelectedSignType('')
@@ -181,6 +191,54 @@ export function ProjectCreateTaskModal({ open, onClose, onCreated, submissionDat
       .then((res) => setRevisionCode(res?.revisionCode ?? 'R0'))
       .catch(() => {})
   }, [open, record])
+
+  // Fetch project-wide phase history (for the smart phase suggestion)
+  useEffect(() => {
+    if (!open || !record || phaseFetched.current) return
+    const opNo = String(record.opNo ?? '').trim()
+    const projectNo = String(record.projectNo ?? record.projectId ?? '').trim()
+    if (!opNo || !projectNo) return
+    phaseFetched.current = true
+    const qs = new URLSearchParams({ opNo, projectNo, designType: 'Project' }).toString()
+    apiClient
+      .get(`/tasks/next-phase?${qs}`)
+      .then((res) => setPhaseContext({ maxPhase: res?.maxPhase ?? 0, bySignType: res?.bySignType ?? {} }))
+      .catch(() => setPhaseContextFailed(true))
+  }, [open, record])
+
+  // Sign types with at least one ticked discipline right now
+  const checkedSignTypes = rows.flatMap((row) =>
+    (row.children ?? [])
+      .filter((child) => DISCIPLINES.some((d) => child[d.key]))
+      .map((child) => child.signType)
+      .filter(Boolean),
+  )
+  const checkedSignTypesKey = Array.from(new Set(checkedSignTypes)).sort().join('|')
+
+  // Live "smart" phase suggestion: continue a checked sign type's own lineage
+  // (its last phase + 1) when it has history, otherwise fall back to the
+  // project-wide next phase. Stops recomputing once the HOD picks manually.
+  useEffect(() => {
+    if (!open || phaseTouched) return
+    const distinctSignTypes = Array.from(new Set(checkedSignTypes))
+    const lineages = distinctSignTypes
+      .map((st) => phaseContext.bySignType?.[st]?.maxPhase)
+      .filter((v) => typeof v === 'number')
+    const suggested = lineages.length > 0 ? Math.max(...lineages) + 1 : (phaseContext.maxPhase || 0) + 1
+    setPhase(suggested)
+  }, [open, checkedSignTypesKey, phaseContext, phaseTouched])
+
+  const phaseHint = (() => {
+    if (phaseTouched) return null
+    const distinctSignTypes = Array.from(new Set(checkedSignTypes))
+    const withHistory = distinctSignTypes.filter((st) => typeof phaseContext.bySignType?.[st]?.maxPhase === 'number')
+    if (withHistory.length === 0) return 'No prior tasks for these sign types in this project — starting a new phase.'
+    if (withHistory.length === 1) {
+      const st = withHistory[0]
+      return `Sign type ${st} was last used in Phase ${phaseContext.bySignType[st].maxPhase}.`
+    }
+    return 'Multiple sign types have different phase histories — showing the continuation from the most recent one.'
+  })()
 
   if (!open) return null
 
@@ -276,6 +334,9 @@ export function ProjectCreateTaskModal({ open, onClose, onCreated, submissionDat
     const nextFieldErrors = {}
     if (!REVISION_PATTERN.test(normalizedRevision)) {
       nextFieldErrors.revisionCode = 'Revision must be like R0, R1, R2'
+    }
+    if (!Number.isInteger(Number(phase)) || Number(phase) < 1) {
+      nextFieldErrors.phase = 'Phase must be a positive whole number'
     }
     if (!(localDeadline instanceof Date) || Number.isNaN(localDeadline.getTime())) {
       nextFieldErrors.deadline = 'Deadline for Task Submission is required'
@@ -383,6 +444,7 @@ export function ProjectCreateTaskModal({ open, onClose, onCreated, submissionDat
         designType: 'Project',
         task: {
           revisionCode: normalizedRevision,
+          phase: Number(phase),
           designType: 'Project',
           opNo: record.opNo ?? undefined,
           projectId: resolvedProjectId ?? undefined,
@@ -426,24 +488,62 @@ export function ProjectCreateTaskModal({ open, onClose, onCreated, submissionDat
         </div>
 
         <div className="space-y-3 p-4">
-          <div>
-            <label className="mb-1 block text-xs font-semibold text-slate-600">
-              Revision <span className="text-red-600">*</span>
-            </label>
-            <input
-              value={revisionCode}
-              onChange={(e) => {
-                setRevisionCode(e.target.value.toUpperCase())
-                setFieldErrors((prev) => ({ ...prev, revisionCode: '' }))
-              }}
-              onBlur={() => setTouched((prev) => ({ ...prev, revisionCode: true }))}
-              placeholder="R0"
-              required
-              className="h-10 w-full rounded-md border border-slate-300 px-3 text-sm outline-none transition-colors focus:border-blue-500 focus:ring-2 focus:ring-blue-500/20"
-            />
-            {((submitAttempted || touched.revisionCode) && !REVISION_PATTERN.test(revisionCode.trim().toUpperCase())) || fieldErrors.revisionCode ? (
-              <p className="mt-1 text-xs text-red-600">{fieldErrors.revisionCode || 'Revision must be like R0, R1, R2'}</p>
-            ) : null}
+          <div className="grid grid-cols-2 gap-4">
+            <div>
+              <label className="mb-1 block text-xs font-semibold text-slate-600">
+                Revision <span className="text-red-600">*</span>
+              </label>
+              <input
+                value={revisionCode}
+                onChange={(e) => {
+                  setRevisionCode(e.target.value.toUpperCase())
+                  setFieldErrors((prev) => ({ ...prev, revisionCode: '' }))
+                }}
+                onBlur={() => setTouched((prev) => ({ ...prev, revisionCode: true }))}
+                placeholder="R0"
+                required
+                className="h-10 w-full rounded-md border border-slate-300 px-3 text-sm outline-none transition-colors focus:border-blue-500 focus:ring-2 focus:ring-blue-500/20"
+              />
+              {((submitAttempted || touched.revisionCode) && !REVISION_PATTERN.test(revisionCode.trim().toUpperCase())) || fieldErrors.revisionCode ? (
+                <p className="mt-1 text-xs text-red-600">{fieldErrors.revisionCode || 'Revision must be like R0, R1, R2'}</p>
+              ) : null}
+            </div>
+
+            <div>
+              <label className="mb-1 block text-xs font-semibold text-slate-600">
+                Phase <span className="text-red-600">*</span>
+              </label>
+              {phaseContextFailed ? (
+                <input
+                  type="number"
+                  min={1}
+                  step={1}
+                  value={phase}
+                  onChange={(e) => { setPhaseTouched(true); setPhase(e.target.value) }}
+                  placeholder="1"
+                  className="h-10 w-full rounded-md border border-slate-300 px-3 text-sm outline-none transition-colors focus:border-blue-500 focus:ring-2 focus:ring-blue-500/20"
+                />
+              ) : (
+                <select
+                  value={phase}
+                  onChange={(e) => { setPhaseTouched(true); setPhase(Number(e.target.value)) }}
+                  className="h-10 w-full rounded-md border border-slate-300 bg-white px-3 text-sm outline-none transition-colors focus:border-blue-500 focus:ring-2 focus:ring-blue-500/20"
+                >
+                  {Array.from({ length: (phaseContext.maxPhase || 0) + 1 }, (_, i) => i + 1).map((opt) => (
+                    <option key={opt} value={opt}>
+                      {opt === (phaseContext.maxPhase || 0) + 1 ? `Phase ${opt} (New)` : `Phase ${opt}`}
+                    </option>
+                  ))}
+                </select>
+              )}
+              {fieldErrors.phase ? (
+                <p className="mt-1 text-xs text-red-600">{fieldErrors.phase}</p>
+              ) : (
+                <p className="mt-1 text-[11px] text-slate-500">
+                  {phaseContextFailed ? "Couldn't load existing phases — enter manually." : phaseHint}
+                </p>
+              )}
+            </div>
           </div>
 
           <div>
@@ -667,6 +767,7 @@ export function ProjectCreateTaskModal({ open, onClose, onCreated, submissionDat
                 selectedCount === 0 ||
                 submitting ||
                 !REVISION_PATTERN.test(revisionCode.trim().toUpperCase()) ||
+                !Number.isInteger(Number(phase)) || Number(phase) < 1 ||
                 !(localDeadline instanceof Date) ||
                 Number.isNaN(localDeadline.getTime())
               }

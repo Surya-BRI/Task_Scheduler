@@ -75,8 +75,11 @@ export class SchedulerAssignmentsController {
 
   @Delete('task/:taskId')
   @Roles(UserRole.HOD, UserRole.ADMIN, UserRole.PROJECT_MANAGER)
-  clearTask(@Param('taskId') taskId: string) {
-    return this.schedulerAssignmentsService.clearTaskSchedule(taskId);
+  clearTask(@Param('taskId') taskId: string, @Query('expectedAssignmentIds') expectedAssignmentIds?: string) {
+    const ids = expectedAssignmentIds != null
+      ? expectedAssignmentIds.split(',').map((s) => s.trim()).filter(Boolean)
+      : undefined;
+    return this.schedulerAssignmentsService.clearTaskSchedule(taskId, ids);
   }
 
   @Post(':id/detach')

@@ -65,7 +65,7 @@ export default function StatsBar({ stats, isDesignerMode = true, isHOD = false, 
       {isDesignerMode ? (
         <button
           type="button"
-          onClick={() => router.push(`/designer/requests#regularization`)}
+          onClick={() => router.push(`/designer/requests?tab=regularization`)}
           className="flex items-center gap-1.5 hover:bg-slate-100 p-1 -m-1 rounded cursor-pointer transition-colors text-left"
         >
           <span className="inline-block h-2.5 w-2.5 rounded-full bg-orange-400 shrink-0" />

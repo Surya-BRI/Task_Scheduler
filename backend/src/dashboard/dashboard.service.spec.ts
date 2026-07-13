@@ -29,7 +29,7 @@ describe('DashboardService', () => {
     it('scopes designer metrics to direct and split assignments', async () => {
       prisma.task.count.mockResolvedValue(4);
       prisma.task.groupBy.mockResolvedValue([
-        { status: 'PENDING', _count: { status: 4 } },
+        { status: 'DESIGN_NEW', _count: { status: 4 } },
       ]);
       prisma.task.findMany.mockResolvedValue([{ projectId: 'p1' }, { projectId: 'p2' }]);
       prisma.taskDesigner.findMany.mockResolvedValue([{ taskId: 'split-task-1' }]);
@@ -60,8 +60,7 @@ describe('DashboardService', () => {
       prisma.task.count.mockResolvedValue(37);
       prisma.project.count.mockResolvedValue(76);
       prisma.task.groupBy.mockResolvedValue([
-        { status: 'PENDING', _count: { status: 17 } },
-        { status: 'DESIGN_NEW', _count: { status: 17 } },
+        { status: 'DESIGN_NEW', _count: { status: 34 } },
         { status: 'ON_HOLD', _count: { status: 1 } },
         { status: 'CLIENT_ACCEPTED', _count: { status: 2 } },
       ]);

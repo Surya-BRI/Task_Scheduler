@@ -1,4 +1,4 @@
-import { IsIn, IsOptional, IsString, MaxLength } from 'class-validator';
+import { IsArray, IsIn, IsOptional, IsString, IsUUID, MaxLength } from 'class-validator';
 
 export class UpdateTaskStatusDto {
   @IsString()
@@ -8,6 +8,18 @@ export class UpdateTaskStatusDto {
     'ON_HOLD',
   ])
   status: string;
+
+  /**
+   * Scheduler-consolidation guard (ON_HOLD only): the caller's known-live SchedulerAssignment
+   * row ids for this task at the time it decided to fold all parts into one whole-task status
+   * change. If the server finds any OTHER live row for this task not in this list, the status
+   * change is rejected instead of silently deleting a sibling the caller didn't know about.
+   * Omit entirely to skip this check (existing non-scheduler callers are unaffected).
+   */
+  @IsOptional()
+  @IsArray()
+  @IsUUID('all', { each: true })
+  expectedAssignmentIds?: string[];
 
   @IsOptional()
   @IsString()

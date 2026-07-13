@@ -1,4 +1,6 @@
-﻿export function formatDisplayDate(dateLike) {
+﻿import { normalizeTaskStatus, TASK_STATUSES } from '@/lib/task-status'
+
+export function formatDisplayDate(dateLike) {
   const date = dateLike instanceof Date ? dateLike : new Date(dateLike);
   if (!(date instanceof Date) || Number.isNaN(date.getTime())) return "";
   const day = String(date.getDate()).padStart(2, "0");
@@ -7,41 +9,13 @@
   return `${day}/${month}/${year}`;
 }
 
+/** @deprecated Use normalizeTaskStatus from @/lib/task-status */
 export function normalizeStatusCode(rawStatus) {
-  const value = String(rawStatus ?? "").trim().toUpperCase();
-  // New lifecycle statuses — pass through
-  if (value === "DESIGN_NEW")       return "DESIGN_NEW";
-  if (value === "DESIGN_PLANNED")   return "DESIGN_PLANNED";
-  if (value === "IN_PROGRESS")      return "IN_PROGRESS";
-  if (value === "DESIGN_COMPLETED") return "DESIGN_COMPLETED";
-  if (value === "HOD_REVIEW")       return "HOD_REVIEW";
-  if (value === "SALES_REVIEW")     return "SALES_REVIEW";
-  if (value === "REWORK")           return "REWORK";
-  if (value === "CLIENT_ACCEPTED")  return "CLIENT_ACCEPTED";
-  if (value === "CLIENT_REJECTED")  return "CLIENT_REJECTED";
-  if (value === "ON_HOLD")          return "ON_HOLD";
-  // Legacy → new lifecycle mapping
-  if (value === "PENDING")   return "DESIGN_NEW";
-  if (value === "WIP")       return "IN_PROGRESS";
-  if (value === "REVISION")  return "REWORK";
-  if (value === "COMPLETED") return "CLIENT_ACCEPTED";
-  if (value === "APPROVED")  return "CLIENT_ACCEPTED";
-  return "DESIGN_NEW";
-}
-
-/** Maps a frontend display status back to the legacy backend value for API filter calls. */
-export function toBackendStatus(frontendStatus) {
-  switch (String(frontendStatus ?? "").toUpperCase()) {
-    case "DESIGN_NEW":       return "PENDING";
-    case "IN_PROGRESS":      return "WIP";
-    case "REWORK":           return "REVISION";
-    case "CLIENT_ACCEPTED":  return "CLIENT_ACCEPTED";
-    default:                 return frontendStatus;
-  }
+  return normalizeTaskStatus(rawStatus);
 }
 
 export function getStatusLabel(statusCode) {
-  switch (normalizeStatusCode(statusCode)) {
+  switch (normalizeTaskStatus(statusCode)) {
     case "DESIGN_NEW":       return "Design Task New";
     case "DESIGN_PLANNED":   return "Design Planned";
     case "IN_PROGRESS":      return "In Progress";
@@ -55,6 +29,27 @@ export function getStatusLabel(statusCode) {
     default:                 return "Design Task New";
   }
 }
+
+export { TASK_STATUSES };
+
+/** Statuses a designer can filter on in My Work — excludes downstream review/client states. */
+export const DESIGNER_QUEUE_FILTER_STATUSES = [
+  "DESIGN_NEW",
+  "DESIGN_PLANNED",
+  "IN_PROGRESS",
+  "REWORK",
+  "DESIGN_COMPLETED",
+  "ON_HOLD",
+];
+
+export const DESIGNER_BOARD_COLUMNS = [
+  { title: "Design Task New", status: "DESIGN_NEW" },
+  { title: "Design Planned", status: "DESIGN_PLANNED" },
+  { title: "In Progress", status: "IN_PROGRESS" },
+  { title: "Rework / Error", status: "REWORK" },
+  { title: "Design Completed", status: "DESIGN_COMPLETED" },
+  { title: "On Hold", status: "ON_HOLD" },
+];
 
 function toCreatedDate(task) {
   if (task?.createdAt instanceof Date && !Number.isNaN(task.createdAt.getTime())) return task.createdAt;
@@ -93,7 +88,7 @@ export function mapTaskToDesignRow(task) {
       task?.disciplineType || null,
       task?.revisionCode || null,
     ].filter(Boolean).join(' - ') || "No ID",
-    status: normalizeStatusCode(task?.status),
+    status: normalizeTaskStatus(task?.status),
     salesPerson: task?.project?.salesPerson || "Unassigned",
     created: formatDisplayDate(createdDate) || "—",
     deadline: formatDisplayDate(deadlineDate) || "—",
@@ -123,4 +118,3 @@ export function matchDateRange(date, startDate, endDate) {
   }
   return true;
 }
-

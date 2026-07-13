@@ -20,6 +20,11 @@ import { LEAVE_REASON_OPTIONS } from "@/lib/date-window";
 import { apiClient } from "@/lib/api-client";
 import { StatusBadge } from "@/components/ui/StatusBadge";
 
+const UUID_RE = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
+function isUuidString(value) {
+  return UUID_RE.test(String(value ?? "").trim());
+}
+
 const MONTHS = [
   "January", "February", "March", "April", "May", "June",
   "July", "August", "September", "October", "November", "December"
@@ -592,15 +597,29 @@ export default function LeavePlannerClient() {
     setSelectedLeave,
   ]);
 
+  // Deep-link from a notification: ?leaveId=...&forUserId=... . The pool lookup below only
+  // works today because reloadTeamData() loads every department leave request unscoped — if
+  // that ever narrows (e.g. a per-designer filter), forUserId lets us resolve the specific
+  // request directly instead of silently failing to find it.
   useEffect(() => {
     const leaveId = searchParams.get("leaveId");
     if (!leaveId) return;
+    const forUserId = searchParams.get("forUserId")?.trim() ?? "";
     const pool = [...pendingApprovals, ...leaves, ...teamLeaves];
     const match = pool.find((l) => l.id === leaveId);
     if (match) {
       openReviewModal(match);
+      return;
     }
-  }, [searchParams, pendingApprovals, leaves, teamLeaves, openReviewModal]);
+    if (canReview && isUuidString(forUserId)) {
+      fetchLeaveTeamRequests({ designerId: forUserId })
+        .then((rows) => {
+          const found = (Array.isArray(rows) ? rows : []).find((l) => l.id === leaveId);
+          if (found) openReviewModal(found);
+        })
+        .catch(() => {});
+    }
+  }, [searchParams, pendingApprovals, leaves, teamLeaves, canReview, openReviewModal]);
 
   useEffect(() => {
     if (!isHODModalOpen || !selectedLeave?.id) return;

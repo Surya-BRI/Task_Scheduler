@@ -789,7 +789,7 @@ function mapTaskToRecord(task) {
     taskDesignType: task.designType ?? null,
     retailDesignTypes,
     revisionCode: task.revisionCode ?? null,
-    status: normalizeStatusCode(task.status ?? 'PENDING'),
+    status: normalizeStatusCode(task.status ?? 'DESIGN_NEW'),
     priority: task.priority ?? '-',
     reviewerHod,
     providedAssets,
@@ -880,18 +880,59 @@ function DisciplinePill({ type }) {
   )
 }
 
-function ProjectTaskList({ tasks, loading, onView }) {
+function PhasePill({ phase }) {
+  if (phase == null) return <span className="text-slate-400">—</span>
   return (
-    <div className="mt-3">
+    <span className="inline-block rounded-full bg-indigo-50 px-2 py-0.5 text-[10px] font-semibold text-indigo-700">
+      Phase {phase}
+    </span>
+  )
+}
+
+function distinctPhases(tasks) {
+  const phases = new Set()
+  for (const t of tasks) {
+    if (t.phase != null) phases.add(t.phase)
+  }
+  return Array.from(phases).sort((a, b) => a - b)
+}
+
+function PhaseFilterSelect({ tasks, value, onChange }) {
+  const phases = distinctPhases(tasks)
+  if (phases.length === 0) return null
+  return (
+    <select
+      value={value}
+      onChange={(e) => onChange(e.target.value === 'all' ? 'all' : Number(e.target.value))}
+      className="h-8 rounded-md border-2 border-blue-500 bg-blue-50 px-2.5 text-xs font-semibold text-blue-700 outline-none focus:border-blue-600 focus:ring-2 focus:ring-blue-500/20"
+    >
+      <option value="all">All Phases</option>
+      {phases.map((p) => (
+        <option key={p} value={p}>Phase {p}</option>
+      ))}
+    </select>
+  )
+}
+
+function ProjectTaskList({ tasks, loading, onView, isRetail = false }) {
+  const [phaseFilter, setPhaseFilter] = useState('all')
+  const gridCols = isRetail
+    ? 'grid-cols-[1.2fr_0.5fr_0.9fr_1fr_1fr_80px_44px]'
+    : 'grid-cols-[1.2fr_0.5fr_0.5fr_1fr_0.9fr_1fr_1fr_80px_44px]'
+  const visibleTasks = phaseFilter === 'all' ? tasks : tasks.filter((t) => t.phase === phaseFilter)
+
+  return (
+    <div className="mt-6">
       <div className="mb-1.5 flex items-center justify-between">
         <h3 className="text-xs font-semibold text-slate-700">Task List</h3>
-        <span className="text-[11px] text-slate-400">{tasks.length} task{tasks.length !== 1 ? 's' : ''}</span>
+        {!isRetail ? <PhaseFilterSelect tasks={tasks} value={phaseFilter} onChange={setPhaseFilter} /> : null}
       </div>
       <div className="overflow-hidden rounded-md border border-slate-200">
-        <div className="grid grid-cols-[1.2fr_0.5fr_1fr_0.9fr_1fr_1fr_80px_44px] bg-slate-100 px-2.5 py-1.5 text-[11px] font-semibold text-slate-600">
+        <div className={`grid ${gridCols} bg-slate-100 px-2.5 py-1.5 text-[11px] font-semibold text-slate-600`}>
           <div>Task No</div>
           <div>Revision</div>
-          <div>Sign Family</div>
+          {!isRetail ? <div>Phase</div> : null}
+          {!isRetail ? <div>Sign Family</div> : null}
           <div>Type</div>
           <div>Status</div>
           <div>Designer</div>
@@ -903,23 +944,26 @@ function ProjectTaskList({ tasks, loading, onView }) {
             <div className="h-7 animate-pulse rounded bg-slate-100" />
             <div className="h-7 animate-pulse rounded bg-slate-100" />
           </div>
-        ) : tasks.length === 0 ? (
-          <div className="px-3 py-5 text-center text-xs text-slate-500">No tasks yet.</div>
+        ) : visibleTasks.length === 0 ? (
+          <div className="px-3 py-5 text-center text-xs text-slate-500">
+            {tasks.length === 0 ? 'No tasks yet.' : 'No tasks in this phase.'}
+          </div>
         ) : (
           <ul className="divide-y divide-slate-100">
-            {tasks.map((task) => {
+            {visibleTasks.map((task) => {
               const normalized = normalizeStatusCode(task.status)
               return (
                 <li
                   key={task.id}
-                  className="grid grid-cols-[1.2fr_0.5fr_1fr_0.9fr_1fr_1fr_80px_44px] items-center px-2.5 py-2 text-xs text-slate-700 hover:bg-slate-50"
+                  className={`grid ${gridCols} items-center px-2.5 py-2 text-xs text-slate-700 hover:bg-slate-50`}
                 >
                   <span className="min-w-0">
                     <span className="block truncate font-medium text-slate-900">{task.taskNo || '—'}</span>
                     {task.signType && <span className="block truncate text-[10px] text-slate-400">{task.signType}</span>}
                   </span>
                   <span>{task.revisionCode || '—'}</span>
-                  <span className="truncate text-slate-600">{task.signFamily || '—'}</span>
+                  {!isRetail ? <span><PhasePill phase={task.phase} /></span> : null}
+                  {!isRetail ? <span className="truncate text-slate-600">{task.signFamily || '—'}</span> : null}
                   <span><DisciplinePill type={task.disciplineType} /></span>
                   <span>
                     <span className={`inline-block rounded-full px-2 py-0.5 text-[10px] font-semibold ${getTaskStatusBadgeClass(normalized)}`}>
@@ -973,6 +1017,8 @@ export function TaskDetailsPage() {
   const from = searchParams.get('from')
   const recordId = routeId
   const [record, setRecord] = useState(null)
+  const [holdImpact, setHoldImpact] = useState(null) // { partCount, designers } | null — set once fetched, opens the confirm modal
+  const [holdImpactChecking, setHoldImpactChecking] = useState(false)
   const [reworkDialogOpen, setReworkDialogOpen] = useState(false)
   const [reworkNote, setReworkNote] = useState('')
   const [reworkSubmitting, setReworkSubmitting] = useState(false)
@@ -1181,6 +1227,31 @@ export function TaskDetailsPage() {
       setTaskRefreshCounter((c) => c + 1)
     }
   }, [taskId])
+
+  // "Put On Hold" removes every current/future scheduled part for this task across every
+  // designer in one shot — preview the impact so the HOD/salesperson isn't surprised.
+  const requestHold = useCallback(async () => {
+    if (!taskId || holdImpactChecking) return
+    setHoldImpactChecking(true)
+    try {
+      const impact = await apiClient.get(`/tasks/${taskId}/hold-impact`)
+      if ((impact?.partCount ?? 0) > 0) {
+        setHoldImpact(impact)
+      } else {
+        await handleStatusChange('ON_HOLD')
+      }
+    } catch {
+      // Preview is best-effort — don't block the hold action if the check itself fails.
+      await handleStatusChange('ON_HOLD')
+    } finally {
+      setHoldImpactChecking(false)
+    }
+  }, [taskId, holdImpactChecking, handleStatusChange])
+
+  const confirmHold = useCallback(() => {
+    setHoldImpact(null)
+    handleStatusChange('ON_HOLD')
+  }, [handleStatusChange])
 
   const clearTimerLaunchParams = useCallback(() => {
     const next = new URLSearchParams(searchParams.toString())
@@ -2042,7 +2113,7 @@ export function TaskDetailsPage() {
                           <DetailRow label="Task Status" value={record.status ?? '-'} />
                           <DetailRow label="Priority Level" value={record.priority ?? '-'} />
                           <DetailRow
-                            label="Assigned Hours"
+                            label="Assigned Time"
                             value={(() => {
                               const viewerId = _session?.designerId ?? _session?.id ?? null;
                               const fromScheduler = formatSchedulerAssignedHours(record.schedulerHours, {
@@ -2059,6 +2130,38 @@ export function TaskDetailsPage() {
                               return total > 0 ? formatHoursAsHm(total) : '-';
                             })()}
                           />
+                          <DetailRow
+                            label="Logged Time"
+                            value={(() => {
+                              const sh = record.schedulerHours;
+                              if (!sh) return '-';
+                              if (isHod) {
+                                const logged = sh.totalLoggedHours ?? 0;
+                                return logged > 0 ? formatHoursAsHm(logged) : '-';
+                              }
+                              const mine = sh.myLoggedHours ?? 0;
+                              return mine > 0 ? formatHoursAsHm(mine) : '-';
+                            })()}
+                          />
+                          <DetailRow
+                            label="Remaining"
+                            value={(() => {
+                              const sh = record.schedulerHours;
+                              if (!sh) return '-';
+                              const viewerId = _session?.designerId ?? _session?.id ?? null;
+                              const assigned = isHod ? (sh.totalAssignedHours ?? sh.totalHours) : (sh.myAssignedHours ?? sh.myHours);
+                              const logged = isHod ? (sh.totalLoggedHours ?? 0) : (sh.myLoggedHours ?? 0);
+                              if (assigned == null || assigned <= 0) return '-';
+                              const rem = Math.max(0, assigned - logged);
+                              return formatHoursAsHm(rem);
+                            })()}
+                          />
+                          {!isHod && (record.schedulerHours?.myApprovedOvertimeHours ?? 0) > 0 ? (
+                            <DetailRow
+                              label="Approved OT (today)"
+                              value={formatHoursAsHm(record.schedulerHours.myApprovedOvertimeHours)}
+                            />
+                          ) : null}
                         </div>
                         <div className="space-y-0.5">
                           <DetailRow label="Created Date" value={record.created ?? '-'} />
@@ -2108,6 +2211,9 @@ export function TaskDetailsPage() {
                         <ProjectTaskTimer
                           taskId={taskId}
                           taskStatus={taskStatus}
+                          assignedHours={record.schedulerHours?.myAssignedHours ?? record.schedulerHours?.myHours ?? null}
+                          approvedOvertimeHours={record.schedulerHours?.myApprovedOvertimeHours ?? null}
+                          pendingOvertimeHours={record.schedulerHours?.myPendingOvertimeHours ?? null}
                           launchAutostart={launchAutostart}
                           launchPauseModal={launchPauseModal}
                           launchCompleteModal={launchCompleteModal}
@@ -2220,7 +2326,7 @@ export function TaskDetailsPage() {
                               <button type="button" onClick={() => handleStatusChange(record?.holdPreviousStatus || 'HOD_REVIEW')} className="rounded-md bg-violet-600 px-3 py-1.5 text-xs font-semibold text-white hover:bg-violet-700 transition-colors">Resume</button>
                             )}
                             {taskStatus !== 'ON_HOLD' && (
-                              <button type="button" onClick={() => handleStatusChange('ON_HOLD')} className="rounded-md border border-slate-300 bg-white px-3 py-1.5 text-xs font-semibold text-slate-600 hover:bg-slate-50 transition-colors">Put On Hold</button>
+                              <button type="button" onClick={requestHold} disabled={holdImpactChecking} className="rounded-md border border-slate-300 bg-white px-3 py-1.5 text-xs font-semibold text-slate-600 hover:bg-slate-50 transition-colors disabled:opacity-50">Put On Hold</button>
                             )}
                           </div>
                         </div>
@@ -2238,7 +2344,7 @@ export function TaskDetailsPage() {
                               <button type="button" onClick={() => handleStatusChange('CLIENT_ACCEPTED')} className="rounded-md bg-emerald-600 px-3 py-1.5 text-xs font-semibold text-white hover:bg-emerald-700 transition-colors">Client Accepted</button>
                               <button type="button" onClick={() => handleStatusChange('CLIENT_REJECTED')} className="rounded-md bg-rose-600 px-3 py-1.5 text-xs font-semibold text-white hover:bg-rose-700 transition-colors">Client Rejected</button>
                               <button type="button" onClick={() => { setReworkNote(''); setReworkFile(null); setReworkLink({ url: '', name: '' }); setReworkRefMode('file'); setReworkDialogOpen(true); }} className="rounded-md bg-red-500 px-3 py-1.5 text-xs font-semibold text-white hover:bg-red-600 transition-colors">Request Rework</button>
-                              <button type="button" onClick={() => handleStatusChange('ON_HOLD')} className="rounded-md border border-slate-300 bg-white px-3 py-1.5 text-xs font-semibold text-slate-600 hover:bg-slate-50 transition-colors">Put On Hold</button>
+                              <button type="button" onClick={requestHold} disabled={holdImpactChecking} className="rounded-md border border-slate-300 bg-white px-3 py-1.5 text-xs font-semibold text-slate-600 hover:bg-slate-50 transition-colors disabled:opacity-50">Put On Hold</button>
                             </>)}
                             {taskStatus === 'CLIENT_REJECTED' && (
                               <button type="button" onClick={() => { setReworkNote(''); setReworkFile(null); setReworkLink({ url: '', name: '' }); setReworkRefMode('file'); setReworkDialogOpen(true); }} className="rounded-md bg-red-500 px-3 py-1.5 text-xs font-semibold text-white hover:bg-red-600 transition-colors">Issue Rework</button>
@@ -2517,23 +2623,11 @@ export function TaskDetailsPage() {
                     </div>
                   ) : null}
 
-                  {(isCreationRoute || !hasExistingTask) && isRetail ? (
-                    <div className="mt-3 overflow-hidden rounded-md border border-slate-200">
-                      <div className="grid grid-cols-5 bg-slate-100 px-2.5 py-1.5 text-[11px] font-semibold text-slate-600">
-                        <div>Sign Family</div>
-                        <div>Sign Type</div>
-                        <div>Plan Code</div>
-                        <div>Contract Reference</div>
-                        <div>Quantity</div>
-                      </div>
-                      <div className="px-3 py-6 text-center text-xs text-slate-500">No rows yet.</div>
-                    </div>
-                  ) : null}
-
                   {isCreationRoute && projectId ? (
                     <ProjectTaskList
                       tasks={projectTasks}
                       loading={tasksLoading}
+                      isRetail={isRetail}
                       onView={(task) =>
                         router.push(taskViewPathForRecord({ id: task.id, designType: task.designType ?? task.project?.category }))
                       }
@@ -2915,6 +3009,44 @@ export function TaskDetailsPage() {
           type={historyDialog.type}
           onClose={() => setHistoryDialog(null)}
         />
+      )}
+
+      {holdImpact && (
+        <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/40 p-4">
+          <div className="bg-white rounded-xl shadow-xl w-full max-w-md flex flex-col gap-4 p-6">
+            <div>
+              <h2 className="text-sm font-bold text-slate-900">Put task on hold?</h2>
+              <p className="mt-1 text-xs text-slate-500">
+                This removes {holdImpact.partCount} scheduled part{holdImpact.partCount === 1 ? '' : 's'} from the scheduler grid — for every designer below, not just the one you're viewing:
+              </p>
+            </div>
+            <ul className="flex flex-col gap-1 rounded-md border border-slate-200 bg-slate-50 p-3">
+              {holdImpact.designers.map((d) => (
+                <li key={d.designerId} className="flex items-center justify-between text-xs text-slate-700">
+                  <span>{d.designerName}</span>
+                  <span className="text-slate-400">{d.partCount} part{d.partCount === 1 ? '' : 's'}</span>
+                </li>
+              ))}
+            </ul>
+            <p className="text-xs text-slate-500">Resuming later restores the task's status but does not re-schedule these parts — they'll need to be dragged back onto the grid manually.</p>
+            <div className="flex justify-end gap-2">
+              <button
+                type="button"
+                onClick={() => setHoldImpact(null)}
+                className="rounded-md border border-slate-300 bg-white px-3 py-1.5 text-xs font-semibold text-slate-600 hover:bg-slate-50 transition-colors"
+              >
+                Cancel
+              </button>
+              <button
+                type="button"
+                onClick={confirmHold}
+                className="rounded-md bg-amber-600 px-3 py-1.5 text-xs font-semibold text-white hover:bg-amber-700 transition-colors"
+              >
+                Put On Hold
+              </button>
+            </div>
+          </div>
+        </div>
       )}
 
       {reworkDialogOpen && (

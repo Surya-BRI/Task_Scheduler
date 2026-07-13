@@ -6,10 +6,12 @@ import { ChatController } from './chat.controller';
 import { ChatGateway } from './chat.gateway';
 import { ChatService } from './chat.service';
 import { resolveJwtSecret } from '../common/utils/resolve-jwt-secret.util';
+import { DashboardModule } from '../dashboard/dashboard.module';
 
 @Module({
   imports: [
     PrismaModule,
+    DashboardModule,
     ConfigModule,
     JwtModule.registerAsync({
       imports: [ConfigModule],

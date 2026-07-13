@@ -9,8 +9,9 @@ import { CreateOvertimeRequestDto } from './dto/create-overtime-request.dto';
 import { UpdateOvertimeRequestDto } from './dto/update-overtime-request.dto';
 import { ReviewOvertimeRequestDto } from './dto/review-overtime-request.dto';
 import { Decimal } from '@prisma/client/runtime/library';
+import { utcDateOnlyString } from '../common/utils/date-window.util';
 
-const todayOtDate = () => new Date().toISOString().split('T')[0];
+const todayOtDate = () => utcDateOnlyString();
 
 describe('OvertimeRequestsService', () => {
   let service: OvertimeRequestsService;
@@ -558,6 +559,7 @@ describe('OvertimeRequestsService', () => {
       const mockRequest = {
         id: 'r1',
         designerId: 'd1',
+        taskId: 't1',
         status: 'DRAFT',
         designer: { id: 'd1', fullName: 'Designer 1', email: 'd1@x.com', departmentId: 'dept1' },
         task: { id: 't1', title: 'Task 1', taskNo: 'T-001' },
@@ -569,6 +571,8 @@ describe('OvertimeRequestsService', () => {
       mockPrismaService.overtimeRequest.findUnique.mockResolvedValue(mockRequest);
       mockPrismaService.overtimeRequest.update.mockResolvedValue({ ...mockRequest, status: 'SUBMITTED' });
       mockPrismaService.user.findMany.mockResolvedValue([{ id: 'h1', fullName: 'HOD 1' }]);
+      mockPrismaService.schedulerAssignment.findFirst.mockResolvedValue({ id: 'assign-1' });
+      mockPrismaService.leaveRequest.findMany.mockResolvedValue([]);
 
       const result = await service.submit('r1', 'd1');
       expect(result.status).toBe('SUBMITTED');

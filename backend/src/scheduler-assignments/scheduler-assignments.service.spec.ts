@@ -16,7 +16,7 @@ describe('SchedulerAssignmentsService', () => {
   });
 
   const prisma: any = {
-    schedulerAssignment: { findMany: jest.fn(), update: jest.fn(), deleteMany: jest.fn(), createMany: jest.fn(), groupBy: jest.fn() },
+    schedulerAssignment: { findMany: jest.fn(), update: jest.fn(), deleteMany: jest.fn(), createMany: jest.fn(), groupBy: jest.fn(), create: jest.fn() },
     taskDesigner: { deleteMany: jest.fn(), createMany: jest.fn() },
     overtimeRequest: { findMany: jest.fn() },
     leaveRequest: { findMany: jest.fn() },
@@ -73,6 +73,7 @@ describe('SchedulerAssignmentsService', () => {
     prisma.$executeRaw.mockResolvedValue(1);
     prisma.$executeRawUnsafe.mockResolvedValue(undefined);
     prisma.$transaction.mockImplementation((cb: (tx: any) => Promise<unknown>) => cb(prisma));
+    notificationsService.create.mockResolvedValue({});
     await service.onModuleInit();
   });
 
@@ -764,5 +765,205 @@ describe('SchedulerAssignmentsService', () => {
         }),
       }),
     );
+  });
+
+  describe('clearTaskSchedule', () => {
+    it('deletes unconditionally when no expectedAssignmentIds given (back-compat)', async () => {
+      await service.clearTaskSchedule('task-1');
+
+      expect(prisma.schedulerAssignment.findMany).not.toHaveBeenCalled();
+      expect(prisma.schedulerAssignment.deleteMany).toHaveBeenCalledWith({
+        where: { taskId: 'task-1', weekStartDate: { gte: expect.any(Date) } },
+      });
+    });
+
+    it('proceeds when every live row is in expectedAssignmentIds', async () => {
+      prisma.schedulerAssignment.findMany.mockResolvedValue([{ id: 'row-a' }, { id: 'row-b' }]);
+
+      await service.clearTaskSchedule('task-1', ['row-a', 'row-b']);
+
+      expect(prisma.schedulerAssignment.deleteMany).toHaveBeenCalledWith({
+        where: { taskId: 'task-1', weekStartDate: { gte: expect.any(Date) } },
+      });
+    });
+
+    it('rejects and does not delete when a live row is outside expectedAssignmentIds', async () => {
+      // Simulates a sibling scheduled in a week the caller never loaded, created after its last reload.
+      prisma.schedulerAssignment.findMany.mockResolvedValue([{ id: 'row-a' }, { id: 'row-unknown' }]);
+
+      await expect(
+        service.clearTaskSchedule('task-1', ['row-a']),
+      ).rejects.toThrow('Another scheduled part of this task changed');
+
+      expect(prisma.schedulerAssignment.deleteMany).not.toHaveBeenCalled();
+    });
+  });
+
+  describe('saveWeekSnapshot — cross-week overflow placement', () => {
+    const DESIGNER_ID = 'cccccccc-cccc-4ccc-8ccc-cccccccccccc';
+    const TASK_ID = '79bde5e5-d694-4728-88ab-33d71f238e11';
+    const HOD_ID = 'hod-1';
+    // 2026-07-06 is a Monday; 2026-07-13 (the following Monday) is the first overflow candidate.
+
+    function mockQueryRaw(weekVersion = 0, holidayDates: string[] = []) {
+      prisma.$queryRaw.mockImplementation((strings: TemplateStringsArray) => {
+        const sql = strings.join('?');
+        if (sql.includes('ErpTSHoliday')) {
+          return Promise.resolve(holidayDates.map((date) => ({ date })));
+        }
+        if (sql.includes('ErpTSSchedulerWeek')) {
+          return Promise.resolve([
+            { id: 'week-row', version: weekVersion, isLocked: false, lastPayloadHash: null, updatedAt: new Date(), updatedBy: null },
+          ]);
+        }
+        return Promise.resolve([]);
+      });
+    }
+
+    beforeEach(() => {
+      prisma.user.findMany.mockResolvedValue([{ id: DESIGNER_ID, fullName: 'Alex Johnson' }]);
+      prisma.task.findMany.mockResolvedValue([
+        { id: TASK_ID, status: 'DESIGN_PLANNED', assigneeId: DESIGNER_ID, projectId: null, project: null },
+      ]);
+      prisma.schedulerWeek.findUnique.mockResolvedValue({ version: 1 });
+      prisma.schedulerWeek.update.mockResolvedValue({
+        version: 1,
+        isLocked: false,
+        updatedAt: new Date('2026-07-06T01:00:00.000Z'),
+        updatedBy: HOD_ID,
+      });
+      prisma.schedulerAssignment.create.mockResolvedValue({});
+      mockQueryRaw(0, []);
+    });
+
+    it('places overflow on the next available day when it does not fit this week', async () => {
+      // Live capacity check for the destination day — nothing else scheduled, full room.
+      prisma.schedulerAssignment.findMany.mockImplementation(({ where, select }: any) => {
+        if (where?.dayIndex !== undefined && select?.assignedHours) return Promise.resolve([]);
+        return Promise.resolve([]);
+      });
+
+      const result = await service.saveWeekSnapshot('2026-07-06', HOD_ID, {
+        version: 0,
+        assignments: [
+          {
+            designerId: DESIGNER_ID, taskId: TASK_ID, dayIndex: 4, assignedHours: 1.67,
+            parentId: TASK_ID, splitIndex: 1, totalParts: 2,
+          },
+        ],
+        overflow: [{ designerId: DESIGNER_ID, taskId: TASK_ID, hours: 0.33 }],
+      } as any);
+
+      expect(prisma.schedulerAssignment.create).toHaveBeenCalledWith({
+        data: expect.objectContaining({
+          designerId: DESIGNER_ID,
+          taskId: TASK_ID,
+          dayIndex: 0,
+          weekStartDate: new Date('2026-07-13T00:00:00.000Z'),
+          parentId: TASK_ID,
+        }),
+      });
+      expect(prisma.schedulerWeek.upsert).toHaveBeenCalledWith(
+        expect.objectContaining({ where: { weekStartDate: new Date('2026-07-13T00:00:00.000Z') } }),
+      );
+      expect(result.overflowPlacements).toEqual([
+        expect.objectContaining({ weekStart: '2026-07-13', dayIndex: 0, hours: 0.33, taskId: TASK_ID, designerId: DESIGNER_ID }),
+      ]);
+      expect(result.unplacedOverflow).toEqual([]);
+    });
+
+    it('splits overflow across multiple days when one day is not enough', async () => {
+      // First candidate day (Mon 07-13) already has 7h used — only 1h of room; the rest (1h) must roll to Tuesday.
+      prisma.schedulerAssignment.findMany.mockImplementation(({ where, select }: any) => {
+        if (where?.dayIndex !== undefined && select?.assignedHours) {
+          const isMonday = where.dayIndex === 0;
+          return Promise.resolve(isMonday ? [{ assignedHours: 7 }] : []);
+        }
+        return Promise.resolve([]);
+      });
+
+      const result = await service.saveWeekSnapshot('2026-07-06', HOD_ID, {
+        version: 0,
+        assignments: [
+          { designerId: DESIGNER_ID, taskId: TASK_ID, dayIndex: 4, assignedHours: 8, parentId: TASK_ID, splitIndex: 1, totalParts: 2 },
+        ],
+        overflow: [{ designerId: DESIGNER_ID, taskId: TASK_ID, hours: 2 }],
+      } as any);
+
+      expect(result.overflowPlacements).toEqual([
+        expect.objectContaining({ weekStart: '2026-07-13', dayIndex: 0, hours: 1 }),
+        expect.objectContaining({ weekStart: '2026-07-13', dayIndex: 1, hours: 1 }),
+      ]);
+      expect(result.unplacedOverflow).toEqual([]);
+    });
+
+    it('skips weekends and holidays when finding a day', async () => {
+      // Block Mon 07-13 with a holiday so the first real candidate is Tue 07-14.
+      mockQueryRaw(0, ['2026-07-13']);
+      prisma.schedulerAssignment.findMany.mockImplementation(({ where, select }: any) => {
+        if (where?.dayIndex !== undefined && select?.assignedHours) return Promise.resolve([]);
+        return Promise.resolve([]);
+      });
+
+      const result = await service.saveWeekSnapshot('2026-07-06', HOD_ID, {
+        version: 0,
+        assignments: [
+          { designerId: DESIGNER_ID, taskId: TASK_ID, dayIndex: 4, assignedHours: 1, parentId: TASK_ID, splitIndex: 1, totalParts: 2 },
+        ],
+        overflow: [{ designerId: DESIGNER_ID, taskId: TASK_ID, hours: 1 }],
+      } as any);
+
+      expect(result.overflowPlacements).toEqual([
+        expect.objectContaining({ weekStart: '2026-07-13', dayIndex: 1 }),
+      ]);
+    });
+
+    it('reports unplaced hours instead of dropping them when no capacity is found within the lookahead bound', async () => {
+      // Every candidate day reports full capacity already used.
+      prisma.schedulerAssignment.findMany.mockImplementation(({ where, select }: any) => {
+        if (where?.dayIndex !== undefined && select?.assignedHours) return Promise.resolve([{ assignedHours: 8 }]);
+        return Promise.resolve([]);
+      });
+
+      const result = await service.saveWeekSnapshot('2026-07-06', HOD_ID, {
+        version: 0,
+        assignments: [
+          { designerId: DESIGNER_ID, taskId: TASK_ID, dayIndex: 4, assignedHours: 1, parentId: TASK_ID, splitIndex: 1, totalParts: 2 },
+        ],
+        overflow: [{ designerId: DESIGNER_ID, taskId: TASK_ID, hours: 1 }],
+      } as any);
+
+      expect(result.overflowPlacements).toEqual([]);
+      expect(result.unplacedOverflow).toEqual([
+        expect.objectContaining({ taskId: TASK_ID, designerId: DESIGNER_ID, hours: 1 }),
+      ]);
+      expect(prisma.schedulerAssignment.create).not.toHaveBeenCalled();
+    });
+
+    it('live-checks the destination day rather than trusting a stale assumption', async () => {
+      // Simulates a concurrent change: the destination day already has 7.7h used by the time
+      // this transaction actually reads it, leaving only 0.3h of real room.
+      prisma.schedulerAssignment.findMany.mockImplementation(({ where, select }: any) => {
+        if (where?.dayIndex !== undefined && select?.assignedHours) {
+          const isMonday = where.dayIndex === 0;
+          return Promise.resolve(isMonday ? [{ assignedHours: 7.7 }] : []);
+        }
+        return Promise.resolve([]);
+      });
+
+      const result = await service.saveWeekSnapshot('2026-07-06', HOD_ID, {
+        version: 0,
+        assignments: [
+          { designerId: DESIGNER_ID, taskId: TASK_ID, dayIndex: 4, assignedHours: 1, parentId: TASK_ID, splitIndex: 1, totalParts: 2 },
+        ],
+        overflow: [{ designerId: DESIGNER_ID, taskId: TASK_ID, hours: 1 }],
+      } as any);
+
+      // 0.3h fits Monday (live capacity, not the naive assumption of a full 8h day), remaining 0.7h rolls to Tuesday.
+      expect(result.overflowPlacements).toEqual([
+        expect.objectContaining({ weekStart: '2026-07-13', dayIndex: 0, hours: 0.3 }),
+        expect.objectContaining({ weekStart: '2026-07-13', dayIndex: 1, hours: 0.7 }),
+      ]);
+    });
   });
 });
