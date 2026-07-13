@@ -1,4 +1,5 @@
 export interface ScheduledTaskItem {
+  id: string;
   taskNo: string;
   title: string;
   projectName: string;
@@ -7,18 +8,22 @@ export interface ScheduledTaskItem {
   assigneeName: string;
   assigneeInitials: string;
   dueDate: string | null;
+  linkUrl: string;
 }
 
 export interface CompletedTaskItem {
+  id: string;
   taskNo: string;
   title: string;
   projectName: string;
   designType: string | null;
   revisionCode: string | null;
   completedAt: string | null;
+  linkUrl: string;
 }
 
 export interface OnHoldTaskItem {
+  id: string;
   taskNo: string;
   title: string;
   projectName: string;
@@ -26,6 +31,9 @@ export interface OnHoldTaskItem {
   revisionCode: string | null;
   holdDate: string | null;
   reason: string | null;
+  /** Distinguishes whole-task vs fragment rows for list keys */
+  rowKey?: string;
+  linkUrl: string;
 }
 
 export interface ReallocatedTaskItem {
@@ -37,6 +45,18 @@ export interface ReallocatedTaskItem {
   fromAssigneeName: string | null;
   newAssigneeName: string;
   reassignedAt: string;
+}
+
+export interface ReworkTaskItem {
+  id: string;
+  taskNo: string;
+  title: string;
+  projectName: string;
+  designType: string | null;
+  revisionCode: string | null;
+  updatedAt: string | null;
+  assigneeName: string | null;
+  linkUrl: string;
 }
 
 export interface InboxItem {
@@ -67,13 +87,16 @@ export interface ProjectsOverviewResponseDto {
   scheduledTasks: ScheduledTaskItem[];
   completedTasks: CompletedTaskItem[];
   onHoldTasks: OnHoldTaskItem[];
+  /** @deprecated UI removed — always empty */
   reallocatedTasks: ReallocatedTaskItem[];
+  reworkTasks: ReworkTaskItem[];
   inbox: InboxItem[];
   summary: {
     total: number;
     active: number;
     onHold: number;
     completed: number;
+    reworkCount: number;
     onTimePct: number;
     reallocatedPct: number;
     donut: {

@@ -86,8 +86,6 @@ const DEFAULT_STATS = {
   monthlyHourCount: 0,
   score: 0,
   pendingRegularization: 0,
-  xp: 0,
-  streak: 0,
 };
 
 const EMPTY_OT_FORM = {
@@ -165,8 +163,6 @@ function computeStatsFromTasks(tasks) {
     monthlyTaskCount: thisMonthCompleted.length,
     monthlyHourCount: thisMonthCompleted.reduce((acc, t) => acc + taskHours(t), 0),
     score,
-    xp: 0,
-    streak: 0,
   };
 }
 

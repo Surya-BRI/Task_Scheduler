@@ -168,6 +168,10 @@ function normalizePostType(raw: string | null | undefined): string {
   const lower = t.toLowerCase();
   if (lower.includes('task') && lower.includes('update')) return 'Task Updates';
   if (lower.includes('private')) return 'Private';
+  if (lower === 'client_reject' || lower === 'client-reject' || lower === 'client rejected') {
+    return 'CLIENT_REJECT';
+  }
+  if (lower === 'rework') return 'REWORK';
   return t;
 }
 
@@ -178,12 +182,17 @@ function isGenericTaskReference(value: string): boolean {
 function resolveDisplayTitle(dto: ChatterPostDto): string {
   const listing = dto.listingLabel?.trim();
   if (listing) return listing;
+  const title = dto.title?.trim() ?? '';
+  const isGenericTitle =
+    !title ||
+    title.toLowerCase() === 'chatter post' ||
+    isGenericTaskReference(title);
+  // Prefer the author's title so Create Post does not get overwritten by OP/task name.
+  if (title && !isGenericTitle) return title;
   const taskOp = dto.taskOpNo?.trim() || dto.taskName?.trim() || '';
   if (dto.taskId && taskOp && !isGenericTaskReference(taskOp)) return taskOp;
   const projectNo = dto.projectNo?.trim();
   if (projectNo) return projectNo;
-  const title = dto.title?.trim() ?? '';
-  if (title && title.toLowerCase() !== 'chatter post' && !isGenericTaskReference(title)) return title;
   return title || taskOp || '(No title)';
 }
 

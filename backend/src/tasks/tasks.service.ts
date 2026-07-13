@@ -1885,7 +1885,7 @@ export class TasksService {
           data: {
             taskId: id,
             title: 'Rework Instructions',
-            message: `Rework Required:\n\n${note}`,
+            message: `Rework Required:\n${note}`,
             postType: 'REWORK',
             authorId: userId,
           },
@@ -2071,8 +2071,8 @@ export class TasksService {
         data: {
           taskId: result.id,
           title: 'Client Reject Instructions',
-          message: `Client Rejected — next revision:\n\n${note}`,
-          postType: 'REWORK',
+          message: `Client Rejected — next revision:\n${note}`,
+          postType: 'CLIENT_REJECT',
           authorId: userId,
         },
       }).catch((err) => this.logger.error('Failed to create client-reject chatter post', err));

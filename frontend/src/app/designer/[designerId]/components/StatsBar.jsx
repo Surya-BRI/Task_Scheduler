@@ -1,10 +1,9 @@
 "use client";
-import { Flame, Star } from "lucide-react";
 import { useRouter } from "next/navigation";
 
 export default function StatsBar({ stats, isDesignerMode = true, isHOD = false, isViewingOther = false }) {
   const router = useRouter();
-  const { workLoad, workTill, monthlyTaskCount, monthlyHourCount, score, pendingRegularization, xp, streak } = stats;
+  const { workLoad, workTill, monthlyTaskCount, monthlyHourCount, score, pendingRegularization } = stats;
 
   return (
     <div className="bg-white border-b border-slate-200 flex items-center flex-wrap gap-x-6 gap-y-1 px-6 py-2 text-xs shrink-0">
@@ -85,20 +84,6 @@ export default function StatsBar({ stats, isDesignerMode = true, isHOD = false, 
           </span>
         </div>
       )}
-
-      <div className="h-4 w-px bg-slate-200 hidden sm:block" />
-
-      {/* XP + Streak */}
-      <div className="flex items-center gap-2">
-        <div className="flex items-center gap-1">
-          <Star className="h-3.5 w-3.5 text-yellow-400 fill-yellow-400" />
-          <span className="font-bold text-slate-800">+{xp} XP!</span>
-        </div>
-        <div className="flex items-center gap-1">
-          <Flame className="h-3.5 w-3.5 text-orange-500" />
-          <span className="font-semibold text-slate-700">{streak} days streak</span>
-        </div>
-      </div>
     </div>
   );
 }

@@ -806,6 +806,13 @@ function mapTaskToRecord(task) {
     designers: task.designers ?? '',
     assignedTo: task.assignee?.fullName
       || (task.taskDesigners?.length > 0 ? task.taskDesigners.map(d => d.designer.fullName).join(', ') : 'Unassigned'),
+    assigneeId: task.assigneeId ?? task.assignee?.id ?? null,
+    assignedDesignerIds: [
+      task.assigneeId ?? task.assignee?.id ?? null,
+      ...(Array.isArray(task.taskDesigners)
+        ? task.taskDesigners.map((d) => d.designerId ?? d.designer?.id ?? null)
+        : []),
+    ].filter(Boolean),
     projectDetails: task.projectDetails ?? [],
     disciplineType: task.disciplineType ?? null,
     signType: task.signType ?? null,
@@ -1307,14 +1314,33 @@ export function TaskDetailsPage() {
   const isTerminalStatus = taskStatus === 'CLIENT_ACCEPTED' || taskStatus === 'CLIENT_REJECTED'
   const isPostSubmitStatus = ['DESIGN_COMPLETED', 'HOD_REVIEW', 'SALES_REVIEW', 'REWORK', 'CLIENT_ACCEPTED', 'CLIENT_REJECTED', 'ON_HOLD'].includes(taskStatus)
   const TIMER_ACTIVE_STATUSES = ['DESIGN_PLANNED', 'IN_PROGRESS', 'REWORK']
-  const showTimer = !isCreationRoute && hasExistingTask && Boolean(taskId) && TIMER_ACTIVE_STATUSES.includes(taskStatus) && (from === 'designer-queue' || from === 'designer-design-list')
   const _session = getSession()
-  const isHod = hasHodWorkflowAccess(_session?.role ?? '')
-  const isSales = _session?.role === 'SALESPERSON'
-  const isAdmin = _session?.role === 'ADMIN'
+  const sessionUserId = String(_session?.id ?? '').trim()
+  // HOD uses one login (no separate designer account). If they scheduled the task
+  // to themselves, show the work timer from any entry point (incl. master scheduler).
+  const isAssignedToMe = Boolean(
+    sessionUserId &&
+    (
+      String(record?.assigneeId ?? '') === sessionUserId ||
+      (Array.isArray(record?.assignedDesignerIds) &&
+        record.assignedDesignerIds.some((id) => String(id) === sessionUserId))
+    ),
+  )
+  const canUseWorkTimer =
+    from === 'designer-queue' ||
+    from === 'designer-design-list' ||
+    isAssignedToMe
+  const showTimer = !isCreationRoute && hasExistingTask && Boolean(taskId) && TIMER_ACTIVE_STATUSES.includes(taskStatus) && canUseWorkTimer
+  const sessionRole = String(_session?.role ?? '')
+  const isHod = hasHodWorkflowAccess(sessionRole)
+  const isSales = sessionRole === 'SALESPERSON'
+  const isAdmin = sessionRole === 'ADMIN'
   const canSalesReview = isSales || isAdmin
-  const isDesigner = _session?.role === 'DESIGNER'
-  const isDesignerWorkMode = isDesigner || (isHod && from === FROM_DESIGNER_QUEUE)
+  const isDesigner = sessionRole === 'DESIGNER'
+  // HOD has a single login: keep Move Status (Start HOD Review, etc.) even when the
+  // task was opened from the personal designer dashboard (from=designer-queue).
+  const isDesignerWorkMode =
+    isDesigner || (isHod && sessionRole !== 'HOD' && from === FROM_DESIGNER_QUEUE)
   const isHodManagementMode = isHod && !isDesignerWorkMode
   const normalizedQsStatus = String(qsStatus?.status ?? '').trim().toLowerCase()
   const isQsCompleted = normalizedQsStatus === 'completed'
