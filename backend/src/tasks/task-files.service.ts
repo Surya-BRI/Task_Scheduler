@@ -14,7 +14,10 @@ type UploadResult = {
   fileName: string;
   mimeType: string;
   size: number;
+  /** Presigned read URL (usable immediately). Persist `key` long-term, not this URL. */
   url: string;
+  fileUrl: string;
+  signedUrl: string;
 };
 
 @Injectable()
@@ -102,7 +105,7 @@ export class TaskFilesService {
         }),
       );
 
-      const url = `https://${this.bucket}.s3.${this.region}.amazonaws.com/${key}`;
+      const signedUrl = await this.createSignedReadUrl(key);
       this.logger.log(
         `Upload success: name=${originalName} key=${key} bytes=${byteLength} ContentType=${head.ContentType ?? resolvedMime} S3 Length=${head.ContentLength ?? 'n/a'} ETag=${putResult.ETag ?? 'n/a'}`,
       );
@@ -112,7 +115,10 @@ export class TaskFilesService {
         fileName: originalName,
         mimeType: resolvedMime,
         size: byteLength,
-        url,
+        // Signed (usable) URL for immediate open; persist `key` in DB, not this URL.
+        url: signedUrl,
+        fileUrl: signedUrl,
+        signedUrl,
       };
     } catch (error) {
       if (error instanceof BadRequestException) {

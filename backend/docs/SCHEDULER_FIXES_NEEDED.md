@@ -87,52 +87,85 @@ Architectural/scalability items found while investigating [SCHEDULER_DISAPPEARIN
 
 ---
 
+### 10. False-positive conflict from stale `assignmentRowId`
+
+**Was:** `assignmentRowId` on frontend task objects was populated only from the initial ERP week load and never refreshed after save. Every save does `deleteMany` + `createMany`, which replaces assignment row ids. Same-session Unassign/Hold then sent a stale or empty `expectedAssignmentIds` set (and empty `[]` still opted into the guard because it is truthy in JS), so the backend rejected with a false "Another scheduled part of this task changed" conflict.
+
+**Fix:**
+- After each successful week save, map returned assignment row ids back onto matching frontend cards (`applyAssignmentMetaFromRows`) and update a synchronous `assignmentRowIdByFrontendIdRef` so Unassign/Hold does not race React state.
+- Rebuild that ref on week reload from ERP.
+- Omit `expectedAssignmentIds` entirely when no reliable ids are known (`clearTaskFromSchedule` treats empty arrays as omit).
+
+**Files:**
+- `frontend/src/features/scheduler/components/DesignSchedulerScreen.jsx`
+- `frontend/src/features/scheduler/services/scheduler-assignments.api.ts`
+
+---
+
+### 9. Stale-consolidation guard's `tasks.service.ts` path is transactional
+
+**Was:** `SchedulerAssignmentsService.clearTaskSchedule` wraps its expected-ids check and the delete in one `$transaction`. `TasksService.updateStatus`'s equivalent ON_HOLD guard did not — the `findMany` check, `task.update()`, and the later unconditional `schedulerAssignment.deleteMany` were three separate, non-transactional Prisma calls. A sibling assignment created in that window could still be silently deleted even though the guard "passed."
+
+**Fix:** ON_HOLD path now runs the optional expected-ids check, `task.update`, and `schedulerAssignment.deleteMany` inside a single `$transaction`, matching `clearTaskSchedule`.
+
+**Files:**
+- `backend/src/tasks/tasks.service.ts` — `updateStatus` ON_HOLD path
+
+---
+
+### 6. SchedulerAssignmentHistory retention purge
+
+**Was:** every week save appended a before/after JSON snapshot to `SchedulerAssignmentHistory` forever — no cron, no archival, no delete.
+
+**Before example:** after a year of daily HOD edits, the history table keeps growing without bound (millions of large JSON rows).
+
+**Fix:** daily cron (`15 3 * * *` UTC) deletes rows older than `SCHEDULER_HISTORY_RETENTION_MONTHS` (default **18**). Set to `0` to disable. Index `IX_ErpTSSchedulerAssignmentHistory_createdAt` supports the purge.
+
+**After example:** on 14 Jul 2027, rows with `createdAt` before 14 Jan 2026 are deleted overnight; recent months stay available for incremental concurrent-edit merge.
+
+**Files:**
+- `backend/src/scheduler-assignments/scheduler-assignments.service.ts` — `purgeExpiredAssignmentHistory` + cron
+- `backend/prisma/schema.prisma` / `prisma/sql/add-scheduler-history-createdAt-index.sql`
+- `backend/.env.example` — `SCHEDULER_HISTORY_RETENTION_MONTHS`
+
+---
+
+### 7. Incremental week saves (not full-board replace on every edit)
+
+**Was (original gap):** every `PUT` rewrote *all* assignments for the week (`deleteMany` + `createMany`), so two HODs editing different tasks on the same week collided on version and one lost their work.
+
+**Before example:** Alex moves Task A; Ben moves Task B at the same time → version conflict → Ben must refresh and redo, even though the tasks never overlapped.
+
+**Fix (already in place; tightened here):**
+- Frontend sends `affectedTaskIds` + only those assignment rows.
+- Backend replaces only those task rows; if versions differ but history shows no overlapping task ids, the save merges.
+- **New:** no-op flushes (nothing moved, no overflow/fragments) skip the PUT entirely — no accidental full-week rewrite.
+
+**After example:** Alex saves Task A (incremental). Ben’s Task B save sees a newer week version but history proves Task B was untouched → Ben’s save succeeds without refresh.
+
+**Files:**
+- `frontend/.../DesignSchedulerScreen.jsx` — `computeAffectedTaskIds`, no-op skip
+- `backend/.../scheduler-assignments.service.ts` — `isIncrementalSave` / overlap merge
+
+---
+
+### 8. Cross-week split-index recompute is time-bounded
+
+**Was:** renumbering split parts queried *every* `SchedulerAssignment` row for that task across all weeks forever.
+
+**Before example:** a task last touched in 2023 still forces a full historical scan on every 2026 save that mentions it.
+
+**Fix:** only peer parts within ±`SCHEDULER_SPLIT_RECOMPUTE_WEEK_WINDOW` weeks (default **26**, ~6 months each side) are loaded for renumbering.
+
+**After example:** saving July 2026 only considers peers roughly Jan 2026–Jan 2027; older dormant weeks are ignored.
+
+**Files:**
+- `backend/src/scheduler-assignments/scheduler-assignments.service.ts` — `splitRecomputeWeekBounds`
+- `backend/src/config/configuration.ts` — `scheduler.splitRecomputeWeekWindow`
+
+---
+
 ## Not yet done
-
-### 6. No retention/purge policy for `SchedulerAssignmentHistory`
-
-Every save writes a full before/after JSON snapshot to `SchedulerAssignmentHistory`, forever. No cron job, no archival, no deletion.
-
-**Fix:** a scheduled delete of rows older than N months. Technically simple — the blocker is that the retention period is a business/compliance decision (audit requirements may dictate a minimum retention), not something to pick unilaterally. Needs an answer from whoever owns audit/compliance requirements before writing the actual query.
-
----
-
-### 7. Whole-week replace instead of incremental/per-cell saves
-
-`saveWeekSnapshot` (`scheduler-assignments.service.ts`) does a full `deleteMany` + `createMany` of *all* assignments for the week on every single `PUT`, even when only one task moved. Combined with the optimistic-concurrency version check, this means:
-
-- Two people editing the *same week* concurrently will hit version conflicts more often as more people edit it at once.
-- Every conflict discards the loser's edit entirely and forces a reload + redo — not a merge.
-
-This doesn't scale past a handful of people actively editing the same week simultaneously. Fixing it means moving to per-cell/incremental saves — a genuine architecture change to the core save path, not a small patch. Worth doing if concurrent same-week editing becomes a frequent pain point in practice.
-
----
-
-### 8. Cross-week split-index recompute has no time bound
-
-The recompute in `saveWeekSnapshot` (for tasks split across weeks) queries `SchedulerAssignment` for a task across *every week that ever existed*. It's now backed by an index (`IX_ErpTSSchedulerAssignment_task_week`, added during the disappearing-tasks investigation), so it's an efficient seek rather than a scan — but it's still unbounded by time range. As total history grows over years, this specific query's cost grows with it.
-
-**Fix:** bound the lookback/lookahead to a rolling window of weeks instead of "all time," if/when history actually grows large enough for this to matter. Low urgency now that it's indexed.
-
----
-
-### 9. Stale-consolidation guard's `tasks.service.ts` path isn't transactional
-
-`SchedulerAssignmentsService.clearTaskSchedule` wraps its expected-ids check and the delete in one `$transaction`. `TasksService.updateStatus`'s equivalent ON_HOLD guard does not — the `findMany` check, `task.update()`, and the later unconditional `schedulerAssignment.deleteMany` are three separate, non-transactional Prisma calls. A sibling assignment created in that window would still be silently deleted even though the guard "passed," despite both implementations' doc comments claiming the check happens "before mutating anything."
-
-**Fix:** wrap `updateStatus`'s ON_HOLD guard check and the scheduler-assignment delete in a single `$transaction`, matching `clearTaskSchedule`.
-
----
-
-### 10. Possible false-positive conflict from stale `assignmentRowId`
-
-`assignmentRowId` on frontend task objects is populated only from the initial per-page ERP load (`buildSchedulerStateFromErpAssignments`) and is never refreshed afterward — but every save does `deleteMany` + `createMany`, which replaces assignment row ids. A task touched by even one prior save in the current browser session therefore has a stale or empty `assignmentRowId`. Since `expectedAssignmentIds` is derived from it and an empty array (`[]`) is still truthy in JS, the guard is never actually skipped for such a task — it's sent as a present-but-stale/empty expected set, and the backend then rejects the delete for any live row it finds (normally the very row being cleared), throwing a false "Another scheduled part of this task changed" conflict.
-
-**Reproduction:** drag a task onto the grid, let it save, then (same session, no page reload) drag that same task to Unassigned or On Hold.
-
-**Fix:** refresh `assignmentRowId` from each save's response instead of relying on the initial ERP-load snapshot; alternatively, have the frontend omit `expectedAssignmentIds` entirely (rather than sending `[]`) whenever it has no reliable ids for a task.
-
----
 
 ### 11. `placeOverflowCapacity` doesn't check the destination week's lock state
 

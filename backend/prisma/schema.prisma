@@ -168,11 +168,11 @@ model Task {
   completedAt        DateTime?
   holdPreviousStatus String?   @db.NVarChar(50)
 
-  // Rework context — populated on the NEW revision task when rework is issued
+  // Rework context — populated when rework/client-reject instructions are issued
   reworkNote             String?  @db.NVarChar(Max)
-  reworkAttachmentUrl    String?  @db.NVarChar(500)
+  reworkAttachmentUrl    String?  @db.NVarChar(2000)
   reworkAttachmentName   String?  @db.NVarChar(255)
-  reworkLinkUrl          String?  @db.NVarChar(500)
+  reworkLinkUrl          String?  @db.NVarChar(2000)
   reworkLinkName         String?  @db.NVarChar(255)
   previousRevisionTaskId String?  @db.NVarChar(36)
 
@@ -696,6 +696,7 @@ model SchedulerAssignmentHistory {
   createdAt     DateTime @default(now())
 
   @@index([weekStartDate])
+  @@index([createdAt], name: "IX_ErpTSSchedulerAssignmentHistory_createdAt")
   @@map("ErpTSSchedulerAssignmentHistory")
 }
 

@@ -70,6 +70,8 @@ export default () => {
     },
     scheduler: {
       splitRecomputeWeekWindow: Number(process.env.SCHEDULER_SPLIT_RECOMPUTE_WEEK_WINDOW ?? 26),
+      /** Months to retain SchedulerAssignmentHistory rows; 0 disables the daily purge cron. */
+      historyRetentionMonths: Number(process.env.SCHEDULER_HISTORY_RETENTION_MONTHS ?? 18),
     },
   };
 };

@@ -135,8 +135,12 @@ export function unlockSchedulerWeek(weekStart: string) {
  * a week the caller never loaded — instead of silently deleting it.
  */
 export function clearTaskFromSchedule(taskId: string, expectedAssignmentIds?: string[]) {
-  const q = expectedAssignmentIds
-    ? `?expectedAssignmentIds=${encodeURIComponent(expectedAssignmentIds.join(','))}`
+  // Empty arrays must be treated as "omit guard" — `[]` is truthy and would send
+  // `?expectedAssignmentIds=`, which the backend interprets as an empty expected set
+  // and then rejects any live row (false "Another scheduled part changed").
+  const ids = (expectedAssignmentIds ?? []).map((id) => String(id ?? '').trim()).filter(Boolean);
+  const q = ids.length > 0
+    ? `?expectedAssignmentIds=${encodeURIComponent(ids.join(','))}`
     : '';
   return apiClient.delete(`/scheduler-assignments/task/${encodeURIComponent(taskId)}${q}`);
 }

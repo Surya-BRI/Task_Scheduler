@@ -136,7 +136,7 @@ export class ProjectsController {
   }
 
   @Get(':id/qs-status')
-  @Roles(UserRole.HOD, UserRole.QS)
+  @Roles(UserRole.HOD, UserRole.DESIGNER, UserRole.SALESPERSON, UserRole.QS)
   getQsStatus(@Param('id') id: string, @CurrentUser() user: JwtPayload) {
     return this.projectsService.getQsStatus(id, user.sub, user.role);
   }

@@ -1,9 +1,10 @@
 ﻿"use client";
 
-import { useEffect, useMemo, useState } from "react";
+import { useEffect, useMemo, useRef, useState } from "react";
 import { useRouter } from "next/navigation";
 import {
-  Calendar,
+  Check,
+  ChevronDown,
   Clock,
   Eye,
   Filter,
@@ -78,8 +79,16 @@ function truncateText(value, max = 20) {
   return `${text.slice(0, max)}...`;
 }
 
+const TYPE_OPTIONS = [
+  { value: "", label: "All Types" },
+  { value: "Retail", label: "Retail" },
+  { value: "Project", label: "Project" },
+];
+
 const Toolbar = ({ viewMode, setViewMode, filters, setFilters, salesPersons }) => {
   const [showFilters, setShowFilters] = useState(false);
+  const [typeMenuOpen, setTypeMenuOpen] = useState(false);
+  const filtersPanelRef = useRef(null);
   const activeCount = [
     filters.type,
     filters.status,
@@ -91,6 +100,29 @@ const Toolbar = ({ viewMode, setViewMode, filters, setFilters, salesPersons }) =
     "DESIGN_NEW", "DESIGN_PLANNED", "IN_PROGRESS", "DESIGN_COMPLETED",
     "HOD_REVIEW", "SALES_REVIEW", "REWORK", "CLIENT_ACCEPTED", "CLIENT_REJECTED", "ON_HOLD",
   ];
+  const selectedTypeLabel = TYPE_OPTIONS.find((o) => o.value === filters.type)?.label ?? "All Types";
+
+  useEffect(() => {
+    if (!showFilters) return undefined;
+    const onPointerDown = (event) => {
+      if (filtersPanelRef.current && !filtersPanelRef.current.contains(event.target)) {
+        setShowFilters(false);
+        setTypeMenuOpen(false);
+      }
+    };
+    const onKeyDown = (event) => {
+      if (event.key === "Escape") {
+        setShowFilters(false);
+        setTypeMenuOpen(false);
+      }
+    };
+    document.addEventListener("mousedown", onPointerDown);
+    document.addEventListener("keydown", onKeyDown);
+    return () => {
+      document.removeEventListener("mousedown", onPointerDown);
+      document.removeEventListener("keydown", onKeyDown);
+    };
+  }, [showFilters]);
 
   return (
     <div className="mb-4 mt-4 flex flex-col gap-4 px-4 sm:px-6 md:flex-row md:items-center md:justify-between">
@@ -110,59 +142,95 @@ const Toolbar = ({ viewMode, setViewMode, filters, setFilters, salesPersons }) =
           />
         </div>
 
-        <button onClick={() => setShowFilters(!showFilters)} className={`flex cursor-pointer items-center gap-2 rounded-md border px-3 py-1.5 shadow-sm transition-colors ${activeCount > 0 ? "bg-blue-50 border-blue-300 text-blue-700" : "bg-white border-slate-300 text-slate-700 hover:bg-slate-50"}`}>
-          <Filter size={14} />
-          <span className="text-sm font-medium">Filters {activeCount > 0 && `(${activeCount})`}</span>
-        </button>
+        <div className="relative" ref={filtersPanelRef}>
+          <button
+            type="button"
+            onClick={() => setShowFilters((open) => !open)}
+            className={`flex cursor-pointer items-center gap-2 rounded-md border px-3 py-1.5 shadow-sm transition-colors ${activeCount > 0 ? "bg-blue-50 border-blue-300 text-blue-700" : "bg-white border-slate-300 text-slate-700 hover:bg-slate-50"}`}
+          >
+            <Filter size={14} />
+            <span className="text-sm font-medium">Filters {activeCount > 0 && `(${activeCount})`}</span>
+          </button>
 
-        {showFilters && (
-          <div className="ui-surface absolute right-20 top-12 z-50 flex w-[340px] flex-col gap-4 p-5">
-            <div className="mb-2 flex items-center justify-between border-b border-slate-200 pb-2">
-              <h3 className="text-sm font-semibold text-slate-800">Filter Options</h3>
-              {activeCount > 0 && (
-                <button onClick={() => setFilters({ type: "", status: "", salesPerson: "", startDate: "", endDate: "", searchQuery: filters.searchQuery })} className="cursor-pointer rounded bg-red-50 px-2 py-1 text-xs font-medium text-red-500 transition-colors hover:text-red-700">Clear All</button>
-              )}
-            </div>
-            <div className="flex flex-col gap-1.5">
-              <label className="text-xs font-semibold text-slate-500 uppercase">Type</label>
-              <div className="flex items-center bg-slate-50 border border-slate-200 rounded-lg px-3 py-2">
-                <GalleryVerticalEnd size={14} className="text-slate-400 mr-2" />
-                <select className="text-sm bg-transparent outline-none text-slate-700 cursor-pointer w-full" value={filters.type} onChange={(e) => setFilters({ ...filters, type: e.target.value })}>
-                  <option value="">All Types</option>
-                  <option value="Retail">Retail</option>
-                  <option value="Project">Project</option>
+          {showFilters && (
+            <div className="ui-surface absolute right-0 top-11 z-50 flex w-[340px] flex-col gap-4 p-5 shadow-lg">
+              <div className="mb-2 flex items-center justify-between border-b border-slate-200 pb-2">
+                <h3 className="text-sm font-semibold text-slate-800">Filter Options</h3>
+                {activeCount > 0 && (
+                  <button
+                    type="button"
+                    onClick={() => setFilters({ type: "", status: "", salesPerson: "", startDate: "", endDate: "", searchQuery: filters.searchQuery })}
+                    className="cursor-pointer rounded bg-red-50 px-2 py-1 text-xs font-medium text-red-500 transition-colors hover:text-red-700"
+                  >
+                    Clear All
+                  </button>
+                )}
+              </div>
+              <div className="relative flex flex-col gap-1.5">
+                <label className="text-xs font-semibold text-slate-500 uppercase">Type</label>
+                <button
+                  type="button"
+                  onClick={() => setTypeMenuOpen((open) => !open)}
+                  className="flex w-full items-center gap-2 rounded-lg border border-slate-200 bg-white px-3 py-2.5 text-left text-sm text-slate-700 shadow-sm transition-colors hover:border-slate-300 hover:bg-slate-50"
+                >
+                  <GalleryVerticalEnd size={14} className="shrink-0 text-slate-400" />
+                  <span className="min-w-0 flex-1 font-medium">{selectedTypeLabel}</span>
+                  <ChevronDown size={14} className={`shrink-0 text-slate-400 transition-transform ${typeMenuOpen ? "rotate-180" : ""}`} />
+                </button>
+                {typeMenuOpen && (
+                  <div className="absolute left-0 right-0 top-full z-10 mt-1 overflow-hidden rounded-lg border border-slate-200 bg-white py-1 shadow-md">
+                    {TYPE_OPTIONS.map((option) => {
+                      const selected = filters.type === option.value;
+                      return (
+                        <button
+                          key={option.label}
+                          type="button"
+                          onClick={() => {
+                            setFilters({ ...filters, type: option.value });
+                            setTypeMenuOpen(false);
+                          }}
+                          className={`flex w-full items-center gap-2 px-3 py-2 text-left text-sm transition-colors ${
+                            selected ? "bg-blue-50 font-semibold text-blue-700" : "text-slate-700 hover:bg-slate-50"
+                          }`}
+                        >
+                          <span className="min-w-0 flex-1">{option.label}</span>
+                          {selected ? <Check size={14} className="shrink-0 text-blue-600" /> : null}
+                        </button>
+                      );
+                    })}
+                  </div>
+                )}
+              </div>
+              <div className="flex flex-col gap-1.5 mt-2">
+                <label className="text-xs font-semibold text-slate-500 uppercase">Status</label>
+                <div className="flex flex-wrap gap-2 mt-1">
+                  <button type="button" onClick={() => setFilters({ ...filters, status: "" })} className={`px-3 py-1 rounded-full text-xs font-medium border transition-colors cursor-pointer ${filters.status === "" ? "bg-slate-800 text-white border-slate-800" : "bg-white text-slate-600 border-slate-200 hover:bg-slate-50"}`}>All</button>
+                  {designStatuses.map((status) => (
+                    <button type="button" key={status} onClick={() => setFilters({ ...filters, status })} className={`px-3 py-1 rounded-full text-xs font-medium border focus:outline-none transition-all cursor-pointer ${filters.status === status ? `ring-2 ring-blue-500 ring-offset-1 shadow-sm ${getStatusColor(status)}` : `bg-white ${getStatusColor(status).replace("bg-", "hover:bg-").split(" ").filter((c) => !c.startsWith("bg-")).join(" ")}`}`}>{getStatusLabel(status)}</button>
+                  ))}
+                </div>
+              </div>
+              <div className="flex flex-col gap-1.5">
+                <label className="text-xs font-semibold text-slate-500 uppercase">Sales Person</label>
+                <select className="text-sm bg-slate-50 border border-slate-200 rounded-lg px-3 py-2 outline-none text-slate-700 cursor-pointer w-full" value={filters.salesPerson} onChange={(e) => setFilters({ ...filters, salesPerson: e.target.value })}>
+                  <option value="">All Sales Persons</option>
+                  {salesPersons.map((sp) => (<option key={sp} value={sp}>{sp}</option>))}
                 </select>
               </div>
-            </div>
-            <div className="flex flex-col gap-1.5 mt-2">
-              <label className="text-xs font-semibold text-slate-500 uppercase">Status</label>
-              <div className="flex flex-wrap gap-2 mt-1">
-                <button onClick={() => setFilters({ ...filters, status: "" })} className={`px-3 py-1 rounded-full text-xs font-medium border transition-colors cursor-pointer ${filters.status === "" ? "bg-slate-800 text-white border-slate-800" : "bg-white text-slate-600 border-slate-200 hover:bg-slate-50"}`}>All</button>
-                {designStatuses.map((status) => (
-                  <button key={status} onClick={() => setFilters({ ...filters, status })} className={`px-3 py-1 rounded-full text-xs font-medium border focus:outline-none transition-all cursor-pointer ${filters.status === status ? `ring-2 ring-blue-500 ring-offset-1 shadow-sm ${getStatusColor(status)}` : `bg-white ${getStatusColor(status).replace("bg-", "hover:bg-").split(" ").filter((c) => !c.startsWith("bg-")).join(" ")}`}`}>{getStatusLabel(status)}</button>
-                ))}
+              <div className="flex flex-col gap-1.5">
+                <label className="text-xs font-semibold text-slate-500 uppercase">Date Range</label>
+                <div className="grid grid-cols-2 gap-2">
+                  <input type="date" value={filters.startDate} onChange={(e) => setFilters({ ...filters, startDate: e.target.value })} className="text-xs rounded-lg border border-slate-200 px-2 py-2" />
+                  <input type="date" value={filters.endDate} onChange={(e) => setFilters({ ...filters, endDate: e.target.value })} className="text-xs rounded-lg border border-slate-200 px-2 py-2" />
+                </div>
               </div>
             </div>
-            <div className="flex flex-col gap-1.5">
-              <label className="text-xs font-semibold text-slate-500 uppercase">Sales Person</label>
-              <select className="text-sm bg-slate-50 border border-slate-200 rounded-lg px-3 py-2 outline-none text-slate-700 cursor-pointer w-full" value={filters.salesPerson} onChange={(e) => setFilters({ ...filters, salesPerson: e.target.value })}>
-                <option value="">All Sales Persons</option>
-                {salesPersons.map((sp) => (<option key={sp} value={sp}>{sp}</option>))}
-              </select>
-            </div>
-            <div className="flex flex-col gap-1.5">
-              <label className="text-xs font-semibold text-slate-500 uppercase">Date Range</label>
-              <div className="grid grid-cols-2 gap-2">
-                <input type="date" value={filters.startDate} onChange={(e) => setFilters({ ...filters, startDate: e.target.value })} className="text-xs rounded-lg border border-slate-200 px-2 py-2" />
-                <input type="date" value={filters.endDate} onChange={(e) => setFilters({ ...filters, endDate: e.target.value })} className="text-xs rounded-lg border border-slate-200 px-2 py-2" />
-              </div>
-            </div>
-          </div>
-        )}
+          )}
+        </div>
 
         <div className="ml-0 flex rounded-md border border-slate-200 bg-slate-100 p-1 sm:ml-1">
-          <button onClick={() => setViewMode("list")} title="List View" className={`p-1.5 rounded transition-colors cursor-pointer ${viewMode === "list" ? "bg-white shadow text-slate-900" : "text-slate-500 hover:text-slate-700"}`}><List size={16} /></button>
-          <button onClick={() => setViewMode("board")} title="Board View" className={`p-1.5 rounded transition-colors cursor-pointer ${viewMode === "board" ? "bg-white shadow text-slate-900" : "text-slate-500 hover:text-slate-700"}`}><LayoutGrid size={16} /></button>
+          <button type="button" onClick={() => setViewMode("list")} title="List View" className={`p-1.5 rounded transition-colors cursor-pointer ${viewMode === "list" ? "bg-white shadow text-slate-900" : "text-slate-500 hover:text-slate-700"}`}><List size={16} /></button>
+          <button type="button" onClick={() => setViewMode("board")} title="Board View" className={`p-1.5 rounded transition-colors cursor-pointer ${viewMode === "board" ? "bg-white shadow text-slate-900" : "text-slate-500 hover:text-slate-700"}`}><LayoutGrid size={16} /></button>
         </div>
       </div>
     </div>

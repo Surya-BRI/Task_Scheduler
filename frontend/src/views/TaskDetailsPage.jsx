@@ -1020,6 +1020,7 @@ export function TaskDetailsPage() {
   const [holdImpact, setHoldImpact] = useState(null) // { partCount, designers } | null — set once fetched, opens the confirm modal
   const [holdImpactChecking, setHoldImpactChecking] = useState(false)
   const [reworkDialogOpen, setReworkDialogOpen] = useState(false)
+  const [reworkDialogMode, setReworkDialogMode] = useState('rework') // 'rework' | 'reject'
   const [reworkNote, setReworkNote] = useState('')
   const [reworkSubmitting, setReworkSubmitting] = useState(false)
   const [reworkFile, setReworkFile] = useState(null) // { url, name } | null
@@ -1215,10 +1216,12 @@ export function TaskDetailsPage() {
         ...(reworkFileArg?.url ? { reworkAttachmentUrl: reworkFileArg.url, reworkAttachmentName: reworkFileArg.name } : {}),
         ...(reworkLinkArg?.url ? { reworkLinkUrl: reworkLinkArg.url, reworkLinkName: reworkLinkArg.name } : {}),
       })
-      if (newStatus === 'REWORK' && res?.newRevisionTaskNo) {
-        toast.success(`Rework issued — revision ${res.newRevisionTaskNo} created and queued for assignment.`)
-      } else if (newStatus === 'REWORK') {
-        toast.error('Rework issued but revision task creation failed — check backend logs.')
+      if (newStatus === 'REWORK') {
+        toast.success('Rework issued — same task returned to the designer.')
+      } else if (newStatus === 'CLIENT_REJECTED' && res?.newRevisionTaskNo) {
+        toast.success(`Client rejected — revision ${res.newRevisionTaskNo} created and queued for assignment.`)
+      } else if (newStatus === 'CLIENT_REJECTED') {
+        toast.error('Client rejected but revision task creation failed — check backend logs.')
       }
       setTaskRefreshCounter((c) => c + 1)
     } catch (err) {
@@ -1227,6 +1230,15 @@ export function TaskDetailsPage() {
       setTaskRefreshCounter((c) => c + 1)
     }
   }, [taskId])
+
+  const openSalesActionDialog = useCallback((mode) => {
+    setReworkDialogMode(mode)
+    setReworkNote('')
+    setReworkFile(null)
+    setReworkLink({ url: '', name: '' })
+    setReworkRefMode('file')
+    setReworkDialogOpen(true)
+  }, [])
 
   // "Put On Hold" removes every current/future scheduled part for this task across every
   // designer in one shot — preview the impact so the HOD/salesperson isn't surprised.
@@ -1299,6 +1311,8 @@ export function TaskDetailsPage() {
   const _session = getSession()
   const isHod = hasHodWorkflowAccess(_session?.role ?? '')
   const isSales = _session?.role === 'SALESPERSON'
+  const isAdmin = _session?.role === 'ADMIN'
+  const canSalesReview = isSales || isAdmin
   const isDesigner = _session?.role === 'DESIGNER'
   const isDesignerWorkMode = isDesigner || (isHod && from === FROM_DESIGNER_QUEUE)
   const isHodManagementMode = isHod && !isDesignerWorkMode
@@ -1322,7 +1336,13 @@ export function TaskDetailsPage() {
   const projectTaskCreateGateMessage = canCreateProjectTasks
     ? 'Team assigned. You can create tasks now.'
     : 'Set and save the full team before creating tasks.'
-  const hasReworkInstructions = Boolean(record?.previousRevisionTaskId)
+  const hasReworkInstructions = Boolean(
+    record?.reworkNote ||
+    record?.reworkAttachmentUrl ||
+    record?.reworkLinkUrl ||
+    record?.previousRevisionTaskId ||
+    taskStatus === 'REWORK',
+  )
   const showWorkflowStatusBlocks =
     DESIGN_WORKFLOW_SOURCES.has(from) || Boolean(pathname?.startsWith('/task-summary/'))
   const baseTabs = isCreationRoute && !isRetail ? [...TABS, PROJECT_TAB] : TABS
@@ -2238,7 +2258,7 @@ export function TaskDetailsPage() {
                               </span>
                             )}
                           </div>
-                          <div className="rounded-lg border border-slate-200 bg-slate-50 p-3 space-y-2.5">
+                          <div className="min-w-0 overflow-hidden rounded-lg border border-slate-200 bg-slate-50 p-3 space-y-2.5">
                             <div className="flex items-center gap-2">
                               <Clock3 className="h-3.5 w-3.5 text-slate-400 shrink-0" />
                               <span className="text-xs text-slate-500 font-medium">Duration</span>
@@ -2253,20 +2273,20 @@ export function TaskDetailsPage() {
                               </span>
                             </div>
                             {(submittedSession.submissionLink || submittedSession.files?.length > 0) && (
-                              <div>
+                              <div className="min-w-0">
                                 <div className="flex items-center gap-2 mb-1.5">
                                   <FileText className="h-3.5 w-3.5 text-slate-400 shrink-0" />
                                   <span className="text-xs text-slate-500 font-medium">Submitted Docs</span>
                                 </div>
-                                <ul className="space-y-1">
+                                <ul className="min-w-0 space-y-1">
                                   {submittedSession.submissionLink && (
-                                    <li className="flex items-center gap-2 rounded-md bg-white border border-slate-200 px-2.5 py-1.5 text-xs text-slate-800">
+                                    <li className="flex min-w-0 items-center gap-2 rounded-md bg-white border border-slate-200 px-2.5 py-1.5 text-xs text-slate-800">
                                       <Link className="h-3.5 w-3.5 shrink-0 text-slate-400" />
                                       <a
                                         href={submittedSession.submissionLink}
                                         target="_blank"
                                         rel="noreferrer"
-                                        className="truncate text-blue-600 hover:underline"
+                                        className="min-w-0 flex-1 truncate text-blue-600 hover:underline"
                                         title={submittedSession.submissionLink}
                                       >
                                         {submittedSession.submissionLink}
@@ -2274,20 +2294,20 @@ export function TaskDetailsPage() {
                                     </li>
                                   )}
                                   {submittedSession.files?.map((f, i) => (
-                                    <li key={i} className="flex items-center gap-2 rounded-md bg-white border border-slate-200 px-2.5 py-1.5 text-xs text-slate-800">
+                                    <li key={i} className="flex min-w-0 items-center gap-2 rounded-md bg-white border border-slate-200 px-2.5 py-1.5 text-xs text-slate-800">
                                       <FileText className="h-3.5 w-3.5 shrink-0 text-slate-400" />
                                       {f.fileUrl ? (
                                         <a
                                           href={f.fileUrl}
                                           target="_blank"
                                           rel="noreferrer"
-                                          className="truncate text-blue-600 hover:underline"
+                                          className="min-w-0 flex-1 truncate text-blue-600 hover:underline"
                                           title={f.fileName}
                                         >
                                           {f.fileName}
                                         </a>
                                       ) : (
-                                        <span className="truncate" title={f.fileName}>{f.fileName}</span>
+                                        <span className="min-w-0 flex-1 truncate" title={f.fileName}>{f.fileName}</span>
                                       )}
                                       {f.sizeBytes && (
                                         <span className="ml-auto shrink-0 text-[10px] text-slate-400">
@@ -2333,10 +2353,9 @@ export function TaskDetailsPage() {
                           </div>
                         </div>
                       )}
-                      {/* Salesperson action panel — SALES_REVIEW, CLIENT_REJECTED, and ON_HOLD parked from SALES_REVIEW */}
-                      {isSales && (
+                      {/* Sales / Admin action panel — SALES_REVIEW and ON_HOLD parked from SALES_REVIEW */}
+                      {canSalesReview && (
                         taskStatus === 'SALES_REVIEW' ||
-                        taskStatus === 'CLIENT_REJECTED' ||
                         (taskStatus === 'ON_HOLD' && record?.holdPreviousStatus === 'SALES_REVIEW')
                       ) && (
                         <div className="mt-4 pt-3 border-t border-slate-200">
@@ -2344,25 +2363,13 @@ export function TaskDetailsPage() {
                           <div className="flex flex-wrap gap-2">
                             {taskStatus === 'SALES_REVIEW' && (<>
                               <button type="button" onClick={() => handleStatusChange('CLIENT_ACCEPTED')} className="rounded-md bg-emerald-600 px-3 py-1.5 text-xs font-semibold text-white hover:bg-emerald-700 transition-colors">Client Accepted</button>
-                              <button type="button" onClick={() => handleStatusChange('CLIENT_REJECTED')} className="rounded-md bg-rose-600 px-3 py-1.5 text-xs font-semibold text-white hover:bg-rose-700 transition-colors">Client Rejected</button>
-                              <button type="button" onClick={() => { setReworkNote(''); setReworkFile(null); setReworkLink({ url: '', name: '' }); setReworkRefMode('file'); setReworkDialogOpen(true); }} className="rounded-md bg-red-500 px-3 py-1.5 text-xs font-semibold text-white hover:bg-red-600 transition-colors">Request Rework</button>
+                              <button type="button" onClick={() => openSalesActionDialog('reject')} className="rounded-md bg-rose-600 px-3 py-1.5 text-xs font-semibold text-white hover:bg-rose-700 transition-colors">Client Rejected</button>
+                              <button type="button" onClick={() => openSalesActionDialog('rework')} className="rounded-md bg-red-500 px-3 py-1.5 text-xs font-semibold text-white hover:bg-red-600 transition-colors">Request Rework</button>
                               <button type="button" onClick={requestHold} disabled={holdImpactChecking} className="rounded-md border border-slate-300 bg-white px-3 py-1.5 text-xs font-semibold text-slate-600 hover:bg-slate-50 transition-colors disabled:opacity-50">Put On Hold</button>
                             </>)}
-                            {taskStatus === 'CLIENT_REJECTED' && (
-                              <button type="button" onClick={() => { setReworkNote(''); setReworkFile(null); setReworkLink({ url: '', name: '' }); setReworkRefMode('file'); setReworkDialogOpen(true); }} className="rounded-md bg-red-500 px-3 py-1.5 text-xs font-semibold text-white hover:bg-red-600 transition-colors">Issue Rework</button>
-                            )}
                             {taskStatus === 'ON_HOLD' && (
                               <button type="button" onClick={() => handleStatusChange(record?.holdPreviousStatus || 'SALES_REVIEW')} className="rounded-md bg-orange-500 px-3 py-1.5 text-xs font-semibold text-white hover:bg-orange-600 transition-colors">Resume</button>
                             )}
-                          </div>
-                        </div>
-                      )}
-                      {/* Designer action panel — resubmit from REWORK back to HOD */}
-                      {isDesignerWorkMode && taskStatus === 'REWORK' && (
-                        <div className="mt-4 pt-3 border-t border-slate-200">
-                          <p className="text-[10px] font-semibold text-slate-400 uppercase tracking-wide mb-2">Rework Actions</p>
-                          <div className="flex flex-wrap gap-2">
-                            <button type="button" onClick={() => handleStatusChange('HOD_REVIEW')} className="rounded-md bg-violet-600 px-3 py-1.5 text-xs font-semibold text-white hover:bg-violet-700 transition-colors">Submit for HOD Review</button>
                           </div>
                         </div>
                       )}
@@ -2849,71 +2856,85 @@ export function TaskDetailsPage() {
                         href={record.reworkLinkUrl}
                         target="_blank"
                         rel="noopener noreferrer"
-                        className="mt-2 flex items-center gap-2.5 rounded-lg border border-slate-200 bg-white px-3 py-2.5 text-sm text-blue-700 hover:bg-slate-50 hover:underline"
+                        className="mt-2 flex min-w-0 items-center gap-2.5 rounded-lg border border-slate-200 bg-white px-3 py-2.5 text-sm text-blue-700 hover:bg-slate-50 hover:underline"
                       >
                         <FileText className="h-4 w-4 shrink-0 text-slate-400" />
-                        <span className="truncate font-medium">{record.reworkLinkName || record.reworkLinkUrl}</span>
+                        <span className="min-w-0 flex-1 truncate font-medium">{record.reworkLinkName || record.reworkLinkUrl}</span>
                       </a>
                     )}
                   </div>
 
                   {!record?.reworkNote && !record?.reworkAttachmentUrl && !record?.reworkLinkUrl && (
                     <div className="rounded-lg border border-dashed border-slate-300 bg-slate-50 px-4 py-8 text-center text-sm text-slate-500">
-                      No rework instructions were attached to this revision.
+                      No rework instructions were attached to this task yet.
                     </div>
                   )}
 
-                  {/* Previous Submission */}
+                  {/* Submitted work shown for this rework pass */}
                   <div className="mt-2 pt-5 border-t border-slate-200">
                     <div className="flex items-center gap-1.5 mb-3">
                       <Clock3 className="h-3.5 w-3.5 text-slate-400" />
-                      <p className="text-[11px] font-semibold uppercase tracking-wide text-slate-800">Previous Submission</p>
+                      <p className="text-[11px] font-semibold uppercase tracking-wide text-slate-800">
+                        {record?.previousRevisionTaskId ? 'Previous Revision Submission' : 'Submitted Work'}
+                      </p>
                     </div>
-                    {prevRevisionLoading ? (
-                      <p className="text-sm text-slate-400 italic">Loading…</p>
-                    ) : prevRevisionSession ? (
-                      <div className="rounded-lg border border-slate-200 bg-slate-50 divide-y divide-slate-200">
+                    {(() => {
+                      const reworkSubmission = record?.previousRevisionTaskId ? prevRevisionSession : submittedSession
+                      const reworkSubmissionLoading = record?.previousRevisionTaskId ? prevRevisionLoading : false
+                      if (reworkSubmissionLoading) {
+                        return <p className="text-sm text-slate-400 italic">Loading…</p>
+                      }
+                      if (!reworkSubmission) {
+                        return (
+                          <p className="text-sm text-slate-400 italic">
+                            {record?.previousRevisionTaskId
+                              ? 'No submission found for the previous revision.'
+                              : 'No submitted work found for this task yet.'}
+                          </p>
+                        )
+                      }
+                      return (
+                      <div className="min-w-0 overflow-hidden rounded-lg border border-slate-200 bg-slate-50 divide-y divide-slate-200">
                         <div className="flex flex-wrap gap-x-6 gap-y-1 px-3 py-2.5 text-xs text-slate-600">
-                          {prevRevisionSession.submittedBy && (
-                            <span><span className="font-semibold text-slate-500">Submitted by: </span>{prevRevisionSession.submittedBy}</span>
+                          {reworkSubmission.submittedBy && (
+                            <span><span className="font-semibold text-slate-500">Submitted by: </span>{reworkSubmission.submittedBy}</span>
                           )}
-                          {prevRevisionSession.submittedAt && (
-                            <span><span className="font-semibold text-slate-500">Date: </span>{new Date(prevRevisionSession.submittedAt).toLocaleString('en-GB', { day: '2-digit', month: 'short', year: 'numeric', hour: '2-digit', minute: '2-digit' })}</span>
+                          {reworkSubmission.submittedAt && (
+                            <span><span className="font-semibold text-slate-500">Date: </span>{new Date(reworkSubmission.submittedAt).toLocaleString('en-GB', { day: '2-digit', month: 'short', year: 'numeric', hour: '2-digit', minute: '2-digit' })}</span>
                           )}
-                          {prevRevisionSession.durationSeconds > 0 && (
-                            <span><span className="font-semibold text-slate-500">Duration: </span>{Math.floor(prevRevisionSession.durationSeconds / 3600)}h {Math.floor((prevRevisionSession.durationSeconds % 3600) / 60)}m</span>
+                          {reworkSubmission.durationSeconds > 0 && (
+                            <span><span className="font-semibold text-slate-500">Duration: </span>{Math.floor(reworkSubmission.durationSeconds / 3600)}h {Math.floor((reworkSubmission.durationSeconds % 3600) / 60)}m</span>
                           )}
                         </div>
-                        {prevRevisionSession.files?.length > 0 && (
+                        {reworkSubmission.files?.length > 0 && (
                           <div className="px-3 py-2.5 space-y-1.5">
                             <p className="text-[11px] font-semibold text-slate-400 uppercase tracking-wide mb-1">Files</p>
-                            {prevRevisionSession.files.map((f, i) => (
+                            {reworkSubmission.files.map((f, i) => (
                               <a key={i} href={f.fileUrl} target="_blank" rel="noopener noreferrer"
-                                className="flex items-center gap-2 rounded-md border border-slate-200 bg-white px-2.5 py-2 text-sm text-blue-700 hover:bg-slate-50 hover:underline">
+                                className="flex min-w-0 items-center gap-2 rounded-md border border-slate-200 bg-white px-2.5 py-2 text-sm text-blue-700 hover:bg-slate-50 hover:underline">
                                 <FileText className="h-4 w-4 shrink-0 text-slate-400" />
-                                <span className="truncate font-medium">{f.fileName}</span>
+                                <span className="min-w-0 flex-1 truncate font-medium">{f.fileName}</span>
                                 {f.sizeBytes && <span className="ml-auto shrink-0 text-xs text-slate-400">{(Number(f.sizeBytes) / 1024).toFixed(1)} KB</span>}
                               </a>
                             ))}
                           </div>
                         )}
-                        {prevRevisionSession.submissionLink && (
-                          <div className="px-3 py-2.5">
+                        {reworkSubmission.submissionLink && (
+                          <div className="min-w-0 px-3 py-2.5">
                             <p className="text-[11px] font-semibold text-slate-400 uppercase tracking-wide mb-1">Submitted Docs</p>
-                            <a href={prevRevisionSession.submissionLink} target="_blank" rel="noopener noreferrer"
-                              className="flex items-center gap-2 rounded-md border border-slate-200 bg-white px-2.5 py-2 text-sm text-blue-700 hover:bg-slate-50 hover:underline">
+                            <a href={reworkSubmission.submissionLink} target="_blank" rel="noopener noreferrer"
+                              className="flex min-w-0 items-center gap-2 rounded-md border border-slate-200 bg-white px-2.5 py-2 text-sm text-blue-700 hover:bg-slate-50 hover:underline">
                               <FileText className="h-4 w-4 shrink-0 text-slate-400" />
-                              <span className="truncate">{prevRevisionSession.submissionLink}</span>
+                              <span className="min-w-0 flex-1 truncate">{reworkSubmission.submissionLink}</span>
                             </a>
                           </div>
                         )}
-                        {!prevRevisionSession.files?.length && !prevRevisionSession.submissionLink && (
+                        {!reworkSubmission.files?.length && !reworkSubmission.submissionLink && (
                           <div className="px-3 py-2.5 text-sm text-slate-500 italic">No files or links were submitted.</div>
                         )}
                       </div>
-                    ) : (
-                      <p className="text-sm text-slate-400 italic">No submission found for the previous revision.</p>
-                    )}
+                      )
+                    })()}
                   </div>
                 </div>
               ) : null}
@@ -3055,15 +3076,28 @@ export function TaskDetailsPage() {
         <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/40 p-4">
           <div className="bg-white rounded-xl shadow-xl w-full max-w-lg flex flex-col gap-4 p-6">
             <div>
-              <h2 className="text-sm font-bold text-slate-900">Issue Rework</h2>
-              <p className="mt-1 text-xs text-slate-500">A new revision task will be created with these instructions. The original task stays in its current status.</p>
+              <h2 className="text-sm font-bold text-slate-900">
+                {reworkDialogMode === 'reject' ? 'Client Rejected' : 'Request Rework'}
+              </h2>
+              <p className="mt-1 text-xs text-slate-500">
+                {reworkDialogMode === 'reject'
+                  ? 'This task will be marked client rejected and a new revision task (next R code) will be created for HOD assignment.'
+                  : 'This same task will return to the current designer for corrections. No new revision is created.'}
+              </p>
             </div>
             <div className="flex flex-col gap-1">
-              <label className="text-xs font-semibold text-slate-700">Rework Instructions <span className="text-red-500">*</span></label>
+              <label className="text-xs font-semibold text-slate-700">
+                {reworkDialogMode === 'reject' ? 'Reject Instructions' : 'Rework Instructions'}{' '}
+                <span className="text-red-500">*</span>
+              </label>
               <textarea
                 className="w-full rounded-md border border-slate-300 p-2.5 text-xs text-slate-800 resize-none focus:outline-none focus:ring-2 focus:ring-red-400"
                 rows={4}
-                placeholder="e.g. Please revise the sign dimensions on sheet 3 and update the colour palette to match the revised brief..."
+                placeholder={
+                  reworkDialogMode === 'reject'
+                    ? 'e.g. Client rejected the submission — please prepare a revised pack addressing the feedback…'
+                    : 'e.g. Please revise the sign dimensions on sheet 3 and update the colour palette to match the revised brief...'
+                }
                 value={reworkNote}
                 onChange={(e) => setReworkNote(e.target.value)}
                 autoFocus
@@ -3113,7 +3147,15 @@ export function TaskDetailsPage() {
                           const form = new FormData()
                           form.append('file', file)
                           const res = await apiClient.post('/tasks/upload-file', form)
-                          setReworkFile({ url: res.fileUrl, name: res.fileName })
+                          const fileUrl = res?.signedUrl || res?.fileUrl || res?.url
+                          const fileKey = res?.key
+                          if (!fileUrl && !fileKey) throw new Error('Upload response missing file URL/key')
+                          // Persist the S3 key (bucket is private); keep signed url for immediate UI preview.
+                          setReworkFile({
+                            url: fileKey || fileUrl,
+                            previewUrl: fileUrl || null,
+                            name: res.fileName || file.name,
+                          })
                         } catch {
                           toast.error('File upload failed')
                         } finally {
@@ -3156,13 +3198,18 @@ export function TaskDetailsPage() {
                 disabled={!reworkNote.trim() || reworkSubmitting || reworkFileUploading}
                 onClick={async () => {
                   setReworkSubmitting(true)
-                  await handleStatusChange('REWORK', reworkNote.trim(), reworkFile, reworkLink.url ? reworkLink : null)
+                  const nextStatus = reworkDialogMode === 'reject' ? 'CLIENT_REJECTED' : 'REWORK'
+                  await handleStatusChange(nextStatus, reworkNote.trim(), reworkFile, reworkLink.url ? reworkLink : null)
                   setReworkDialogOpen(false)
                   setReworkSubmitting(false)
                 }}
-                className="rounded-md bg-red-500 px-4 py-1.5 text-xs font-semibold text-white hover:bg-red-600 disabled:opacity-50 transition-colors"
+                className={`rounded-md px-4 py-1.5 text-xs font-semibold text-white disabled:opacity-50 transition-colors ${
+                  reworkDialogMode === 'reject' ? 'bg-rose-600 hover:bg-rose-700' : 'bg-red-500 hover:bg-red-600'
+                }`}
               >
-                {reworkSubmitting ? 'Creating revision…' : 'Issue Rework'}
+                {reworkSubmitting
+                  ? (reworkDialogMode === 'reject' ? 'Creating revision…' : 'Sending…')
+                  : (reworkDialogMode === 'reject' ? 'Reject & Create Revision' : 'Send to Rework')}
               </button>
             </div>
           </div>

@@ -48,6 +48,11 @@ import {
 } from "../utils/schedulerNavigationState";
 import { isDesignerEligibleForProject } from "../utils/projectTeamEligibility";
 import { fetchSchedulerQueue } from "../services/scheduler-queue.api";
+import {
+    isRequestSystemBlock,
+    partitionDayTaskIds,
+    shouldSkipOptimizerTask,
+} from "../utils/scheduler-day-layout";
 // Only these backend events should trigger a scheduler reload for other HODs.
 // Capacity constants
 const DAILY_CAPACITY = 8; // 8hrs per day = normal capacity (green/blue)
@@ -72,29 +77,10 @@ const sumTaskTotalHours = (taskMap, taskIds) => taskIds.reduce((acc, taskId) => 
 
 const nextVisibleWeekdayAfter = (dayIndex, candidateDays) => candidateDays.find((idx) => idx > dayIndex);
 
-const isRequestSystemBlock = (task) => Boolean(task?.isSystemBlock || task?.requestType === "LEAVE" || task?.requestType === "REGULARIZATION");
-
 const isFullDayLeaveBlock = (task) => task?.requestType === "LEAVE" &&
     toPositiveHours(task.leaveHours ?? task.scheduledHours ?? task.estimatedHours) >= DAILY_CAPACITY;
 
 const hasFullDayLeaveBlock = (taskMap, taskIds = []) => taskIds.some((taskId) => isFullDayLeaveBlock(taskMap?.[taskId]));
-
-const normalizeLeaveSession = (session) =>
-    String(session ?? "").trim().toLowerCase().replace(/[_-]+/g, " ").replace(/\s+/g, " ");
-
-const getHalfDayLeaveVisualOrder = (task) => {
-    if (task?.requestType !== "LEAVE") return 1;
-    if (toPositiveHours(task.leaveHours ?? task.scheduledHours ?? task.estimatedHours) >= DAILY_CAPACITY) return 0;
-    const session = normalizeLeaveSession(task.leaveSession);
-    if (session === "first half" || session === "first session" || session === "first" || session === "am" || session === "morning") return 0;
-    if (session === "second half" || session === "second session" || session === "second" || session === "pm" || session === "afternoon") return 2;
-    return 1;
-};
-
-const sortRegularTaskIdsForVisualSession = (taskIds, taskMap) => taskIds
-    .map((taskId, order) => ({ taskId, order }))
-    .sort((a, b) => getHalfDayLeaveVisualOrder(taskMap[a.taskId]) - getHalfDayLeaveVisualOrder(taskMap[b.taskId]) || a.order - b.order)
-    .map((entry) => entry.taskId);
 
 const getRequestBlockHours = (row) => {
     if (row?.requestType === "LEAVE") return toPositiveHours(row.leaveHours ?? row.scheduledHours ?? row.assignedHours);
@@ -340,6 +326,46 @@ function applySplitIndexFromRows(rows, schedules, tasks) {
             if (canonical !== row.taskId) continue;
             if (hit === matchIdx) {
                 result[fId] = { splitIndex: row.splitIndex, totalParts: row.totalParts };
+                break;
+            }
+            hit++;
+        }
+    }
+    return result;
+}
+
+/**
+ * After a week save, map each persisted SchedulerAssignment row id back onto the
+ * matching frontend card. Save does deleteMany + createMany, so without this
+ * assignmentRowId goes stale/empty and Unassign/Hold falsely trips the
+ * expectedAssignmentIds consolidation guard.
+ */
+function applyAssignmentMetaFromRows(rows, schedules, tasks) {
+    const result = {};
+    if (!rows?.length) return result;
+    const seenPerSlot = new Map();
+    for (const row of rows) {
+        if (!row?.id || !row?.taskId) continue;
+        const slotKey = `${row.designerId}|${row.dayIndex}|${row.taskId}`;
+        const matchIdx = seenPerSlot.get(slotKey) ?? 0;
+        seenPerSlot.set(slotKey, matchIdx + 1);
+        const dayTasks = schedules[row.designerId]?.[String(row.dayIndex)] ?? [];
+        let hit = 0;
+        for (const fId of dayTasks) {
+            const task = tasks[fId];
+            if (!task || task.isOvertime || task.isSystemBlock) continue;
+            const canonical = isUuid(task.id) ? task.id : (isUuid(task.parentId) ? task.parentId : null);
+            if (canonical !== row.taskId) continue;
+            if (hit === matchIdx) {
+                const upd = { assignmentRowId: row.id };
+                if (row.splitIndex != null) {
+                    upd.splitIndex = row.splitIndex;
+                    upd.totalParts = row.totalParts;
+                }
+                if (typeof row.otherScheduledAssignmentCount === "number") {
+                    upd.otherScheduledAssignmentCount = row.otherScheduledAssignmentCount;
+                }
+                result[fId] = upd;
                 break;
             }
             hit++;
@@ -861,6 +887,19 @@ export function DesignSchedulerScreen() {
     const schedulesRef = useRef({});
     tasksRef.current = tasks;
     schedulesRef.current = schedules;
+    // Synchronous map of frontend card id → live SchedulerAssignment row id.
+    // Save recreates DB rows; setTasks is async, so Unassign/Hold must read this
+    // ref (not only React state) to avoid sending a stale/empty expectedAssignmentIds.
+    const assignmentRowIdByFrontendIdRef = useRef({});
+    const syncAssignmentRowIdRef = (patch) => {
+        if (!patch || typeof patch !== 'object') return;
+        const next = { ...assignmentRowIdByFrontendIdRef.current };
+        for (const [fId, value] of Object.entries(patch)) {
+            if (value == null || value === '') delete next[fId];
+            else next[fId] = value;
+        }
+        assignmentRowIdByFrontendIdRef.current = next;
+    };
     const [loadedFromErp, setLoadedFromErp] = useState(false);
     const [isWeekLocked, setIsWeekLocked] = useState(false);
     const isWeekLockedRef = useRef(false);
@@ -1160,6 +1199,11 @@ export function DesignSchedulerScreen() {
             isWeekLockedRef.current = locked;
             if (Array.isArray(rows) && rows.length > 0) {
                 const next = buildSchedulerStateFromErpAssignments(freshQueueRecords, rows, designersRef.current);
+                const rowIdPatch = {};
+                for (const [fId, task] of Object.entries(next.tasksObj)) {
+                    if (task?.assignmentRowId) rowIdPatch[fId] = task.assignmentRowId;
+                }
+                assignmentRowIdByFrontendIdRef.current = rowIdPatch;
                 setTasks(next.tasksObj);
                 setSchedules(next.schedulesObj);
                 lastSavedAssignmentsRef.current = buildWeekSnapshotPayload(next.schedulesObj, next.tasksObj);
@@ -1168,6 +1212,7 @@ export function DesignSchedulerScreen() {
                 setLoadedFromErp(true);
             } else {
                 const mock = buildMockSchedulerState(freshQueueRecords, designersRef.current);
+                assignmentRowIdByFrontendIdRef.current = {};
                 setTasks(mock.tasksObj);
                 setSchedules(mock.schedulesObj);
                 lastSavedAssignmentsRef.current = buildWeekSnapshotPayload(mock.schedulesObj, mock.tasksObj);
@@ -1176,6 +1221,7 @@ export function DesignSchedulerScreen() {
 
         } catch {
             const mock = buildMockSchedulerState(queueRecordsRef.current, designersRef.current);
+            assignmentRowIdByFrontendIdRef.current = {};
             setTasks(mock.tasksObj);
             setSchedules(mock.schedulesObj);
             lastSavedAssignmentsRef.current = buildWeekSnapshotPayload(mock.schedulesObj, mock.tasksObj);
@@ -1244,6 +1290,17 @@ export function DesignSchedulerScreen() {
             extraResolvedFragmentIdsRef.current = [];
             const allAssignments = buildWeekSnapshotPayload(s, t);
             const affectedTaskIds = computeAffectedTaskIds(lastSavedAssignmentsRef.current, allAssignments);
+            // Incremental path: only when something actually moved. Empty affected list with no
+            // overflow/fragments means a no-op flush — skip the PUT so we don't fall back to a
+            // full-week deleteMany+createMany for an unchanged board.
+            if (
+                affectedTaskIds.length === 0 &&
+                resolvedFragmentIds.length === 0 &&
+                pendingOverflow.length === 0
+            ) {
+                saveSucceeded = true;
+                return;
+            }
             const incrementalAssignments = affectedTaskIds.length > 0
                 ? allAssignments.filter((a) => affectedTaskIds.includes(a.taskId))
                 : allAssignments;
@@ -1292,12 +1349,17 @@ export function DesignSchedulerScreen() {
             if (weekStartStr === currentWeekStr) {
                 weekVersionWeekStartRef.current = weekStartStr;
                 setWeekVersion(saved.version);
-                // Reconcile split labels: backend may have recomputed splitIndex/totalParts
-                // globally (cross-week). Use same per-slot matching so parts don't overwrite
-                // each other.
+                // Reconcile split labels + fresh assignment row ids. Save recreates DB rows
+                // (deleteMany + createMany); without refreshing assignmentRowId, same-session
+                // Unassign/Hold sends a stale/empty expectedAssignmentIds set and false-conflicts.
                 if (saved.assignments?.length > 0) {
-                    const backendFix = applySplitIndexFromRows(saved.assignments, s, t);
+                    const backendFix = applyAssignmentMetaFromRows(saved.assignments, s, t);
                     if (Object.keys(backendFix).length > 0) {
+                        const rowIdPatch = {};
+                        for (const [fId, upd] of Object.entries(backendFix)) {
+                            if (upd?.assignmentRowId) rowIdPatch[fId] = upd.assignmentRowId;
+                        }
+                        syncAssignmentRowIdRef(rowIdPatch);
                         setTasks(prev => {
                             const next = { ...prev };
                             for (const [fId, upd] of Object.entries(backendFix)) {
@@ -1306,6 +1368,15 @@ export function DesignSchedulerScreen() {
                             return next;
                         });
                     }
+                } else {
+                    // Full wipe of this week's rows — drop stale ids for cards that were in the saved schedules.
+                    const cleared = {};
+                    for (const dayMap of Object.values(s || {})) {
+                        for (const ids of Object.values(dayMap || {})) {
+                            for (const fId of ids || []) cleared[fId] = null;
+                        }
+                    }
+                    syncAssignmentRowIdRef(cleared);
                 }
             }
         } catch (error) {
@@ -2105,9 +2176,14 @@ export function DesignSchedulerScreen() {
         // single part that merely LOOKS unsplit to this stale tab — either way, "myself plus
         // whatever in-memory siblings I know about" is exactly what the whole-task wipe is
         // about to remove, and nothing else should be live on the server.
+        // Prefer the sync ref (updated immediately on save/load) over React state, which can
+        // still hold a pre-save assignmentRowId until the next render.
         const expectedAssignmentIds = [taskId, ...inMemorySiblingIds]
-            .map((id) => tasks[id]?.assignmentRowId)
+            .map((id) => assignmentRowIdByFrontendIdRef.current[id] ?? tasks[id]?.assignmentRowId)
             .filter(Boolean);
+        const consolidationGuardIds = expectedAssignmentIds.length > 0
+            ? expectedAssignmentIds
+            : undefined;
         let nextTasks = { ...tasks };
         if (isSplitPart) {
             // Sum hours across all parts (including this one) to restore original task
@@ -2168,7 +2244,9 @@ export function DesignSchedulerScreen() {
         };
         apiClient.patch(`/tasks/${apiTaskId}/status`, {
             status: backendStatus,
-            ...(backendStatus === "ON_HOLD" ? { expectedAssignmentIds } : {}),
+            ...(backendStatus === "ON_HOLD" && consolidationGuardIds
+                ? { expectedAssignmentIds: consolidationGuardIds }
+                : {}),
         }).catch((error) => {
             console.warn("Unable to persist task status change", { apiTaskId, backendStatus, error });
             if (handleStaleConsolidationConflict(error)) return;
@@ -2179,7 +2257,7 @@ export function DesignSchedulerScreen() {
         if (newStatus !== 'ON_HOLD') {
             const clearId = isUuid(parentId) ? parentId : (isUuid(apiTaskId) ? apiTaskId : null);
             if (clearId) {
-                clearTaskFromSchedule(clearId, expectedAssignmentIds).catch((error) => {
+                clearTaskFromSchedule(clearId, consolidationGuardIds).catch((error) => {
                     if (handleStaleConsolidationConflict(error)) return;
                     /* non-fatal otherwise */
                 });
@@ -2273,13 +2351,8 @@ export function DesignSchedulerScreen() {
                     const originalSourceLength = sourceTasks.length;
                     for (const tid of sourceTasks) {
                         const taskInfo = newTasks[tid];
-                        if (taskInfo?.isOvertime) {
-                            keptInSource.push(tid);
-                            continue;
-                        }
-                        // Pinned tasks were deliberately placed on a later day via the redirect
-                        // override — never pull them backward into an earlier gap.
-                        if (taskInfo?.isPinned) {
+                        // Approved leave/regularization blocks are calendar-fixed — never move them.
+                        if (shouldSkipOptimizerTask(taskInfo)) {
                             keptInSource.push(tid);
                             continue;
                         }
@@ -2687,30 +2760,7 @@ export function DesignSchedulerScreen() {
                 }}>
                         {visibleDays.map(dayIndex => {
                     const rawTasksInDay = designerDays[dayIndex.toString()] || [];
-                    const regularTaskIds = rawTasksInDay.filter((taskId) => !tasks[taskId]?.isOvertime);
-
-                    // Split regular tasks into within-capacity and overflow (beyond 8h) so the
-                    // HOD can see which task is pushing the designer into overtime even without
-                    // a formal OT request.
-                    let _cumulativeHours = 0;
-                    const withinCapacityTaskIds = [];
-                    const overflowTaskIds = [];
-                    for (const taskId of regularTaskIds) {
-                      const hrs = Number(tasks[taskId]?.estimatedHours) || 0;
-                      if (_cumulativeHours >= DAILY_CAPACITY) {
-                        overflowTaskIds.push(taskId);
-                      } else {
-                        withinCapacityTaskIds.push(taskId);
-                        _cumulativeHours += hrs;
-                      }
-                    }
-
-                    const visualRegularTaskIds = sortRegularTaskIdsForVisualSession(withinCapacityTaskIds, tasks);
-                    // Merge approved OT request tasks with overflow tasks from regular scheduling
-                    const overtimeTaskIds = [
-                      ...rawTasksInDay.filter((taskId) => tasks[taskId]?.isOvertime),
-                      ...overflowTaskIds,
-                    ];
+                    const { visualRegularTaskIds, overtimeTaskIds } = partitionDayTaskIds(rawTasksInDay, tasks);
                     const isWeekend = dayIndex >= 5;
                     const isPastDay = !isWeekend && isPastDayIndex(dayIndex, currentDate);
                     const dayHours = getDayHours(designer.id, dayIndex);

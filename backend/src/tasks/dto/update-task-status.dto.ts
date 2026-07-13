@@ -29,7 +29,7 @@ export class UpdateTaskStatusDto {
   // Reference file pre-uploaded via POST /tasks/upload-file
   @IsOptional()
   @IsString()
-  @MaxLength(500)
+  @MaxLength(2000)
   reworkAttachmentUrl?: string;
 
   @IsOptional()
@@ -40,7 +40,7 @@ export class UpdateTaskStatusDto {
   // External reference link
   @IsOptional()
   @IsString()
-  @MaxLength(500)
+  @MaxLength(2000)
   reworkLinkUrl?: string;
 
   @IsOptional()
