@@ -539,7 +539,7 @@ export function ProjectsOverviewScreen() {
       scheduledTasks: overview.scheduledTasks.filter(matchTask),
       completedTasks: overview.completedTasks.filter(matchTask),
       onHoldTasks: overview.onHoldTasks.filter(matchTask),
-      reallocatedTasks: overview.reallocatedTasks.filter(matchTask),
+      reworkTasks: (overview.reworkTasks ?? []).filter(matchTask),
       inbox: overview.inbox.filter(matchInbox),
     };
   }, [overview, searchTerm]);
@@ -680,7 +680,7 @@ export function ProjectsOverviewScreen() {
                 emptyMessage="No tasks on hold"
                 errorMessage={tableError}
                 renderRow={(row) => (
-                  <tr key={row.taskNo}>
+                  <tr key={row.rowKey ?? `${row.taskNo}-${row.reason ?? 'hold'}`}>
                     <td className="truncate px-2 py-2 font-mono sm:px-3">{row.taskNo}</td>
                     <td className="truncate px-2 py-2 sm:px-3" title={row.projectName}>{row.projectName || '—'}</td>
                     <td className="truncate px-2 py-2 font-mono text-slate-500 sm:px-3">{row.revisionCode || '—'}</td>
@@ -691,18 +691,19 @@ export function ProjectsOverviewScreen() {
               />
             </CompactCard>
 
-            <CompactCard title="Reallocated Tasks" className="h-full min-h-[280px]" state={cardState}>
+            <CompactCard title="Rework Tasks" className="h-full min-h-[280px]" state={cardState}>
               <ResponsiveTable
-                headers={['Task No', 'Project', 'From', 'To']}
-                rows={data?.reallocatedTasks ?? []}
-                emptyMessage="No reallocations this week"
+                headers={['Task No', 'Project', 'Rev', 'Assignee', 'Updated']}
+                rows={data?.reworkTasks ?? []}
+                emptyMessage="No tasks in rework"
                 errorMessage={tableError}
                 renderRow={(row) => (
-                  <tr key={`${row.taskNo}-${row.reassignedAt}`}>
+                  <tr key={row.taskNo}>
                     <td className="truncate px-2 py-2 font-mono sm:px-3">{row.taskNo}</td>
                     <td className="truncate px-2 py-2 sm:px-3" title={row.projectName}>{row.projectName || '—'}</td>
-                    <td className="truncate px-2 py-2 text-slate-400 sm:px-3" title={row.fromAssigneeName ?? ''}>{row.fromAssigneeName || '—'}</td>
-                    <td className="truncate px-2 py-2 sm:px-3" title={row.newAssigneeName}>{row.newAssigneeName}</td>
+                    <td className="truncate px-2 py-2 font-mono text-slate-500 sm:px-3">{row.revisionCode || '—'}</td>
+                    <td className="truncate px-2 py-2 sm:px-3" title={row.assigneeName ?? ''}>{row.assigneeName || '—'}</td>
+                    <td className="truncate px-2 py-2 sm:px-3">{fmt(row.updatedAt)}</td>
                   </tr>
                 )}
               />
@@ -736,8 +737,8 @@ export function ProjectsOverviewScreen() {
                   <p className="text-lg font-bold text-emerald-600">{summary?.onTimePct ?? 0}%</p>
                 </div>
                 <div className="rounded-lg border border-slate-100 bg-slate-50 p-2 text-center shadow-sm">
-                  <p className="mb-0.5 font-medium text-slate-500">Reallocated</p>
-                  <p className="text-lg font-bold text-slate-900">{summary?.reallocatedPct ?? 0}%</p>
+                  <p className="mb-0.5 font-medium text-slate-500">Rework</p>
+                  <p className="text-lg font-bold text-slate-900">{summary?.reworkCount ?? 0}</p>
                 </div>
               </div>
 
@@ -748,7 +749,7 @@ export function ProjectsOverviewScreen() {
                 </div>
                 {summary ? (
                   <p className="mt-1 text-[10px] text-slate-400">
-                    {summary.total} tasks · {summary.active} active · {summary.onHold} on hold · {summary.completed} completed
+                    {summary.total} tasks · {summary.active} active · {summary.onHold} on hold · {summary.reworkCount ?? 0} rework · {summary.completed} completed
                   </p>
                 ) : null}
               </div>

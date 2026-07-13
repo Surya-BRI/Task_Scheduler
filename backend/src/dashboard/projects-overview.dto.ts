@@ -26,6 +26,8 @@ export interface OnHoldTaskItem {
   revisionCode: string | null;
   holdDate: string | null;
   reason: string | null;
+  /** Distinguishes whole-task vs fragment rows for list keys */
+  rowKey?: string;
 }
 
 export interface ReallocatedTaskItem {
@@ -37,6 +39,16 @@ export interface ReallocatedTaskItem {
   fromAssigneeName: string | null;
   newAssigneeName: string;
   reassignedAt: string;
+}
+
+export interface ReworkTaskItem {
+  taskNo: string;
+  title: string;
+  projectName: string;
+  designType: string | null;
+  revisionCode: string | null;
+  updatedAt: string | null;
+  assigneeName: string | null;
 }
 
 export interface InboxItem {
@@ -68,12 +80,14 @@ export interface ProjectsOverviewResponseDto {
   completedTasks: CompletedTaskItem[];
   onHoldTasks: OnHoldTaskItem[];
   reallocatedTasks: ReallocatedTaskItem[];
+  reworkTasks: ReworkTaskItem[];
   inbox: InboxItem[];
   summary: {
     total: number;
     active: number;
     onHold: number;
     completed: number;
+    reworkCount: number;
     onTimePct: number;
     reallocatedPct: number;
     donut: {

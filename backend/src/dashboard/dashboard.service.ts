@@ -9,6 +9,7 @@ import {
   CompletedTaskItem,
   OnHoldTaskItem,
   ReallocatedTaskItem,
+  ReworkTaskItem,
   InboxItem,
   DonutSegment,
 } from './projects-overview.dto';
@@ -68,11 +69,15 @@ export class DashboardService {
     const metricsWhere = viewerId && viewerRole
       ? await this.buildMetricsTaskWhere(viewerId, viewerRole)
       : {};
+    const hasMetricsFilter = Object.keys(metricsWhere).length > 0;
+    const taskScope = hasMetricsFilter ? { task: metricsWhere } : {};
 
     const [
       assignmentRows,
       completedRows,
       onHoldRows,
+      fragmentHoldRows,
+      reworkRows,
       reassignRows,
     ] = await Promise.all([
       this.prisma.schedulerAssignment.findMany({
@@ -124,10 +129,48 @@ export class DashboardService {
         orderBy: { updatedAt: 'desc' },
         take: 50,
       }),
+      this.prisma.schedulerTaskFragment.findMany({
+        where: { status: 'ON_HOLD', ...taskScope },
+        select: {
+          id: true,
+          updatedAt: true,
+          createdAt: true,
+          task: {
+            select: {
+              taskNo: true,
+              title: true,
+              designType: true,
+              revisionCode: true,
+              project: { select: { name: true, projectNo: true } },
+            },
+          },
+        },
+        orderBy: { updatedAt: 'desc' },
+        take: 50,
+      }),
+      this.prisma.task.findMany({
+        where: { status: 'REWORK', ...metricsWhere },
+        select: {
+          taskNo: true,
+          title: true,
+          designType: true,
+          revisionCode: true,
+          updatedAt: true,
+          project: { select: { name: true, projectNo: true } },
+          assignee: { select: { fullName: true } },
+          taskDesigners: {
+            select: { designer: { select: { fullName: true } } },
+            take: 5,
+          },
+        },
+        orderBy: { updatedAt: 'desc' },
+        take: 50,
+      }),
       this.prisma.activityLog.findMany({
         where: {
           action: ActivityAction.ASSIGNED_TASK,
           createdAt: { gte: ws, lte: we },
+          ...taskScope,
         },
         select: {
           id: true,
@@ -144,7 +187,7 @@ export class DashboardService {
           },
         },
         orderBy: { createdAt: 'desc' },
-        take: 100,
+        take: 200,
       }),
     ]);
 
@@ -209,33 +252,93 @@ export class DashboardService {
       completedAt: r.completedAt?.toISOString() ?? null,
     }));
 
-    const onHoldTasks: OnHoldTaskItem[] = onHoldRows.map((r) => ({
-      taskNo: r.taskNo,
-      title: r.title ?? '',
-      projectName: this.resolveProjectName(r.project, r.title),
-      designType: r.designType ?? null,
-      revisionCode: r.revisionCode ?? null,
-      holdDate: r.updatedAt?.toISOString() ?? null,
-      reason: 'On hold',
-    }));
+    const onHoldTasks: OnHoldTaskItem[] = [];
+    const seenWholeHold = new Set<string>();
+    for (const r of onHoldRows) {
+      if (!r.taskNo || seenWholeHold.has(r.taskNo)) continue;
+      seenWholeHold.add(r.taskNo);
+      onHoldTasks.push({
+        taskNo: r.taskNo,
+        title: r.title ?? '',
+        projectName: this.resolveProjectName(r.project, r.title),
+        designType: r.designType ?? null,
+        revisionCode: r.revisionCode ?? null,
+        holdDate: r.updatedAt?.toISOString() ?? null,
+        reason: 'On hold',
+        rowKey: `task-${r.taskNo}`,
+      });
+    }
+    const seenFragmentHold = new Set<string>();
+    for (const frag of fragmentHoldRows as Array<{
+      id: string;
+      updatedAt?: Date | null;
+      createdAt?: Date | null;
+      task?: {
+        taskNo?: string | null;
+        title?: string | null;
+        designType?: string | null;
+        revisionCode?: string | null;
+        project?: { name?: string | null; projectNo?: string | null } | null;
+      } | null;
+    }>) {
+      const taskNo = frag.task?.taskNo ?? '';
+      if (!taskNo) continue;
+      // Skip fragment row when the whole task is already listed as ON_HOLD
+      if (seenWholeHold.has(taskNo)) continue;
+      const fragKey = `${taskNo}-frag`;
+      if (seenFragmentHold.has(fragKey)) continue;
+      seenFragmentHold.add(fragKey);
+      onHoldTasks.push({
+        taskNo,
+        title: frag.task?.title ?? '',
+        projectName: this.resolveProjectName(frag.task?.project, frag.task?.title),
+        designType: frag.task?.designType ?? null,
+        revisionCode: frag.task?.revisionCode ?? null,
+        holdDate: (frag.updatedAt ?? frag.createdAt)?.toISOString() ?? null,
+        reason: 'Part on hold',
+        rowKey: `frag-${frag.id}`,
+      });
+    }
+
+    const reworkTasks: ReworkTaskItem[] = reworkRows.map((r) => {
+      const splitNames = (r.taskDesigners ?? [])
+        .map((d) => d.designer?.fullName)
+        .filter(Boolean) as string[];
+      const assigneeName =
+        r.assignee?.fullName
+        ?? (splitNames.length > 0 ? splitNames.join(', ') : null);
+      return {
+        taskNo: r.taskNo,
+        title: r.title ?? '',
+        projectName: this.resolveProjectName(r.project, r.title),
+        designType: r.designType ?? null,
+        revisionCode: r.revisionCode ?? null,
+        updatedAt: r.updatedAt?.toISOString() ?? null,
+        assigneeName,
+      };
+    });
 
     const seenRealloc = new Set<string>();
     const reallocatedTasks: ReallocatedTaskItem[] = [];
     for (const row of reassignRows) {
       if (!row.task || seenRealloc.has(row.task.taskNo)) continue;
-      let newAssigneeName = 'Unknown';
-      let fromAssigneeName: string | null = null;
-      try {
-        const det = typeof row.details === 'string'
-          ? JSON.parse(row.details)
-          : (row.details as unknown as Record<string, unknown>);
-        const changes = det?.changes as Record<string, unknown> | undefined;
-        newAssigneeName = (changes?.newAssigneeName as string) ?? 'Unknown';
-        fromAssigneeName = (changes?.oldAssigneeName as string) ?? null;
-      } catch {
-        /* ignore malformed JSON */
-      }
-      if (!fromAssigneeName) continue;
+      const changes = this.parseAssignChanges(row.details);
+      const oldAssigneeId = changes.oldAssigneeId;
+      const oldNameRaw = changes.oldAssigneeName;
+      const hasPriorAssignee =
+        Boolean(oldAssigneeId)
+        || (typeof oldNameRaw === 'string' && oldNameRaw.trim().length > 0);
+      if (!hasPriorAssignee) continue;
+
+      const fromAssigneeName =
+        (typeof oldNameRaw === 'string' && oldNameRaw.trim())
+          ? oldNameRaw.trim()
+          : 'Unknown';
+      const newAssigneeName =
+        (typeof changes.newAssigneeName === 'string' && changes.newAssigneeName.trim())
+          ? changes.newAssigneeName.trim()
+          : 'Unknown';
+
       seenRealloc.add(row.task.taskNo);
       reallocatedTasks.push({
         taskNo: row.task.taskNo,
@@ -288,7 +391,9 @@ export class DashboardService {
     }, {} as Record<string, number>);
 
     const buckets = aggregateStatusCounts(counts);
-    const { active, onHold, completed, total } = buckets;
+    const { active, completed, total } = buckets;
+    const onHoldUnique = new Set(onHoldTasks.map((t) => t.taskNo)).size;
+    const reworkCount = reworkTasks.length;
     const safeTotal = total || 1;
 
     const onTimeCount = completedWithDue.filter(
@@ -312,17 +417,19 @@ export class DashboardService {
       completedTasks,
       onHoldTasks,
       reallocatedTasks,
+      reworkTasks,
       inbox: trimmedInbox,
       summary: {
         total,
         active,
-        onHold,
+        onHold: onHoldUnique,
         completed,
+        reworkCount,
         onTimePct,
         reallocatedPct,
         donut: {
           active: mkSegment(active, '#4f8ef7'),
-          onHold: mkSegment(onHold, '#f5a623'),
+          onHold: mkSegment(onHoldUnique, '#f5a623'),
           completed: mkSegment(completed, '#7ed321'),
           centerPct: Math.round((completed / safeTotal) * 100),
           centerTotal: total,
@@ -385,11 +492,38 @@ export class DashboardService {
         select: { departmentId: true },
       });
       if (viewer?.departmentId) {
-        return { assignee: { departmentId: viewer.departmentId } };
+        const departmentId = viewer.departmentId;
+        return {
+          OR: [
+            { assignee: { departmentId } },
+            { taskDesigners: { some: { designer: { departmentId } } } },
+            { AND: [{ assigneeId: null }, { taskDesigners: { none: {} } }] },
+          ],
+        };
       }
       return {};
     }
     return { assigneeId: userId };
+  }
+
+  private parseAssignChanges(details: unknown): {
+    oldAssigneeId?: string | null;
+    oldAssigneeName?: string | null;
+    newAssigneeName?: string | null;
+  } {
+    try {
+      const det = typeof details === 'string'
+        ? JSON.parse(details)
+        : (details as Record<string, unknown> | null);
+      const changes = (det?.changes ?? {}) as Record<string, unknown>;
+      return {
+        oldAssigneeId: (changes.oldAssigneeId as string | null | undefined) ?? null,
+        oldAssigneeName: (changes.oldAssigneeName as string | null | undefined) ?? null,
+        newAssigneeName: (changes.newAssigneeName as string | null | undefined) ?? null,
+      };
+    } catch {
+      return {};
+    }
   }
 
   private async buildApprovalInbox(

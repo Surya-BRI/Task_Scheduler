@@ -328,8 +328,6 @@ const DEFAULT_STATS = {
   monthlyHourCount: 0,
   score: 0,
   pendingRegularization: 0,
-  xp: 0,
-  streak: 0,
 };
 const DEFAULT_DONUT = {
   active: { value: 0, pct: 0, color: '#4f8ef7' },
