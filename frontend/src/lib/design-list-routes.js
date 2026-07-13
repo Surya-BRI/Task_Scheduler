@@ -23,6 +23,19 @@ export function isProjectsListWorkflow(from) {
  * @param {string | null | undefined} from
  * @returns {string}
  */
+/**
+ * Resolve back navigation for task detail pages.
+ * @param {string | null | undefined} from
+ * @param {string | null | undefined} backOverride
+ * @returns {string}
+ */
+export function resolveTaskBackPath(from, backOverride) {
+  if (backOverride && String(backOverride).startsWith("/")) {
+    return backOverride;
+  }
+  return resolveWorkflowBackPath(from);
+}
+
 export function resolveWorkflowBackPath(from) {
   switch (from) {
     case FROM_PROJECT_DESIGN:

@@ -19,7 +19,7 @@ import {
 } from "@/features/scheduler/utils/schedulerWeek";
 import { listSchedulerAssignmentsForWeek, getSchedulerWeekMeta } from "@/features/scheduler/services/scheduler-assignments.api";
 import { apiClient } from "@/lib/api-client";
-import { FROM_DESIGNER_QUEUE, taskViewPathForRecord } from "@/lib/design-list-routes";
+import { FROM_DESIGN_LIST, FROM_DESIGNER_QUEUE, taskViewPathForRecord } from "@/lib/design-list-routes";
 import { getSession } from "@/lib/mock-auth";
 import { connectDashboardRealtime } from "@/lib/realtime";
 
@@ -298,6 +298,7 @@ function buildLiveScheduleData(assignments, tasksArr) {
     tasksMap[key] = {
       id: key,
       parentId: a.parentId ?? (a.splitIndex != null ? a.taskId : null),
+      designType: apiTask?.designType ?? apiTask?.project?.category ?? null,
       name: apiTask?.revisionCode
         ? `${apiTask?.opNo ? apiTask.opNo + '-' : ''}${apiTask.revisionCode}`
         : apiTask?.opNo || `Task #${a.taskId.slice(0, 6)}`,
@@ -354,11 +355,13 @@ export default function DesignerDashboard({ designer: designerProp } = {}) {
 
   useEffect(() => {
     const session = getSession();
-    setIsDesignerMode(!fromHome && session?.role === "DESIGNER");
+    const viewingOther = !!(propErpId && propErpId !== session?.id);
+    const hodSelf = (session?.role === "HOD" || session?.role === "SALESPERSON") && !viewingOther;
+    setIsDesignerMode(!fromHome && (session?.role === "DESIGNER" || hodSelf));
     setIsHOD(session?.role === "HOD" || session?.role === "SALESPERSON");
     if (session?.name) setSessionName(session.name);
     if (session) setSessionUser(session);
-  }, [fromHome]);
+  }, [fromHome, propErpId]);
 
   useEffect(() => {
     if (!propErpId) return;
@@ -368,6 +371,7 @@ export default function DesignerDashboard({ designer: designerProp } = {}) {
   }, [propErpId]);
 
   const isViewingOther = !!(propErpId && propErpId !== sessionUser?.id);
+  const hodSelfMode = isHOD && !isViewingOther;
 
   const designer = {
     id: isViewingOther ? propErpId : (sessionUser?.id ?? ''),
@@ -606,14 +610,27 @@ export default function DesignerDashboard({ designer: designerProp } = {}) {
   const donut = liveData?.donut ?? designer.donut;
 
   const openTask = useCallback((task) => {
-    router.push(taskViewPathForRecord(task, { from: FROM_DESIGNER_QUEUE }));
-  }, [router]);
+    if (isHOD && isViewingOther) {
+      router.push(taskViewPathForRecord(task, {
+        from: FROM_DESIGN_LIST,
+        back: `/designer/${encodeURIComponent(designer.erpDesignerId || designer.id)}`,
+      }));
+      return;
+    }
+    const back = hodSelfMode && sessionUser?.id
+      ? `/designer/${encodeURIComponent(sessionUser.id)}`
+      : undefined;
+    router.push(taskViewPathForRecord(task, {
+      from: FROM_DESIGNER_QUEUE,
+      ...(back ? { back } : {}),
+    }));
+  }, [router, isHOD, isViewingOther, hodSelfMode, sessionUser, designer.erpDesignerId, designer.id]);
 
   return (
     <div className="app-shell flex flex-col font-sans">
       <Navbar
-        currentDate={isHOD ? null : currentDate}
-        onCalendarChange={isHOD ? undefined : setCurrentDate}
+        currentDate={!isHOD && isDesignerMode ? currentDate : null}
+        onCalendarChange={!isHOD && isDesignerMode ? setCurrentDate : undefined}
         dateRangeText={dateRangeText}
       />
 
@@ -661,6 +678,7 @@ export default function DesignerDashboard({ designer: designerProp } = {}) {
             weekDates={weekDates}
             designerId={erpId || designer.id}
             isDesignerMode={isDesignerMode}
+            onOpenTask={openTask}
           />
 
           <div className="mt-1 flex gap-3">
