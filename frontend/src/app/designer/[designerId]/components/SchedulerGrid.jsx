@@ -1,5 +1,6 @@
 "use client";
 import { useRouter } from "next/navigation";
+import { formatHoursAsHm } from "@/lib/format-duration";
 
 const HOUR_COLS = [
   "0-1 HR", "1-2 HR", "2-3 HR", "3-4 HR",
@@ -62,7 +63,7 @@ function TaskBlock({ task, onOtClick, onOpenTask }) {
       >
         <div className="text-[9px] font-semibold truncate leading-none mr-1 select-none pointer-events-none">{task.label}</div>
         <div className="flex items-center gap-0.5 shrink-0">
-          <span className="text-[8px] font-bold opacity-70">{task.estimatedHours || (task.endHr - task.startHr)}h</span>
+          <span className="text-[8px] font-bold opacity-70">{formatHoursAsHm(task.estimatedHours || (task.endHr - task.startHr))}</span>
           {task.isOvertime && (
             <span className="text-[7px] font-bold bg-red-500 text-white rounded px-0.5 py-px leading-none ml-0.5">OT</span>
           )}

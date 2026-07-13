@@ -101,6 +101,16 @@ describe('SchedulerAssignmentsService', () => {
         status: 'Approved',
         task: { taskNo: 'T-100', title: 'Design task', opNo: 'OP-1' },
       },
+      {
+        id: 'reg-2',
+        designerId: 'designer-1',
+        taskId: 'task-2',
+        date: new Date('2026-06-11T00:00:00.000Z'),
+        duration: '30 mins',
+        reason: 'Late start',
+        status: 'Approved',
+        task: { taskNo: 'T-101', title: 'Short fix', opNo: 'OP-2' },
+      },
     ]);
 
     const rows = await service.findForWeekStart('2026-06-08', 'designer-1');
@@ -128,6 +138,17 @@ describe('SchedulerAssignmentsService', () => {
           scheduledHours: 2.5,
           regularizationHours: 2.5,
           regularizationRequestIds: ['reg-1'],
+        }),
+        expect.objectContaining({
+          id: 'regularization-reg-2',
+          requestType: 'REGULARIZATION',
+          isSystemBlock: true,
+          designerId: 'designer-1',
+          taskId: 'task-2',
+          dayIndex: 3,
+          scheduledHours: 0.5,
+          regularizationHours: 0.5,
+          regularizationRequestIds: ['reg-2'],
         }),
       ]),
     );

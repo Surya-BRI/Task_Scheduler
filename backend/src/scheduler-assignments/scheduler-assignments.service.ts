@@ -275,7 +275,14 @@ export class SchedulerAssignmentsService implements OnModuleInit {
     const numberMatch = text.match(/(\d+(?:\.\d+)?)/);
     if (!numberMatch) return 0;
     const parsed = Number(numberMatch[1]);
-    return Number.isFinite(parsed) ? parsed : 0;
+    if (!Number.isFinite(parsed)) return 0;
+
+    const isMinutes =
+      /\b(?:min|mins|minute|minutes)\b/.test(text) ||
+      (/\bm\b/.test(text) && !/\b(?:hr|hrs|hour|hours|h)\b/.test(text));
+    if (isMinutes) return parsed / 60;
+
+    return parsed;
   }
 
   private weekStartForDate(date: Date): Date {
