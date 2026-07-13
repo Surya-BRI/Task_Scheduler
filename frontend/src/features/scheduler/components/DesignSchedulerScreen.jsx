@@ -48,6 +48,11 @@ import {
 } from "../utils/schedulerNavigationState";
 import { isDesignerEligibleForProject } from "../utils/projectTeamEligibility";
 import { fetchSchedulerQueue } from "../services/scheduler-queue.api";
+import {
+    isRequestSystemBlock,
+    partitionDayTaskIds,
+    shouldSkipOptimizerTask,
+} from "../utils/scheduler-day-layout";
 // Only these backend events should trigger a scheduler reload for other HODs.
 // Capacity constants
 const DAILY_CAPACITY = 8; // 8hrs per day = normal capacity (green/blue)
@@ -72,29 +77,10 @@ const sumTaskTotalHours = (taskMap, taskIds) => taskIds.reduce((acc, taskId) => 
 
 const nextVisibleWeekdayAfter = (dayIndex, candidateDays) => candidateDays.find((idx) => idx > dayIndex);
 
-const isRequestSystemBlock = (task) => Boolean(task?.isSystemBlock || task?.requestType === "LEAVE" || task?.requestType === "REGULARIZATION");
-
 const isFullDayLeaveBlock = (task) => task?.requestType === "LEAVE" &&
     toPositiveHours(task.leaveHours ?? task.scheduledHours ?? task.estimatedHours) >= DAILY_CAPACITY;
 
 const hasFullDayLeaveBlock = (taskMap, taskIds = []) => taskIds.some((taskId) => isFullDayLeaveBlock(taskMap?.[taskId]));
-
-const normalizeLeaveSession = (session) =>
-    String(session ?? "").trim().toLowerCase().replace(/[_-]+/g, " ").replace(/\s+/g, " ");
-
-const getHalfDayLeaveVisualOrder = (task) => {
-    if (task?.requestType !== "LEAVE") return 1;
-    if (toPositiveHours(task.leaveHours ?? task.scheduledHours ?? task.estimatedHours) >= DAILY_CAPACITY) return 0;
-    const session = normalizeLeaveSession(task.leaveSession);
-    if (session === "first half" || session === "first session" || session === "first" || session === "am" || session === "morning") return 0;
-    if (session === "second half" || session === "second session" || session === "second" || session === "pm" || session === "afternoon") return 2;
-    return 1;
-};
-
-const sortRegularTaskIdsForVisualSession = (taskIds, taskMap) => taskIds
-    .map((taskId, order) => ({ taskId, order }))
-    .sort((a, b) => getHalfDayLeaveVisualOrder(taskMap[a.taskId]) - getHalfDayLeaveVisualOrder(taskMap[b.taskId]) || a.order - b.order)
-    .map((entry) => entry.taskId);
 
 const getRequestBlockHours = (row) => {
     if (row?.requestType === "LEAVE") return toPositiveHours(row.leaveHours ?? row.scheduledHours ?? row.assignedHours);
@@ -2273,13 +2259,8 @@ export function DesignSchedulerScreen() {
                     const originalSourceLength = sourceTasks.length;
                     for (const tid of sourceTasks) {
                         const taskInfo = newTasks[tid];
-                        if (taskInfo?.isOvertime) {
-                            keptInSource.push(tid);
-                            continue;
-                        }
-                        // Pinned tasks were deliberately placed on a later day via the redirect
-                        // override — never pull them backward into an earlier gap.
-                        if (taskInfo?.isPinned) {
+                        // Approved leave/regularization blocks are calendar-fixed — never move them.
+                        if (shouldSkipOptimizerTask(taskInfo)) {
                             keptInSource.push(tid);
                             continue;
                         }
@@ -2687,30 +2668,7 @@ export function DesignSchedulerScreen() {
                 }}>
                         {visibleDays.map(dayIndex => {
                     const rawTasksInDay = designerDays[dayIndex.toString()] || [];
-                    const regularTaskIds = rawTasksInDay.filter((taskId) => !tasks[taskId]?.isOvertime);
-
-                    // Split regular tasks into within-capacity and overflow (beyond 8h) so the
-                    // HOD can see which task is pushing the designer into overtime even without
-                    // a formal OT request.
-                    let _cumulativeHours = 0;
-                    const withinCapacityTaskIds = [];
-                    const overflowTaskIds = [];
-                    for (const taskId of regularTaskIds) {
-                      const hrs = Number(tasks[taskId]?.estimatedHours) || 0;
-                      if (_cumulativeHours >= DAILY_CAPACITY) {
-                        overflowTaskIds.push(taskId);
-                      } else {
-                        withinCapacityTaskIds.push(taskId);
-                        _cumulativeHours += hrs;
-                      }
-                    }
-
-                    const visualRegularTaskIds = sortRegularTaskIdsForVisualSession(withinCapacityTaskIds, tasks);
-                    // Merge approved OT request tasks with overflow tasks from regular scheduling
-                    const overtimeTaskIds = [
-                      ...rawTasksInDay.filter((taskId) => tasks[taskId]?.isOvertime),
-                      ...overflowTaskIds,
-                    ];
+                    const { visualRegularTaskIds, overtimeTaskIds } = partitionDayTaskIds(rawTasksInDay, tasks);
                     const isWeekend = dayIndex >= 5;
                     const isPastDay = !isWeekend && isPastDayIndex(dayIndex, currentDate);
                     const dayHours = getDayHours(designer.id, dayIndex);
