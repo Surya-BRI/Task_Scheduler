@@ -31,7 +31,7 @@ describe('SchedulerAssignmentsService', () => {
       update: jest.fn(),
       upsert: jest.fn(),
     },
-    schedulerAssignmentHistory: { create: jest.fn(), findMany: jest.fn() },
+    schedulerAssignmentHistory: { create: jest.fn(), findMany: jest.fn(), deleteMany: jest.fn() },
     $queryRaw: jest.fn(),
     $executeRaw: jest.fn(),
     $executeRawUnsafe: jest.fn(),
@@ -39,11 +39,15 @@ describe('SchedulerAssignmentsService', () => {
   };
   const activityLogger: any = { log: jest.fn() };
   const notificationsService: any = { create: jest.fn() };
+  const cronLockService: any = {
+    tryAcquire: jest.fn().mockResolvedValue(async () => undefined),
+  };
   const service = new SchedulerAssignmentsService(
     prisma,
     {} as any,
     activityLogger,
     notificationsService,
+    cronLockService,
   );
 
   beforeEach(async () => {
@@ -69,6 +73,7 @@ describe('SchedulerAssignmentsService', () => {
     prisma.schedulerAssignment.createMany.mockResolvedValue({ count: 0 });
     prisma.schedulerAssignmentHistory.create.mockResolvedValue({});
     prisma.schedulerAssignmentHistory.findMany.mockResolvedValue([]);
+    prisma.schedulerAssignmentHistory.deleteMany.mockResolvedValue({ count: 0 });
     prisma.$queryRaw.mockResolvedValue([]);
     prisma.$executeRaw.mockResolvedValue(1);
     prisma.$executeRawUnsafe.mockResolvedValue(undefined);
@@ -986,5 +991,98 @@ describe('SchedulerAssignmentsService', () => {
         expect.objectContaining({ weekStart: '2026-07-13', dayIndex: 1, hours: 0.7 }),
       ]);
     });
+  });
+
+  describe('purgeExpiredAssignmentHistory', () => {
+    const originalRetention = process.env.SCHEDULER_HISTORY_RETENTION_MONTHS;
+
+    afterEach(() => {
+      if (originalRetention === undefined) {
+        delete process.env.SCHEDULER_HISTORY_RETENTION_MONTHS;
+      } else {
+        process.env.SCHEDULER_HISTORY_RETENTION_MONTHS = originalRetention;
+      }
+    });
+
+    it('deletes history older than the retention window', async () => {
+      process.env.SCHEDULER_HISTORY_RETENTION_MONTHS = '18';
+      prisma.schedulerAssignmentHistory.deleteMany.mockResolvedValue({ count: 42 });
+
+      const result = await service.purgeExpiredAssignmentHistory();
+
+      expect(result.deletedCount).toBe(42);
+      expect(result.cutoff).toBeInstanceOf(Date);
+      expect(prisma.schedulerAssignmentHistory.deleteMany).toHaveBeenCalledWith({
+        where: { createdAt: { lt: expect.any(Date) } },
+      });
+    });
+
+    it('skips delete when retention is disabled (0)', async () => {
+      process.env.SCHEDULER_HISTORY_RETENTION_MONTHS = '0';
+
+      const result = await service.purgeExpiredAssignmentHistory();
+
+      expect(result).toEqual({ deletedCount: 0, cutoff: null });
+      expect(prisma.schedulerAssignmentHistory.deleteMany).not.toHaveBeenCalled();
+    });
+  });
+
+  it('bounds cross-week split recompute to ±SCHEDULER_SPLIT_RECOMPUTE_WEEK_WINDOW', async () => {
+    const originalWindow = process.env.SCHEDULER_SPLIT_RECOMPUTE_WEEK_WINDOW;
+    process.env.SCHEDULER_SPLIT_RECOMPUTE_WEEK_WINDOW = '4';
+    try {
+      const taskId = '79bde5e5-d694-4728-88ab-33d71f238e11';
+      const alex = 'cbfa197a-d2ca-463c-adf3-ea6f8457e2c3';
+      prisma.user.findMany.mockResolvedValue([{ id: alex, fullName: 'Alex Johnson' }]);
+      prisma.task.findMany.mockResolvedValue([
+        { id: taskId, status: 'DESIGN_PLANNED', assigneeId: alex, projectId: null, project: null },
+      ]);
+      prisma.schedulerAssignment.findMany
+        .mockResolvedValueOnce([])
+        .mockResolvedValueOnce([])
+        .mockResolvedValueOnce([]);
+      prisma.$queryRaw.mockResolvedValue([
+        {
+          id: 'week-1',
+          weekStartDate: new Date('2026-07-06T00:00:00.000Z'),
+          version: 0,
+          isLocked: false,
+          updatedAt: new Date(),
+          updatedBy: null,
+          lastPayloadHash: null,
+        },
+      ]);
+      prisma.schedulerWeek.update.mockResolvedValue({
+        version: 1,
+        isLocked: false,
+        updatedAt: new Date(),
+        updatedBy: alex,
+      });
+
+      await service.saveWeekSnapshot('2026-07-06', alex, {
+        version: 0,
+        assignments: [
+          {
+            designerId: alex,
+            taskId,
+            dayIndex: 0,
+            assignedHours: 4,
+            parentId: taskId,
+            splitIndex: 1,
+            totalParts: 2,
+          },
+        ],
+      } as any);
+
+      const crossWeekCall = prisma.schedulerAssignment.findMany.mock.calls.find(
+        (call: any[]) => call[0]?.where?.weekStartDate?.gte && call[0]?.where?.weekStartDate?.lte,
+      );
+      expect(crossWeekCall).toBeTruthy();
+      expect(crossWeekCall[0].where.weekStartDate.gte.toISOString()).toBe('2026-06-08T00:00:00.000Z');
+      expect(crossWeekCall[0].where.weekStartDate.lte.toISOString()).toBe('2026-08-03T00:00:00.000Z');
+    } finally {
+      if (originalWindow === undefined) delete process.env.SCHEDULER_SPLIT_RECOMPUTE_WEEK_WINDOW;
+      else process.env.SCHEDULER_SPLIT_RECOMPUTE_WEEK_WINDOW = originalWindow;
+    }
   });
 });

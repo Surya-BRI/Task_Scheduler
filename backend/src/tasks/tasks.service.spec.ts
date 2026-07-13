@@ -9,6 +9,20 @@ describe('TasksService', () => {
     assigneeId: 'designer-1',
     startedAt: new Date('2026-07-01T00:00:00.000Z'),
     holdPreviousStatus: null,
+    projectId: 'project-1',
+    opNo: 'OP-1',
+    designType: 'PROJECT',
+    signType: 'Pylon',
+    signFamily: 'Family',
+    disciplineType: 'Artwork',
+    title: 'Facade',
+    description: null,
+    priority: 'MEDIUM',
+    dueDate: null,
+    technicalHead: null,
+    teamLead: null,
+    subTeamLead: null,
+    designers: null,
   };
 
   const updatedTask = {
@@ -32,6 +46,10 @@ describe('TasksService', () => {
     taskWorkSession: { findFirst: jest.fn(), findMany: jest.fn(), update: jest.fn() },
     project: { findFirst: jest.fn(), findMany: jest.fn(), update: jest.fn(), create: jest.fn() },
     projectTaskDetail: { create: jest.fn() },
+    retailTaskDetail: { create: jest.fn() },
+    retailTaskDetailAttachment: { create: jest.fn() },
+    projectTaskDetailAttachment: { create: jest.fn() },
+    chatterPost: { create: jest.fn() },
     $queryRaw: jest.fn(),
     $transaction: jest.fn((cb: (tx: any) => Promise<unknown>) => cb(prisma)),
   };
@@ -54,6 +72,7 @@ describe('TasksService', () => {
     prisma.user.findMany.mockResolvedValue([]);
     notificationsService.create.mockResolvedValue({});
     prisma.task.findMany.mockResolvedValue([]);
+    prisma.chatterPost.create.mockResolvedValue({});
     prisma.$transaction.mockImplementation((cb: (tx: any) => Promise<unknown>) => cb(prisma));
     activityLogger.log.mockResolvedValue(undefined);
   });
@@ -62,6 +81,7 @@ describe('TasksService', () => {
     it('deletes unconditionally when no expectedAssignmentIds given (back-compat)', async () => {
       await service.updateStatus(TASK_ID, 'hod-1', UserRole.HOD, { status: 'ON_HOLD' } as any);
 
+      expect(prisma.$transaction).toHaveBeenCalled();
       expect(prisma.schedulerAssignment.findMany).not.toHaveBeenCalled();
       expect(prisma.task.update).toHaveBeenCalled();
       expect(prisma.schedulerAssignment.deleteMany).toHaveBeenCalledWith({
@@ -77,6 +97,7 @@ describe('TasksService', () => {
         expectedAssignmentIds: ['row-a'],
       } as any);
 
+      expect(prisma.$transaction).toHaveBeenCalled();
       expect(prisma.task.update).toHaveBeenCalled();
       expect(prisma.schedulerAssignment.deleteMany).toHaveBeenCalledWith({
         where: { taskId: TASK_ID, weekStartDate: { gte: expect.any(Date) } },
@@ -336,12 +357,46 @@ describe('TasksService', () => {
       expect(dashboardRealtime.notifyUserNotificationRefresh).toHaveBeenCalledWith('hod-1');
     });
 
-    it('CLIENT_REJECTED notifies the assignee', async () => {
-      await service.updateStatus(TASK_ID, 'sales-1', UserRole.SALESPERSON, { status: 'CLIENT_REJECTED' } as any);
+    it('CLIENT_REJECTED notifies the assignee and creates the next revision task', async () => {
+      const revisionTask = { id: 'rev-task-1', taskNo: 'T-101' };
+      prisma.task.update
+        .mockResolvedValueOnce({ ...updatedTask, status: 'CLIENT_REJECTED' })
+        .mockResolvedValueOnce(revisionTask);
+      prisma.task.findUnique
+        .mockResolvedValueOnce(existingTask)
+        .mockResolvedValueOnce({ retailDetails: [], projectDetails: [] });
+      prisma.task.create.mockResolvedValue(revisionTask);
+      prisma.task.findMany.mockResolvedValue([{ revisionCode: 'R0' }]);
+
+      const result = await service.updateStatus(TASK_ID, 'sales-1', UserRole.SALESPERSON, {
+        status: 'CLIENT_REJECTED',
+        reworkNote: 'Client wants new pack',
+      } as any);
 
       expect(notificationsService.create).toHaveBeenCalledWith(
         expect.objectContaining({ userId: 'designer-1', title: 'Client Rejected Task' }),
       );
+      expect(prisma.task.create).toHaveBeenCalledWith(
+        expect.objectContaining({
+          data: expect.objectContaining({
+            revisionCode: 'R1',
+            status: 'DESIGN_NEW',
+            assigneeId: null,
+          }),
+        }),
+      );
+      // Follow-up update attaches previousRevisionTaskId + reject note on the new task
+      expect(prisma.task.update).toHaveBeenCalledWith(
+        expect.objectContaining({
+          where: { id: revisionTask.id },
+          data: expect.objectContaining({
+            previousRevisionTaskId: TASK_ID,
+            reworkNote: 'Client wants new pack',
+          }),
+        }),
+      );
+      expect(result.newRevisionTaskId).toBe(revisionTask.id);
+      expect(result.newRevisionTaskNo).toBe(revisionTask.taskNo);
     });
 
     it('entering ON_HOLD notifies the assignee that the task was put on hold', async () => {
@@ -360,6 +415,54 @@ describe('TasksService', () => {
       expect(notificationsService.create).toHaveBeenCalledWith(
         expect.objectContaining({ userId: 'designer-1', title: 'Task Resumed' }),
       );
+    });
+  });
+
+  describe('updateStatus — rework vs client-reject revision rules', () => {
+    it('REWORK keeps the same task, persists instructions, and does not create a revision', async () => {
+      prisma.task.update.mockResolvedValue({
+        ...updatedTask,
+        status: 'REWORK',
+        assigneeId: 'designer-1',
+        reworkNote: 'Fix sheet 3',
+      });
+
+      const result = await service.updateStatus(TASK_ID, 'sales-1', UserRole.SALESPERSON, {
+        status: 'REWORK',
+        reworkNote: 'Fix sheet 3',
+      } as any);
+
+      expect(prisma.task.update).toHaveBeenCalledWith(
+        expect.objectContaining({
+          where: { id: TASK_ID },
+          data: expect.objectContaining({
+            status: 'REWORK',
+            reworkNote: 'Fix sheet 3',
+          }),
+        }),
+      );
+      expect(prisma.task.create).not.toHaveBeenCalled();
+      expect(result.newRevisionTaskId).toBeUndefined();
+      expect(notificationsService.create).toHaveBeenCalledWith(
+        expect.objectContaining({ userId: 'designer-1', title: expect.stringContaining('Rework Issued') }),
+      );
+      expect(prisma.chatterPost.create).toHaveBeenCalledWith(
+        expect.objectContaining({
+          data: expect.objectContaining({ taskId: TASK_ID, title: 'Rework Instructions' }),
+        }),
+      );
+    });
+
+    it('forbids designers from issuing REWORK', async () => {
+      await expect(
+        service.updateStatus(TASK_ID, 'designer-1', UserRole.DESIGNER, { status: 'REWORK' } as any),
+      ).rejects.toThrow('Only SALESPERSON or ADMIN can issue rework');
+    });
+
+    it('forbids designers from marking CLIENT_REJECTED', async () => {
+      await expect(
+        service.updateStatus(TASK_ID, 'designer-1', UserRole.DESIGNER, { status: 'CLIENT_REJECTED' } as any),
+      ).rejects.toThrow('Only SALESPERSON or ADMIN can mark client rejected');
     });
   });
 

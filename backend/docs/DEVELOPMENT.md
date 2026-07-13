@@ -135,6 +135,12 @@ A task is "split" when the HOD assigns it to multiple designers in the scheduler
 - Work submission (`POST /tasks/:id/submit-work`) builds the submitter display name from the junction when `assigneeId` is null.
 - SQL migration: `backend/prisma/sql/add-task-designer-junction.sql`
 
+## Rework vs Client Reject
+
+- **REWORK** (`PATCH /tasks/:id/status` with `status: REWORK`) keeps the **same** task and assignee(s). Instructions (`reworkNote` / attachment / link) are stored on that task. No revision bump and no new task row. Designer can continue (or HOD can reassign via existing flows).
+- **CLIENT_REJECTED** marks the old task rejected and **creates a new revision task** (next `R{n}`), cloned from the rejected task, unassigned (`DESIGN_NEW`), with `previousRevisionTaskId` pointing at the old task. Optional reject instructions are copied onto the new revision.
+- Only `SALESPERSON` or `ADMIN` may issue REWORK or CLIENT_REJECTED.
+
 ## Task Create Rules (Important)
 
 For `POST /api/v1/tasks/extended`:

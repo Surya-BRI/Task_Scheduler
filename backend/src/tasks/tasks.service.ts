@@ -257,7 +257,53 @@ export class TasksService {
     return /^https?:\/\//i.test(String(value ?? '').trim());
   }
 
-  private async withSignedAttachmentUrls<T extends { retailDetails?: any[]; projectDetails?: any[] }>(task: T): Promise<T> {
+  /** Prefer S3 object key for storage; unwrap unsigned bucket URLs back to keys. */
+  private toStoredS3ObjectKey(value?: string | null): string | null {
+    const raw = String(value ?? '').trim();
+    if (!raw) return null;
+    if (!this.isAbsoluteHttpUrl(raw)) return raw;
+    try {
+      const parsed = new URL(raw);
+      // Already a usable signed URL — leave as-is for legacy rows.
+      if (parsed.searchParams.has('X-Amz-Algorithm') || parsed.searchParams.has('X-Amz-Signature')) {
+        return raw;
+      }
+      if (parsed.hostname.includes('.s3.') || parsed.hostname.startsWith('s3.')) {
+        const key = decodeURIComponent(parsed.pathname.replace(/^\/+/, ''));
+        return key || raw;
+      }
+    } catch {
+      return raw;
+    }
+    return raw;
+  }
+
+  private async resolveReadableFileUrl(stored?: string | null): Promise<string | null> {
+    const raw = String(stored ?? '').trim();
+    if (!raw) return null;
+    if (this.isAbsoluteHttpUrl(raw)) {
+      try {
+        const parsed = new URL(raw);
+        if (parsed.searchParams.has('X-Amz-Algorithm') || parsed.searchParams.has('X-Amz-Signature')) {
+          return raw;
+        }
+        if (parsed.hostname.includes('.s3.') || parsed.hostname.startsWith('s3.')) {
+          const key = decodeURIComponent(parsed.pathname.replace(/^\/+/, ''));
+          if (key) return this.taskFilesService.createSignedReadUrl(key);
+        }
+      } catch {
+        return raw;
+      }
+      return raw;
+    }
+    return this.taskFilesService.createSignedReadUrl(raw);
+  }
+
+  private async withSignedAttachmentUrls<T extends {
+    retailDetails?: any[];
+    projectDetails?: any[];
+    reworkAttachmentUrl?: string | null;
+  }>(task: T): Promise<T & { reworkAttachmentUrl?: string | null }> {
     const allKeys = [
       ...(task.retailDetails ?? []).flatMap((line) => (line.attachments ?? []).map((a: any) => a.fileKey)),
       ...(task.projectDetails ?? []).flatMap((line) => (line.attachments ?? []).map((a: any) => a.fileKey)),
@@ -273,8 +319,11 @@ export class TasksService {
       }),
     );
 
+    const reworkAttachmentUrl = await this.resolveReadableFileUrl(task.reworkAttachmentUrl);
+
     return {
       ...task,
+      reworkAttachmentUrl,
       retailDetails: (task.retailDetails ?? []).map((line: any) => ({
         ...line,
         attachments: (line.attachments ?? []).map((a: any) => ({
@@ -1478,10 +1527,18 @@ export class TasksService {
       if (!inJunction) throw new ForbiddenException('Designers can only update status on their own tasks');
     }
 
-    // Only SALESPERSON and ADMIN can issue rework
+    // Only SALESPERSON and ADMIN can issue rework or client-reject (which creates the next revision)
     const newStatusApi = toApiTaskStatus(dto.status);
-    if (newStatusApi === 'REWORK' && role !== UserRole.SALESPERSON && role !== UserRole.ADMIN) {
-      throw new ForbiddenException('Only SALESPERSON or ADMIN can issue rework');
+    if (
+      (newStatusApi === 'REWORK' || newStatusApi === 'CLIENT_REJECTED') &&
+      role !== UserRole.SALESPERSON &&
+      role !== UserRole.ADMIN
+    ) {
+      throw new ForbiddenException(
+        newStatusApi === 'REWORK'
+          ? 'Only SALESPERSON or ADMIN can issue rework'
+          : 'Only SALESPERSON or ADMIN can mark client rejected',
+      );
     }
 
     // Auto-track startedAt / completedAt timestamps
@@ -1507,44 +1564,54 @@ export class TasksService {
     if (effectiveStatusApi === 'IN_PROGRESS' && !existing.startedAt) extraData.startedAt = now;
     if (COMPLETED_STATUS_FILTER.includes(effectiveStatusApi)) extraData.completedAt = now;
 
-    // When issuing REWORK from CLIENT_REJECTED: keep old task as CLIENT_REJECTED — only create the revision
-    const skipStatusUpdate = currentStatusApi === 'CLIENT_REJECTED' && newStatusApi === 'REWORK';
-
-    // Scheduler-consolidation guard: reject before mutating anything if a live scheduler
-    // assignment exists that the caller (folding split parts into one whole-task status
-    // change) didn't know about — prevents silently wiping a sibling scheduled in a week
-    // the caller hadn't loaded. Only runs when the caller opts in via expectedAssignmentIds.
-    if (newStatusApi === 'ON_HOLD' && dto.expectedAssignmentIds) {
-      const todayMidnightGuard = new Date(new Date().toISOString().split('T')[0] + 'T00:00:00.000Z');
-      const liveRows = await this.prisma.schedulerAssignment.findMany({
-        where: { taskId: id, weekStartDate: { gte: todayMidnightGuard } },
-        select: { id: true },
-      });
-      const expected = new Set(dto.expectedAssignmentIds);
-      if (liveRows.some((row) => !expected.has(row.id))) {
-        throw new ConflictException(
-          'Another scheduled part of this task changed since this page last loaded. Refresh and try again.',
-        );
-      }
+    // REWORK stays on the same task — persist instructions alongside the status flip
+    if (effectiveStatusApi === 'REWORK') {
+      extraData.reworkNote = dto.reworkNote?.trim() || null;
+      extraData.reworkAttachmentUrl = this.toStoredS3ObjectKey(dto.reworkAttachmentUrl);
+      extraData.reworkAttachmentName = dto.reworkAttachmentName || null;
+      extraData.reworkLinkUrl = dto.reworkLinkUrl || null;
+      extraData.reworkLinkName = dto.reworkLinkName || null;
     }
 
     let updatedTask: Awaited<ReturnType<typeof this.prisma.task.findUniqueOrThrow>>;
-    if (skipStatusUpdate) {
-      updatedTask = await (this.prisma.task.findUniqueOrThrow as any)({ where: { id }, select: TASK_SELECT });
+
+    // ON_HOLD: status update + future-assignment wipe (and optional consolidation guard) must
+    // run in one transaction. Without that, a sibling row created between the expected-ids
+    // check and deleteMany would still be wiped even though the guard "passed" — matching
+    // clearTaskSchedule's atomic check+delete.
+    if (newStatusApi === 'ON_HOLD') {
+      const todayMidnight = new Date(new Date().toISOString().split('T')[0] + 'T00:00:00.000Z');
+      updatedTask = await this.prisma.$transaction(async (tx) => {
+        if (dto.expectedAssignmentIds) {
+          const liveRows = await tx.schedulerAssignment.findMany({
+            where: { taskId: id, weekStartDate: { gte: todayMidnight } },
+            select: { id: true },
+          });
+          const expected = new Set(dto.expectedAssignmentIds);
+          if (liveRows.some((row) => !expected.has(row.id))) {
+            throw new ConflictException(
+              'Another scheduled part of this task changed since this page last loaded. Refresh and try again.',
+            );
+          }
+        }
+
+        const held = await (tx.task.update as any)({
+          where: { id },
+          data: { status: newStatusDb, ...extraData },
+          select: TASK_SELECT,
+        });
+
+        await tx.schedulerAssignment.deleteMany({
+          where: { taskId: id, weekStartDate: { gte: todayMidnight } },
+        });
+
+        return held;
+      });
     } else {
       updatedTask = await (this.prisma.task.update as any)({
         where: { id },
         data: { status: newStatusDb, ...extraData },
         select: TASK_SELECT,
-      });
-    }
-
-    // When transitioning to ON_HOLD, remove all future scheduler assignments so the
-    // task doesn't appear as assigned on the scheduler grid
-    if (newStatusApi === 'ON_HOLD') {
-      const todayMidnight = new Date(new Date().toISOString().split('T')[0] + 'T00:00:00.000Z');
-      await this.prisma.schedulerAssignment.deleteMany({
-        where: { taskId: id, weekStartDate: { gte: todayMidnight } },
       });
     }
 
@@ -1615,7 +1682,12 @@ export class TasksService {
       }
       // Notify split-task designers (junction table) who don't have assigneeId
       const splitDesignersComplete = await this.prisma.taskDesigner.findMany({
-        where: { taskId: id, NOT: { designerId: (updatedTask as any).assigneeId ?? '' } },
+        where: {
+          taskId: id,
+          ...((updatedTask as any).assigneeId
+            ? { NOT: { designerId: (updatedTask as any).assigneeId } }
+            : {}),
+        },
         select: { designerId: true },
       });
       for (const { designerId } of splitDesignersComplete) {
@@ -1653,7 +1725,8 @@ export class TasksService {
       }
     }
 
-    // CLIENT_REJECTED — notify the assignee and split designers that the client rejected the submission
+    // CLIENT_REJECTED — notify designers, then create the next revision task
+    let revisionResult: { id: string; taskNo: string } | null = null;
     if (effectiveStatusApi === 'CLIENT_REJECTED') {
       const linkUrlClientRejected =
         (updatedTask as any).designType?.toLowerCase() === 'retail'
@@ -1667,7 +1740,12 @@ export class TasksService {
         this.dashboardRealtime?.notifyUserNotificationRefresh((updatedTask as any).assigneeId);
       }
       const splitDesignersRejected = await this.prisma.taskDesigner.findMany({
-        where: { taskId: id, NOT: { designerId: (updatedTask as any).assigneeId ?? '' } },
+        where: {
+          taskId: id,
+          ...((updatedTask as any).assigneeId
+            ? { NOT: { designerId: (updatedTask as any).assigneeId } }
+            : {}),
+        },
         select: { designerId: true },
       });
       for (const { designerId } of splitDesignersRejected) {
@@ -1676,6 +1754,8 @@ export class TasksService {
           .catch((err) => this.logger.error('Failed to send client-rejected notification to split designer', err));
         this.dashboardRealtime?.notifyUserNotificationRefresh(designerId);
       }
+
+      revisionResult = await this.createRevisionFromClientReject(existing, dto, userId);
     }
 
     // ON_HOLD — notify the assignee and split designers whichever direction the transition goes
@@ -1697,7 +1777,12 @@ export class TasksService {
         this.dashboardRealtime?.notifyUserNotificationRefresh((updatedTask as any).assigneeId);
       }
       const splitDesignersHold = await this.prisma.taskDesigner.findMany({
-        where: { taskId: id, NOT: { designerId: (updatedTask as any).assigneeId ?? '' } },
+        where: {
+          taskId: id,
+          ...((updatedTask as any).assigneeId
+            ? { NOT: { designerId: (updatedTask as any).assigneeId } }
+            : {}),
+        },
         select: { designerId: true },
       });
       for (const { designerId } of splitDesignersHold) {
@@ -1727,8 +1812,7 @@ export class TasksService {
       }
     }
 
-    // REWORK — notify original designers and create new revision task
-    let reworkResult: { id: string; taskNo: string } | null = null;
+    // REWORK — same task stays with current designer(s); notify and post instructions
     if (effectiveStatusApi === 'REWORK') {
       const taskLink =
         (updatedTask as any).designType?.toLowerCase() === 'retail'
@@ -1736,7 +1820,6 @@ export class TasksService {
           : `/project-task-view/${id}`;
       const note = dto.reworkNote?.trim() ?? '';
 
-      // Notify the original task's designer(s) that rework was issued
       if ((updatedTask as any).assigneeId) {
         this.notificationsService
           .create({
@@ -1749,7 +1832,12 @@ export class TasksService {
         this.dashboardRealtime?.notifyUserNotificationRefresh((updatedTask as any).assigneeId);
       }
       const splitDesignersRework = await this.prisma.taskDesigner.findMany({
-        where: { taskId: id, NOT: { designerId: (updatedTask as any).assigneeId ?? '' } },
+        where: {
+          taskId: id,
+          ...((updatedTask as any).assigneeId
+            ? { NOT: { designerId: (updatedTask as any).assigneeId } }
+            : {}),
+        },
         select: { designerId: true },
       });
       for (const { designerId } of splitDesignersRework) {
@@ -1764,19 +1852,28 @@ export class TasksService {
         this.dashboardRealtime?.notifyUserNotificationRefresh(designerId);
       }
 
-      // Create the new revision task
-      reworkResult = await this.createRevisionFromRework(existing, dto, userId);
+      if (note) {
+        await this.prisma.chatterPost.create({
+          data: {
+            taskId: id,
+            title: 'Rework Instructions',
+            message: `Rework Required:\n\n${note}`,
+            postType: 'REWORK',
+            authorId: userId,
+          },
+        }).catch((err) => this.logger.error('Failed to create rework chatter post', err));
+      }
     }
 
     const withUrls = await this.withSignedAttachmentUrls(updatedTask as any);
     const normalized = this.normalizeTaskForApi(withUrls);
     return {
       ...normalized,
-      ...(reworkResult ? { newRevisionTaskId: reworkResult.id, newRevisionTaskNo: reworkResult.taskNo } : {}),
+      ...(revisionResult ? { newRevisionTaskId: revisionResult.id, newRevisionTaskNo: revisionResult.taskNo } : {}),
     };
   }
 
-  private async createRevisionFromRework(
+  private async createRevisionFromClientReject(
     originalTask: { id: string; projectId: string; opNo: string | null; designType: string | null; signType: string | null; signFamily: string | null; disciplineType: string | null; title: string | null; description: string | null; priority: string; dueDate: Date | null; technicalHead: string | null; teamLead: string | null; subTeamLead: string | null; designers: string | null },
     dto: UpdateTaskStatusDto,
     userId: string,
@@ -1809,7 +1906,7 @@ export class TasksService {
       },
     });
 
-    this.logger.log(`createRevisionFromRework: start — original=${originalTask.id} opNo=${opNo} designType=${designType} projectId=${originalTask.projectId}`);
+    this.logger.log(`createRevisionFromClientReject: start — original=${originalTask.id} opNo=${opNo} designType=${designType} projectId=${originalTask.projectId}`);
     const result = await this.prisma.$transaction(async (tx) => {
       // Resolve next revision code
       const nextRevision = await this.resolveNextRevisionCode(tx, {
@@ -1818,7 +1915,7 @@ export class TasksService {
         designType,
         signType: originalTask.signType,
       });
-      this.logger.log(`createRevisionFromRework: nextRevision=${nextRevision}`);
+      this.logger.log(`createRevisionFromClientReject: nextRevision=${nextRevision}`);
 
       const newTaskNo = this.buildTaskNo(opNo);
 
@@ -1829,8 +1926,8 @@ export class TasksService {
           .filter(Boolean).join(' - ') || originalTask.title || null;
       }
 
-      this.logger.log(`createRevisionFromRework: creating task taskNo=${newTaskNo} title=${newTitle}`);
-      // Create the new revision task (core fields only — rework context applied separately below)
+      this.logger.log(`createRevisionFromClientReject: creating task taskNo=${newTaskNo} title=${newTitle}`);
+      // Create the new revision task (core fields only — reject context applied separately below)
       const newTask = await tx.task.create({
         data: {
           taskNo: newTaskNo,
@@ -1855,7 +1952,7 @@ export class TasksService {
         select: { id: true, taskNo: true },
       });
 
-      this.logger.log(`createRevisionFromRework: task created id=${newTask.id} taskNo=${newTask.taskNo}`);
+      this.logger.log(`createRevisionFromClientReject: task created id=${newTask.id} taskNo=${newTask.taskNo}`);
 
       // Clone retail detail + attachments
       if (originalFull?.retailDetails && originalFull.retailDetails.length > 0) {
@@ -1924,33 +2021,33 @@ export class TasksService {
 
     // Everything below uses this.prisma — must be outside the transaction to avoid P2028.
 
-    // Rework context fields
+    // Reject context fields on the new revision task
     await (this.prisma.task.update as any)({
       where: { id: result.id },
       data: {
         reworkNote: dto.reworkNote?.trim() || null,
-        reworkAttachmentUrl: dto.reworkAttachmentUrl || null,
+        reworkAttachmentUrl: this.toStoredS3ObjectKey(dto.reworkAttachmentUrl),
         reworkAttachmentName: dto.reworkAttachmentName || null,
         reworkLinkUrl: dto.reworkLinkUrl || null,
         reworkLinkName: dto.reworkLinkName || null,
         previousRevisionTaskId: originalTask.id,
       },
     }).catch((err: unknown) => {
-      this.logger.warn('Rework context fields not saved:', err);
+      this.logger.warn('Client-reject revision context fields not saved:', err);
     });
 
-    // Chatter post with rework instructions
+    // Chatter post with rejection instructions on the new revision
     const note = dto.reworkNote?.trim();
     if (note) {
       await this.prisma.chatterPost.create({
         data: {
           taskId: result.id,
-          title: 'Rework Instructions',
-          message: `Rework Required:\n\n${note}`,
+          title: 'Client Reject Instructions',
+          message: `Client Rejected — next revision:\n\n${note}`,
           postType: 'REWORK',
           authorId: userId,
         },
-      }).catch((err) => this.logger.error('Failed to create rework chatter post', err));
+      }).catch((err) => this.logger.error('Failed to create client-reject chatter post', err));
     }
 
     // Activity log
@@ -1962,9 +2059,9 @@ export class TasksService {
         event: ActivityAction.TASK_CREATED,
         messageKey: 'task_created',
         taskSnapshot: { id: result.id, taskNo: result.taskNo },
-        context: { source: 'rework_revision', previousTaskId: originalTask.id, revisionCode: result._revision },
+        context: { source: 'client_reject_revision', previousTaskId: originalTask.id, revisionCode: result._revision },
       },
-    }).catch((err) => this.logger.error('Failed to log rework revision activity', err));
+    }).catch((err) => this.logger.error('Failed to log client-reject revision activity', err));
 
     // Notify HODs
     const hodUsers = await this.prisma.user.findMany({
@@ -1979,7 +2076,7 @@ export class TasksService {
         .create({
           userId: hod.id,
           title: `New Revision Created — ${result.taskNo}`,
-          message: `Revision ${result._revision} created from rework. Awaiting assignment.`,
+          message: `Revision ${result._revision} created after client reject. Awaiting assignment.`,
           linkUrl: taskLink,
         })
         .catch((err) => this.logger.error('Failed to send new revision notification to HOD', err));
@@ -1996,7 +2093,7 @@ export class TasksService {
         .create({
           userId: sp.id,
           title: `New Revision Created — ${result.taskNo}`,
-          message: `Revision ${result._revision} created from your rework request. Awaiting designer assignment.`,
+          message: `Revision ${result._revision} created after client reject. Awaiting designer assignment.`,
           linkUrl: taskLink,
         })
         .catch((err) => this.logger.error('Failed to send new revision notification to salesperson', err));

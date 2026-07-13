@@ -11,6 +11,7 @@ import {
   Optional,
 } from '@nestjs/common';
 import { ConfigService } from '@nestjs/config';
+import { Cron } from '@nestjs/schedule';
 import { Prisma } from '@prisma/client';
 import { createHash } from 'crypto';
 import { shouldRunRuntimeSchemaBootstrap } from '../common/utils/runtime-schema-bootstrap.util';
@@ -18,6 +19,7 @@ import {
   effectiveWorkSessionSeconds,
   workedHoursFromSeconds,
 } from '../common/utils/task-work-session-time.util';
+import { CronLockService } from '../common/services/cron-lock.service';
 import { PrismaService } from '../prisma/prisma.service';
 import { ActivityLoggerService } from '../activities/activity-logger.service';
 import { ActivityAction } from '../activities/activity-events';
@@ -135,6 +137,9 @@ const DAILY_CAPACITY = 8;
 const MAX_DAILY_HOURS = 12;
 /** ±N weeks around the saved week when recomputing cross-week splitIndex/totalParts. */
 const DEFAULT_SPLIT_RECOMPUTE_WEEK_WINDOW = 26;
+/** Keep SchedulerAssignmentHistory for this many months (0 disables purge). */
+const DEFAULT_HISTORY_RETENTION_MONTHS = 18;
+const HISTORY_PURGE_CRON_LOCK = 'TaskScheduler:SchedulerHistoryPurgeCron';
 
 type LeaveRescheduleSnapshotRow = {
   assignmentId: string;
@@ -151,6 +156,7 @@ export class SchedulerAssignmentsService implements OnModuleInit {
     _config: ConfigService,
     private readonly activityLogger: ActivityLoggerService,
     private readonly notificationsService: NotificationsService,
+    private readonly cronLockService: CronLockService,
     @Optional() private readonly dashboardRealtime?: DashboardRealtimeService,
   ) {}
 
@@ -417,6 +423,14 @@ export class SchedulerAssignmentsService implements OnModuleInit {
     return Math.floor(parsed);
   }
 
+  private getHistoryRetentionMonths(): number {
+    const parsed = Number(
+      process.env.SCHEDULER_HISTORY_RETENTION_MONTHS ?? DEFAULT_HISTORY_RETENTION_MONTHS,
+    );
+    if (!Number.isFinite(parsed) || parsed < 0) return DEFAULT_HISTORY_RETENTION_MONTHS;
+    return Math.floor(parsed);
+  }
+
   private splitRecomputeWeekBounds(weekStartDate: Date): { minWeekStart: Date; maxWeekStart: Date } {
     const windowWeeks = this.getSplitRecomputeWeekWindow();
     const minWeekStart = new Date(weekStartDate);
@@ -424,6 +438,47 @@ export class SchedulerAssignmentsService implements OnModuleInit {
     const maxWeekStart = new Date(weekStartDate);
     maxWeekStart.setUTCDate(maxWeekStart.getUTCDate() + windowWeeks * 7);
     return { minWeekStart, maxWeekStart };
+  }
+
+  /**
+   * Deletes SchedulerAssignmentHistory rows older than the configured retention window.
+   * Default: 18 months. Set SCHEDULER_HISTORY_RETENTION_MONTHS=0 to disable.
+   */
+  async purgeExpiredAssignmentHistory(): Promise<{ deletedCount: number; cutoff: Date | null }> {
+    const months = this.getHistoryRetentionMonths();
+    if (months <= 0) {
+      this.logger.debug('Scheduler history purge skipped (SCHEDULER_HISTORY_RETENTION_MONTHS=0)');
+      return { deletedCount: 0, cutoff: null };
+    }
+    const cutoff = new Date();
+    cutoff.setUTCMonth(cutoff.getUTCMonth() - months);
+    const result = await this.prisma.schedulerAssignmentHistory.deleteMany({
+      where: { createdAt: { lt: cutoff } },
+    });
+    if (result.count > 0) {
+      this.logger.log(
+        `Purged ${result.count} SchedulerAssignmentHistory row(s) older than ${cutoff.toISOString()}`,
+      );
+    }
+    return { deletedCount: result.count, cutoff };
+  }
+
+  /** Daily ~03:15 UTC — prune old week-save audit snapshots. */
+  @Cron('15 3 * * *')
+  async purgeExpiredAssignmentHistoryCron(): Promise<void> {
+    const release = await this.cronLockService.tryAcquire(HISTORY_PURGE_CRON_LOCK);
+    if (!release) {
+      this.logger.debug('Scheduler history purge skipped: lock held by another instance');
+      return;
+    }
+    try {
+      await this.purgeExpiredAssignmentHistory();
+    } catch (err) {
+      const detail = err instanceof Error ? err.message : String(err);
+      this.logger.error(`Scheduler history purge failed: ${detail}`);
+    } finally {
+      await release();
+    }
   }
 
   private mapRow(row: RawAssignmentRow): SchedulerAssignmentDto {
