@@ -432,12 +432,14 @@ export function Navbar({ currentDate, onCalendarChange, dateRangeText }) {
   }, [pathname])
 
   const isDesigner = session?.role === 'DESIGNER'
+  const isHod = session?.role === 'HOD'
   const isSalesperson = session?.role === 'SALESPERSON'
   const isQs = session?.role === 'QS'
   const canViewOverview = hasDepartmentManagerAccess(session?.role)
   const bottomNavItems = isQs ? [] : NAV_ITEMS
 
   const utilityIconClass = 'ui-icon-button'
+  const onDesignerDashboard = pathname.startsWith('/designer')
   const onTeamActivity =
     pathname === '/team-activity' ||
     pathname.startsWith('/team-activity/') ||
@@ -468,6 +470,8 @@ export function Navbar({ currentDate, onCalendarChange, dateRangeText }) {
       router.push('/designer/dashboard')
     } else if (isQs) {
       router.push('/qs/projects')
+    } else if (onDesignerDashboard && (isHod || isSalesperson)) {
+      router.push('/design-scheduler')
     } else {
       // HOD / guest → master scheduler
       router.push('/design-scheduler')

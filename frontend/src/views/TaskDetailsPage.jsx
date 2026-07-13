@@ -47,7 +47,7 @@ import {
   FROM_SALES_PROJECTS_LIST,
   FROM_SALES_QUEUE,
   isProjectsListWorkflow,
-  resolveWorkflowBackPath,
+  resolveTaskBackPath,
   taskViewPathForRecord,
 } from '@/lib/design-list-routes'
 import { getSession } from '@/lib/mock-auth'
@@ -1282,7 +1282,7 @@ export function TaskDetailsPage() {
     TASK_TAB_IDS.includes(rawTab) && !(rawTab === 'team' && isRetail)
       ? rawTab
       : 'details'
-  const backPath = resolveWorkflowBackPath(from)
+  const backPath = resolveTaskBackPath(from, searchParams.get('back'))
   const resolvedProjectName = record?.projectName ?? record?.name ?? ''
   const resolvedOpCode = String(record?.salesForceCode ?? record?.opNo ?? '').trim()
   const pageTitleCore = `${resolvedProjectName.toUpperCase()} @ ${(record?.businessUnit ?? '').toUpperCase()}`
@@ -1300,6 +1300,8 @@ export function TaskDetailsPage() {
   const isHod = hasHodWorkflowAccess(_session?.role ?? '')
   const isSales = _session?.role === 'SALESPERSON'
   const isDesigner = _session?.role === 'DESIGNER'
+  const isDesignerWorkMode = isDesigner || (isHod && from === FROM_DESIGNER_QUEUE)
+  const isHodManagementMode = isHod && !isDesignerWorkMode
   const normalizedQsStatus = String(qsStatus?.status ?? '').trim().toLowerCase()
   const isQsCompleted = normalizedQsStatus === 'completed'
   const isQs = _session?.role === 'QS'
@@ -2117,7 +2119,7 @@ export function TaskDetailsPage() {
                             value={(() => {
                               const viewerId = _session?.designerId ?? _session?.id ?? null;
                               const fromScheduler = formatSchedulerAssignedHours(record.schedulerHours, {
-                                isHod,
+                                isHod: isHodManagementMode,
                                 viewerUserId: viewerId,
                               });
                               if (fromScheduler) return fromScheduler;
@@ -2135,7 +2137,7 @@ export function TaskDetailsPage() {
                             value={(() => {
                               const sh = record.schedulerHours;
                               if (!sh) return '-';
-                              if (isHod) {
+                              if (isHodManagementMode) {
                                 const logged = sh.totalLoggedHours ?? 0;
                                 return logged > 0 ? formatHoursAsHm(logged) : '-';
                               }
@@ -2149,14 +2151,14 @@ export function TaskDetailsPage() {
                               const sh = record.schedulerHours;
                               if (!sh) return '-';
                               const viewerId = _session?.designerId ?? _session?.id ?? null;
-                              const assigned = isHod ? (sh.totalAssignedHours ?? sh.totalHours) : (sh.myAssignedHours ?? sh.myHours);
-                              const logged = isHod ? (sh.totalLoggedHours ?? 0) : (sh.myLoggedHours ?? 0);
+                              const assigned = isHodManagementMode ? (sh.totalAssignedHours ?? sh.totalHours) : (sh.myAssignedHours ?? sh.myHours);
+                              const logged = isHodManagementMode ? (sh.totalLoggedHours ?? 0) : (sh.myLoggedHours ?? 0);
                               if (assigned == null || assigned <= 0) return '-';
                               const rem = Math.max(0, assigned - logged);
                               return formatHoursAsHm(rem);
                             })()}
                           />
-                          {!isHod && (record.schedulerHours?.myApprovedOvertimeHours ?? 0) > 0 ? (
+                          {isDesignerWorkMode && (record.schedulerHours?.myApprovedOvertimeHours ?? 0) > 0 ? (
                             <DetailRow
                               label="Approved OT (today)"
                               value={formatHoursAsHm(record.schedulerHours.myApprovedOvertimeHours)}
@@ -2303,7 +2305,7 @@ export function TaskDetailsPage() {
                         </div>
                       ) : null}
                       {/* HOD action panel — any active stage except SALES_REVIEW (which belongs to salesperson) */}
-                      {isHod && !isTerminalStatus &&
+                      {isHodManagementMode && !isTerminalStatus &&
                         taskStatus !== 'SALES_REVIEW' &&
                         !(taskStatus === 'ON_HOLD' && record?.holdPreviousStatus === 'SALES_REVIEW')
                       && (
@@ -2356,7 +2358,7 @@ export function TaskDetailsPage() {
                         </div>
                       )}
                       {/* Designer action panel — resubmit from REWORK back to HOD */}
-                      {isDesigner && taskStatus === 'REWORK' && (
+                      {isDesignerWorkMode && taskStatus === 'REWORK' && (
                         <div className="mt-4 pt-3 border-t border-slate-200">
                           <p className="text-[10px] font-semibold text-slate-400 uppercase tracking-wide mb-2">Rework Actions</p>
                           <div className="flex flex-wrap gap-2">
