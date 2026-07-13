@@ -176,7 +176,7 @@ export const MentionTextarea = forwardRef(function MentionTextarea(
 
   const richHtml = useMemo(() => {
     if (!richPreview || !String(value ?? '')) return '';
-    return formatMessageHtml(value, mentionUsers, { linkMentions: false });
+    return formatMessageHtml(value, mentionUsers);
   }, [richPreview, value, mentionUsers]);
 
   const reportMentionIds = useCallback((text) => {
