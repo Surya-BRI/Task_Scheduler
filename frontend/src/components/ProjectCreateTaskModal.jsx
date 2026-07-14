@@ -495,14 +495,12 @@ export function ProjectCreateTaskModal({ open, onClose, onCreated, submissionDat
               </label>
               <input
                 value={revisionCode}
-                onChange={(e) => {
-                  setRevisionCode(e.target.value.toUpperCase())
-                  setFieldErrors((prev) => ({ ...prev, revisionCode: '' }))
-                }}
-                onBlur={() => setTouched((prev) => ({ ...prev, revisionCode: true }))}
+                readOnly
+                aria-readonly="true"
+                title="Revision is assigned automatically"
                 placeholder="R0"
                 required
-                className="h-10 w-full rounded-md border border-slate-300 px-3 text-sm outline-none transition-colors focus:border-blue-500 focus:ring-2 focus:ring-blue-500/20"
+                className="h-10 w-full cursor-not-allowed rounded-md border border-slate-200 bg-slate-50 px-3 text-sm font-medium text-slate-700 outline-none"
               />
               {((submitAttempted || touched.revisionCode) && !REVISION_PATTERN.test(revisionCode.trim().toUpperCase())) || fieldErrors.revisionCode ? (
                 <p className="mt-1 text-xs text-red-600">{fieldErrors.revisionCode || 'Revision must be like R0, R1, R2'}</p>
