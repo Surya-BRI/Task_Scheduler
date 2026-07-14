@@ -13,6 +13,9 @@ import {
 } from '@/features/notifications/services/notifications.api'
 import { connectDashboardRealtime } from '@/lib/realtime'
 import { hasDepartmentManagerAccess } from '@/lib/workflow-roles'
+import { apiClient } from '@/lib/api-client'
+import { applyRemoteTimerPause } from '@/components/design-list-task-timer-storage'
+import { toast } from 'sonner'
 
 const NAV_ITEMS = [
   'Activities',
@@ -242,6 +245,19 @@ function NotificationDropdown({ session }) {
     document.addEventListener('visibilitychange', onVisible)
     const disconnectRealtime = connectDashboardRealtime({
       onNotificationsRefresh: () => void loadNotifications(),
+      onTimerPaused: (payload) => {
+        void applyRemoteTimerPause(payload.taskId, {
+          sessionClosed: Boolean(payload.sessionClosed),
+          fetchTimerState: () => apiClient.get(`/tasks/${payload.taskId}/timer-state`),
+        }).then((applied) => {
+          if (!applied) return
+          toast.warning(
+            payload.sessionClosed
+              ? 'Your timer was stopped — this task slice was handed off.'
+              : 'Your timer was paused because a slice was reassigned. Press Start to resume.',
+          )
+        })
+      },
     })
     return () => {
       clearInterval(interval)

@@ -53,10 +53,17 @@ export interface ChatterRefreshPayload {
   at: string;
 }
 
+export interface TimerPausedPayload {
+  taskId: string;
+  sessionClosed: boolean;
+  at: string;
+}
+
 type DashboardEmitter = {
   emitDashboardRefresh: (payload: DashboardRefreshPayload) => void;
   emitNotificationRefresh: (userId: string) => void;
   emitChatterRefresh: (payload: ChatterRefreshPayload) => void;
+  emitTimerPaused: (userId: string, payload: TimerPausedPayload) => void;
 };
 
 const OVERVIEW_ROLES: UserRole[] = [UserRole.HOD, UserRole.SALESPERSON];
@@ -94,6 +101,20 @@ export class DashboardRealtimeService {
       this.emitter.emitChatterRefresh(payload);
     } catch (err) {
       this.logger.warn(`Failed to emit chatter refresh (${payload.event}): ${(err as Error).message}`);
+    }
+  }
+
+  /** Force the designer's open browser tab to stop a running timer after handoff. */
+  notifyTimerPaused(userId: string, taskId: string, sessionClosed = false) {
+    if (!this.emitter || !userId || !taskId) return;
+    try {
+      this.emitter.emitTimerPaused(userId, {
+        taskId,
+        sessionClosed,
+        at: new Date().toISOString(),
+      });
+    } catch (err) {
+      this.logger.warn(`Failed to emit timer paused: ${(err as Error).message}`);
     }
   }
 

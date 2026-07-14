@@ -15,6 +15,7 @@ import {
 } from './timer-end-of-day'
 import {
   TIMER_SYNC_EVENT,
+  TIMER_REMOTE_PAUSE_EVENT,
   findRunningTimerTaskId,
 } from './design-list-task-timer-storage'
 import { useActiveRunningTaskContext } from './ActiveRunningTaskProvider'
@@ -272,15 +273,30 @@ export function ProjectTaskTimer({
       syncFromStorage()
     }
 
+    function onRemotePause(event) {
+      if (event?.detail?.taskId !== taskId) return
+      const nextAcc =
+        typeof event.detail.accumulatedSeconds === 'number'
+          ? event.detail.accumulatedSeconds
+          : readPersisted(taskId).accumulatedSeconds
+      setAccumulatedSeconds(nextAcc)
+      setRunStartAt(null)
+      if (event.detail.handedOff || event.detail.sessionClosed) {
+        setTimerHandedOff(true)
+      }
+    }
+
     function onStorage(event) {
       if (event.key !== storageKey(taskId)) return
       syncFromStorage()
     }
 
     window.addEventListener(TIMER_SYNC_EVENT_LEGACY, onTimerSync)
+    window.addEventListener(TIMER_REMOTE_PAUSE_EVENT, onRemotePause)
     window.addEventListener('storage', onStorage)
     return () => {
       window.removeEventListener(TIMER_SYNC_EVENT_LEGACY, onTimerSync)
+      window.removeEventListener(TIMER_REMOTE_PAUSE_EVENT, onRemotePause)
       window.removeEventListener('storage', onStorage)
     }
   }, [taskId])

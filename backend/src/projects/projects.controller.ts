@@ -104,7 +104,7 @@ export class ProjectsController {
   }
 
   @Delete(':id/files/:fileId')
-  @Roles(UserRole.HOD, UserRole.SALESPERSON)
+  @Roles(UserRole.HOD)
   removeFile(@Param('id') id: string, @Param('fileId') fileId: string, @CurrentUser() user: JwtPayload) {
     return this.projectsService.removeProjectFile(id, fileId, user.sub);
   }

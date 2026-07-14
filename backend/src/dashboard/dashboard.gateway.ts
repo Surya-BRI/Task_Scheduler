@@ -13,6 +13,7 @@ import {
   ChatterRefreshPayload,
   DashboardRealtimeService,
   DashboardRefreshPayload,
+  TimerPausedPayload,
 } from './dashboard-realtime.service';
 import { extractAccessTokenFromSocket } from '../common/utils/extract-socket-token.util';
 
@@ -37,6 +38,7 @@ export class DashboardGateway
       emitDashboardRefresh: (payload) => this.broadcastOverviewRefresh(payload),
       emitNotificationRefresh: (userId) => this.emitNotificationRefresh(userId),
       emitChatterRefresh: (payload) => this.broadcastChatterRefresh(payload),
+      emitTimerPaused: (userId, payload) => this.emitTimerPaused(userId, payload),
     });
     this.logger.log('Dashboard realtime gateway initialized');
   }
@@ -86,5 +88,9 @@ export class DashboardGateway
 
   private broadcastChatterRefresh(payload: ChatterRefreshPayload) {
     this.server?.to('chatter').emit('chatter:refresh', payload);
+  }
+
+  private emitTimerPaused(userId: string, payload: TimerPausedPayload) {
+    this.server?.to(`user:${userId}`).emit('timer:paused', payload);
   }
 }

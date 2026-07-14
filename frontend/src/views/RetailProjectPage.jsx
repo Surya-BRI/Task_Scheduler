@@ -8,6 +8,7 @@ import { CreateTaskModal } from '../components/CreateTaskModal'
 import { Navbar } from '../components/Navbar'
 import { dummyProjects } from '../features/projects/data/dummy-projects'
 import { apiClient } from '@/lib/api-client'
+import { getSession } from '@/lib/mock-auth'
 import { fetchProjectActivities, fetchTaskActivities } from '@/features/team-activity/services/activities.api'
 import {
   createChatterComment,
@@ -129,7 +130,7 @@ function FormFieldWithPencil({ id, label, value, onChange, placeholder }) {
   )
 }
 
-function FilesPanel({ projectId, files, uploading, onPick, onAddLink, onDelete }) {
+function FilesPanel({ projectId, files, uploading, onPick, onAddLink, onDelete, canAdd = false, canDelete = false }) {
   const fileInputRef = useRef(null)
   const [mode, setMode] = useState('link')
   const [linkUrl, setLinkUrl] = useState('')
@@ -137,73 +138,81 @@ function FilesPanel({ projectId, files, uploading, onPick, onAddLink, onDelete }
   return (
     <section className="rounded-lg border border-slate-200 bg-white p-3 shadow-sm">
       <h2 className="text-sm font-semibold text-slate-900">Project Files</h2>
-      <div className="mt-2 inline-flex rounded-md border border-blue-500 bg-blue-50 p-1 text-xs">
-        <button type="button" onClick={() => setMode('link')} className={`rounded px-2 py-1 font-semibold transition-colors ${mode === 'link' ? 'bg-blue-600 text-white shadow-sm' : 'text-slate-600 hover:text-slate-900'}`}>Paste Link</button>
-        <button type="button" onClick={() => setMode('browse')} className={`rounded px-2 py-1 font-semibold transition-colors ${mode === 'browse' ? 'bg-blue-600 text-white shadow-sm' : 'text-slate-600 hover:text-slate-900'}`}>Browse Files</button>
-      </div>
-      {mode === 'link' ? (
-        <div className="mt-2 space-y-2">
-          <div className="flex gap-2">
-            <input
-              value={linkUrl}
-              onChange={(event) => {
-                setLinkUrl(event.target.value)
-                setLinkError('')
-              }}
-              placeholder="Paste Google Drive/S3/HTTP link"
-              className="w-full rounded-md border border-slate-300 bg-white px-2.5 py-1.5 text-xs text-slate-900 outline-none focus:border-blue-500 focus:ring-2 focus:ring-blue-500/20"
-            />
+      {canAdd ? (
+        <>
+          <div className="mt-2 inline-flex rounded-md border border-blue-500 bg-blue-50 p-1 text-xs">
+            <button type="button" onClick={() => setMode('link')} className={`rounded px-2 py-1 font-semibold transition-colors ${mode === 'link' ? 'bg-blue-600 text-white shadow-sm' : 'text-slate-600 hover:text-slate-900'}`}>Paste Link</button>
+            <button type="button" onClick={() => setMode('browse')} className={`rounded px-2 py-1 font-semibold transition-colors ${mode === 'browse' ? 'bg-blue-600 text-white shadow-sm' : 'text-slate-600 hover:text-slate-900'}`}>Browse Files</button>
+          </div>
+          {mode === 'link' ? (
+            <div className="mt-2 space-y-2">
+              <div className="flex gap-2">
+                <input
+                  value={linkUrl}
+                  onChange={(event) => {
+                    setLinkUrl(event.target.value)
+                    setLinkError('')
+                  }}
+                  placeholder="Paste Google Drive/S3/HTTP link"
+                  className="w-full rounded-md border border-slate-300 bg-white px-2.5 py-1.5 text-xs text-slate-900 outline-none focus:border-blue-500 focus:ring-2 focus:ring-blue-500/20"
+                />
+                <button
+                  type="button"
+                  disabled={!projectId || uploading}
+                  onClick={async () => {
+                    const url = linkUrl.trim()
+                    if (!isValidHttpUrl(url)) {
+                      setLinkError('Enter a valid http/https URL')
+                      return
+                    }
+                    await onAddLink(url, deriveFileNameFromUrl(url))
+                    setLinkUrl('')
+                  }}
+                  className="shrink-0 rounded-md bg-blue-50 px-3 py-1.5 text-xs font-semibold text-blue-700 hover:bg-blue-100 disabled:cursor-not-allowed disabled:opacity-60"
+                >
+                  Add Link
+                </button>
+              </div>
+              {linkError ? <p className="text-xs text-red-600">{linkError}</p> : null}
+            </div>
+          ) : (
             <button
               type="button"
               disabled={!projectId || uploading}
-              onClick={async () => {
-                const url = linkUrl.trim()
-                if (!isValidHttpUrl(url)) {
-                  setLinkError('Enter a valid http/https URL')
-                  return
-                }
-                await onAddLink(url, deriveFileNameFromUrl(url))
-                setLinkUrl('')
-              }}
-              className="shrink-0 rounded-md bg-blue-50 px-3 py-1.5 text-xs font-semibold text-blue-700 hover:bg-blue-100 disabled:cursor-not-allowed disabled:opacity-60"
+              onClick={() => fileInputRef.current?.click()}
+              className="mt-2 inline-flex w-full items-center justify-center gap-2 rounded-md bg-blue-50 px-3 py-1.5 text-xs font-semibold text-blue-700 hover:bg-blue-100 disabled:cursor-not-allowed disabled:opacity-60"
             >
-              Add Link
+              <Upload className="h-3.5 w-3.5" />
+              {uploading ? 'Uploading...' : 'Upload Project Files'}
             </button>
+          )}
+          <input
+            ref={fileInputRef}
+            type="file"
+            className="hidden"
+            multiple
+            onChange={(event) => onPick(Array.from(event.target.files ?? []))}
+          />
+          <div className="mt-2 rounded-md border border-dashed border-slate-300 px-3 py-5 text-center text-xs text-slate-500">
+            Drag &amp; drop files here or click to browse.
+            <span className="mt-1 block text-xs text-slate-400">Supported: Audio, MP4 Files.</span>
           </div>
-          {linkError ? <p className="text-xs text-red-600">{linkError}</p> : null}
-        </div>
-      ) : (
-        <button
-          type="button"
-          disabled={!projectId || uploading}
-          onClick={() => fileInputRef.current?.click()}
-          className="mt-2 inline-flex w-full items-center justify-center gap-2 rounded-md bg-blue-50 px-3 py-1.5 text-xs font-semibold text-blue-700 hover:bg-blue-100 disabled:cursor-not-allowed disabled:opacity-60"
-        >
-          <Upload className="h-3.5 w-3.5" />
-          {uploading ? 'Uploading...' : 'Upload Project Files'}
-        </button>
-      )}
-      <input
-        ref={fileInputRef}
-        type="file"
-        className="hidden"
-        multiple
-        onChange={(event) => onPick(Array.from(event.target.files ?? []))}
-      />
-      <div className="mt-2 rounded-md border border-dashed border-slate-300 px-3 py-5 text-center text-xs text-slate-500">
-        Drag &amp; drop files here or click to browse.
-        <span className="mt-1 block text-xs text-slate-400">Supported: Audio, MP4 Files.</span>
-      </div>
+        </>
+      ) : null}
       <div className="mt-2 space-y-1.5">
-        {files.map((file) => (
+        {files.length === 0 ? (
+          <p className="text-xs text-slate-500">{canAdd ? 'No project files yet.' : 'No project files to view.'}</p>
+        ) : files.map((file) => (
           <div key={file.id} className="flex min-h-10 items-center justify-between rounded border border-slate-200 bg-slate-50 px-3 py-2 text-sm">
             <a href={file.signedUrl} target="_blank" rel="noreferrer" className="flex min-w-0 items-center gap-2 truncate text-blue-700 hover:underline">
               <FileText className="h-4 w-4 shrink-0 text-slate-400" aria-hidden />
               <span className="truncate">{file.fileName}</span>
             </a>
-            <button type="button" className="ml-2 text-slate-500 hover:text-red-600" onClick={() => onDelete(file.id)}>
-              <Trash2 className="h-4 w-4" />
-            </button>
+            {canDelete ? (
+              <button type="button" className="ml-2 text-slate-500 hover:text-red-600" onClick={() => onDelete(file.id)} title="Delete file">
+                <Trash2 className="h-4 w-4" />
+              </button>
+            ) : null}
           </div>
         ))}
       </div>
@@ -404,6 +413,9 @@ export function RetailProjectPage() {
   const searchParams = useSearchParams()
   const params = useParams()
   const projectRowId = String(params.projectRowId ?? '')
+  const sessionRole = String(getSession()?.role ?? '')
+  const canAddProjectFiles = sessionRole === 'HOD' || sessionRole === 'SALESPERSON'
+  const canDeleteProjectFiles = sessionRole === 'HOD'
 
   const row = useMemo(
     () => dummyProjects.find((p) => p.id === projectRowId && p.category === 'Retail'),
@@ -1249,6 +1261,8 @@ export function RetailProjectPage() {
                 onPick={handleProjectFilesPicked}
                 onAddLink={handleProjectFileLinkAdd}
                 onDelete={handleDeleteProjectFile}
+                canAdd={canAddProjectFiles}
+                canDelete={canDeleteProjectFiles}
               />
             </aside>
           </div>
