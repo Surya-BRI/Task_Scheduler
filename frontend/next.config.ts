@@ -46,22 +46,36 @@ const apiOrigin = resolveApiOrigin();
 const nextConfig: NextConfig = {
   output: "standalone",
   outputFileTracingRoot: monorepoRoot,
+  // Socket.IO Engine.IO requests use `/socket.io/?…`. Next's default trailing-slash
+  // rewrite answers with HTTP 308, which browsers refuse for WebSocket upgrades (BUG-008).
+  skipTrailingSlashRedirect: true,
   async rewrites() {
     const clientApiBase = resolveClientApiBase();
-    const enableProxy =
-      isProd ||
-      clientApiBase.startsWith("/");
+    const backendOrigin = resolveApiOrigin();
+    const enableApiProxy = isProd || clientApiBase.startsWith("/");
 
-    if (!enableProxy) {
-      return [];
+    // Always proxy Engine.IO so same-origin WS (window.location.origin) reaches Nest.
+    const socketRewrites = [
+      {
+        source: "/socket.io",
+        destination: `${backendOrigin}/socket.io`,
+      },
+      {
+        source: "/socket.io/:path*",
+        destination: `${backendOrigin}/socket.io/:path*`,
+      },
+    ];
+
+    if (!enableApiProxy) {
+      return socketRewrites;
     }
 
-    const backendOrigin = resolveApiOrigin();
     return [
       {
         source: "/api/v1/:path*",
         destination: `${backendOrigin}/api/v1/:path*`,
       },
+      ...socketRewrites,
     ];
   },
   async headers() {

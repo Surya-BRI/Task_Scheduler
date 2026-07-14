@@ -97,7 +97,8 @@ export default function SalesTaskListScreen() {
                   <tr>
                     <th className="px-2 py-1.5">Task</th>
                     <th className="px-2 py-1.5">Project</th>
-                    <th className="px-2 py-1.5">Type</th>
+                    <th className="px-2 py-1.5">Business Unit</th>
+                    <th className="px-2 py-1.5">Design Type</th>
                     <th className="px-2 py-1.5">Status</th>
                     <th className="px-2 py-1.5">Created</th>
                     <th className="px-2 py-1.5">Deadline</th>
@@ -118,7 +119,8 @@ export default function SalesTaskListScreen() {
                       <td className="px-2 py-1 text-slate-700">
                         <div className="max-w-[180px] truncate" title={row.projectName}>{row.projectName}</div>
                       </td>
-                      <td className="px-2 py-1 text-slate-500">{row.designType || '—'}</td>
+                      <td className="px-2 py-1 text-slate-500">{row.businessUnit || row.designType || '—'}</td>
+                      <td className="px-2 py-1 font-medium text-slate-800 whitespace-nowrap">{row.typeOfDesign || '—'}</td>
                       <td className="px-2 py-1">
                         <span className={`inline-block rounded-full border px-1.5 py-0.5 text-[10px] font-medium leading-none ${getStatusColor(row.status)}`}>
                           {getStatusLabel(row.status)}
