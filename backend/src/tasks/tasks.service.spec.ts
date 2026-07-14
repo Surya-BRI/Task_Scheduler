@@ -66,6 +66,10 @@ describe('TasksService', () => {
 
   beforeEach(() => {
     jest.clearAllMocks();
+    // Prefer reset for findUnique so leftover mockResolvedValueOnce queues from a
+    // failed prior test cannot leak into the next case (e.g. ON_HOLD resume).
+    prisma.task.findUnique.mockReset();
+    prisma.task.update.mockReset();
     prisma.task.findUnique.mockResolvedValue(existingTask);
     prisma.task.update.mockResolvedValue(updatedTask);
     prisma.schedulerAssignment.findMany.mockResolvedValue([]);
@@ -370,7 +374,7 @@ describe('TasksService', () => {
         .mockResolvedValueOnce({ ...updatedTask, status: 'CLIENT_REJECTED' })
         .mockResolvedValueOnce(revisionTask);
       prisma.task.findUnique
-        .mockResolvedValueOnce(existingTask)
+        .mockResolvedValueOnce({ ...existingTask, status: 'SALES_REVIEW' })
         .mockResolvedValueOnce({ retailDetails: [], projectDetails: [] });
       prisma.task.create.mockResolvedValue(revisionTask);
       prisma.task.findMany.mockResolvedValue([{ revisionCode: 'R0' }]);
@@ -438,6 +442,7 @@ describe('TasksService', () => {
 
   describe('updateStatus — rework vs client-reject revision rules', () => {
     it('REWORK keeps the same task, persists instructions, and does not create a revision', async () => {
+      prisma.task.findUnique.mockResolvedValue({ ...existingTask, status: 'SALES_REVIEW' });
       prisma.task.update.mockResolvedValue({
         ...updatedTask,
         status: 'REWORK',
