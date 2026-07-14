@@ -795,6 +795,10 @@ function mapTaskToRecord(task) {
         .flatMap((line) => String(line?.designTypes ?? '').split(',').map((s) => s.trim()).filter(Boolean))
     ),
   ]
+  const hoursRequired = (task.retailDetails ?? []).reduce((sum, line) => {
+    const hours = Number(line?.hoursRequired)
+    return sum + (Number.isFinite(hours) && hours > 0 ? hours : 0)
+  }, 0)
 
   return {
     id: task.id,
@@ -812,6 +816,7 @@ function mapTaskToRecord(task) {
     priority: task.priority ?? '-',
     reviewerHod,
     providedAssets,
+    hoursRequired,
     designType: project.category ?? 'Project',
     businessUnit: project.category ?? 'Project',
     salesPerson: project.salesPerson ?? 'Unassigned',
@@ -846,15 +851,53 @@ function mapTaskToRecord(task) {
   }
 }
 
+function normalizeProjectKey(value) {
+  return String(value ?? '')
+    .trim()
+    .toLowerCase()
+    .replace(/[\s_-]+/g, '')
+}
+
+function pickProjectListRow(projectRows, { opNo, projectCode }) {
+  const rows = Array.isArray(projectRows) ? projectRows : []
+  const op = String(opNo ?? '').trim()
+  if (op) {
+    const byOp = rows.find((row) => {
+      const candidates = [row?.salesForceCode, row?.opNo]
+      return candidates.some((value) => String(value ?? '').trim() === op)
+    })
+    if (byOp) return byOp
+  }
+
+  const code = String(projectCode ?? '').trim()
+  if (!code) return null
+
+  const exact = rows.find(
+    (row) => String(row?.projectCode ?? row?.projectNo ?? '').trim() === code,
+  )
+  if (exact) return exact
+
+  const normalized = normalizeProjectKey(code)
+  if (!normalized) return null
+  return (
+    rows.find(
+      (row) => normalizeProjectKey(row?.projectCode ?? row?.projectNo) === normalized,
+    ) ?? null
+  )
+}
+
 function mapProjectListRowToRecord(row) {
   const createdOn = row?.created ?? row?.createdOn ?? null
   const dateLabel = formatDdMmYyyy(createdOn)
+  const salesForceCode = row?.salesForceCode ?? (row?.opNo && /^OP-/i.test(String(row.opNo)) ? row.opNo : null) ?? null
   return {
     id: String(row?.id ?? ''),
     taskId: row?.taskId ?? null,
     fromTaskApi: false,
-    opNo: row?.salesForceCode ?? row?.opNo ?? row?.projectCode ?? row?.projectNo ?? '-',
+    opNo: salesForceCode ?? row?.opNo ?? row?.projectCode ?? row?.projectNo ?? '-',
+    salesForceCode: salesForceCode || undefined,
     projectNo: row?.projectCode ?? row?.projectNo ?? '-',
+    projectCode: row?.projectCode ?? row?.projectNo ?? undefined,
     projectId: row?.projectId ?? row?.id ?? null,
     designType: row?.designType ?? row?.category ?? 'Project',
     businessUnit: row?.businessUnitCode ?? row?.businessUnit ?? 'Project',
@@ -867,6 +910,66 @@ function mapProjectListRowToRecord(row) {
     clientName: row?.clientName ?? row?.customerName ?? null,
     projectName: row?.projectName ?? row?.name ?? null,
     client: row?.clientName ?? row?.customerName ?? null,
+  }
+}
+
+/** Project-wide fields always belong to live ERP — not the app ErpTSProject snapshot. */
+function applyLiveProjectWideFields(record, erpRow) {
+  if (!record || !erpRow) return record
+  const salesPerson = String(erpRow.salesPerson ?? '').trim()
+  const projectName = String(erpRow.projectName ?? erpRow.name ?? '').trim()
+  const projectCode = String(erpRow.projectCode ?? erpRow.projectNo ?? '').trim()
+  const businessUnit = String(erpRow.businessUnitCode ?? erpRow.businessUnit ?? '').trim()
+  const clientName = String(erpRow.clientName ?? erpRow.customerName ?? '').trim()
+  const salesForceCode = String(
+    erpRow.salesForceCode ??
+      (erpRow.opNo && /^OP-/i.test(String(erpRow.opNo)) ? erpRow.opNo : '') ??
+      '',
+  ).trim()
+
+  return {
+    ...record,
+    ...(salesPerson ? { salesPerson } : {}),
+    ...(projectName
+      ? {
+          projectName,
+          // Keep task title when record came from a task; otherwise show project name.
+          ...(record.fromTaskApi ? {} : { name: projectName }),
+        }
+      : {}),
+    ...(projectCode ? { projectNo: projectCode, projectCode } : {}),
+    ...(businessUnit ? { businessUnit } : {}),
+    ...(clientName ? { clientName, client: clientName } : {}),
+    ...(salesForceCode ? { opNo: salesForceCode, salesForceCode } : {}),
+  }
+}
+
+async function fetchLiveProjectRow({ opNo, projectCode }) {
+  const op = String(opNo ?? '').trim()
+  const code = String(projectCode ?? '').trim()
+  const query = op || code
+  if (!query) return null
+
+  async function fetchRows(q) {
+    const response = await apiClient.get(
+      `/design-list/projects-list?page=1&limit=30&q=${encodeURIComponent(q)}`,
+    )
+    return Array.isArray(response?.data) ? response.data : []
+  }
+
+  try {
+    let rows = await fetchRows(query)
+    let row = pickProjectListRow(rows, { opNo: op, projectCode: code })
+    if (!row && code) {
+      const jToken = code.match(/J\d{4,}/i)?.[0]
+      if (jToken && jToken.toLowerCase() !== query.toLowerCase()) {
+        rows = await fetchRows(jToken)
+        row = pickProjectListRow(rows, { opNo: op, projectCode: code })
+      }
+    }
+    return row
+  } catch {
+    return null
   }
 }
 
@@ -1124,8 +1227,12 @@ export function TaskDetailsPage() {
         const rawId = String(recordId ?? '').trim()
         const rawOpNo = String(queryOpNo ?? '').trim()
         const isProjectsListFlow = isProjectsListWorkflow(from)
-        const lookupProjectCode = isProjectsListFlow ? (String(queryProjectCode ?? '').trim() || rawId) : ''
-        const lookupOpNo = isProjectsListFlow ? rawOpNo : rawOpNo
+        // Prefer Salesforce OP for projects-list create; path id may already be OP-*.
+        const lookupOpNo =
+          rawOpNo || (isProjectsListFlow && /^OP-/i.test(rawId) ? rawId : '') || ''
+        const lookupProjectCode =
+          String(queryProjectCode ?? '').trim() ||
+          (isProjectsListFlow && !lookupOpNo ? rawId : '')
         let task = null
         if (!isProjectsListFlow && rawId && isUuid(rawId)) {
           try {
@@ -1169,20 +1276,13 @@ export function TaskDetailsPage() {
           }
         }
         if (!task) {
-          const projectLookupKey = lookupProjectCode || lookupOpNo || rawId
+          const projectLookupKey = lookupOpNo || lookupProjectCode || rawId
           if (projectLookupKey) {
-            const projectRowsResponse = await apiClient.get(
-              `/design-list/projects-list?page=1&limit=30&q=${encodeURIComponent(projectLookupKey)}`,
-            )
-            const projectRows = Array.isArray(projectRowsResponse?.data) ? projectRowsResponse.data : []
-            // Exact projectCode match — trim both sides to handle ERP whitespace issues
-            const projectRow =
-              projectRows.find((row) => String(row?.projectCode ?? row?.projectNo ?? '').trim() === projectLookupKey) ??
-              // Only fall back to salesForceCode match when NOT in projects-list flow
-              // (projects-list flow passes designType in URL; salesForceCode fallback risks loading the wrong project)
-              (!isProjectsListFlow
-                ? projectRows.find((row) => String(row?.salesForceCode ?? row?.opNo ?? '') === projectLookupKey) ?? null
-                : null)
+            const projectRow = await fetchLiveProjectRow({
+              opNo: lookupOpNo,
+              projectCode: lookupProjectCode || (!lookupOpNo ? rawId : ''),
+            })
+
             if (projectRow) {
               if (!alive) return
               const mapped = mapProjectListRowToRecord(projectRow)
@@ -1197,11 +1297,13 @@ export function TaskDetailsPage() {
                 taskId: null,
                 fromTaskApi: false,
                 opNo: lookupOpNo || '-',
+                salesForceCode: lookupOpNo || undefined,
                 projectNo: lookupProjectCode || rawId,
+                projectCode: lookupProjectCode || undefined,
                 projectId: null,
                 designType: queryDesignType,
                 businessUnit: queryDesignType,
-                name: lookupProjectCode || rawId,
+                name: lookupProjectCode || lookupOpNo || rawId,
                 status: 'Pending',
                 salesPerson: 'Unassigned',
                 created: '',
@@ -1216,7 +1318,18 @@ export function TaskDetailsPage() {
           }
         }
         if (!alive) return
-        setRecord(task ? mapTaskToRecord(task) : null)
+        if (task) {
+          let mapped = mapTaskToRecord(task)
+          // Project-wide display fields always stay on live ERP.
+          const liveRow = await fetchLiveProjectRow({
+            opNo: lookupOpNo || mapped.opNo,
+            projectCode: lookupProjectCode || mapped.projectNo,
+          })
+          mapped = applyLiveProjectWideFields(mapped, liveRow)
+          setRecord(mapped)
+        } else {
+          setRecord(null)
+        }
       } catch {
         if (!alive) return
         setRecord(null)
@@ -1497,7 +1610,14 @@ export function TaskDetailsPage() {
           try {
             const fullTask = await apiClient.get(`/tasks/${encodeURIComponent(foundId)}`)
             if (!alive) return
-            setRecord(mapTaskToRecord(fullTask))
+            let mapped = mapTaskToRecord(fullTask)
+            const liveRow = await fetchLiveProjectRow({
+              opNo: queryOpNo || mapped.opNo || record?.opNo,
+              projectCode: queryProjectCode || mapped.projectNo || record?.projectNo,
+            })
+            mapped = applyLiveProjectWideFields(mapped, liveRow)
+            if (!alive) return
+            setRecord(mapped)
           } catch {
             // keep existing record if detail fetch fails
           }
@@ -1513,7 +1633,7 @@ export function TaskDetailsPage() {
     return () => {
       alive = false
     }
-  }, [record?.taskId, record?.id, record?.opNo, record?.fromTaskApi, projectId, routeId])
+  }, [record?.taskId, record?.id, record?.opNo, record?.fromTaskApi, record?.projectNo, projectId, routeId, queryOpNo, queryProjectCode])
 
   useEffect(() => {
     if (!record || isCreationRoute) return
@@ -2236,7 +2356,7 @@ export function TaskDetailsPage() {
                         <div className="space-y-0.5">
                           <DetailRow label="Created Date" value={record.created ?? '-'} />
                           <DetailRow label="Deadline" value={record.deadline ?? '-'} />
-                          <DetailRow label="Created By (HOD)" value={taskAuditInfo.createdByHod} />
+                          <DetailRow label="Created By" value={taskAuditInfo.createdByHod} />
                           <DetailRow label="Reviewer HOD" value={record.reviewerHod ?? '-'} />
                           <DetailRow label="Assigned To" value={record.assignedTo ?? 'Unassigned'} />
                         </div>

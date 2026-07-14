@@ -20,11 +20,15 @@ function hubTaskHref(row, workflowFromOrOpts = FROM_PROJECT_DESIGN, maybeOpts = 
   } else if (workflowFromOrOpts && typeof workflowFromOrOpts === 'object') {
     opts = workflowFromOrOpts;
   }
-  const routingId = row?.taskId || row?.opNo || row?.id;
+  const routingId = row?.taskId || row?.salesForceCode || row?.opNo || row?.id;
   if (!routingId) return null;
   const routingRow = { ...row, id: routingId };
   const q = { from: workflowFrom };
-  if (row?.opNo) q.opNo = row.opNo;
+  const opNo = String(row?.salesForceCode ?? row?.opNo ?? "").trim();
+  const projectCode = String(row?.projectCode ?? row?.projectNo ?? "").trim();
+  if (opNo) q.opNo = opNo;
+  if (projectCode) q.projectCode = projectCode;
+  if (row?.designType || row?.category) q.designType = row.designType || row.category;
   if (opts.tab) q.tab = opts.tab;
   if (opts.create) return taskCreationPathForRecord(routingRow, q);
   return taskViewPathForRecord(routingRow, q);
