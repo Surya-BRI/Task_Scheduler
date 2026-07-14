@@ -248,11 +248,11 @@ END;
       const salesPerson = String(erpRows[0]?.salesPerson ?? '').trim();
       if (!salesPerson) return project;
 
-      return this.prisma.project.update({
+      await this.prisma.project.update({
         where: { id: project.id },
         data: { salesPerson },
-        select: PROJECT_SELECT,
-      }) as Promise<T>;
+      });
+      return { ...project, salesPerson };
     } catch (err) {
       this.logger.warn(
         `ensureSalesPersonFromErp failed for ${projectCode}: ${err instanceof Error ? err.message : String(err)}`,
