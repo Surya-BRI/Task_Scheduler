@@ -395,13 +395,11 @@ export function CreateTaskModal({ open, onClose, onCreated, submissionDate, reco
               <input
                 id="create-revision-code"
                 value={revisionCode}
-                onChange={(e) => {
-                  setRevisionCode(e.target.value.toUpperCase())
-                  setFieldErrors((prev) => ({ ...prev, revisionCode: '' }))
-                }}
-                onBlur={() => setTouched((prev) => ({ ...prev, revisionCode: true }))}
+                readOnly
+                aria-readonly="true"
+                title="Revision is assigned automatically"
                 placeholder="R0"
-                className="mt-1.5 w-full rounded-md border border-slate-300 bg-white px-3 py-2 text-sm text-slate-900 outline-none transition-colors focus:border-blue-500 focus:ring-2 focus:ring-blue-500/20"
+                className="mt-1.5 w-full cursor-not-allowed rounded-md border border-slate-200 bg-slate-50 px-3 py-2 text-sm font-medium text-slate-700 outline-none"
               />
               {((submitAttempted || touched.revisionCode) && !REVISION_PATTERN.test(revisionCode.trim().toUpperCase())) || fieldErrors.revisionCode ? (
                 <p className="mt-1 text-xs text-red-600">{fieldErrors.revisionCode || 'Must be R0, R1, R2…'}</p>
