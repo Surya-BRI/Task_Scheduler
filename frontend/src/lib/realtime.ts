@@ -59,6 +59,8 @@ export function connectDashboardRealtime(handlers: DashboardRealtimeHandlers): (
 
   try {
     socket = io(`${getSocketOrigin()}/dashboard`, {
+      path: '/socket.io',
+      addTrailingSlash: false,
       withCredentials: true,
       transports: ['websocket', 'polling'],
       reconnection: true,

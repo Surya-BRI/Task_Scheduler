@@ -21,6 +21,8 @@ export class SocketIoAdapter extends IoAdapter {
   createIOServer(port: number, options?: ServerOptions) {
     return super.createIOServer(port, {
       ...options,
+      // Avoid `/socket.io/` vs `/socket.io` trailing-slash mismatches with proxies (BUG-008).
+      addTrailingSlash: false,
       cors: { origin: this.corsOrigin, credentials: true },
     });
   }
