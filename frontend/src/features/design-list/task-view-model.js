@@ -71,6 +71,52 @@ export function computeAgingDays(submissionDate) {
   return diffMs > 0 ? Math.floor(diffMs / 86400000) : 0;
 }
 
+const RETAIL_TYPE_LABELS = {
+  ESTIMATION_PURPOSE: 'Estimation Purpose',
+  PRESENTATION: 'Presentation',
+  CLIENT_SUBMISSION: 'Client Submission',
+  TECHNICAL_DRAWING: 'Technical Drawing',
+};
+
+function prettifyTypeToken(value) {
+  const raw = String(value ?? '').trim();
+  if (!raw) return '';
+  const fromCode = RETAIL_TYPE_LABELS[raw.toUpperCase().replace(/[\s-]+/g, '_')];
+  if (fromCode) return fromCode;
+  if (/^(retail|project|rtl|r)$/i.test(raw)) return '';
+  return raw.replace(/_/g, ' ').replace(/\b\w/g, (c) => c.toUpperCase());
+}
+
+/**
+ * Human label that distinguishes sibling tasks sharing OP / project / revision.
+ * Retail → Estimation Purpose / Client Submission / …
+ * Project → Artwork / Location / Technical / … (discipline), with sign type as fallback.
+ */
+export function resolveTypeOfDesign(task) {
+  const category = String(task?.project?.category ?? '').trim().toLowerCase();
+  const isRetail =
+    category === 'retail' ||
+    Boolean(RETAIL_TYPE_LABELS[String(task?.designType ?? '').trim().toUpperCase().replace(/[\s-]+/g, '_')]);
+
+  if (isRetail) {
+    const fromTask = prettifyTypeToken(task?.designType);
+    if (fromTask) return fromTask;
+    const fromDetail = String(task?.retailDetails?.[0]?.designTypes ?? '').trim();
+    const detailLabel = prettifyTypeToken(fromDetail);
+    if (detailLabel) return detailLabel;
+    return '—';
+  }
+
+  const discipline = String(task?.disciplineType ?? '').trim();
+  if (discipline) return discipline;
+
+  const signType = String(task?.signType ?? '').trim();
+  if (signType) return signType;
+
+  const fromTask = prettifyTypeToken(task?.designType);
+  return fromTask || '—';
+}
+
 export function mapTaskToDesignRow(task) {
   const createdDate = toCreatedDate(task);
   const deadlineDate = toDeadlineDate(task);
@@ -82,6 +128,10 @@ export function mapTaskToDesignRow(task) {
     projectName: task?.project?.name || task?.project?.projectNo || "—",
     designType: task?.project?.category || "Project",
     businessUnit: task?.project?.category || "Project",
+    typeOfDesign: resolveTypeOfDesign(task),
+    disciplineType: task?.disciplineType || null,
+    taskDesignType: task?.designType || null,
+    signType: task?.signType || null,
     name: [
       task?.opNo || task?.project?.projectNo || null,
       task?.signType || null,
