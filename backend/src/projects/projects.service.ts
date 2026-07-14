@@ -222,6 +222,45 @@ END;
     return { ...withStatus, attachments };
   }
 
+  /** Keep app project salesPerson in sync with live ERP when the local copy is blank. */
+  private async ensureSalesPersonFromErp<T extends { id: string; projectNo?: string | null; salesPerson?: string | null }>(
+    project: T,
+  ): Promise<T> {
+    if (String(project.salesPerson ?? '').trim()) return project;
+    const projectCode = String(project.projectNo ?? '').trim();
+    if (!projectCode) return project;
+
+    try {
+      const erpRows = await this.prisma.live.$queryRaw<Array<{ salesPerson: string | null }>>(Prisma.sql`
+        SELECT TOP 1
+          me.firstName + '' + me.lastName AS salesPerson
+        FROM ErpMasterProject mp
+        LEFT JOIN ErpMasterOpportunity mo ON mo.projectid = mp.projectid
+        LEFT JOIN ErpMasterEmployee me ON me.employeeId = mo.salesRepId
+        WHERE mp.isActive = 1
+          AND (
+            mp.projectCode = ${projectCode}
+            OR REPLACE(REPLACE(LOWER(mp.projectCode), ' ', ''), '-', '') =
+               REPLACE(REPLACE(LOWER(${projectCode}), ' ', ''), '-', '')
+          )
+        ORDER BY mp.createdOn DESC
+      `);
+      const salesPerson = String(erpRows[0]?.salesPerson ?? '').trim();
+      if (!salesPerson) return project;
+
+      return this.prisma.project.update({
+        where: { id: project.id },
+        data: { salesPerson },
+        select: PROJECT_SELECT,
+      }) as Promise<T>;
+    } catch (err) {
+      this.logger.warn(
+        `ensureSalesPersonFromErp failed for ${projectCode}: ${err instanceof Error ? err.message : String(err)}`,
+      );
+      return project;
+    }
+  }
+
   async findByProjectNo(projectNo: string, currentUserId?: string, currentUserRole?: string) {
     const value = (projectNo ?? '').trim();
     if (!value) throw new NotFoundException('Project not found');
@@ -231,8 +270,9 @@ END;
       select: PROJECT_SELECT,
     });
     if (exact) {
-      await this.assertProjectAccess(exact.id, currentUserId, currentUserRole);
-      const [withStatus] = await this.withQsStatuses([exact]);
+      const hydrated = await this.ensureSalesPersonFromErp(exact);
+      await this.assertProjectAccess(hydrated.id, currentUserId, currentUserRole);
+      const [withStatus] = await this.withQsStatuses([hydrated]);
       return withStatus;
     }
 
@@ -250,7 +290,9 @@ END;
             .replace(/[\s-]/g, '') === normalized,
       ) ?? null;
     if (normalizedMatch) {
-      const [withStatus] = await this.withQsStatuses([normalizedMatch]);
+      const hydrated = await this.ensureSalesPersonFromErp(normalizedMatch);
+      await this.assertProjectAccess(hydrated.id, currentUserId, currentUserRole);
+      const [withStatus] = await this.withQsStatuses([hydrated]);
       return withStatus;
     }
 

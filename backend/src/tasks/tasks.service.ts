@@ -59,7 +59,15 @@ const TASK_SELECT = {
   subTeamLead: true,
   designers: true,
   projectId: true,
-  project: { select: { id: true, name: true, projectNo: true, category: true } },
+  project: {
+    select: {
+      id: true,
+      name: true,
+      projectNo: true,
+      category: true,
+      salesPerson: true,
+    },
+  },
   assigneeId: true,
   assignee: { select: { id: true, fullName: true, email: true } },
   taskDesigners: { select: { designer: { select: { id: true, fullName: true, email: true } } } },
@@ -504,6 +512,43 @@ export class TasksService {
     throw new NotFoundException('Project not found (reuse existing projectNo or OP no)');
   }
 
+  /** Live ERP sales person for a project code / Salesforce OP (best-effort). */
+  private async lookupErpSalesPerson(params: {
+    projectCode?: string | null;
+    salesForceCode?: string | null;
+  }): Promise<string | null> {
+    const projectCode = String(params.projectCode ?? '').trim();
+    const salesForceCode = String(params.salesForceCode ?? '').trim();
+    if (!projectCode && !salesForceCode) return null;
+
+    try {
+      const rows = await this.prisma.live.$queryRaw<Array<{ salesPerson: string | null }>>(Prisma.sql`
+        SELECT TOP 1
+          me.firstName + '' + me.lastName AS salesPerson
+        FROM ErpMasterProject mp
+        LEFT JOIN ErpMasterOpportunity mo ON mo.projectid = mp.projectid
+        LEFT JOIN ErpMasterEmployee me ON me.employeeId = mo.salesRepId
+        WHERE mp.isActive = 1
+          AND (
+            (${projectCode} <> '' AND (
+              mp.projectCode = ${projectCode}
+              OR REPLACE(REPLACE(LOWER(mp.projectCode), ' ', ''), '-', '') =
+                 REPLACE(REPLACE(LOWER(${projectCode}), ' ', ''), '-', '')
+            ))
+            OR (${salesForceCode} <> '' AND LTRIM(RTRIM(mo.salesForceCode)) = ${salesForceCode})
+          )
+        ORDER BY mp.createdOn DESC
+      `);
+      const name = String(rows[0]?.salesPerson ?? '').trim();
+      return name || null;
+    } catch (err) {
+      this.logger.warn(
+        `lookupErpSalesPerson failed: ${err instanceof Error ? err.message : String(err)}`,
+      );
+      return null;
+    }
+  }
+
   private async resolveOrCreateProjectForExtended(
     task: {
       projectNo?: string;
@@ -522,10 +567,22 @@ export class TasksService {
 
     const existing = await this.resolveProjectForCreate(task).catch(() => null);
     if (existing) {
+      const patch: { name?: string; salesPerson?: string | null } = {};
       if (requestedName && requestedName !== (existing.name ?? '').trim()) {
+        patch.name = requestedName;
+      }
+      // Backfill ERP sales person when the app project was created without it.
+      if (!String(existing.salesPerson ?? '').trim()) {
+        const erpSalesPerson = await this.lookupErpSalesPerson({
+          projectCode: existing.projectNo ?? task.projectNo,
+          salesForceCode: task.opNo,
+        });
+        if (erpSalesPerson) patch.salesPerson = erpSalesPerson;
+      }
+      if (Object.keys(patch).length > 0) {
         return this.prisma.project.update({
           where: { id: existing.id },
-          data: { name: requestedName },
+          data: patch,
           select: PROJECT_LOOKUP_SELECT,
         });
       }
@@ -540,6 +597,10 @@ export class TasksService {
     const name = requestedName;
     const businessUnit = (task.businessUnit ?? designType).trim();
     const category = designType;
+    const salesPerson = await this.lookupErpSalesPerson({
+      projectCode: task.projectNo,
+      salesForceCode: task.opNo,
+    });
 
     return this.prisma.project.create({
       data: {
@@ -549,7 +610,7 @@ export class TasksService {
         businessUnit,
         description: task.description?.trim() || null,
         status: 'ACTIVE',
-        salesPerson: null,
+        salesPerson,
       },
       select: PROJECT_LOOKUP_SELECT,
     });

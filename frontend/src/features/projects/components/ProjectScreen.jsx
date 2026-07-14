@@ -10,14 +10,19 @@ import { useDesignListStore } from "@/state/DesignListContext";
 
 function projectListTaskHref(row, workflowFrom = FROM_PROJECTS_LIST) {
   const projectCode = String(row?.projectCode ?? "").trim();
-  if (!projectCode) return null;
+  const opNo = String(row?.salesForceCode ?? row?.opNo ?? "").trim();
+  if (!projectCode && !opNo) return null;
+  // Prefer Salesforce OP code in the path — ERP projectCode spacing/hyphens are unreliable.
+  const routeId = opNo || projectCode;
+  const query = {
+    from: workflowFrom,
+    designType: row.category,
+  };
+  if (projectCode) query.projectCode = projectCode;
+  if (opNo) query.opNo = opNo;
   return taskCreationPathForRecord(
-    { id: projectCode, designType: row.category, category: row.category },
-    {
-      from: workflowFrom,
-      projectCode,
-      designType: row.category,
-    },
+    { id: routeId, designType: row.category, category: row.category },
+    query,
   );
 }
 
