@@ -47,11 +47,31 @@ const getRegularVisualOrder = (entry) => {
   return 1;
 };
 
+const pushTimelineBlock = (rawTasks, task, startHr, endHr, { isOvertime = false } = {}) => {
+  if (!(endHr > startHr)) return;
+  rawTasks.push({
+    id: isOvertime ? `${task.id}-ot` : task.id,
+    parentId: task.parentId ?? task.id,
+    designType: task.designType ?? null,
+    label: isOvertime ? `${toTaskLabel(task)} (OT)` : toTaskLabel(task),
+    estimatedHours: endHr - startHr,
+    colorClass: isOvertime
+      ? (task.overtimeColorClass ?? "bg-red-100 border border-red-300 text-red-800")
+      : task.colorClass,
+    startHr,
+    endHr,
+    isOvertime,
+    isSystemBlock: Boolean(task.isSystemBlock),
+    requestType: task.requestType,
+  });
+};
+
 const buildDaySlot = (taskIds, tasksMap) => {
   let regularCursor = 0;
   let overtimeCursor = NORMAL_DAILY_HOURS;
   let hasOvertime = false;
   const rawTasks = [];
+  const overflowTasks = [];
   const rawTaskIds = [];
   const rawRecordIds = [];
   const entries = [];
@@ -72,53 +92,72 @@ const buildDaySlot = (taskIds, tasksMap) => {
     if (overtimeHours > 0) {
       hasOvertime = true;
       const startHr = overtimeCursor;
-      const endHr = overtimeCursor + overtimeHours;
+      const endHr = Math.min(overtimeCursor + overtimeHours, MAX_DAILY_HOURS);
       overtimeCursor = endHr;
-
-      rawTasks.push({
-        id: `${task.id}-ot`,
-        parentId: task.parentId ?? task.id,
-        designType: task.designType ?? null,
-        label: `${toTaskLabel(task)} (OT)`,
-        estimatedHours: overtimeHours,
-        colorClass: task.overtimeColorClass ?? "bg-red-100 border border-red-300 text-red-800",
-        startHr,
-        endHr,
-        isOvertime: true,
-      });
+      pushTimelineBlock(rawTasks, task, startHr, endHr, { isOvertime: true });
     }
   }
 
-  entries
+  const regularEntries = entries
     .filter((entry) => entry.regularHours > 0)
-    .sort((a, b) => getRegularVisualOrder(a) - getRegularVisualOrder(b) || a.order - b.order)
-    .forEach(({ task, regularHours }) => {
-      const session = getHalfDayLeaveSession(task, regularHours);
-      const startHr = session === "first"
-        ? 0
-        : session === "second"
-          ? Math.max(NORMAL_DAILY_HOURS / 2, regularCursor)
-          : regularCursor;
-      const endHr = startHr + regularHours;
-      regularCursor = Math.max(regularCursor, endHr);
+    .sort((a, b) => getRegularVisualOrder(a) - getRegularVisualOrder(b) || a.order - b.order);
 
-      rawTasks.push({
-        id: task.id,
+  // Pack leave + work into the normal 0–8 band first (never spill into OT).
+  for (const entry of regularEntries) {
+    if (entry.task.requestType === "REGULARIZATION") continue;
+    const { task, regularHours } = entry;
+    const session = getHalfDayLeaveSession(task, regularHours);
+    const startHr = session === "first"
+      ? 0
+      : session === "second"
+        ? Math.max(NORMAL_DAILY_HOURS / 2, regularCursor)
+        : regularCursor;
+    if (startHr >= NORMAL_DAILY_HOURS) continue;
+    const endHr = Math.min(startHr + regularHours, NORMAL_DAILY_HOURS);
+    regularCursor = Math.max(regularCursor, endHr);
+    pushTimelineBlock(rawTasks, task, startHr, endHr);
+  }
+
+  // Fit regularization into remaining normal hours; overflow goes to a second row.
+  let overflowCursor = 0;
+  for (const entry of regularEntries) {
+    if (entry.task.requestType !== "REGULARIZATION") continue;
+    const { task, regularHours } = entry;
+    const remaining = NORMAL_DAILY_HOURS - regularCursor;
+    if (regularHours <= remaining) {
+      const startHr = regularCursor;
+      const endHr = startHr + regularHours;
+      regularCursor = endHr;
+      pushTimelineBlock(rawTasks, task, startHr, endHr);
+      continue;
+    }
+
+    const startHr = overflowCursor;
+    const endHr = Math.min(startHr + regularHours, NORMAL_DAILY_HOURS);
+    overflowCursor = endHr;
+    if (endHr > startHr) {
+      overflowTasks.push({
+        id: `${task.id}-overflow`,
         parentId: task.parentId ?? task.id,
         designType: task.designType ?? null,
         label: toTaskLabel(task),
-        estimatedHours: regularHours,
+        estimatedHours: endHr - startHr,
         colorClass: task.colorClass,
         startHr,
         endHr,
         isOvertime: false,
-        isSystemBlock: Boolean(task.isSystemBlock),
+        isSystemBlock: true,
         requestType: task.requestType,
+        isOverflow: true,
       });
-    });
+    }
+  }
 
   const assignedStartHr = 0;
-  const assignedEndHr = Math.min(Math.max(regularCursor, hasOvertime ? overtimeCursor : 0), MAX_DAILY_HOURS);
+  const assignedEndHr = Math.min(
+    Math.max(Math.min(regularCursor, NORMAL_DAILY_HOURS), hasOvertime ? overtimeCursor : 0),
+    MAX_DAILY_HOURS,
+  );
 
   const boundedTasks = [];
   for (const task of rawTasks) {
@@ -136,6 +175,7 @@ const buildDaySlot = (taskIds, tasksMap) => {
     assignedStartHr,
     assignedEndHr,
     tasks: boundedTasks,
+    overflowTasks,
     rawTaskIds,
     rawRecordIds,
   };
@@ -166,8 +206,9 @@ export const buildDesignerSnapshot = (tasksMap, designerScheduleByDayIndex = {})
     dayTaskRecordIds[dayName] = recordIdsForDay;
     const daySlot = buildDaySlot(taskIds, tasksMap);
     schedule[dayName] = daySlot;
-    totalTasks += daySlot.tasks.length;
+    totalTasks += daySlot.tasks.length + (daySlot.overflowTasks?.length ?? 0);
     totalHours += daySlot.tasks.reduce((acc, task) => acc + task.estimatedHours, 0);
+    totalHours += (daySlot.overflowTasks ?? []).reduce((acc, task) => acc + task.estimatedHours, 0);
     for (const recordId of daySlot.rawRecordIds || []) {
       if (!recordId || seenAssignedRecordIds.has(recordId)) continue;
       seenAssignedRecordIds.add(recordId);
