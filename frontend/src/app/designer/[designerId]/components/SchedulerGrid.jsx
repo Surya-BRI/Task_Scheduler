@@ -87,6 +87,7 @@ function SchedulerRow({ day, daySlot, dayDate, onOtClick, onOpenTask }) {
     ? `${dayDate.toLocaleDateString("en-US", { weekday: "short" })} ${dayDate.getDate()}`
     : day;
   const tasks = daySlot?.tasks || [];
+  const overflowTasks = daySlot?.overflowTasks || [];
   const assignedStartHr = daySlot?.assignedStartHr ?? 0;
   const assignedEndHr = daySlot?.assignedEndHr ?? TOTAL_COLS;
   const boundedStart = Math.max(0, Math.min(assignedStartHr, TOTAL_COLS));
@@ -99,14 +100,26 @@ function SchedulerRow({ day, daySlot, dayDate, onOtClick, onOpenTask }) {
     }))
     .filter((task) => task.endHr > task.startHr);
   const hasOvertimeTasks = timelineTasks.some((t) => t.isOvertime);
+  const hasOverflow = !isWeekend && overflowTasks.length > 0;
+  const rowMinHeight = hasOverflow ? 84 : 56;
 
   return (
-    <div className="flex border-b border-slate-100 group relative min-h-[56px] items-stretch">
+    <div
+      className="flex border-b border-slate-100 group relative items-stretch"
+      style={{ minHeight: rowMinHeight }}
+    >
       {/* Day label */}
       <div
         className={`w-[180px] shrink-0 py-1.5 px-4 flex items-center border-r border-slate-200 z-10 transition-colors group-hover:bg-slate-50 ${isWeekend ? 'bg-slate-50' : 'bg-white'}`}
       >
-        <span className={`text-[11px] font-semibold truncate tracking-tight ${isWeekend ? 'text-slate-400' : 'text-slate-900'}`}>{dayLabel}</span>
+        <div className="min-w-0">
+          <span className={`text-[11px] font-semibold truncate tracking-tight block ${isWeekend ? 'text-slate-400' : 'text-slate-900'}`}>{dayLabel}</span>
+          {hasOverflow ? (
+            <span className="mt-0.5 block text-[9px] font-medium text-violet-600">
+              +{overflowTasks.length} reg overflow
+            </span>
+          ) : null}
+        </div>
       </div>
 
       {/* Time grid with exact hour-based positioning */}
@@ -148,17 +161,39 @@ function SchedulerRow({ day, daySlot, dayDate, onOtClick, onOpenTask }) {
             </div>
           )}
           {!isWeekend && (
-            <div className="absolute inset-0 pointer-events-none">
+            <div
+              className={`absolute inset-x-0 pointer-events-none ${hasOverflow ? "top-1 h-[28px]" : "inset-y-1"}`}
+            >
               {timelineTasks.map((task, index) => {
                 const leftPct = (task.startHr / TOTAL_COLS) * 100;
                 const widthPct = ((task.endHr - task.startHr) / TOTAL_COLS) * 100;
                 return (
                   <div
                     key={`${day}-task-${task.id ?? task.label}-${index}`}
-                    className="absolute top-1 bottom-1 pointer-events-auto"
+                    className="absolute top-0 bottom-0 pointer-events-auto"
                     style={{ left: `${leftPct}%`, width: `${widthPct}%` }}
                   >
                     <TaskBlock task={task} onOtClick={onOtClick} onOpenTask={onOpenTask} />
+                  </div>
+                );
+              })}
+            </div>
+          )}
+          {hasOverflow && (
+            <div className="absolute inset-x-0 bottom-1 h-[28px] pointer-events-none border-t border-dashed border-violet-200/80">
+              <span className="absolute left-1 top-0 text-[7px] font-bold uppercase tracking-wide text-violet-500 leading-none">
+                Reg
+              </span>
+              {overflowTasks.map((task, index) => {
+                const leftPct = (task.startHr / TOTAL_COLS) * 100;
+                const widthPct = ((task.endHr - task.startHr) / TOTAL_COLS) * 100;
+                return (
+                  <div
+                    key={`${day}-overflow-${task.id ?? task.label}-${index}`}
+                    className="absolute top-1 bottom-0 pointer-events-auto"
+                    style={{ left: `${leftPct}%`, width: `${Math.max(widthPct, (1 / TOTAL_COLS) * 100)}%` }}
+                  >
+                    <TaskBlock task={task} onOtClick={null} onOpenTask={null} />
                   </div>
                 );
               })}
