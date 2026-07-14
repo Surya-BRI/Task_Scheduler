@@ -8,6 +8,7 @@ describe('DashboardRealtimeService', () => {
       emitDashboardRefresh: (payload) => emitted.push(payload),
       emitNotificationRefresh: () => {},
       emitChatterRefresh: () => {},
+      emitTimerPaused: () => {},
     });
 
     service.notifyOverviewRefresh('scheduler_week_saved', {

@@ -15,6 +15,7 @@ import {
 } from './timer-end-of-day'
 import {
   TIMER_SYNC_EVENT,
+  TIMER_REMOTE_PAUSE_EVENT,
   findRunningTimerTaskId,
 } from './design-list-task-timer-storage'
 import { useActiveRunningTaskContext } from './ActiveRunningTaskProvider'
@@ -101,17 +102,27 @@ function clearPersistedPauses(taskId) {
 
 const FIVE_MIN_SECONDS = 5 * 60
 
-// Logged work time is rounded UP to the next 5-minute step — seconds-level precision
-// isn't tracked or shown, and any nonzero effort must never be credited as 0 minutes
-// (e.g. 3m20s of real work rounds up to 5m, not down to 0m).
+// Credited work (pause / submit / handoff) rounds UP to the next 5-minute step so any
+// nonzero effort is never saved as 0 minutes (e.g. 3m20s → 5m). The on-screen clock
+// stays exact — including seconds — so designers don't see 0 jump to 5m while working.
 function roundUpTo5Min(totalSeconds) {
   const s = Math.max(0, totalSeconds)
   if (s <= 0) return 0
   return Math.ceil(s / FIVE_MIN_SECONDS) * FIVE_MIN_SECONDS
 }
 
+/** Exact clock for the live timer UI (no 5-minute rounding). */
+function formatHms(totalSeconds) {
+  const s = Math.max(0, Math.floor(totalSeconds))
+  const h = Math.floor(s / 3600)
+  const m = Math.floor((s % 3600) / 60)
+  const sec = s % 60
+  return `${h}h ${m}m ${String(sec).padStart(2, '0')}s`
+}
+
+/** Compact exact duration for labels (assigned / OT banners) — no rounding. */
 function formatHm(totalSeconds) {
-  const s = roundUpTo5Min(totalSeconds)
+  const s = Math.max(0, Math.floor(totalSeconds))
   const h = Math.floor(s / 3600)
   const m = Math.floor((s % 3600) / 60)
   return `${h}h ${m}m`
@@ -262,15 +273,30 @@ export function ProjectTaskTimer({
       syncFromStorage()
     }
 
+    function onRemotePause(event) {
+      if (event?.detail?.taskId !== taskId) return
+      const nextAcc =
+        typeof event.detail.accumulatedSeconds === 'number'
+          ? event.detail.accumulatedSeconds
+          : readPersisted(taskId).accumulatedSeconds
+      setAccumulatedSeconds(nextAcc)
+      setRunStartAt(null)
+      if (event.detail.handedOff || event.detail.sessionClosed) {
+        setTimerHandedOff(true)
+      }
+    }
+
     function onStorage(event) {
       if (event.key !== storageKey(taskId)) return
       syncFromStorage()
     }
 
     window.addEventListener(TIMER_SYNC_EVENT_LEGACY, onTimerSync)
+    window.addEventListener(TIMER_REMOTE_PAUSE_EVENT, onRemotePause)
     window.addEventListener('storage', onStorage)
     return () => {
       window.removeEventListener(TIMER_SYNC_EVENT_LEGACY, onTimerSync)
+      window.removeEventListener(TIMER_REMOTE_PAUSE_EVENT, onRemotePause)
       window.removeEventListener('storage', onStorage)
     }
   }, [taskId])
@@ -283,7 +309,9 @@ export function ProjectTaskTimer({
 
   const freezeRunningClock = useCallback(() => {
     if (!runStartAt) return accumulatedSeconds
-    const total = roundUpTo5Min(liveTotalSeconds(accumulatedSeconds, runStartAt))
+    // Keep exact elapsed on screen / in draft; 5-minute round-up applies on submit (and
+    // handoff / workedHours on the backend).
+    const total = liveTotalSeconds(accumulatedSeconds, runStartAt)
     setAccumulatedSeconds(total)
     setRunStartAt(null)
     writePersisted(taskId, total, null)
@@ -343,7 +371,7 @@ export function ProjectTaskTimer({
       if (!start) return
 
       if (isOvernightRunningTimer(start)) {
-        const total = roundUpTo5Min(liveTotalSeconds(acc, start))
+        const total = liveTotalSeconds(acc, start)
         setAccumulatedSeconds(total)
         setRunStartAt(null)
         writePersisted(taskId, total, null)
@@ -408,13 +436,13 @@ export function ProjectTaskTimer({
     }
 
     if (launchPauseModal && start0) {
-      setAccumulatedSeconds(roundUpTo5Min(totalNow))
+      setAccumulatedSeconds(totalNow)
       setRunStartAt(null)
       setShowPauseDropdown(true)
     }
 
     if (launchCompleteModal && totalNow > 0) {
-      setAccumulatedSeconds(roundUpTo5Min(totalNow))
+      setAccumulatedSeconds(totalNow)
       setRunStartAt(null)
       setShowCompleteModal(true)
     }
@@ -640,12 +668,12 @@ export function ProjectTaskTimer({
 
         <div className={inline ? 'relative flex items-center gap-1' : 'relative flex flex-wrap items-center gap-1.5 sm:justify-end'}>
           <div className={inline
-            ? 'flex min-w-[4.6rem] items-center justify-center rounded px-1 py-0.5'
-            : 'flex min-w-[6.75rem] items-center justify-center rounded-xl border border-slate-200 bg-slate-50 px-3 py-2 shadow-sm ring-1 ring-slate-900/5 sm:min-w-[7.25rem]'}>
+            ? 'flex min-w-[5.75rem] items-center justify-center rounded px-1 py-0.5'
+            : 'flex min-w-[8.25rem] items-center justify-center rounded-xl border border-slate-200 bg-slate-50 px-3 py-2 shadow-sm ring-1 ring-slate-900/5 sm:min-w-[8.75rem]'}>
             <span className={inline
               ? 'font-mono text-[11px] font-semibold tabular-nums tracking-tight text-slate-700'
               : 'font-mono text-sm font-medium tabular-nums tracking-tight text-slate-900'}>
-              {formatHm(displaySeconds)}
+              {formatHms(displaySeconds)}
             </span>
           </div>
           <>

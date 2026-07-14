@@ -56,7 +56,11 @@ describe('TasksService', () => {
   const taskFilesService: any = {};
   const activityLogger: any = { log: jest.fn() };
   const notificationsService: any = { create: jest.fn() };
-  const dashboardRealtime: any = { notifyOverviewRefresh: jest.fn(), notifyUserNotificationRefresh: jest.fn() };
+  const dashboardRealtime: any = {
+    notifyOverviewRefresh: jest.fn(),
+    notifyUserNotificationRefresh: jest.fn(),
+    notifyTimerPaused: jest.fn(),
+  };
 
   const service = new TasksService(prisma, taskFilesService, activityLogger, notificationsService, dashboardRealtime);
 
@@ -183,12 +187,14 @@ describe('TasksService', () => {
       expect(createCall.userId).toBe(DESIGNER_ID);
       expect(createCall.title).toBe('Timer Paused — T-100');
       expect(createCall.linkUrl).toBe(`/project-task-view/${TASK_ID}`);
+      expect(dashboardRealtime.notifyTimerPaused).toHaveBeenCalledWith(DESIGNER_ID, TASK_ID, false);
     });
 
     it('does not notify when closeSession is true (session fully handed off)', async () => {
       await service.freezeDraftWorkSession(TASK_ID, DESIGNER_ID, true);
 
       expect(notificationsService.create).not.toHaveBeenCalled();
+      expect(dashboardRealtime.notifyTimerPaused).toHaveBeenCalledWith(DESIGNER_ID, TASK_ID, true);
     });
 
     it('does not notify when closeSession is false but there was no running timer', async () => {
@@ -197,6 +203,7 @@ describe('TasksService', () => {
       await service.freezeDraftWorkSession(TASK_ID, DESIGNER_ID, false);
 
       expect(notificationsService.create).not.toHaveBeenCalled();
+      expect(dashboardRealtime.notifyTimerPaused).not.toHaveBeenCalled();
     });
   });
 

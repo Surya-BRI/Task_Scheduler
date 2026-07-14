@@ -23,6 +23,12 @@ export type ChatterRefreshPayload = {
   at: string;
 };
 
+export type TimerPausedPayload = {
+  taskId: string;
+  sessionClosed?: boolean;
+  at?: string;
+};
+
 export type DashboardRefreshPayload = {
   event: string;
   at: string;
@@ -39,6 +45,7 @@ export type DashboardRealtimeHandlers = {
   onDashboardRefresh?: (payload?: DashboardRefreshPayload) => void;
   onNotificationsRefresh?: () => void;
   onChatterRefresh?: (payload: ChatterRefreshPayload) => void;
+  onTimerPaused?: (payload: TimerPausedPayload) => void;
 };
 
 export function connectDashboardRealtime(handlers: DashboardRealtimeHandlers): () => void {
@@ -66,6 +73,9 @@ export function connectDashboardRealtime(handlers: DashboardRealtimeHandlers): (
     });
     socket.on('chatter:refresh', (payload: ChatterRefreshPayload) => {
       handlers.onChatterRefresh?.(payload);
+    });
+    socket.on('timer:paused', (payload: TimerPausedPayload) => {
+      if (payload?.taskId) handlers.onTimerPaused?.(payload);
     });
 
     // socket.io gives up permanently after reconnectionAttempts is exhausted (e.g. a

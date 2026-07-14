@@ -2562,20 +2562,23 @@ export class TasksService {
       });
     }
 
-    // Scoped to "other slices remain, timer was running" only — closeSession:true is the
-    // last-slice case (session genuinely done, nothing to resume) and needs no notice.
-    if (!closeSession && hadRunningTimer) {
-      const linkUrl =
-        task.designType?.toLowerCase() === 'retail' ? `/retail-task-view/${taskId}` : `/project-task-view/${taskId}`;
-      this.notificationsService
-        .create({
-          userId: designerId,
-          title: `Timer Paused — ${task.taskNo}`,
-          message: `Your running timer was paused because a slice of this task was reassigned. Press Start to resume tracking your remaining time.`,
-          linkUrl,
-        })
-        .catch((err) => this.logger.error('Failed to send timer-paused notification to designer', err));
-      this.dashboardRealtime?.notifyUserNotificationRefresh(designerId);
+    // Always push a realtime pause so an open browser tab stops ticking immediately.
+    // Inbox notice stays on the "other slices remain" path (designer can press Start again).
+    if (hadRunningTimer) {
+      this.dashboardRealtime?.notifyTimerPaused(designerId, taskId, closeSession);
+      if (!closeSession) {
+        const linkUrl =
+          task.designType?.toLowerCase() === 'retail' ? `/retail-task-view/${taskId}` : `/project-task-view/${taskId}`;
+        this.notificationsService
+          .create({
+            userId: designerId,
+            title: `Timer Paused — ${task.taskNo}`,
+            message: `Your running timer was paused because a slice of this task was reassigned. Press Start to resume tracking your remaining time.`,
+            linkUrl,
+          })
+          .catch((err) => this.logger.error('Failed to send timer-paused notification to designer', err));
+        this.dashboardRealtime?.notifyUserNotificationRefresh(designerId);
+      }
     }
 
     return {
