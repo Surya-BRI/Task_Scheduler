@@ -22,6 +22,7 @@ import {
   normalizeHalfDaySession,
   normalizeLeaveType,
 } from '../requests/leave-request.validation';
+import { taskViewPath } from '../common/utils/design-type.util';
 const INBOX_ACTION_LABELS: Record<string, string> = {
   [ActivityAction.TASK_CREATED]: 'Task created',
   [ActivityAction.ASSIGNED_TASK]: 'Task assigned',
@@ -610,9 +611,7 @@ export class DashboardService {
   }
 
   private buildTaskViewLink(taskId: string, designType?: string | null): string {
-    const isRetail = String(designType ?? '').trim().toLowerCase() === 'retail';
-    const path = isRetail ? `/retail-task-view/${taskId}` : `/project-task-view/${taskId}`;
-    return `${path}?from=design-list`;
+    return `${taskViewPath(taskId, designType)}?from=design-list`;
   }
 
   private buildActivityLinkUrl(

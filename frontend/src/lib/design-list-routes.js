@@ -65,12 +65,24 @@ export function resolveWorkflowBackPath(from) {
 }
 
 /**
+ * Resolve Retail vs Project for routing.
+ * Retail task rows store subtype on designType (ESTIMATION_PURPOSE, Presentation, …),
+ * not the literal "Retail" — those must still open /retail-task-view.
  * @param {unknown} value
  * @returns {"retail" | "project" | "unknown"}
  */
 export function normalizeDesignType(value) {
-  const v = String(value ?? "").trim().toLowerCase();
+  const v = String(value ?? "").trim().toLowerCase().replace(/[_\s-]+/g, " ");
+  if (!v) return "unknown";
   if (v === "retail" || v === "rtl" || v === "r") return "retail";
+  if (
+    v === "estimation purpose" ||
+    v === "presentation" ||
+    v === "client submission" ||
+    v === "technical drawing"
+  ) {
+    return "retail";
+  }
   if (v === "project" || v === "normal") return "project";
   return "unknown";
 }

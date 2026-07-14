@@ -7,6 +7,7 @@ import { ActivityLoggerService } from '../activities/activity-logger.service';
 import { ActivityAction } from '../activities/activity-events';
 import { DashboardRealtimeService } from '../dashboard/dashboard-realtime.service';
 import { CronLockService } from '../common/services/cron-lock.service';
+import { taskViewPath } from '../common/utils/design-type.util';
 
 const DEADLINE_CRON_LOCK = 'TaskScheduler:DeadlineAlertsCron';
 
@@ -379,9 +380,7 @@ export class DeadlineAlertsService {
   }
 
   private taskLink(task: any) {
-    return task.designType?.toLowerCase() === 'retail'
-      ? `/retail-task-view/${task.id}`
-      : `/project-task-view/${task.id}`;
+    return taskViewPath(task.id, task.designType);
   }
 
   private formatDateTime(value: Date) {
