@@ -199,7 +199,7 @@ const TASK_LIST_SELECT = {
   assigneeId: true,
   assignee: { select: { id: true, fullName: true, email: true } },
   taskDesigners: { select: { designer: { select: { id: true, fullName: true, email: true } } } },
-  retailDetails: { select: { hoursRequired: true } },
+  retailDetails: { select: { hoursRequired: true, designTypes: true } },
   projectDetails: { select: { artworkHours: true, technicalHours: true, locationHours: true, asBuiltHours: true } },
   createdAt: true,
   updatedAt: true,

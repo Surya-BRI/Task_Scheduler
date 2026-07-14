@@ -999,12 +999,51 @@ const DISCIPLINE_PILL_CLASSES = {
   BIM:       'bg-teal-100 text-teal-700',
 }
 
+const RETAIL_TYPE_LABELS = {
+  ESTIMATION_PURPOSE: 'Estimation Purpose',
+  PRESENTATION: 'Presentation',
+  CLIENT_SUBMISSION: 'Client Submission',
+  TECHNICAL_DRAWING: 'Technical Drawing',
+}
+
+const RETAIL_TYPE_PILL_CLASSES = {
+  'Estimation Purpose': 'bg-sky-100 text-sky-700',
+  Presentation: 'bg-violet-100 text-violet-700',
+  'Client Submission': 'bg-amber-100 text-amber-700',
+  'Technical Drawing': 'bg-teal-100 text-teal-700',
+}
+
+function formatRetailTypeLabel(task) {
+  const rawDesignType = String(task?.designType ?? '').trim()
+  const fromCode = RETAIL_TYPE_LABELS[rawDesignType.toUpperCase().replace(/\s+/g, '_')]
+  if (fromCode) return fromCode
+
+  const fromDetail = String(task?.retailDetails?.[0]?.designTypes ?? '').trim()
+  if (fromDetail && !/^retail$/i.test(fromDetail)) return fromDetail
+
+  if (rawDesignType && !/^retail$/i.test(rawDesignType) && !/^project$/i.test(rawDesignType)) {
+    return rawDesignType.replace(/_/g, ' ').replace(/\b\w/g, (c) => c.toUpperCase())
+  }
+  return null
+}
+
 function DisciplinePill({ type }) {
   if (!type) return <span className="text-slate-400">—</span>
   const cls = DISCIPLINE_PILL_CLASSES[type] ?? 'bg-slate-100 text-slate-600'
   return (
     <span className={`inline-block rounded-full px-2 py-0.5 text-[10px] font-semibold ${cls}`}>
       {type}
+    </span>
+  )
+}
+
+function RetailTypePill({ task }) {
+  const label = formatRetailTypeLabel(task)
+  if (!label) return <span className="text-slate-400">—</span>
+  const cls = RETAIL_TYPE_PILL_CLASSES[label] ?? 'bg-slate-100 text-slate-600'
+  return (
+    <span className={`inline-block rounded-full px-2 py-0.5 text-[10px] font-semibold ${cls}`}>
+      {label}
     </span>
   )
 }
@@ -1093,7 +1132,7 @@ function ProjectTaskList({ tasks, loading, onView, isRetail = false }) {
                   <span>{task.revisionCode || '—'}</span>
                   {!isRetail ? <span><PhasePill phase={task.phase} /></span> : null}
                   {!isRetail ? <span className="truncate text-slate-600">{task.signFamily || '—'}</span> : null}
-                  <span><DisciplinePill type={task.disciplineType} /></span>
+                  <span>{isRetail ? <RetailTypePill task={task} /> : <DisciplinePill type={task.disciplineType} />}</span>
                   <span>
                     <span className={`inline-block rounded-full px-2 py-0.5 text-[10px] font-semibold ${getTaskStatusBadgeClass(normalized)}`}>
                       {getStatusLabel(task.status)}
