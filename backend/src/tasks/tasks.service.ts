@@ -29,6 +29,7 @@ import {
 } from '../common/utils/task-work-session-time.util';
 import { utcDateOnlyString } from '../common/utils/date-window.util';
 import { summarizeViewerOvertimeHours } from './scheduler-overtime-hours.util';
+import { taskViewPath } from '../common/utils/design-type.util';
 
 const TASK_SELECT = {
   id: true,
@@ -1507,9 +1508,7 @@ export class TasksService {
     }
 
     const linkUrlAssign =
-      updatedTask.designType?.toLowerCase() === 'retail'
-        ? `/retail-task-view/${id}`
-        : `/project-task-view/${id}`;
+      taskViewPath(id, updatedTask.designType);
     const assignMessage = `${updatedTask.taskNo} — ${updatedTask.project?.name ?? 'Unknown Project'} has been assigned to ${assignee.fullName}`;
     const hodUsersAssign = await this.prisma.user.findMany({
       where: { role: { name: { in: ['HOD', 'SALESPERSON', 'ADMIN'] } } },
@@ -1602,6 +1601,23 @@ export class TasksService {
       );
     }
 
+    // Sales may only change status once the task is in Sales Review (or hold parked from there).
+    // Prevents Sales from starting HOD review / sending to sales / holding earlier stages.
+    const currentStatusApiForSales = toApiTaskStatus(existing.status);
+    if (role === UserRole.SALESPERSON) {
+      const holdPrevApi = existing.holdPreviousStatus
+        ? toApiTaskStatus(existing.holdPreviousStatus)
+        : null;
+      const inSalesScope =
+        currentStatusApiForSales === 'SALES_REVIEW' ||
+        (currentStatusApiForSales === 'ON_HOLD' && holdPrevApi === 'SALES_REVIEW');
+      if (!inSalesScope) {
+        throw new ForbiddenException(
+          'Salesperson can only update tasks that are in Sales Review',
+        );
+      }
+    }
+
     // Auto-track startedAt / completedAt timestamps
     const now = new Date();
     let newStatusDb = toDbTaskStatus(dto.status);
@@ -1613,7 +1629,7 @@ export class TasksService {
     }
 
     // Coming OUT of ON_HOLD — restore the previously stored status regardless of what was sent
-    const currentStatusApi = toApiTaskStatus(existing.status);
+    const currentStatusApi = currentStatusApiForSales;
     if (currentStatusApi === 'ON_HOLD' && newStatusApi !== 'ON_HOLD') {
       newStatusDb = existing.holdPreviousStatus ?? newStatusDb;
       extraData.holdPreviousStatus = null;
@@ -1727,9 +1743,7 @@ export class TasksService {
 
     if (COMPLETED_STATUS_FILTER.includes(effectiveStatusApi)) {
       const linkUrlStatus =
-        (updatedTask as any).designType?.toLowerCase() === 'retail'
-          ? `/retail-task-view/${id}`
-          : `/project-task-view/${id}`;
+        taskViewPath(id, (updatedTask as any).designType);
       const statusMessage = `${(updatedTask as any).taskNo} — ${(updatedTask as any).project?.name ?? 'Unknown Project'} status changed to ${effectiveStatusApi}`;
       const hodUsersStatus = await this.prisma.user.findMany({
         where: { role: { name: { in: ['HOD', 'SALESPERSON', 'ADMIN'] } } },
@@ -1770,9 +1784,7 @@ export class TasksService {
     // HOD_REVIEW — notify HOD/ADMIN users that a task is waiting for their review
     if (effectiveStatusApi === 'HOD_REVIEW') {
       const linkUrlHodReview =
-        (updatedTask as any).designType?.toLowerCase() === 'retail'
-          ? `/retail-task-view/${id}`
-          : `/project-task-view/${id}`;
+        taskViewPath(id, (updatedTask as any).designType);
       const hodReviewMessage = `${(updatedTask as any).taskNo} — ${(updatedTask as any).project?.name ?? 'Unknown Project'} is ready for HOD review.`;
       const hodReviewers = await this.prisma.user.findMany({
         where: { role: { name: { in: ['HOD', 'ADMIN'] } } },
@@ -1792,9 +1804,7 @@ export class TasksService {
       revisionResult = await this.createRevisionFromClientReject(existing, dto, userId);
 
       const linkUrlClientRejected =
-        (updatedTask as any).designType?.toLowerCase() === 'retail'
-          ? `/retail-task-view/${revisionResult.id}`
-          : `/project-task-view/${revisionResult.id}`;
+        taskViewPath(revisionResult.id, (updatedTask as any).designType);
       const clientRejectedMessage =
         `${(updatedTask as any).taskNo} — ${(updatedTask as any).project?.name ?? 'Unknown Project'} was rejected by the client. ` +
         `New revision ${revisionResult.taskNo} created and is awaiting assignment.`;
@@ -1826,9 +1836,7 @@ export class TasksService {
     const resumedFromHold = currentStatusApi === 'ON_HOLD' && newStatusApi !== 'ON_HOLD';
     if (enteredHold || resumedFromHold) {
       const linkUrlHold =
-        (updatedTask as any).designType?.toLowerCase() === 'retail'
-          ? `/retail-task-view/${id}`
-          : `/project-task-view/${id}`;
+        taskViewPath(id, (updatedTask as any).designType);
       const holdTitle = enteredHold ? 'Task Put On Hold' : 'Task Resumed';
       const holdMessage = enteredHold
         ? `${(updatedTask as any).taskNo} — ${(updatedTask as any).project?.name ?? 'Unknown Project'} was put on hold; its scheduled slots were removed.`
@@ -1859,9 +1867,7 @@ export class TasksService {
     // SALES_REVIEW — notify sales + admin that a task is waiting for their decision
     if (effectiveStatusApi === 'SALES_REVIEW') {
       const linkUrlSales =
-        (updatedTask as any).designType?.toLowerCase() === 'retail'
-          ? `/retail-task-view/${id}`
-          : `/project-task-view/${id}`;
+        taskViewPath(id, (updatedTask as any).designType);
       const salesMessage = `${(updatedTask as any).taskNo} — ${(updatedTask as any).project?.name ?? 'Unknown Project'} is ready for your review.`;
       const salesReviewers = await this.prisma.user.findMany({
         where: { role: { name: { in: ['SALESPERSON', 'ADMIN'] } } },
@@ -1878,9 +1884,7 @@ export class TasksService {
     // REWORK — same task stays with current designer(s); notify designers + stakeholders
     if (effectiveStatusApi === 'REWORK') {
       const taskLink =
-        (updatedTask as any).designType?.toLowerCase() === 'retail'
-          ? `/retail-task-view/${id}`
-          : `/project-task-view/${id}`;
+        taskViewPath(id, (updatedTask as any).designType);
       const note = dto.reworkNote?.trim() ?? '';
       const reworkTitle = `Rework Issued — ${(updatedTask as any).taskNo}`;
       const reworkMessage = note || 'Task has been sent for rework.';
@@ -2157,9 +2161,7 @@ export class TasksService {
       where: { role: { name: { in: ['HOD', 'SALESPERSON', 'ADMIN'] } } },
       select: { id: true },
     });
-    const taskLink = designType?.toLowerCase() === 'retail'
-      ? `/retail-task-view/${result.id}`
-      : `/project-task-view/${result.id}`;
+    const taskLink = taskViewPath(result.id, designType);
     for (const stakeholder of stakeholders) {
       this.notificationsService
         .create({
@@ -2355,9 +2357,7 @@ export class TasksService {
       });
       if (submittedTask) {
         const taskLink =
-          submittedTask.designType?.toLowerCase() === 'retail'
-            ? `/retail-task-view/${taskId}`
-            : `/project-task-view/${taskId}`;
+          taskViewPath(taskId, submittedTask.designType);
         const submitterName =
           submittedTask.assignee?.fullName ??
           ((submittedTask as any).taskDesigners?.length > 0
@@ -2629,7 +2629,7 @@ export class TasksService {
       this.dashboardRealtime?.notifyTimerPaused(designerId, taskId, closeSession);
       if (!closeSession) {
         const linkUrl =
-          task.designType?.toLowerCase() === 'retail' ? `/retail-task-view/${taskId}` : `/project-task-view/${taskId}`;
+          taskViewPath(taskId, task.designType);
         this.notificationsService
           .create({
             userId: designerId,

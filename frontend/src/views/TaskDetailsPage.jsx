@@ -1513,9 +1513,10 @@ export function TaskDetailsPage() {
   const canDeleteProjectFiles = sessionRole === 'HOD'
   // HOD has a single login: keep Move Status (Start HOD Review, etc.) even when the
   // task was opened from the personal designer dashboard (from=designer-queue).
+  // Salesperson must NOT get the HOD Move Status panel — only Sales Review actions.
   const isDesignerWorkMode =
     isDesigner || (isHod && sessionRole !== 'HOD' && from === FROM_DESIGNER_QUEUE)
-  const isHodManagementMode = isHod && !isDesignerWorkMode
+  const isHodManagementMode = isHod && !isDesignerWorkMode && !isSales
   const normalizedQsStatus = String(qsStatus?.status ?? '').trim().toLowerCase()
   const isQsCompleted = normalizedQsStatus === 'completed'
   const isQs = _session?.role === 'QS'
@@ -1544,7 +1545,11 @@ export function TaskDetailsPage() {
     taskStatus === 'REWORK',
   )
   const showWorkflowStatusBlocks =
-    DESIGN_WORKFLOW_SOURCES.has(from) || Boolean(pathname?.startsWith('/task-summary/'))
+    DESIGN_WORKFLOW_SOURCES.has(from) ||
+    Boolean(pathname?.startsWith('/task-summary/')) ||
+    // Task view pages should always show the stage strip, even if `from` is missing
+    // (e.g. Sales opened View from create without forwarding the workflow source).
+    Boolean(pathname?.includes('-task-view'))
   const baseTabs = isCreationRoute && !isRetail ? [...TABS, PROJECT_TAB] : TABS
   const tabs = hasReworkInstructions ? [...baseTabs, REWORK_TAB] : baseTabs
   useEffect(() => {
@@ -2845,7 +2850,21 @@ export function TaskDetailsPage() {
                       loading={tasksLoading}
                       isRetail={isRetail}
                       onView={(task) =>
-                        router.push(taskViewPathForRecord({ id: task.id, designType: task.designType ?? task.project?.category }))
+                        router.push(
+                          taskViewPathForRecord(
+                            {
+                              id: task.id,
+                              // Prefer project category (Retail/Project). task.designType is the
+                              // retail subtype (e.g. Presentation) and would mis-route the URL.
+                              designType: task.project?.category ?? record?.designType ?? task.designType,
+                            },
+                            {
+                              ...(from ? { from } : {}),
+                              ...(queryOpNo ? { opNo: queryOpNo } : {}),
+                              ...(queryProjectCode ? { projectCode: queryProjectCode } : {}),
+                            },
+                          ),
+                        )
                       }
                     />
                   ) : null}

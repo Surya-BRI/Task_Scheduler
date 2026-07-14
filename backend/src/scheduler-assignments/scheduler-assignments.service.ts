@@ -37,6 +37,7 @@ import {
   SCHEDULER_TASK_SUMMARY_SELECT,
   type SchedulerTaskSummaryDto,
 } from '../tasks/scheduler-task-summary.util';
+import { taskViewPath } from '../common/utils/design-type.util';
 
 type RawAssignmentRow = {
   id: string;
@@ -2995,7 +2996,7 @@ export class SchedulerAssignmentsService implements OnModuleInit {
       const taskIds = Array.from(new Set(result.reassignedTasks.map((r) => r.taskId)));
       const taskDetails = await this.prisma.task.findMany({
         where: { id: { in: taskIds } },
-        select: { id: true, taskNo: true, title: true },
+        select: { id: true, taskNo: true, title: true, designType: true },
       });
       const taskById = new Map(taskDetails.map((t) => [t.id, t]));
 
@@ -3033,7 +3034,7 @@ export class SchedulerAssignmentsService implements OnModuleInit {
       for (const r of result.reassignedTasks) {
         const task = taskById.get(r.taskId);
         if (!task) continue;
-        const taskLink = `/project-task-view/${r.taskId}`;
+        const taskLink = taskViewPath(r.taskId, task.designType);
         const designerName = nameById.get(r.newAssigneeId) ?? 'Designer';
         const designerMsg = `${task.taskNo} has been scheduled for you.`;
         const hodMsg = `${task.taskNo} scheduled and assigned to ${designerName}.`;
@@ -3056,7 +3057,7 @@ export class SchedulerAssignmentsService implements OnModuleInit {
         const splitTaskIds = result.splitTasks.map((s) => s.taskId);
         const splitDesignerIds = Array.from(new Set(result.splitTasks.flatMap((s) => s.designerIds)));
         const [splitTaskDetails, splitDesigners] = await Promise.all([
-          this.prisma.task.findMany({ where: { id: { in: splitTaskIds } }, select: { id: true, taskNo: true } }),
+          this.prisma.task.findMany({ where: { id: { in: splitTaskIds } }, select: { id: true, taskNo: true, designType: true } }),
           this.prisma.user.findMany({ where: { id: { in: splitDesignerIds } }, select: { id: true, fullName: true } }),
         ]);
         const splitTaskById = new Map(splitTaskDetails.map((t) => [t.id, t]));
@@ -3065,7 +3066,7 @@ export class SchedulerAssignmentsService implements OnModuleInit {
         for (const { taskId, designerIds } of result.splitTasks) {
           const task = splitTaskById.get(taskId);
           if (!task) continue;
-          const taskLink = `/project-task-view/${taskId}`;
+          const taskLink = taskViewPath(taskId, task.designType);
           const designerNames = designerIds.map((id) => splitNameById.get(id) ?? 'Designer').join(', ');
           for (const designerId of designerIds) {
             this.notificationsService
@@ -3090,7 +3091,7 @@ export class SchedulerAssignmentsService implements OnModuleInit {
       const taskIds = Array.from(new Set(result.sameDesignerChangedTasks.map((t) => t.taskId)));
       const taskDetails = await this.prisma.task.findMany({
         where: { id: { in: taskIds } },
-        select: { id: true, taskNo: true },
+        select: { id: true, taskNo: true, designType: true },
       });
       const taskById = new Map(taskDetails.map((t) => [t.id, t]));
       for (const { taskId, designerId } of result.sameDesignerChangedTasks) {
@@ -3101,7 +3102,7 @@ export class SchedulerAssignmentsService implements OnModuleInit {
             userId: designerId,
             title: 'Schedule Changed',
             message: `${task.taskNo} was rescheduled to a different day/time.`,
-            linkUrl: `/project-task-view/${taskId}`,
+            linkUrl: taskViewPath(taskId, task.designType),
           })
           .catch((err) => this.logger.error('Failed to notify designer of same-designer schedule change', err));
         this.dashboardRealtime?.notifyUserNotificationRefresh(designerId);
@@ -3113,7 +3114,7 @@ export class SchedulerAssignmentsService implements OnModuleInit {
       const taskIds = Array.from(new Set(result.unassignedFormerAssignees.map((t) => t.taskId)));
       const taskDetails = await this.prisma.task.findMany({
         where: { id: { in: taskIds } },
-        select: { id: true, taskNo: true },
+        select: { id: true, taskNo: true, designType: true },
       });
       const taskById = new Map(taskDetails.map((t) => [t.id, t]));
       for (const { taskId, formerAssigneeId } of result.unassignedFormerAssignees) {
@@ -3124,7 +3125,7 @@ export class SchedulerAssignmentsService implements OnModuleInit {
             userId: formerAssigneeId,
             title: 'Removed from Schedule',
             message: `${task.taskNo} was removed from the scheduler grid.`,
-            linkUrl: `/project-task-view/${taskId}`,
+            linkUrl: taskViewPath(taskId, task.designType),
           })
           .catch((err) => this.logger.error('Failed to notify former assignee of schedule removal', err));
         this.dashboardRealtime?.notifyUserNotificationRefresh(formerAssigneeId);

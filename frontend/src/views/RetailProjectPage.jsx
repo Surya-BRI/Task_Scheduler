@@ -1059,7 +1059,19 @@ export function RetailProjectPage() {
                     tasks={projectTasks}
                     loading={tasksLoading}
                     onView={(task) =>
-                      router.push(taskViewPathForRecord({ id: task.id, designType: task.designType ?? task.project?.category }))
+                      router.push(
+                        taskViewPathForRecord(
+                          {
+                            id: task.id,
+                            designType: task.project?.category ?? 'Retail',
+                          },
+                          {
+                            ...(searchParams.get('from')
+                              ? { from: searchParams.get('from') }
+                              : {}),
+                          },
+                        ),
+                      )
                     }
                   />
                 </>
