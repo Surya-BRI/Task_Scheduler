@@ -411,7 +411,10 @@ function QsProjectDetailContent() {
                   <tr>
                     {['Sign Type', 'No', 'T.No', 'Est QTY', 'Qs QTY', 'Seq', 'Status', 'Cont.Ref',
                       'Plan Code', 'Area/Zone', 'Level/Parcel', 'Comment', ''].map((h) => (
-                      <th key={h} className="px-1.5 py-0.5 text-left text-[9px] font-semibold whitespace-nowrap border-r border-slate-200 last:border-r-0">
+                      <th
+                        key={h}
+                        className={`px-1.5 py-0.5 text-left text-[9px] font-semibold whitespace-nowrap border-r border-slate-200 last:border-r-0${h === 'Sign Type' ? ' w-[220px] min-w-[220px]' : ''}`}
+                      >
                         {h}
                         {h && h !== 'Comment' && <span className="ml-0.5 text-red-600" title="Required">*</span>}
                       </th>
@@ -457,7 +460,7 @@ function QsProjectDetailContent() {
                           <tr key={row.id ?? row._idx} className="hover:bg-slate-50">
                             {['signType', 'no', 'tNo', 'estQty', 'qsQty', 'sequence', 'status', 'contRef',
                                'planCode', 'areaZone', 'levelParcel', 'comment'].map((field) => (
-                              <td key={field} className={`p-0 border-r border-slate-300 last:border-r-0${field === 'signType' ? ' relative group' : ''}`}>
+                              <td key={field} className={`p-0 border-r border-slate-300 last:border-r-0${field === 'signType' ? ' relative group w-[220px] min-w-[220px]' : ''}`}>
                                 {isLockedStatusField(row, field) ? (
                                   <input
                                     value={row[field] ?? ''}
