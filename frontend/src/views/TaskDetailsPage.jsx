@@ -163,6 +163,20 @@ function normalizeSignRowsForSubmit(rows) {
   })
 }
 
+const SIGN_ROW_TRACKED_FIELDS = [
+  'tNo', 'no', 'signType', 'planCode', 'estQty', 'qsQty',
+  'areaZone', 'levelParcel', 'sequence', 'status', 'comment', 'contRef', 'signFamily',
+]
+
+// Stable serialization of user-editable fields, used to detect unsaved changes.
+function serializeSignRows(rows) {
+  return JSON.stringify(
+    (Array.isArray(rows) ? rows : []).map((row) =>
+      SIGN_ROW_TRACKED_FIELDS.map((field) => String(row?.[field] ?? '')),
+    ),
+  )
+}
+
 const STAGE_ITEMS = [
   { id: 'new',       label: 'Design Task New',   hint: 'Awaiting project allocation',   icon: Flag,         status: 'DESIGN_NEW' },
   { id: 'planned',   label: 'Design Planned',    hint: 'Task scheduled for production', icon: Clock3,       status: 'DESIGN_PLANNED' },
@@ -1224,6 +1238,11 @@ export function TaskDetailsPage() {
   const [hodUsers, setHodUsers] = useState([])
   const [designerUsers, setDesignerUsers] = useState([])
   const [signRows, setSignRows] = useState([])
+  // Snapshot of the rows as last loaded/saved; used to detect unsaved changes.
+  const [savedRowsSnapshot, setSavedRowsSnapshot] = useState(() => serializeSignRows([]))
+  // Snapshot of the rows as loaded/last submitted; "Save Rows" does not reset
+  // this, so "Submit QS Update" stays enabled after saving changed rows.
+  const [submittedRowsSnapshot, setSubmittedRowsSnapshot] = useState(() => serializeSignRows([]))
   const [signRowsLoading, setSignRowsLoading] = useState(false)
   const [signRowsSaving, setSignRowsSaving] = useState(false)
   const [qsStatus, setQsStatus] = useState(null)
@@ -1525,6 +1544,18 @@ export function TaskDetailsPage() {
   // permissions (persisted rows are enforced server-side too).
   const isApprovedSignRow = (row) => String(row?.status ?? '').trim().toLowerCase() === 'approved'
   const isLockedSignRowStatusField = (row, field) => field === 'status' && isApprovedSignRow(row)
+  // Dirty when current rows differ from the last loaded/saved snapshot.
+  const hasUnsavedSignRowChanges = useMemo(
+    () => serializeSignRows(signRows) !== savedRowsSnapshot,
+    [signRows, savedRowsSnapshot],
+  )
+  // Dirty when current rows differ from the state at load / last submission.
+  // Saving rows keeps this true, so a saved-but-not-yet-submitted change still
+  // allows resubmission; reverting every change disables the button again.
+  const hasSignRowChangesSinceSubmit = useMemo(
+    () => serializeSignRows(signRows) !== submittedRowsSnapshot,
+    [signRows, submittedRowsSnapshot],
+  )
   const isProjectTeamComplete =
     Boolean(technicalHead.trim()) &&
     Boolean(teamLead.trim()) &&
@@ -1695,6 +1726,8 @@ export function TaskDetailsPage() {
   useEffect(() => {
     if (!projectId) {
       setSignRows([])
+      setSavedRowsSnapshot(serializeSignRows([]))
+      setSubmittedRowsSnapshot(serializeSignRows([]))
       setQsStatus(null)
       return
     }
@@ -1739,6 +1772,8 @@ export function TaskDetailsPage() {
       }
 
       setSignRows(initialRows)
+      setSavedRowsSnapshot(serializeSignRows(initialRows))
+      setSubmittedRowsSnapshot(serializeSignRows(initialRows))
       setQsStatus(status)
       if (alive) setSignRowsLoading(false)
     })
@@ -2232,6 +2267,7 @@ export function TaskDetailsPage() {
       const status = await apiClient.get(`/projects/${projectId}/qs-status`).catch(() => null)
       const nextRows = Array.isArray(verified) ? verified : (Array.isArray(saved) ? saved : [])
       setSignRows(nextRows)
+      setSavedRowsSnapshot(serializeSignRows(nextRows))
       if (status) setQsStatus(status)
       if (nextRows.length !== rows.length) {
         throw new Error('Sign Family rows were saved but could not be verified. Please refresh and check again.')
@@ -2251,12 +2287,19 @@ export function TaskDetailsPage() {
       toast.error('This QS update has already been submitted.')
       return
     }
+    if (!hasSignRowChangesSinceSubmit) {
+      toast.error('Make at least one change before submitting a QS update.')
+      return
+    }
     setQsSubmitting(true)
     try {
       const rows = normalizeSignRowsForSubmit(signRows)
       const response = await apiClient.post(`/projects/${projectId}/qs-submit`, { rows })
       const nextRows = Array.isArray(response?.rows) ? response.rows : await apiClient.get(`/projects/${projectId}/sign-rows`)
-      setSignRows(Array.isArray(nextRows) ? nextRows : [])
+      const submittedRows = Array.isArray(nextRows) ? nextRows : []
+      setSignRows(submittedRows)
+      setSavedRowsSnapshot(serializeSignRows(submittedRows))
+      setSubmittedRowsSnapshot(serializeSignRows(submittedRows))
       setQsStatus(response?.qsStatus ?? { status: response?.status ?? 'Completed' })
       toast.success('QS update submitted. Project is now read-only.')
       await fetchActivities({ append: false, cursor: null })
@@ -2726,16 +2769,18 @@ export function TaskDetailsPage() {
                                 <button
                                   type="button"
                                   onClick={handleSaveSignRows}
-                                  disabled={signRowsSaving || qsSubmitting}
-                                  className="rounded-md bg-[#10a6e3] px-3 py-1 text-[11px] font-semibold text-white transition hover:bg-[#0f96cd] disabled:opacity-60"
+                                  disabled={signRowsSaving || qsSubmitting || !hasUnsavedSignRowChanges}
+                                  title={!hasUnsavedSignRowChanges ? 'No unsaved changes' : undefined}
+                                  className="rounded-md bg-[#10a6e3] px-3 py-1 text-[11px] font-semibold text-white transition hover:bg-[#0f96cd] disabled:cursor-not-allowed disabled:opacity-60"
                                 >
                                   {signRowsSaving ? 'Saving…' : 'Save Rows'}
                                 </button>
                                 <button
                                   type="button"
                                   onClick={handleSubmitQsUpdate}
-                                  disabled={signRowsSaving || qsSubmitting}
-                                  className="rounded-md bg-emerald-600 px-3 py-1 text-[11px] font-semibold text-white transition hover:bg-emerald-700 disabled:opacity-60"
+                                  disabled={signRowsSaving || qsSubmitting || !hasSignRowChangesSinceSubmit}
+                                  title={!hasSignRowChangesSinceSubmit ? 'Make a change before submitting' : undefined}
+                                  className="rounded-md bg-emerald-600 px-3 py-1 text-[11px] font-semibold text-white transition hover:bg-emerald-700 disabled:cursor-not-allowed disabled:opacity-60"
                                 >
                                   {qsSubmitting ? 'Submitting…' : 'Submit QS Update'}
                                 </button>
@@ -2748,7 +2793,10 @@ export function TaskDetailsPage() {
                                 <tr>
                                   {['Sign Type','No','T.No','Est QTY','Qs QTY','Seq','Status','Cont.Ref',
                                       'Plan Code','Area/Zone','Level/Parcel','Comment',''].map((h) => (
-                                    <th key={h} className="px-1.5 py-0.5 text-left text-[9px] font-semibold whitespace-nowrap border-r border-slate-200 last:border-r-0">{h}</th>
+                                    <th key={h} className="px-1.5 py-0.5 text-left text-[9px] font-semibold whitespace-nowrap border-r border-slate-200 last:border-r-0">
+                                      {h}
+                                      {h && h !== 'Comment' && <span className="ml-0.5 text-red-600" title="Required">*</span>}
+                                    </th>
                                   ))}
                                 </tr>
                               </thead>
