@@ -209,6 +209,8 @@ function QsProjectDetailContent() {
   const normalizedQsStatus = String(qsStatus?.status ?? '').trim().toLowerCase()
   const isQsCompleted = normalizedQsStatus === 'completed'
   const isQsReadOnly = isQsCompleted
+  // Approved rows are protected: deletion requires elevated permissions (enforced server-side too).
+  const isApprovedRow = (row) => String(row?.status ?? '').trim().toLowerCase() === 'approved'
 
   const resolvedOpNo = String(project?.salesForceCode ?? project?.opNo ?? queryOp ?? '').trim()
   const resolvedName = project?.name ?? project?.projectName ?? projectCode
@@ -424,7 +426,7 @@ function QsProjectDetailContent() {
                               </td>
                             ))}
                             <td className="px-1 py-0.5 border-r border-slate-300 last:border-r-0">
-                              {!isQsReadOnly && (
+                              {!isQsReadOnly && !isApprovedRow(row) && (
                                 <button
                                   type="button"
                                   onClick={() => setDeleteConfirm({ idx: row._idx, family })}

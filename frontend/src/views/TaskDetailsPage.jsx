@@ -1521,6 +1521,8 @@ export function TaskDetailsPage() {
   const isQsCompleted = normalizedQsStatus === 'completed'
   const isQs = _session?.role === 'QS'
   const isQsReadOnly = isQsCompleted || !isQs
+  // Approved rows are protected: deletion requires elevated permissions (enforced server-side too).
+  const isApprovedSignRow = (row) => String(row?.status ?? '').trim().toLowerCase() === 'approved'
   const isProjectTeamComplete =
     Boolean(technicalHead.trim()) &&
     Boolean(teamLead.trim()) &&
@@ -2798,7 +2800,7 @@ export function TaskDetailsPage() {
                                             </td>
                                           ))}
                                           <td className="px-1 py-0.5">
-                                            {!isQsReadOnly ? (
+                                            {!isQsReadOnly && !isApprovedSignRow(row) ? (
                                               <button
                                                 type="button"
                                                 onClick={() => setDeleteConfirm({ idx: row._idx, family })}

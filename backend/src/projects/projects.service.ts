@@ -41,6 +41,14 @@ const QS_STATUS_VALUES = new Set<string>([QS_STATUS_PENDING, QS_STATUS_IN_PROGRE
 
 const SIGN_ROW_FIELDS = ['tNo', 'no', 'signType', 'planCode', 'estQty', 'qsQty', 'areaZone', 'levelParcel', 'sequence', 'status', 'comment', 'contRef', 'signFamily'] as const;
 
+const SIGN_ROW_STATUS_APPROVED = 'approved';
+// Roles allowed to delete sign rows whose persisted status is Approved.
+const APPROVED_SIGN_ROW_DELETE_ROLES = new Set<string>([UserRole.HOD]);
+
+function isApprovedSignRowStatus(status: unknown): boolean {
+  return String(status ?? '').trim().toLowerCase() === SIGN_ROW_STATUS_APPROVED;
+}
+
 export type ProjectFilters = {
   status?: string;
   category?: string;
@@ -773,6 +781,14 @@ END;
     const existingRows = await this.prisma.projectSignRow.findMany({ where: { projectId }, orderBy: { createdAt: 'asc' } });
     const existingById = new Map(existingRows.map((r) => [r.id, r]));
     const incomingIds = new Set(rowsToPersist.map((r) => r.id).filter(Boolean));
+
+    const canDeleteApprovedRows = !!role && APPROVED_SIGN_ROW_DELETE_ROLES.has(role);
+    if (!canDeleteApprovedRows) {
+      const blockedDeletes = existingRows.filter((row) => !incomingIds.has(row.id) && isApprovedSignRowStatus(row.status));
+      if (blockedDeletes.length > 0) {
+        throw new ForbiddenException('Approved sign rows cannot be deleted. Contact a user with elevated permissions.');
+      }
+    }
 
     const savedRows = await this.prisma.$transaction(async (tx) => {
       for (const row of rowsToPersist) {
