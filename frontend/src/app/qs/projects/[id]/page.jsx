@@ -127,6 +127,9 @@ function QsProjectDetailContent() {
   const [signRows, setSignRows] = useState([])
   // Snapshot of the rows as last loaded/saved; used to detect a dirty state.
   const [savedRowsSnapshot, setSavedRowsSnapshot] = useState(() => serializeSignRows([]))
+  // Snapshot of the rows as loaded/last submitted; "Save Rows" does not reset
+  // this, so "Submit QS Update" stays enabled after saving changed rows.
+  const [submittedRowsSnapshot, setSubmittedRowsSnapshot] = useState(() => serializeSignRows([]))
   const [qsStatus, setQsStatus] = useState(null)
   const [signRowsLoading, setSignRowsLoading] = useState(false)
   const [signRowsSaving, setSignRowsSaving] = useState(false)
@@ -214,6 +217,7 @@ function QsProjectDetailContent() {
       if (alive) {
         setSignRows(initialRows)
         setSavedRowsSnapshot(serializeSignRows(initialRows))
+        setSubmittedRowsSnapshot(serializeSignRows(initialRows))
         setQsStatus(status)
         setSignRowsLoading(false)
       }
@@ -235,6 +239,14 @@ function QsProjectDetailContent() {
   const hasUnsavedChanges = useMemo(
     () => serializeSignRows(signRows) !== savedRowsSnapshot,
     [signRows, savedRowsSnapshot],
+  )
+
+  // Dirty when current rows differ from the state at load / last submission.
+  // Saving rows keeps this true, so a saved-but-not-yet-submitted change still
+  // allows resubmission; reverting every change disables the button again.
+  const hasChangesSinceSubmit = useMemo(
+    () => serializeSignRows(signRows) !== submittedRowsSnapshot,
+    [signRows, submittedRowsSnapshot],
   )
 
   const resolvedOpNo = String(project?.salesForceCode ?? project?.opNo ?? queryOp ?? '').trim()
@@ -277,6 +289,10 @@ function QsProjectDetailContent() {
       toast.error('This QS update has already been submitted.')
       return
     }
+    if (!hasChangesSinceSubmit) {
+      toast.error('Make at least one change before submitting a QS update.')
+      return
+    }
     setQsSubmitting(true)
     try {
       const rows = normalizeSignRowsForSubmit(signRows)
@@ -287,6 +303,7 @@ function QsProjectDetailContent() {
       const submittedRows = Array.isArray(nextRows) ? nextRows : []
       setSignRows(submittedRows)
       setSavedRowsSnapshot(serializeSignRows(submittedRows))
+      setSubmittedRowsSnapshot(serializeSignRows(submittedRows))
       setQsStatus(response?.qsStatus ?? { status: response?.status ?? 'Completed' })
       toast.success('QS update submitted. Project is now read-only.')
     } catch (error) {
@@ -378,8 +395,9 @@ function QsProjectDetailContent() {
                   <button
                     type="button"
                     onClick={handleSubmitQsUpdate}
-                    disabled={signRowsSaving || qsSubmitting}
-                    className="rounded-md bg-emerald-600 px-3 py-1 text-[11px] font-semibold text-white transition hover:bg-emerald-700 disabled:opacity-60"
+                    disabled={signRowsSaving || qsSubmitting || !hasChangesSinceSubmit}
+                    title={!hasChangesSinceSubmit ? 'Make a change before submitting' : undefined}
+                    className="rounded-md bg-emerald-600 px-3 py-1 text-[11px] font-semibold text-white transition hover:bg-emerald-700 disabled:cursor-not-allowed disabled:opacity-60"
                   >
                     {qsSubmitting ? 'Submitting…' : 'Submit QS Update'}
                   </button>
