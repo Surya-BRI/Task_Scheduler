@@ -1521,6 +1521,10 @@ export function TaskDetailsPage() {
   const isQsCompleted = normalizedQsStatus === 'completed'
   const isQs = _session?.role === 'QS'
   const isQsReadOnly = isQsCompleted || !isQs
+  // Approved rows are protected: deletion and status changes require elevated
+  // permissions (persisted rows are enforced server-side too).
+  const isApprovedSignRow = (row) => String(row?.status ?? '').trim().toLowerCase() === 'approved'
+  const isLockedSignRowStatusField = (row, field) => field === 'status' && isApprovedSignRow(row)
   const isProjectTeamComplete =
     Boolean(technicalHead.trim()) &&
     Boolean(teamLead.trim()) &&
@@ -2784,12 +2788,22 @@ export function TaskDetailsPage() {
                                           {['signType','no','tNo','estQty','qsQty','sequence','status','contRef',
                                               'planCode','areaZone','levelParcel','comment'].map((field) => (
                                             <td key={field} className={`p-0 border-r border-slate-300 last:border-r-0${field === 'signType' ? ' relative group' : ''}`}>
+                                              {isLockedSignRowStatusField(row, field) ? (
+                                                <input
+                                                  value={row[field] ?? ''}
+                                                  readOnly
+                                                  tabIndex={-1}
+                                                  title="Approved status is locked and cannot be changed."
+                                                  className="h-6 w-full cursor-not-allowed border border-slate-400 bg-slate-50 px-1.5 text-[11px] text-slate-500 focus:outline-none"
+                                                />
+                                              ) : (
                                               <input
                                                 value={row[field] ?? ''}
                                                 onChange={(e) => setSignRows((prev) => prev.map((r, i) => i === row._idx ? { ...r, [field]: e.target.value } : r))}
                                                 disabled={isQsReadOnly}
                                                 className="h-6 w-full border border-slate-400 px-1.5 text-[11px] text-slate-900 focus:border-blue-500 focus:outline-none focus:ring-1 focus:ring-blue-300"
                                               />
+                                              )}
                                               {field === 'signType' && row[field] && (
                                                 <div className="pointer-events-none absolute left-0 top-full z-50 mt-1 hidden max-w-[260px] rounded border border-slate-200 bg-white px-3 py-2 text-[11px] text-slate-800 shadow-lg group-hover:block">
                                                   {row[field]}
@@ -2798,7 +2812,7 @@ export function TaskDetailsPage() {
                                             </td>
                                           ))}
                                           <td className="px-1 py-0.5">
-                                            {!isQsReadOnly ? (
+                                            {!isQsReadOnly && !isApprovedSignRow(row) ? (
                                               <button
                                                 type="button"
                                                 onClick={() => setDeleteConfirm({ idx: row._idx, family })}
