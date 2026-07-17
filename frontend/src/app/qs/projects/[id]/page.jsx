@@ -1,6 +1,6 @@
 'use client'
 
-import React, { useEffect, useState, Suspense } from 'react'
+import React, { useEffect, useMemo, useState, Suspense } from 'react'
 import { useParams, useRouter, useSearchParams } from 'next/navigation'
 import { ChevronLeft } from 'lucide-react'
 import { toast } from 'sonner'
@@ -23,6 +23,20 @@ const SIGN_ROW_SUBMIT_REQUIRED = [
   ['status', 'Status'],
   ['contRef', 'Cont.Ref'],
 ]
+
+const SIGN_ROW_TRACKED_FIELDS = [
+  'tNo', 'no', 'signType', 'planCode', 'estQty', 'qsQty',
+  'areaZone', 'levelParcel', 'sequence', 'status', 'comment', 'contRef', 'signFamily',
+]
+
+// Stable serialization of user-editable fields, used to detect unsaved changes.
+function serializeSignRows(rows) {
+  return JSON.stringify(
+    (Array.isArray(rows) ? rows : []).map((row) =>
+      SIGN_ROW_TRACKED_FIELDS.map((field) => String(row?.[field] ?? '')),
+    ),
+  )
+}
 
 function normalizeOptionalInteger(value, label, rowNumber) {
   const text = String(value ?? '').trim()
@@ -111,6 +125,8 @@ function QsProjectDetailContent() {
 
   // ── sign rows ──
   const [signRows, setSignRows] = useState([])
+  // Snapshot of the rows as last loaded/saved; used to detect a dirty state.
+  const [savedRowsSnapshot, setSavedRowsSnapshot] = useState(() => serializeSignRows([]))
   const [qsStatus, setQsStatus] = useState(null)
   const [signRowsLoading, setSignRowsLoading] = useState(false)
   const [signRowsSaving, setSignRowsSaving] = useState(false)
@@ -197,6 +213,7 @@ function QsProjectDetailContent() {
 
       if (alive) {
         setSignRows(initialRows)
+        setSavedRowsSnapshot(serializeSignRows(initialRows))
         setQsStatus(status)
         setSignRowsLoading(false)
       }
@@ -213,6 +230,12 @@ function QsProjectDetailContent() {
   // permissions (persisted rows are enforced server-side too).
   const isApprovedRow = (row) => String(row?.status ?? '').trim().toLowerCase() === 'approved'
   const isLockedStatusField = (row, field) => field === 'status' && isApprovedRow(row)
+
+  // Dirty when current rows differ from the last loaded/saved snapshot.
+  const hasUnsavedChanges = useMemo(
+    () => serializeSignRows(signRows) !== savedRowsSnapshot,
+    [signRows, savedRowsSnapshot],
+  )
 
   const resolvedOpNo = String(project?.salesForceCode ?? project?.opNo ?? queryOp ?? '').trim()
   const resolvedName = project?.name ?? project?.projectName ?? projectCode
@@ -236,6 +259,7 @@ function QsProjectDetailContent() {
       const status = await apiClient.get(`/projects/${projectId}/qs-status`).catch(() => null)
       const nextRows = Array.isArray(verified) ? verified : (Array.isArray(saved) ? saved : [])
       setSignRows(nextRows)
+      setSavedRowsSnapshot(serializeSignRows(nextRows))
       if (status) setQsStatus(status)
       if (nextRows.length !== rows.length) {
         throw new Error('Rows saved but could not be verified. Please refresh.')
@@ -260,7 +284,9 @@ function QsProjectDetailContent() {
       const nextRows = Array.isArray(response?.rows)
         ? response.rows
         : await apiClient.get(`/projects/${projectId}/sign-rows`)
-      setSignRows(Array.isArray(nextRows) ? nextRows : [])
+      const submittedRows = Array.isArray(nextRows) ? nextRows : []
+      setSignRows(submittedRows)
+      setSavedRowsSnapshot(serializeSignRows(submittedRows))
       setQsStatus(response?.qsStatus ?? { status: response?.status ?? 'Completed' })
       toast.success('QS update submitted. Project is now read-only.')
     } catch (error) {
@@ -343,8 +369,9 @@ function QsProjectDetailContent() {
                   <button
                     type="button"
                     onClick={handleSaveSignRows}
-                    disabled={signRowsSaving || qsSubmitting}
-                    className="rounded-md bg-[#10a6e3] px-3 py-1 text-[11px] font-semibold text-white transition hover:bg-[#0f96cd] disabled:opacity-60"
+                    disabled={signRowsSaving || qsSubmitting || !hasUnsavedChanges}
+                    title={!hasUnsavedChanges ? 'No unsaved changes' : undefined}
+                    className="rounded-md bg-[#10a6e3] px-3 py-1 text-[11px] font-semibold text-white transition hover:bg-[#0f96cd] disabled:cursor-not-allowed disabled:opacity-60"
                   >
                     {signRowsSaving ? 'Saving…' : 'Save Rows'}
                   </button>
