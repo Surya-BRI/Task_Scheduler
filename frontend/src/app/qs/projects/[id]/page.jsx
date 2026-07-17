@@ -209,8 +209,10 @@ function QsProjectDetailContent() {
   const normalizedQsStatus = String(qsStatus?.status ?? '').trim().toLowerCase()
   const isQsCompleted = normalizedQsStatus === 'completed'
   const isQsReadOnly = isQsCompleted
-  // Approved rows are protected: deletion requires elevated permissions (enforced server-side too).
+  // Approved rows are protected: deletion and status changes require elevated
+  // permissions (persisted rows are enforced server-side too).
   const isApprovedRow = (row) => String(row?.status ?? '').trim().toLowerCase() === 'approved'
+  const isLockedStatusField = (row, field) => field === 'status' && isApprovedRow(row)
 
   const resolvedOpNo = String(project?.salesForceCode ?? project?.opNo ?? queryOp ?? '').trim()
   const resolvedName = project?.name ?? project?.projectName ?? projectCode
@@ -408,6 +410,15 @@ function QsProjectDetailContent() {
                             {['signType', 'no', 'tNo', 'estQty', 'qsQty', 'sequence', 'status', 'contRef',
                                'planCode', 'areaZone', 'levelParcel', 'comment'].map((field) => (
                               <td key={field} className={`p-0 border-r border-slate-300 last:border-r-0${field === 'signType' ? ' relative group' : ''}`}>
+                                {isLockedStatusField(row, field) ? (
+                                  <input
+                                    value={row[field] ?? ''}
+                                    readOnly
+                                    tabIndex={-1}
+                                    title="Approved status is locked and cannot be changed."
+                                    className="h-6 w-full cursor-not-allowed border border-slate-400 bg-slate-50 px-1.5 text-[11px] text-slate-500 focus:outline-none"
+                                  />
+                                ) : (
                                 <input
                                   value={row[field] ?? ''}
                                   onChange={(e) =>
@@ -418,6 +429,7 @@ function QsProjectDetailContent() {
                                   disabled={isQsReadOnly}
                                   className="h-6 w-full border border-slate-400 px-1.5 text-[11px] text-slate-900 focus:border-blue-500 focus:outline-none focus:ring-1 focus:ring-blue-300 disabled:bg-slate-50 disabled:text-slate-500"
                                 />
+                                )}
                                 {field === 'signType' && row[field] && (
                                   <div className="pointer-events-none absolute left-0 top-full z-50 mt-1 hidden max-w-[260px] rounded border border-slate-200 bg-white px-3 py-2 text-[11px] text-slate-800 shadow-lg group-hover:block">
                                     {row[field]}

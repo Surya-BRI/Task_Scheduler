@@ -42,8 +42,8 @@ const QS_STATUS_VALUES = new Set<string>([QS_STATUS_PENDING, QS_STATUS_IN_PROGRE
 const SIGN_ROW_FIELDS = ['tNo', 'no', 'signType', 'planCode', 'estQty', 'qsQty', 'areaZone', 'levelParcel', 'sequence', 'status', 'comment', 'contRef', 'signFamily'] as const;
 
 const SIGN_ROW_STATUS_APPROVED = 'approved';
-// Roles allowed to delete sign rows whose persisted status is Approved.
-const APPROVED_SIGN_ROW_DELETE_ROLES = new Set<string>([UserRole.HOD]);
+// Roles allowed to delete or change the status of sign rows whose persisted status is Approved.
+const APPROVED_SIGN_ROW_OVERRIDE_ROLES = new Set<string>([UserRole.HOD]);
 
 function isApprovedSignRowStatus(status: unknown): boolean {
   return String(status ?? '').trim().toLowerCase() === SIGN_ROW_STATUS_APPROVED;
@@ -782,11 +782,19 @@ END;
     const existingById = new Map(existingRows.map((r) => [r.id, r]));
     const incomingIds = new Set(rowsToPersist.map((r) => r.id).filter(Boolean));
 
-    const canDeleteApprovedRows = !!role && APPROVED_SIGN_ROW_DELETE_ROLES.has(role);
-    if (!canDeleteApprovedRows) {
+    const canOverrideApprovedRows = !!role && APPROVED_SIGN_ROW_OVERRIDE_ROLES.has(role);
+    if (!canOverrideApprovedRows) {
       const blockedDeletes = existingRows.filter((row) => !incomingIds.has(row.id) && isApprovedSignRowStatus(row.status));
       if (blockedDeletes.length > 0) {
         throw new ForbiddenException('Approved sign rows cannot be deleted. Contact a user with elevated permissions.');
+      }
+      const blockedStatusChanges = rowsToPersist.filter((row) => {
+        if (!row.id) return false;
+        const existing = existingById.get(row.id);
+        return !!existing && isApprovedSignRowStatus(existing.status) && !isApprovedSignRowStatus(row.status);
+      });
+      if (blockedStatusChanges.length > 0) {
+        throw new ForbiddenException('The status of approved sign rows cannot be changed. Contact a user with elevated permissions.');
       }
     }
 
