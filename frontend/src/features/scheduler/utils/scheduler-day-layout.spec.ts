@@ -41,29 +41,33 @@ describe('scheduler-day-layout', () => {
     expect(shouldSkipOptimizerTask(firstHalfLeave)).toBe(true);
   });
 
-  it('places first-half leave to the left of schedulable tasks', () => {
+  it('keeps leave on the system strip and tasks on the work row', () => {
     const taskMap = {
       [taskA.id]: taskA,
       [firstHalfLeave.id]: firstHalfLeave,
     };
     const layout = partitionDayTaskIds([taskA.id, firstHalfLeave.id], taskMap);
 
-    expect(layout.visualRegularTaskIds).toEqual([firstHalfLeave.id, taskA.id]);
+    expect(layout.systemBlockIds).toEqual([firstHalfLeave.id]);
+    expect(layout.visualRegularTaskIds).toEqual([taskA.id]);
     expect(layout.overtimeTaskIds).toEqual([]);
   });
 
-  it('places second-half leave to the right of schedulable tasks (Benjamin scenario)', () => {
+  it('orders first-half leave before second-half leave on the system strip', () => {
     const taskMap = {
       [taskA.id]: taskA,
+      [firstHalfLeave.id]: firstHalfLeave,
       [secondHalfLeave.id]: secondHalfLeave,
     };
-    const layout = partitionDayTaskIds([secondHalfLeave.id, taskA.id], taskMap);
+    const layout = partitionDayTaskIds([secondHalfLeave.id, taskA.id, firstHalfLeave.id], taskMap);
 
-    expect(layout.visualRegularTaskIds).toEqual([taskA.id, secondHalfLeave.id]);
-    expect(layout.overtimeTaskIds).toEqual([]);
+    expect(layout.systemBlockIds).toEqual([firstHalfLeave.id, secondHalfLeave.id]);
+    // 4h + 4h leave already fills the day — work spills to overtime.
+    expect(layout.visualRegularTaskIds).toEqual([]);
+    expect(layout.overtimeTaskIds).toEqual([taskA.id]);
   });
 
-  it('overflows schedulable hours beyond 8h/day but keeps second-half leave in the regular row', () => {
+  it('overflows schedulable hours beyond 8h/day but keeps leave on the system strip', () => {
     const taskMap = {
       [secondHalfLeave.id]: secondHalfLeave,
       [taskA.id]: taskA,
@@ -71,7 +75,8 @@ describe('scheduler-day-layout', () => {
     };
     const layout = partitionDayTaskIds([secondHalfLeave.id, taskA.id, taskB.id], taskMap);
 
-    expect(layout.visualRegularTaskIds).toEqual([taskA.id, secondHalfLeave.id]);
+    expect(layout.systemBlockIds).toEqual([secondHalfLeave.id]);
+    expect(layout.visualRegularTaskIds).toEqual([taskA.id]);
     expect(layout.overtimeTaskIds).toEqual([taskB.id]);
   });
 
@@ -84,13 +89,15 @@ describe('scheduler-day-layout', () => {
     const before = partitionDayTaskIds([firstHalfLeave.id, taskA.id, taskB.id], taskMap);
     const after = partitionDayTaskIds([firstHalfLeave.id, taskA.id], taskMap);
 
-    expect(before.visualRegularTaskIds).toEqual([firstHalfLeave.id, taskA.id]);
+    expect(before.systemBlockIds).toEqual([firstHalfLeave.id]);
+    expect(before.visualRegularTaskIds).toEqual([taskA.id]);
     expect(before.overtimeTaskIds).toContain(taskB.id);
-    expect(after.visualRegularTaskIds).toEqual([firstHalfLeave.id, taskA.id]);
+    expect(after.systemBlockIds).toEqual([firstHalfLeave.id]);
+    expect(after.visualRegularTaskIds).toEqual([taskA.id]);
     expect(after.overtimeTaskIds).toEqual([]);
   });
 
-  it('keeps second-half leave on the right after a sibling task is removed from the day', () => {
+  it('keeps second-half leave on the system strip after a sibling task is removed', () => {
     const taskMap = {
       [secondHalfLeave.id]: secondHalfLeave,
       [taskA.id]: taskA,
@@ -99,8 +106,10 @@ describe('scheduler-day-layout', () => {
     const before = partitionDayTaskIds([secondHalfLeave.id, taskA.id, taskB.id], taskMap);
     const after = partitionDayTaskIds([secondHalfLeave.id, taskA.id], taskMap);
 
-    expect(before.visualRegularTaskIds).toEqual([taskA.id, secondHalfLeave.id]);
-    expect(after.visualRegularTaskIds).toEqual([taskA.id, secondHalfLeave.id]);
+    expect(before.systemBlockIds).toEqual([secondHalfLeave.id]);
+    expect(before.visualRegularTaskIds).toEqual([taskA.id]);
+    expect(after.systemBlockIds).toEqual([secondHalfLeave.id]);
+    expect(after.visualRegularTaskIds).toEqual([taskA.id]);
     expect(after.overtimeTaskIds).toEqual([]);
   });
 });

@@ -24,6 +24,12 @@ import {
   parseRequestedHoursLabel,
 } from "@/lib/overtime-constants";
 import { apiClient } from "@/lib/api-client";
+import { getTaskRequiredHours } from "@/lib/task-hours";
+import {
+  COMPLETED_TASK_STATUSES,
+  computeDesignerTaskStats,
+  normalizeTaskStatus,
+} from "@/features/scheduler/utils/designer-task-stats.util";
 import {
   createRegularizationRequest,
   getRegularizationRequest,
@@ -83,7 +89,7 @@ const DEFAULT_STATS = {
   workLoad: { tasks: 0, hours: 0 },
   workTill: { label: "-", hours: 0 },
   monthlyTaskCount: 0,
-  monthlyHourCount: 0,
+  weeklyCompletedCount: 0,
   score: 0,
   pendingRegularization: 0,
 };
@@ -117,25 +123,28 @@ function toInitials(name) {
 }
 
 function taskHours(task) {
-  return Number(
-    task?.retailDetails?.hoursRequired ??
-      task?.projectDetails?.hoursRequired ??
-      task?.estimatedHours ??
-      0,
-  );
+  return getTaskRequiredHours(task);
 }
 
 function computeStatsFromTasks(tasks) {
   if (!Array.isArray(tasks) || tasks.length === 0) return null;
 
   const now = new Date();
-  const currentMonth = now.getMonth();
-  const currentYear = now.getFullYear();
-  const onHold = tasks.filter((t) => t.status === "ON_HOLD");
-  const completed = tasks.filter((t) => t.status === "CLIENT_ACCEPTED");
-  const active = tasks.filter((t) =>
-    ["DESIGN_NEW", "DESIGN_PLANNED", "IN_PROGRESS", "DESIGN_COMPLETED", "HOD_REVIEW", "SALES_REVIEW", "REWORK"].includes(String(t.status ?? ""))
-  );
+  // Monthly Closed + Tasks Closed This Week must match DesignerDashboard.
+  const weekStart = startOfIsoWeekLocal(now);
+  const weekEnd = new Date(weekStart);
+  weekEnd.setDate(weekEnd.getDate() + 6);
+  const taskStats = computeDesignerTaskStats(tasks, {
+    now,
+    viewWeekStart: weekStart,
+    viewWeekEnd: weekEnd,
+  });
+  const onHold = tasks.filter((t) => normalizeTaskStatus(t.status) === "ON_HOLD");
+  const completed = tasks.filter((t) => COMPLETED_TASK_STATUSES.has(normalizeTaskStatus(t.status)));
+  const active = tasks.filter((t) => {
+    const status = normalizeTaskStatus(t.status);
+    return status && status !== "ON_HOLD" && !COMPLETED_TASK_STATUSES.has(status);
+  });
 
   const workLoadHours = [...active, ...onHold].reduce((acc, t) => acc + taskHours(t), 0);
   const upcomingDeadline = active
@@ -143,11 +152,6 @@ function computeStatsFromTasks(tasks) {
     .map((t) => new Date(t.dueDate))
     .filter((d) => !Number.isNaN(d.getTime()) && d > now)
     .sort((a, b) => a - b)[0] ?? null;
-
-  const thisMonthCompleted = completed.filter((t) => {
-    const d = new Date(t.updatedAt ?? t.createdAt);
-    return d.getMonth() === currentMonth && d.getFullYear() === currentYear;
-  });
 
   const total = tasks.length || 1;
   const score = Math.round((completed.length / total) * 100);
@@ -160,10 +164,18 @@ function computeStatsFromTasks(tasks) {
           hours: 0,
         }
       : { label: "-", hours: 0 },
-    monthlyTaskCount: thisMonthCompleted.length,
-    monthlyHourCount: thisMonthCompleted.reduce((acc, t) => acc + taskHours(t), 0),
+    monthlyTaskCount: taskStats.monthlyCompletedCount,
+    weeklyCompletedCount: taskStats.weeklyCompletedCount,
     score,
   };
+}
+
+function startOfIsoWeekLocal(dateLike) {
+  const d = dateLike instanceof Date ? new Date(dateLike) : new Date(dateLike);
+  d.setHours(0, 0, 0, 0);
+  const day = (d.getDay() + 6) % 7;
+  d.setDate(d.getDate() - day);
+  return d;
 }
 
 function matchesActiveDesigner(record, activeDesignerId) {
@@ -576,7 +588,7 @@ export default function RequestsClient() {
           workLoad: DEFAULT_STATS.workLoad,
           workTill: DEFAULT_STATS.workTill,
           monthlyTaskCount: DEFAULT_STATS.monthlyTaskCount,
-          monthlyHourCount: DEFAULT_STATS.monthlyHourCount,
+          weeklyCompletedCount: DEFAULT_STATS.weeklyCompletedCount,
           score: DEFAULT_STATS.score,
         }));
         return;
@@ -591,7 +603,7 @@ export default function RequestsClient() {
         workLoad: DEFAULT_STATS.workLoad,
         workTill: DEFAULT_STATS.workTill,
         monthlyTaskCount: DEFAULT_STATS.monthlyTaskCount,
-        monthlyHourCount: DEFAULT_STATS.monthlyHourCount,
+        weeklyCompletedCount: DEFAULT_STATS.weeklyCompletedCount,
         score: DEFAULT_STATS.score,
       }));
     }

@@ -2,7 +2,7 @@
 
 import { useState, useEffect, useRef, useMemo, useCallback } from "react";
 import { toast } from "sonner";
-import { Search, Plus, PauseCircle, AlertTriangle, LayoutDashboard, Lock, Unlock } from "lucide-react";
+import { Search, Plus, PauseCircle, AlertTriangle, LayoutDashboard, Lock, Unlock, Calendar, ClipboardList } from "lucide-react";
 import { useRouter, useSearchParams } from "next/navigation";
 import { Navbar } from "@/components/Navbar";
 import {
@@ -53,27 +53,34 @@ import {
     partitionDayTaskIds,
     shouldSkipOptimizerTask,
 } from "../utils/scheduler-day-layout";
+import {
+    getSystemBlockBadge,
+    getSystemBlockColorClass,
+    getSystemBlockHatchStyle,
+} from "../utils/scheduler-system-block.ui";
+import {
+    getWorkloadOvertimeHours,
+    getWorkloadRegularHours,
+    resolveAssignmentScheduledHours,
+    sumDesignerWeekWorkload,
+    sumSlotRegularHours,
+    sumSlotTotalHours,
+    WEEKDAY_INDICES as WORKLOAD_WEEKDAY_INDICES,
+} from "../utils/scheduler-workload.util";
 // Only these backend events should trigger a scheduler reload for other HODs.
 // Capacity constants
 const DAILY_CAPACITY = 8; // 8hrs per day = normal capacity (green/blue)
 const MAX_DAILY_HOURS = 12; // absolute max assignable per day
 const WEEKLY_CAPACITY = 40; // 5 working days × 8hrs
 const MIN_SPLIT_HOURS = 5 / 60; // 5 minutes — smallest allowed split part, matching the timer's 5-minute rounding granularity
-const WEEKDAY_INDICES = [0, 1, 2, 3, 4];
+const WEEKDAY_INDICES = WORKLOAD_WEEKDAY_INDICES;
 const ALL_DAY_INDICES = [0, 1, 2, 3, 4, 5, 6];
 const isWeekdayIndex = (dayIndex) => WEEKDAY_INDICES.includes(dayIndex);
 const cloneState = (value) => JSON.parse(JSON.stringify(value));
-const getRegularTaskHours = (task) => task?.isOvertime
-    ? 0
-    : toPositiveHours(task?.scheduledHours ?? task?.estimatedHours);
-const getOvertimeTaskHours = (task) => task?.isOvertime
-    ? toPositiveHours(task?.approvedOvertimeHours ?? task?.estimatedHours)
-    : toPositiveHours(task?.approvedOvertimeHours);
-const sumTaskHours = (taskMap, taskIds) => taskIds.reduce((acc, taskId) => acc + getRegularTaskHours(taskMap[taskId]), 0);
-const sumTaskTotalHours = (taskMap, taskIds) => taskIds.reduce((acc, taskId) => {
-    const task = taskMap[taskId];
-    return acc + getRegularTaskHours(task) + getOvertimeTaskHours(task);
-}, 0);
+const getRegularTaskHours = getWorkloadRegularHours;
+const getOvertimeTaskHours = getWorkloadOvertimeHours;
+const sumTaskHours = sumSlotRegularHours;
+const sumTaskTotalHours = sumSlotTotalHours;
 
 const nextVisibleWeekdayAfter = (dayIndex, candidateDays) => candidateDays.find((idx) => idx > dayIndex);
 
@@ -90,8 +97,12 @@ const getRequestBlockHours = (row) => {
 
 const getRequestBlockLabel = (row) => {
     if (row?.requestLabel) return row.requestLabel;
-    if (row?.requestType === "LEAVE") return row.leaveSession ? `Leave - ${row.leaveSession}` : "Leave";
-    if (row?.requestType === "REGULARIZATION") return "Regularization";
+    if (row?.requestType === "LEAVE") {
+        const parts = ["Approved leave"];
+        if (row.leaveSession) parts.push(row.leaveSession);
+        return parts.join(" - ");
+    }
+    if (row?.requestType === "REGULARIZATION") return "Approved regularization";
     return "Request";
 };
 
@@ -681,17 +692,17 @@ function buildSchedulerStateFromErpAssignments(records, rows, designers) {
                 leaveSession: row.leaveSession ?? null,
                 leaveRequestIds: row.leaveRequestIds ?? [],
                 regularizationRequestIds: row.regularizationRequestIds ?? [],
-                colorClass: row.requestType === "LEAVE"
-                    ? "bg-sky-100 border border-sky-300 text-sky-800"
-                    : "bg-violet-100 border border-violet-300 text-violet-800",
+                requestLabel: row.requestLabel ?? getRequestBlockLabel(row),
+                colorClass: getSystemBlockColorClass(row.requestType)
+                    ?? "bg-slate-100 border border-slate-300 text-slate-800",
             };
             continue;
         }
         const taskId = String(row.taskId ?? "").trim();
         if (!taskId)
             continue;
-        const scheduledHours = toPositiveHours(row.scheduledHours ?? row.assignedHours);
         const approvedOvertimeHours = toPositiveHours(row.approvedOvertimeHours);
+        const scheduledHours = resolveAssignmentScheduledHours(row);
         const workedHours = toPositiveHours(row.workedHours);
         if (!scheduledHours && !approvedOvertimeHours)
             continue;
@@ -1704,6 +1715,7 @@ export function DesignSchedulerScreen() {
         setDropIndicator({ designerId, dayIndex, taskIndex, position });
     };
     const getTaskLabel = (task) => {
+        if (task.requestLabel) return task.requestLabel;
         if (task.isLoggedRemainder) {
             return `${task.baseName ?? task.name} · logged`;
         }
@@ -2440,24 +2452,14 @@ export function DesignSchedulerScreen() {
         const dayTasks = (schedules[designerId] || {})[dayIndex.toString()] || [];
         return dayTasks.reduce((acc, taskId) => acc + getOvertimeTaskHours(tasks[taskId]), 0);
     };
-    const getDesignerBookedHours = (designerId) => {
-        const days = schedules[designerId] || {};
-        return WEEKDAY_INDICES.reduce((acc, dayIdx) => {
-            const dayTasks = days[dayIdx.toString()] || [];
-            return acc + sumTaskTotalHours(tasks, dayTasks);
-        }, 0);
-    };
+    const getDesignerBookedHours = (designerId) =>
+        sumDesignerWeekWorkload(tasks, schedules[designerId] || {});
     const isDesignerOverloaded = (designerId) => {
         return WEEKDAY_INDICES.some((dayIndex) => getDayHours(designerId, dayIndex) > DAILY_CAPACITY);
     };
     const totalScheduledHours = useMemo(() => designers.reduce((acc, designer) => {
-        const days = schedules[designer.id] || {};
-        const designerTotal = WEEKDAY_INDICES.reduce((dayAcc, dayIdx) => {
-            const dayTasks = days[dayIdx.toString()] || [];
-            return dayAcc + sumTaskTotalHours(tasks, dayTasks);
-        }, 0);
-        return acc + designerTotal;
-    }, 0), [schedules, tasks]);
+        return acc + sumDesignerWeekWorkload(tasks, schedules[designer.id] || {});
+    }, 0), [schedules, tasks, designers]);
     const totalDesignersCount = designers.length;
     const overloadedCount = useMemo(() => designers.filter((designer) => WEEKDAY_INDICES.some((dayIndex) => {
         const dayTasks = (schedules[designer.id] || {})[dayIndex.toString()] || [];
@@ -2760,7 +2762,7 @@ export function DesignSchedulerScreen() {
                 }}>
                         {visibleDays.map(dayIndex => {
                     const rawTasksInDay = designerDays[dayIndex.toString()] || [];
-                    const { visualRegularTaskIds, overtimeTaskIds } = partitionDayTaskIds(rawTasksInDay, tasks);
+                    const { systemBlockIds, visualRegularTaskIds, overtimeTaskIds } = partitionDayTaskIds(rawTasksInDay, tasks);
                     const isWeekend = dayIndex >= 5;
                     const isPastDay = !isWeekend && isPastDayIndex(dayIndex, currentDate);
                     const dayHours = getDayHours(designer.id, dayIndex);
@@ -2778,11 +2780,44 @@ export function DesignSchedulerScreen() {
                               `} onDragOver={isWeekend ? undefined : handleDragOver} onDrop={isWeekend ? undefined : (e) => { void handleDropToDay(e, designer.id, dayIndex); }}>
                               {/* Gravity fill bar (background) — weekdays only */}
                               {!isWeekend && dayHours > 0 && (<div className={`absolute bottom-0 left-0 right-0 transition-all opacity-20 ${isDayOverloaded ? 'bg-red-400' : 'bg-blue-400'}`} style={{ height: `${gravityPct}%` }}/>)}
-                              {/* Tasks list: regular assignments and approved overtime stay visually separate. */}
+                              {/* Tasks list: leave/reg, work, and OT stay on separate strips. */}
                               <div className="flex-1 min-h-0 p-1 relative z-10">
                                 {isWeekend ? (<div className="w-full h-full flex items-center justify-center">
                                     <span className="text-[8px] text-slate-400 font-medium select-none">—</span>
                                   </div>) : (<div className="h-full min-h-[42px] overflow-hidden flex flex-col justify-center gap-1">
+                                    {systemBlockIds.length > 0 && (
+                                      <div className="min-h-[20px] w-full rounded border border-dashed border-slate-300/80 bg-slate-50/70 px-1 py-0.5">
+                                        <div className="flex flex-nowrap items-center gap-1 overflow-hidden">
+                                          {systemBlockIds.map((taskId, idx) => {
+                                            const taskInfo = tasks[taskId];
+                                            if (!taskInfo) return null;
+                                            const systemBadge = getSystemBlockBadge(taskInfo.requestType);
+                                            const systemHatch = getSystemBlockHatchStyle(taskInfo.requestType);
+                                            const blockLabel = taskInfo.requestLabel || getTaskLabel(taskInfo);
+                                            const blockWidth = `calc((100% - ${(Math.max(systemBlockIds.length - 1, 0)) * 4}px) / ${Math.max(systemBlockIds.length, 1)})`;
+                                            return (
+                                              <div
+                                                key={`${taskId}-${designer.id}-${dayIndex}-sys-${idx}`}
+                                                className={`h-[18px] min-w-0 overflow-hidden rounded flex items-center gap-0.5 px-1 cursor-default ${taskInfo.colorClass}`}
+                                                style={{ width: blockWidth, maxWidth: blockWidth, ...systemHatch }}
+                                                title={`${blockLabel} (${formatHoursAsHm(taskInfo.estimatedHours)})`}
+                                              >
+                                                {taskInfo.requestType === "LEAVE" && (<Calendar className="h-2.5 w-2.5 shrink-0 opacity-80" aria-hidden="true" />)}
+                                                {taskInfo.requestType === "REGULARIZATION" && (<ClipboardList className="h-2.5 w-2.5 shrink-0 opacity-80" aria-hidden="true" />)}
+                                                {systemBadge && (
+                                                  <span className={`text-[7px] font-bold rounded px-0.5 py-px leading-none shrink-0 ${systemBadge.className}`}>
+                                                    {systemBadge.label}
+                                                  </span>
+                                                )}
+                                                <span className="text-[8px] font-bold opacity-70 shrink-0 ml-auto">
+                                                  {formatHoursAsHm(taskInfo.estimatedHours)}
+                                                </span>
+                                              </div>
+                                            );
+                                          })}
+                                        </div>
+                                      </div>
+                                    )}
                                     <div className="min-h-[20px] w-full flex flex-nowrap items-center gap-1 pr-0.5">
                                     {visualRegularTaskIds.map((taskId, idx) => {
                                 const taskInfo = tasks[taskId];
@@ -2791,11 +2826,11 @@ export function DesignSchedulerScreen() {
                                 const rawTaskIndex = rawTasksInDay.indexOf(taskId);
                                 const dropTaskIndex = rawTaskIndex >= 0 ? rawTaskIndex : idx;
                                 const taskWidth = `calc((100% - ${(Math.max(visualRegularTaskIds.length - 1, 0)) * 4}px) / ${Math.max(visualRegularTaskIds.length, 1)})`;
-                                const isSystemBlock = isRequestSystemBlock(taskInfo);
                                 // Locked cards (e.g. the shrunk "logged hours" remainder left behind on a
                                 // busy designer's day after a partial handoff) can't be dragged, but unlike
                                 // system blocks they're still a real task — clicking should still navigate.
-                                const isDragLocked = isSystemBlock || Boolean(taskInfo?.isLocked);
+                                const isDragLocked = Boolean(taskInfo?.isLocked);
+                                const blockLabel = getTaskLabel(taskInfo);
                                 return (<div key={`${taskId}-${designer.id}-${dayIndex}-${idx}`} draggable={!isDragLocked} onDragStart={(e) => {
                                         if (isDragLocked) return;
                                         handleDragStart(e, taskId, designer.id, dayIndex.toString());
@@ -2810,18 +2845,17 @@ export function DesignSchedulerScreen() {
                                         void handleDropToDay(e, designer.id, dayIndex, dropTaskIndex, getDropPosition(e, e.currentTarget));
                                     }} onClick={(e) => {
                                         e.stopPropagation();
-                                        if (isSystemBlock) return;
                                         router.push(taskViewPathForRecord({ id: getDesignListRoutingTaskId(taskInfo), designType: taskInfo.designType }, { from: FROM_DESIGN_SCHEDULER }));
-                                    }} className={`h-[24px] min-w-0 rounded flex items-center justify-between px-1.5 shadow-sm transition-shadow ${isDragLocked ? "cursor-default" : "cursor-grab active:cursor-grabbing hover:shadow"} ${dropIndicator &&
+                                    }} className={`h-[24px] min-w-0 overflow-hidden rounded flex items-center justify-between px-1.5 shadow-sm transition-shadow ${isDragLocked ? "cursor-default" : "cursor-grab active:cursor-grabbing hover:shadow"} ${dropIndicator &&
                                         dropIndicator.designerId === designer.id &&
                                         dropIndicator.dayIndex === dayIndex &&
                                         dropIndicator.taskIndex === dropTaskIndex
                                         ? dropIndicator.position === "before"
                                             ? "ring-2 ring-blue-400 ring-offset-1"
                                             : "ring-2 ring-green-400 ring-offset-1"
-                                        : ""} ${taskInfo.colorClass}`} style={{ width: taskWidth, maxWidth: taskWidth }} title={`${getTaskLabel(taskInfo)} (${formatHoursAsHm(taskInfo.estimatedHours)})${taskInfo.isPinned ? " — pinned: exempt from auto-fill" : ""}`}>
+                                        : ""} ${taskInfo.colorClass}`} style={{ width: taskWidth, maxWidth: taskWidth }} title={`${blockLabel} (${formatHoursAsHm(taskInfo.estimatedHours)})${taskInfo.isPinned ? " — pinned: exempt from auto-fill" : ""}`}>
                                           {taskInfo.isPinned && (<span className="text-[8px] leading-none mr-0.5 shrink-0 select-none" aria-hidden="true">📌</span>)}
-                                          <div className="text-[9px] font-semibold truncate leading-none mr-1 select-none">{getTaskLabel(taskInfo)}</div>
+                                          <div className="text-[9px] font-semibold truncate leading-none mr-1 select-none">{blockLabel}</div>
                                           <div className="text-[8px] font-bold opacity-60 bg-black/5 rounded px-1 shrink-0">{formatHoursAsHm(taskInfo.estimatedHours)}</div>
                                         </div>);
                             })}
@@ -2847,7 +2881,7 @@ export function DesignSchedulerScreen() {
                                                   e.stopPropagation();
                                                   router.push(taskViewPathForRecord({ id: getDesignListRoutingTaskId(taskInfo), designType: taskInfo.designType }, { from: FROM_DESIGN_SCHEDULER }));
                                                 }}
-                                                className={`h-[18px] min-w-0 rounded flex items-center justify-between px-1.5 cursor-grab active:cursor-grabbing shadow-sm ${taskInfo.colorClass}`}
+                                                className={`h-[18px] min-w-0 overflow-hidden rounded flex items-center justify-between px-1.5 cursor-grab active:cursor-grabbing shadow-sm ${taskInfo.colorClass}`}
                                                 style={{ width: taskWidth, maxWidth: taskWidth }}
                                                 title={`${getTaskLabel(taskInfo)} approved overtime (${formatHoursAsHm(taskInfo.approvedOvertimeHours || taskInfo.estimatedHours)})`}
                                               >

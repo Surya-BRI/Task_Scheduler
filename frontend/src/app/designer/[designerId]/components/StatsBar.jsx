@@ -1,61 +1,69 @@
 "use client";
 import { useRouter } from "next/navigation";
+import { formatHoursAsHm } from "@/lib/format-duration";
 
 export default function StatsBar({ stats, isDesignerMode = true, isHOD = false, isViewingOther = false }) {
   const router = useRouter();
-  const { workLoad, workTill, monthlyTaskCount, monthlyHourCount, score, pendingRegularization } = stats;
+  const {
+    workLoad,
+    workTill,
+    monthlyTaskCount,
+    weeklyCompletedCount = 0,
+    pendingRegularization,
+  } = stats;
+  const slotCount = workLoad.tasks ?? 0;
+  const hoursLabel = (!workLoad.hours || workLoad.hours === 0)
+    ? "No Hours Assigned"
+    : formatHoursAsHm(workLoad.hours);
 
   return (
     <div className="bg-white border-b border-slate-200 flex items-center flex-wrap gap-x-6 gap-y-1 px-6 py-2 text-xs shrink-0">
-      {/* Work Load */}
+      {/* Scheduled slots (this week — scheduler assignments) */}
       <div className="flex items-center gap-1.5">
         <span className="inline-block h-2.5 w-2.5 rounded-full bg-green-500 shrink-0" />
         <span className="font-semibold text-slate-700">
-          Work Load: {(!workLoad.hours || workLoad.hours === 0) ? "No hours assigned" : `${workLoad.tasks}T / ${workLoad.hours}H`}
+          This Week Slots: {slotCount}
         </span>
       </div>
 
-      {/* Separator */}
       <div className="h-4 w-px bg-slate-200 hidden sm:block" />
 
-      {/* Work Till */}
+      {/* Workload hours (this week — scheduler assignments) */}
+      <div className="flex items-center gap-1.5">
+        <span className="inline-block h-2.5 w-2.5 rounded-full bg-green-500 shrink-0" />
+        <span className="font-semibold text-slate-700">
+          This Week Hours: {hoursLabel}
+        </span>
+      </div>
+
+      <div className="h-4 w-px bg-slate-200 hidden sm:block" />
+
+      {/* Work Till: last scheduled work day this week + hours on that day */}
       <div className="flex items-center gap-1.5">
         <span className="inline-block h-2.5 w-2.5 rounded-full bg-red-500 shrink-0" />
         <span className="font-semibold text-slate-700">
-          Work Till: {workTill.label} - {workTill.hours}H
+          Work Till: {workTill.label}{workTill.hours > 0 ? ` - ${formatHoursAsHm(workTill.hours)}` : ""}
         </span>
       </div>
 
       <div className="h-4 w-px bg-slate-200 hidden sm:block" />
 
-      {/* Monthly Task Count */}
+      {/* Tasks finished in the viewed week (completedAt) */}
       <div className="flex items-center gap-1.5">
         <span className="inline-block h-2.5 w-2.5 rounded-full bg-green-500 shrink-0" />
-        <span className="text-slate-700 leading-tight">
-          <span className="font-semibold">Monthly Comp.</span>
-          <br />
-          <span className="font-semibold">Task Count: {monthlyTaskCount}</span>
+        <span className="font-semibold text-slate-700">
+          Tasks Closed This Week: {weeklyCompletedCount}
         </span>
       </div>
 
       <div className="h-4 w-px bg-slate-200 hidden sm:block" />
 
-      {/* Monthly Hour Count */}
+      {/* Monthly closed — CLIENT_ACCEPTED + CLIENT_REJECTED via completedAt */}
       <div className="flex items-center gap-1.5">
         <span className="inline-block h-2.5 w-2.5 rounded-full bg-green-500 shrink-0" />
-        <span className="text-slate-700 leading-tight">
-          <span className="font-semibold">Monthly Comp.</span>
-          <br />
-          <span className="font-semibold">Hour Count: {monthlyHourCount}</span>
+        <span className="font-semibold text-slate-700">
+          Monthly Closed Task Count: {monthlyTaskCount}
         </span>
-      </div>
-
-      <div className="h-4 w-px bg-slate-200 hidden sm:block" />
-
-      {/* Score */}
-      <div className="flex items-center gap-1.5">
-        <span className="inline-block h-2.5 w-2.5 rounded-full bg-green-500 shrink-0" />
-        <span className="font-semibold text-slate-700">Score %: {score}%</span>
       </div>
 
       <div className="h-4 w-px bg-slate-200 hidden sm:block" />
@@ -68,19 +76,15 @@ export default function StatsBar({ stats, isDesignerMode = true, isHOD = false, 
           className="flex items-center gap-1.5 hover:bg-slate-100 p-1 -m-1 rounded cursor-pointer transition-colors text-left"
         >
           <span className="inline-block h-2.5 w-2.5 rounded-full bg-orange-400 shrink-0" />
-          <span className="text-slate-700 leading-tight">
-            <span className="font-semibold">Pending</span>
-            <br />
-            <span className="font-semibold">Regularization: {pendingRegularization}</span>
+          <span className="font-semibold text-slate-700">
+            Pending Regularization: {pendingRegularization}
           </span>
         </button>
       ) : (
         <div className="flex items-center gap-1.5 p-1 -m-1">
           <span className="inline-block h-2.5 w-2.5 rounded-full bg-orange-400 shrink-0" />
-          <span className="text-slate-700 leading-tight">
-            <span className="font-semibold">Pending</span>
-            <br />
-            <span className="font-semibold">Regularization: {pendingRegularization}</span>
+          <span className="font-semibold text-slate-700">
+            Pending Regularization: {pendingRegularization}
           </span>
         </div>
       )}

@@ -12,6 +12,9 @@ import {
   SCHEDULER_DASHBOARD_SYNC_KEY,
   buildDesignerSnapshot,
 } from "@/features/scheduler/utils/designerDashboardSync";
+import { resolveAssignmentScheduledHours } from "@/features/scheduler/utils/scheduler-workload.util";
+import { computeDesignerTaskStats } from "@/features/scheduler/utils/designer-task-stats.util";
+import { getSystemBlockColorClass } from "@/features/scheduler/utils/scheduler-system-block.ui";
 import {
   DEFAULT_SCHEDULER_REFERENCE_DATE,
   formatSchedulerDateRangeText,
@@ -24,45 +27,12 @@ import { getSession } from "@/lib/mock-auth";
 import { connectDashboardRealtime } from "@/lib/realtime";
 
 const UUID_RE = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
-const ACTIVE_TASK_STATUSES = new Set([
-  "DESIGN_NEW",
-  "DESIGN_PLANNED",
-  "IN_PROGRESS",
-  "HOD_REVIEW",
-  "SALES_REVIEW",
-  "REWORK",
-  "CLIENT_REJECTED",
-]);
-const COMPLETED_TASK_STATUSES = new Set(["DESIGN_COMPLETED", "CLIENT_ACCEPTED"]);
 
 function fmtYmd(date) {
   const y = date.getFullYear();
   const m = String(date.getMonth() + 1).padStart(2, "0");
   const d = String(date.getDate()).padStart(2, "0");
   return `${y}-${m}-${d}`;
-}
-
-function fmtDdMmYyyy(dateLike) {
-  if (!dateLike) return "-";
-  const d = dateLike instanceof Date ? dateLike : new Date(dateLike);
-  if (isNaN(d.getTime())) return "-";
-  return d.toLocaleDateString("en-GB");
-}
-
-function getISOWeek(dateLike) {
-  const d = dateLike instanceof Date ? new Date(dateLike) : new Date(dateLike);
-  d.setHours(0, 0, 0, 0);
-  d.setDate(d.getDate() + 3 - ((d.getDay() + 6) % 7));
-  const week1 = new Date(d.getFullYear(), 0, 4);
-  return (
-    1 +
-    Math.round(
-      ((d.getTime() - week1.getTime()) / 86400000 -
-        3 +
-        ((week1.getDay() + 6) % 7)) /
-        7
-    )
-  );
 }
 
 function getOrdinal(n) {
@@ -76,14 +46,6 @@ function formatWorkTillLabel(date) {
   const d = date instanceof Date ? date : new Date(date);
   if (isNaN(d.getTime())) return null;
   return `${d.toLocaleDateString("en-US", { weekday: "long" })} ${getOrdinal(d.getDate())}`;
-}
-
-function normalizeStatus(status) {
-  return String(status ?? "").trim().toUpperCase();
-}
-
-function taskSortDate(task) {
-  return new Date(task.completedAt ?? task.updatedAt ?? task.createdAt ?? 0).getTime();
 }
 
 async function fetchAllDesignerTasks(erpId) {
@@ -103,117 +65,6 @@ async function fetchAllDesignerTasks(erpId) {
     if (Array.isArray(page?.data)) acc.push(...page.data);
     return acc;
   }, firstRows);
-}
-
-function computeLiveData(tasks) {
-  if (!Array.isArray(tasks) || tasks.length === 0) return null;
-
-  const now = new Date();
-  const threeDaysFromNow = new Date(now.getTime() + 3 * 86400000);
-  const currentMonth = now.getMonth();
-  const currentYear = now.getFullYear();
-
-  const onHold = tasks
-    .filter((t) => normalizeStatus(t.status) === "ON_HOLD")
-    .sort((a, b) => taskSortDate(b) - taskSortDate(a));
-  const completed = tasks
-    .filter((t) => COMPLETED_TASK_STATUSES.has(normalizeStatus(t.status)))
-    .sort((a, b) => taskSortDate(b) - taskSortDate(a));
-  const active = tasks.filter((t) => ACTIVE_TASK_STATUSES.has(normalizeStatus(t.status)));
-  const total = tasks.length || 1;
-
-  // OnHoldTable rows
-  const onHoldTasks = onHold.map((task, idx) => ({
-    id: task.id,
-    no: idx + 1,
-    details: task.title ?? task.opNo ?? "-",
-    taskNo: task.taskNo ?? "-",
-    projectDetails: task.project?.name ?? task.project?.projectNo ?? "-",
-    designType: task.designType ?? task.project?.category ?? null,
-    status: normalizeStatus(task.status),
-    pct: 0,
-    deadline: fmtDdMmYyyy(task.dueDate),
-    urgent: task.dueDate ? new Date(task.dueDate) < threeDaysFromNow : false,
-  }));
-
-  // WeeksSection: group completed by ISO week, most recent = Week 1
-  const completedSorted = [...completed];
-  const weekGroups = {};
-  for (const task of completedSorted) {
-    const dateVal = task.updatedAt ?? task.createdAt;
-    if (!dateVal) continue;
-    const weekKey = `${new Date(dateVal).getFullYear()}-W${getISOWeek(dateVal)}`;
-    if (!weekGroups[weekKey]) weekGroups[weekKey] = [];
-    weekGroups[weekKey].push({
-      id: task.id,
-      taskNo: task.taskNo ?? "-",
-      projectDetails: task.project?.name ?? task.project?.projectNo ?? "-",
-      designType: task.designType ?? null,
-      revisionCode: task.revisionCode ?? null,
-      status: normalizeStatus(task.status),
-      pctComplete: 100,
-      deadline: fmtDdMmYyyy(task.dueDate),
-    });
-  }
-  const completedTasksByWeek = {};
-  Object.keys(weekGroups)
-    .forEach((key, idx) => {
-      completedTasksByWeek[`Week ${idx + 1}`] = weekGroups[key];
-    });
-
-  // DonutChart data
-  const donut = {
-    active: {
-      value: active.length,
-      pct: Math.round((active.length / total) * 100),
-      color: "#4f8ef7",
-    },
-    onHold: {
-      value: onHold.length,
-      pct: Math.round((onHold.length / total) * 100),
-      color: "#f5a623",
-    },
-    completed: {
-      value: completed.length,
-      pct: Math.round((completed.length / total) * 100),
-      color: "#7ed321",
-    },
-    centerPct: Math.round((completed.length / total) * 100),
-    centerTotal: total,
-  };
-
-  // Stats overrides
-  const workLoadHours = active.reduce((acc, t) => {
-    return acc + Number(t.retailDetails?.hoursRequired ?? 0);
-  }, 0);
-
-  const upcomingDeadline = active
-    .filter((t) => t.dueDate)
-    .map((t) => new Date(t.dueDate))
-    .filter((d) => !isNaN(d.getTime()) && d > now)
-    .sort((a, b) => a - b)[0] ?? null;
-
-  const thisMonthCompleted = completed.filter((t) => {
-    const d = new Date(t.updatedAt ?? t.createdAt);
-    return d.getMonth() === currentMonth && d.getFullYear() === currentYear;
-  });
-
-  return {
-    onHoldTasks,
-    completedTasksByWeek,
-    donut,
-    statsOverrides: {
-      workLoad: { tasks: active.length + onHold.length, hours: workLoadHours },
-      ...(upcomingDeadline
-        ? { workTill: { label: formatWorkTillLabel(upcomingDeadline), hours: 0 } }
-        : {}),
-      monthlyTaskCount: thisMonthCompleted.length,
-      monthlyHourCount: thisMonthCompleted.reduce(
-        (acc, t) => acc + Number(t.retailDetails?.hoursRequired ?? 0),
-        0
-      ),
-    },
-  };
 }
 
 const DASH_COLORS = [
@@ -245,9 +96,47 @@ function getRequestRowHours(row) {
 
 function getRequestRowLabel(row) {
   if (row?.requestLabel) return row.requestLabel;
-  if (row?.requestType === "LEAVE") return row.leaveSession ? `Leave - ${row.leaveSession}` : "Leave";
-  if (row?.requestType === "REGULARIZATION") return "Regularization";
+  if (row?.requestType === "LEAVE") {
+    const parts = ["Approved leave"];
+    if (row.leaveSession) parts.push(row.leaveSession);
+    return parts.join(" - ");
+  }
+  if (row?.requestType === "REGULARIZATION") return "Approved regularization";
   return "Request";
+}
+
+function formatScheduledOnLabel(date) {
+  if (!date || Number.isNaN(date.getTime?.() ?? NaN)) return null;
+  const weekday = date.toLocaleDateString("en-US", { weekday: "short" });
+  const full = date.toLocaleDateString("en-GB");
+  return `${weekday} ${full}`;
+}
+
+/** Map taskId → unique day labels for the viewed week (e.g. "Thu 16, Fri 17"). */
+function buildScheduledOnByTaskId(assignments, weekDates) {
+  const byTask = new Map();
+  for (const row of assignments || []) {
+    if (isRequestRow(row)) continue;
+    const taskId = String(row.taskId ?? "").trim();
+    if (!UUID_RE.test(taskId)) continue;
+    const dayIndex = Number(row.dayIndex);
+    if (!Number.isFinite(dayIndex) || dayIndex < 0 || dayIndex > 6) continue;
+    const date = weekDates?.[dayIndex];
+    const label = formatScheduledOnLabel(date instanceof Date ? date : date ? new Date(date) : null);
+    if (!label) continue;
+    if (!byTask.has(taskId)) byTask.set(taskId, { labels: [], dayIndexes: new Set() });
+    const entry = byTask.get(taskId);
+    if (entry.dayIndexes.has(dayIndex)) continue;
+    entry.dayIndexes.add(dayIndex);
+    entry.labels.push({ dayIndex, label });
+  }
+
+  const result = {};
+  for (const [taskId, entry] of byTask.entries()) {
+    entry.labels.sort((a, b) => a.dayIndex - b.dayIndex);
+    result[taskId] = entry.labels.map((item) => item.label).join(", ");
+  }
+  return result;
 }
 
 function buildLiveScheduleData(assignments, tasksArr) {
@@ -272,13 +161,13 @@ function buildLiveScheduleData(assignments, tasksArr) {
         estimatedHours: hours,
         scheduledHours: hours,
         approvedOvertimeHours: 0,
-        colorClass: a.requestType === "LEAVE"
-          ? "bg-sky-100 border border-sky-300 text-sky-800"
-          : "bg-violet-100 border border-violet-300 text-violet-800",
+        colorClass: getSystemBlockColorClass(a.requestType)
+          ?? "bg-slate-100 border border-slate-300 text-slate-800",
         isLocked: true,
         isSystemBlock: true,
         requestType: a.requestType,
         leaveSession: a.leaveSession ?? null,
+        requestLabel: a.requestLabel ?? getRequestRowLabel(a),
       };
       const dayStr = String(a.dayIndex);
       if (!scheduleByDayIndex[dayStr]) scheduleByDayIndex[dayStr] = [];
@@ -289,8 +178,7 @@ function buildLiveScheduleData(assignments, tasksArr) {
     const key = a.splitIndex != null ? `${a.taskId}_s${a.splitIndex}` : a.taskId;
     const apiTask = taskById[a.taskId];
     const approvedOvertimeHours = Number(a.approvedOvertimeHours) || 0;
-    const scheduledHours =
-      Number(a.scheduledHours ?? Math.max((Number(a.assignedHours) || 0) - approvedOvertimeHours, 0)) || 0;
+    const scheduledHours = resolveAssignmentScheduledHours(a);
     if (!colorMap[a.taskId]) {
       colorMap[a.taskId] = DASH_COLORS[colorIdx % DASH_COLORS.length];
       colorIdx++;
@@ -325,13 +213,15 @@ const DEFAULT_STATS = {
   workLoad: { tasks: 0, hours: 0 },
   workTill: { label: '-', hours: 0 },
   monthlyTaskCount: 0,
-  monthlyHourCount: 0,
+  weeklyCompletedCount: 0,
   score: 0,
   pendingRegularization: 0,
 };
 const DEFAULT_DONUT = {
   active: { value: 0, pct: 0, color: '#4f8ef7' },
+  inReview: { value: 0, pct: 0, color: '#8b5cf6' },
   onHold: { value: 0, pct: 0, color: '#f5a623' },
+  closed: { value: 0, pct: 0, color: '#7ed321' },
   completed: { value: 0, pct: 0, color: '#7ed321' },
   centerPct: 0,
   centerTotal: 0,
@@ -384,7 +274,7 @@ export default function DesignerDashboard({ designer: designerProp } = {}) {
     donut: DEFAULT_DONUT,
   };
 
-  const [activePanel, setActivePanel] = useState("onHold");
+  const [activePanel, setActivePanel] = useState("active");
   const [currentDate, setCurrentDate] = useState(DEFAULT_SCHEDULER_REFERENCE_DATE);
   const currentDateRef = useRef(currentDate);
   useEffect(() => { currentDateRef.current = currentDate; }, [currentDate]);
@@ -403,11 +293,33 @@ export default function DesignerDashboard({ designer: designerProp } = {}) {
     return initial;
   });
   const [dynamicStats, setDynamicStats] = useState(null);
-  const [liveData, setLiveData] = useState(null);
+  const [weekAssignments, setWeekAssignments] = useState([]);
+  const [assigneeTasks, setAssigneeTasks] = useState([]);
   const [pendingRegCount, setPendingRegCount] = useState(null);
 
   const erpId = designer.erpDesignerId || (UUID_RE.test(designer.id) ? designer.id : null);
-  const allTasksRef = useRef([]);
+  // Assignee task list = source of truth for monthly/completed/donut (never mix in week-only rows).
+  const assigneeTasksRef = useRef([]);
+  // Lookup used only to render this week's scheduler grid labels/hours.
+  const scheduleTasksRef = useRef([]);
+
+  const liveData = useMemo(
+    () =>
+      computeDesignerTaskStats(assigneeTasks, {
+        viewWeekStart: weekDates[0],
+        viewWeekEnd: weekDates[weekDates.length - 1],
+      }),
+    [assigneeTasks, weekDates],
+  );
+
+  const applyAssigneeTasks = useCallback((tasks) => {
+    const list = Array.isArray(tasks) ? tasks : [];
+    assigneeTasksRef.current = list;
+    const byId = Object.fromEntries(scheduleTasksRef.current.map((t) => [t.id, t]));
+    for (const task of list) byId[task.id] = task;
+    scheduleTasksRef.current = Object.values(byId);
+    setAssigneeTasks(list);
+  }, []);
 
   const fetchRegularizationCount = useCallback(async () => {
     if (!erpId) return 0;
@@ -416,20 +328,24 @@ export default function DesignerDashboard({ designer: designerProp } = {}) {
     return rows.filter((r) => r.status === "Pending").length;
   }, [erpId]);
 
-  // Fetch tasks once per designer — tasks are not week-scoped
+  const refreshAssigneeTaskStats = useCallback(async () => {
+    if (!erpId) return;
+    const tasks = await fetchAllDesignerTasks(erpId);
+    applyAssigneeTasks(tasks);
+  }, [erpId, applyAssigneeTasks]);
+
+  // Fetch tasks once per designer — task-status stats are not week-scoped
   useEffect(() => {
     if (!erpId) return;
     let cancelled = false;
     fetchAllDesignerTasks(erpId)
       .then((tasks) => {
         if (cancelled) return;
-        allTasksRef.current = tasks;
-        const computed = computeLiveData(tasks);
-        if (computed) setLiveData(computed);
+        applyAssigneeTasks(tasks);
       })
       .catch(() => {});
     return () => { cancelled = true; };
-  }, [erpId]);
+  }, [erpId, applyAssigneeTasks]);
 
   // Tracks the last-seen scheduler week version to skip unnecessary full fetches
   const weekVersionRef = useRef(null);
@@ -458,7 +374,10 @@ export default function DesignerDashboard({ designer: designerProp } = {}) {
         }
       }
 
-      if (clearFirst) setScheduleData({});
+      if (clearFirst) {
+        setScheduleData({});
+        setWeekAssignments([]);
+      }
 
       const assignments = await listSchedulerAssignmentsForWeek(weekStartStr, erpId);
       const rows = Array.isArray(assignments) ? assignments : [];
@@ -466,32 +385,44 @@ export default function DesignerDashboard({ designer: designerProp } = {}) {
       // HOD removed all assignments for this designer — clear the grid
       if (rows.length === 0) {
         setScheduleData({});
-        setDynamicStats(null);
+        setDynamicStats({ tasks: 0, hours: 0 });
+        setWeekAssignments([]);
         return;
       }
 
-      // Refresh all tasks referenced in this week's assignments by fetching each by ID.
-      // This handles three cases in one shot:
-      //   1. New task assigned to this designer (unknown ID) — append it
-      //   2. Task status changed e.g. ON_HOLD, COMPLETED — update existing entry
-      //   3. Old task re-assigned (beyond limit=200 in assigneeId query) — still found by ID
+      setWeekAssignments(rows);
+
+      // Enrich schedule labels from per-id fetches. Do NOT fold week-only rows into
+      // monthly/completed stats — those stay on the assigneeId task list only.
       const weekTaskIds = [...new Set(rows.filter((r) => !isRequestRow(r) && UUID_RE.test(String(r.taskId ?? ""))).map((r) => r.taskId))];
       const freshTasks = await Promise.all(
         weekTaskIds.map((id) => apiClient.get(`/tasks/${id}`).catch(() => null))
       );
       const validFresh = freshTasks.filter(Boolean);
+      const freshMap = Object.fromEntries(validFresh.map((t) => [t.id, t]));
+
       if (validFresh.length > 0) {
-        const freshMap = Object.fromEntries(validFresh.map((t) => [t.id, t]));
-        const existingIds = new Set(allTasksRef.current.map((t) => t.id));
-        allTasksRef.current = [
-          ...allTasksRef.current.map((t) => freshMap[t.id] ?? t),  // update existing
-          ...validFresh.filter((t) => !existingIds.has(t.id)),      // append new
-        ];
-        const computed = computeLiveData(allTasksRef.current);
-        if (computed) setLiveData(computed);
+        const assigneeIds = new Set(assigneeTasksRef.current.map((t) => t.id));
+        // Refresh status for tasks that already belong to this designer.
+        const updatedAssignee = assigneeTasksRef.current.map((t) => freshMap[t.id] ?? t);
+        applyAssigneeTasks(updatedAssignee);
+
+        const scheduleById = Object.fromEntries([
+          ...updatedAssignee.map((t) => [t.id, t]),
+          ...validFresh.map((t) => [t.id, t]),
+        ]);
+        for (const task of validFresh) scheduleById[task.id] = task;
+        scheduleTasksRef.current = Object.values(scheduleById);
+
+        // If a newly scheduled task isn't in the assignee list yet, refresh assignee stats
+        // so HOD and designer dashboards converge on the same monthly/completed numbers.
+        const hasNewAssigneeWork = validFresh.some((t) => !assigneeIds.has(t.id));
+        if (hasNewAssigneeWork) {
+          void refreshAssigneeTaskStats().catch(() => {});
+        }
       }
 
-      const snapshot = buildLiveScheduleData(rows, allTasksRef.current);
+      const snapshot = buildLiveScheduleData(rows, scheduleTasksRef.current.length ? scheduleTasksRef.current : assigneeTasksRef.current);
       setScheduleData(snapshot.schedule);
       setDynamicStats(snapshot.stats);
     } catch {
@@ -499,7 +430,7 @@ export default function DesignerDashboard({ designer: designerProp } = {}) {
     } finally {
       fetchInFlightRef.current = false;
     }
-  }, [erpId]);
+  }, [erpId, refreshAssigneeTaskStats, applyAssigneeTasks]);
 
   // Fetch week assignments whenever the viewed week changes — clear grid immediately
   useEffect(() => {
@@ -519,15 +450,17 @@ export default function DesignerDashboard({ designer: designerProp } = {}) {
     if (!erpId) return undefined;
     return connectDashboardRealtime({
       onDashboardRefresh: () => {
+        void refreshAssigneeTaskStats().catch(() => {});
         void fetchWeekAssignments(false);
         void fetchRegularizationCount().then(setPendingRegCount).catch(() => {});
       },
       onNotificationsRefresh: () => {
+        void refreshAssigneeTaskStats().catch(() => {});
         void fetchWeekAssignments(false);
         void fetchRegularizationCount().then(setPendingRegCount).catch(() => {});
       },
     });
-  }, [erpId, fetchWeekAssignments, fetchRegularizationCount]);
+  }, [erpId, fetchWeekAssignments, fetchRegularizationCount, refreshAssigneeTaskStats]);
 
   // Fetch pending regularization count
   useEffect(() => {
@@ -592,20 +525,84 @@ export default function DesignerDashboard({ designer: designerProp } = {}) {
     };
   }, [designer.id, fetchWeekAssignments]);
 
+  // Work Till = last weekday with scheduled work in the viewed week + that day's hours,
+  // straight from the scheduler assignments (not task due dates).
+  const workTillFromSchedule = useMemo(() => {
+    if (!dynamicStats || dynamicStats.lastWorkDayIndex == null) return null;
+    const date = weekDates[dynamicStats.lastWorkDayIndex];
+    const label = formatWorkTillLabel(date);
+    if (!label) return null;
+    return { label, hours: dynamicStats.lastWorkDayHours ?? 0 };
+  }, [dynamicStats, weekDates]);
+
   const displayStats = {
     ...designer.stats,
     ...(liveData?.statsOverrides ?? {}),
-    workLoad: dynamicStats ?? liveData?.statsOverrides?.workLoad ?? designer.stats.workLoad,
+    workLoad: dynamicStats ?? designer.stats.workLoad,
+    workTill: workTillFromSchedule ?? designer.stats.workTill,
     ...(pendingRegCount !== null ? { pendingRegularization: pendingRegCount } : {}),
   };
 
   const onHoldTasks = liveData?.onHoldTasks ?? designer.onHoldTasks;
-  const completedTasksByWeek = liveData?.completedTasksByWeek ?? designer.completedTasksByWeek;
-  const completedTaskCount = Object.values(completedTasksByWeek).reduce(
-    (acc, tasks) => acc + (Array.isArray(tasks) ? tasks.length : 0),
-    0
+  const scheduledOnByTaskId = useMemo(
+    () => buildScheduledOnByTaskId(weekAssignments, weekDates),
+    [weekAssignments, weekDates],
   );
-  const donut = liveData?.donut ?? designer.donut;
+  // Active Tasks = active-status tasks that have a scheduler slot in the *viewed* week only.
+  // Assigned but unscheduled / only on older weeks are hidden here.
+  const activeTasks = useMemo(() => {
+    const rows = liveData?.activeTasks ?? [];
+    return rows
+      .filter((task) => Boolean(scheduledOnByTaskId[task.id]))
+      .map((task) => ({
+        ...task,
+        scheduledOn: scheduledOnByTaskId[task.id],
+      }));
+  }, [liveData?.activeTasks, scheduledOnByTaskId]);
+  const inReviewTasks = liveData?.inReviewTasks ?? [];
+  const completedTasksByWeek = liveData?.completedTasksByWeek ?? designer.completedTasksByWeek;
+  // Closed = CLIENT_ACCEPTED + CLIENT_REJECTED (client-final), not DESIGN_COMPLETED.
+  const closedTaskCount = liveData?.allCompletedCount
+    ?? Object.values(completedTasksByWeek).reduce(
+      (acc, tasks) => acc + (Array.isArray(tasks) ? tasks.length : 0),
+      0
+    );
+  const donut = useMemo(() => {
+    const base = liveData?.donut ?? designer.donut;
+    const weekActive = activeTasks.length;
+    const inReview = Number(base.inReview?.value) || 0;
+    const onHold = Number(base.onHold?.value) || 0;
+    const closed = Number(base.closed?.value ?? base.completed?.value) || 0;
+    const total = weekActive + inReview + onHold + closed || 1;
+    const pct = (n) => Math.round((n / total) * 100);
+    const closedSlice = {
+      value: closed,
+      pct: pct(closed),
+      color: base.closed?.color ?? base.completed?.color ?? "#7ed321",
+    };
+    return {
+      ...base,
+      active: {
+        value: weekActive,
+        pct: pct(weekActive),
+        color: base.active?.color ?? "#4f8ef7",
+      },
+      inReview: {
+        value: inReview,
+        pct: pct(inReview),
+        color: base.inReview?.color ?? "#8b5cf6",
+      },
+      onHold: {
+        value: onHold,
+        pct: pct(onHold),
+        color: base.onHold?.color ?? "#f5a623",
+      },
+      closed: closedSlice,
+      completed: closedSlice,
+      centerPct: pct(closed),
+      centerTotal: total,
+    };
+  }, [liveData?.donut, designer.donut, activeTasks.length]);
 
   const openTask = useCallback((task) => {
     if (isHOD && isViewingOther) {
@@ -650,8 +647,8 @@ export default function DesignerDashboard({ designer: designerProp } = {}) {
 
       <StatsBar stats={displayStats} isDesignerMode={isDesignerMode} isHOD={isHOD} isViewingOther={isViewingOther} />
 
-      <div className="flex min-w-0 flex-1 gap-6 px-4 py-5 sm:px-6 sm:py-6">
-        <div className="flex-1 flex flex-col gap-3 min-w-0">
+      <div className="flex min-w-0 flex-1 gap-4 px-4 py-5 sm:px-6 sm:py-6">
+        <div className="min-w-0 flex-[1_1_0%] flex flex-col gap-3">
           {/* Grid view controls */}
           <div className="flex items-center gap-1">
             <button
@@ -679,7 +676,21 @@ export default function DesignerDashboard({ designer: designerProp } = {}) {
             onOpenTask={openTask}
           />
 
-          <div className="mt-1 flex gap-3">
+          <div className="mt-1 flex gap-3 flex-wrap">
+            <button
+              type="button"
+              onClick={() => setActivePanel(activePanel === "active" ? null : "active")}
+              className={`ui-chip-button ${activePanel === "active" ? "ui-chip-button-active" : ""}`}
+            >
+              Active Tasks ({activeTasks.length})
+            </button>
+            <button
+              type="button"
+              onClick={() => setActivePanel(activePanel === "inReview" ? null : "inReview")}
+              className={`ui-chip-button ${activePanel === "inReview" ? "ui-chip-button-active" : ""}`}
+            >
+              In Review ({inReviewTasks.length})
+            </button>
             <button
               type="button"
               onClick={() => setActivePanel(activePanel === "onHold" ? null : "onHold")}
@@ -689,10 +700,10 @@ export default function DesignerDashboard({ designer: designerProp } = {}) {
             </button>
             <button
               type="button"
-              onClick={() => setActivePanel(activePanel === "completed" ? null : "completed")}
-              className={`ui-chip-button ${activePanel === "completed" ? "ui-chip-button-active" : ""}`}
+              onClick={() => setActivePanel(activePanel === "closed" ? null : "closed")}
+              className={`ui-chip-button ${activePanel === "closed" ? "ui-chip-button-active" : ""}`}
             >
-              Completed Tasks ({completedTaskCount})
+              Closed Tasks ({closedTaskCount})
             </button>
             {isDesignerMode && (
               <div className="ml-auto flex gap-3">
@@ -714,15 +725,32 @@ export default function DesignerDashboard({ designer: designerProp } = {}) {
             )}
           </div>
 
+          {activePanel === "active" && (
+            <OnHoldTable
+              tasks={activeTasks}
+              onOpenTask={openTask}
+              emptyLabel="No Active Tasks Scheduled This Week"
+              statusTone="ACTIVE"
+              showScheduledOn
+            />
+          )}
+          {activePanel === "inReview" && (
+            <OnHoldTable
+              tasks={inReviewTasks}
+              onOpenTask={openTask}
+              emptyLabel="No In Review Tasks"
+              statusTone="IN_REVIEW"
+            />
+          )}
           {activePanel === "onHold" && <OnHoldTable tasks={onHoldTasks} onOpenTask={openTask} />}
-          {activePanel === "completed" && (
+          {activePanel === "closed" && (
             <WeeksSection completedTasksByWeek={completedTasksByWeek} onOpenTask={openTask} />
           )}
         </div>
 
-        <div className="w-[180px] shrink-0">
-          <div className="ui-surface w-full p-3">
-            <DonutChart donut={donut} />
+        <div className="w-[230px] shrink-0">
+          <div className="ui-surface w-full p-4">
+            <DonutChart donut={donut} onSelectSegment={setActivePanel} activeSegment={activePanel} />
           </div>
         </div>
       </div>
