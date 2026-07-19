@@ -12,6 +12,7 @@ export type DashboardRealtimeEvent =
   | 'overtime_approved'
   | 'overtime_rejected'
   | 'overtime_scheduler_action'
+  | 'overtime_leave_conflict_cancelled'
   | 'scheduler_week_saved'
   | 'scheduler_leave_rescheduled'
   | 'scheduler_week_locked'

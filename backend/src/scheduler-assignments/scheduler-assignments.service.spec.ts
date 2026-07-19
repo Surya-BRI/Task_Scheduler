@@ -18,7 +18,7 @@ describe('SchedulerAssignmentsService', () => {
   const prisma: any = {
     schedulerAssignment: { findMany: jest.fn(), update: jest.fn(), deleteMany: jest.fn(), createMany: jest.fn(), groupBy: jest.fn(), create: jest.fn() },
     taskDesigner: { deleteMany: jest.fn(), createMany: jest.fn() },
-    overtimeRequest: { findMany: jest.fn() },
+    overtimeRequest: { findMany: jest.fn(), updateMany: jest.fn() },
     leaveRequest: { findMany: jest.fn() },
     regularizationRequest: { findMany: jest.fn() },
     taskWorkSession: { findMany: jest.fn() },
@@ -58,6 +58,7 @@ describe('SchedulerAssignmentsService', () => {
     prisma.taskDesigner.createMany.mockResolvedValue({ count: 0 });
     prisma.task.update.mockResolvedValue({});
     prisma.overtimeRequest.findMany.mockResolvedValue([]);
+    prisma.overtimeRequest.updateMany.mockResolvedValue({ count: 0 });
     prisma.leaveRequest.findMany.mockResolvedValue([]);
     prisma.regularizationRequest.findMany.mockResolvedValue([]);
     prisma.taskWorkSession.findMany.mockResolvedValue([]);
@@ -674,7 +675,7 @@ describe('SchedulerAssignmentsService', () => {
       'hod-1',
     );
 
-    expect(result).toEqual({ movedCount: 2, affectedWeeks: ['2026-06-08', '2026-06-15'] });
+    expect(result).toEqual({ movedCount: 2, affectedWeeks: ['2026-06-08', '2026-06-15'], cancelledOvertimeCount: 0 });
     expect(prisma.schedulerAssignment.update).toHaveBeenNthCalledWith(
       1,
       expect.objectContaining({
@@ -701,6 +702,83 @@ describe('SchedulerAssignmentsService', () => {
     expect(prisma.schedulerAssignmentHistory.create).toHaveBeenCalledTimes(2);
     expect(activityLogger.log).toHaveBeenCalledWith(
       expect.objectContaining({ action: 'SCHEDULER_LEAVE_RESCHEDULED' }),
+    );
+  });
+
+  it('cancels an approved overtime request that falls on a newly-approved leave day (has no backing SchedulerAssignment row)', async () => {
+    prisma.schedulerAssignment.findMany.mockResolvedValue([]);
+    prisma.overtimeRequest.findMany.mockResolvedValue([{ id: 'ot-request-1' }]);
+
+    const result = await service.rescheduleForApprovedLeave(
+      {
+        id: 'leave-1',
+        userId: 'designer-1',
+        type: 'Full Day',
+        startDate: new Date('2026-06-22T00:00:00.000Z'),
+        endDate: new Date('2026-06-22T00:00:00.000Z'),
+      },
+      'hod-1',
+    );
+
+    expect(result).toEqual({ movedCount: 0, affectedWeeks: [], cancelledOvertimeCount: 1 });
+    expect(prisma.overtimeRequest.updateMany).toHaveBeenCalledWith({
+      where: { id: { in: ['ot-request-1'] } },
+      data: { status: 'CANCELLED' },
+    });
+    expect(notificationsService.create).toHaveBeenCalledWith(
+      expect.objectContaining({ userId: 'designer-1', title: 'Approved Overtime Cancelled' }),
+    );
+  });
+
+  it('displaces a regular assignment on the leave day even when the leave request is not yet persisted as Approved', async () => {
+    // Regression test: RequestsService.review() calls rescheduleForApprovedLeave BEFORE
+    // writing the leave row's own status to APPROVED, so a naive "query leaveRequest for
+    // status=Approved" capacity check would miss this exact leave and never displace
+    // anything. Simulate that ordering by returning [] from the approved-leave query.
+    const makeRow = (id: string, weekStartDate: string, dayIndex: number, taskId: string) => ({
+      id,
+      designerId: 'designer-1',
+      taskId,
+      dayIndex,
+      assignedHours: '5',
+      parentId: null,
+      splitIndex: null,
+      totalParts: null,
+      weekStartDate: new Date(`${weekStartDate}T00:00:00.000Z`),
+      weekEndDate: new Date('2026-06-28T00:00:00.000Z'),
+      notes: null,
+      position: 0,
+      isLocked: false,
+      assignedBy: 'hod-old',
+      createdAt: new Date('2026-06-01T00:00:00.000Z'),
+      updatedAt: new Date('2026-06-01T00:00:00.000Z'),
+    });
+    const rows = [makeRow('assignment-1', '2026-06-22', 1, 'task-1')];
+
+    prisma.schedulerAssignment.findMany
+      .mockResolvedValueOnce(rows)
+      .mockResolvedValueOnce(rows)
+      .mockResolvedValueOnce(rows);
+    prisma.leaveRequest.findMany.mockResolvedValue([]);
+    prisma.$queryRaw.mockResolvedValue([]);
+
+    const result = await service.rescheduleForApprovedLeave(
+      {
+        id: 'leave-1',
+        userId: 'designer-1',
+        type: 'Full Day',
+        startDate: new Date('2026-06-23T00:00:00.000Z'),
+        endDate: new Date('2026-06-23T00:00:00.000Z'),
+      },
+      'hod-1',
+    );
+
+    expect(result.movedCount).toBe(1);
+    expect(prisma.schedulerAssignment.update).toHaveBeenCalledWith(
+      expect.objectContaining({
+        where: { id: 'assignment-1' },
+        data: expect.objectContaining({ dayIndex: 2 }),
+      }),
     );
   });
 

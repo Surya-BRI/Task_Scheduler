@@ -1,6 +1,20 @@
-import { toPositiveHours } from "@/lib/format-duration";
+import { formatHoursAsHm, toPositiveHours } from "@/lib/format-duration";
 
 export const WEEKDAY_INDICES = [0, 1, 2, 3, 4];
+
+/**
+ * Day-footer label that leads with the same total the week row uses
+ * (regular + OT), then shows capacity / OT breakdown.
+ * e.g. "8h/8h", "0h/8h" (fully free), or "9h 10m (8h/8h + 1h 10m OT)"
+ */
+export function formatDayWorkloadFooter(regularHours, overtimeHours, dailyCapacity = 8) {
+  const regular = toPositiveHours(regularHours);
+  const overtime = toPositiveHours(overtimeHours);
+  const regularLabel = regular > 0 ? formatHoursAsHm(regular) : "0h";
+  const capacityLabel = `${regularLabel}/${dailyCapacity}h`;
+  if (!overtime) return capacityLabel;
+  return `${formatHoursAsHm(regular + overtime)} (${capacityLabel} + ${formatHoursAsHm(overtime)} OT)`;
+}
 
 /**
  * Normal (non-OT) hours for one assignment row.

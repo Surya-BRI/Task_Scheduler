@@ -59,6 +59,7 @@ import {
     getSystemBlockHatchStyle,
 } from "../utils/scheduler-system-block.ui";
 import {
+    formatDayWorkloadFooter,
     getWorkloadOvertimeHours,
     getWorkloadRegularHours,
     resolveAssignmentScheduledHours,
@@ -2744,7 +2745,10 @@ export function DesignSchedulerScreen() {
                         </div>
                         <div className="flex flex-col overflow-hidden w-full justify-center min-w-0">
                           <span className="text-[11px] font-semibold text-slate-900 truncate tracking-tight">{designer.name}</span>
-                          <div className="flex items-center gap-1">
+                          <div
+                            className="flex items-center gap-1"
+                            title={`${formatHoursAsHm(booked)} booked Mon–Fri (regular + OT + leave/reg). Bar vs ${WEEKLY_CAPACITY}h regular capacity.`}
+                          >
                             <div className="flex-1 h-1 bg-slate-100 border border-slate-200 rounded-full mt-0.5 overflow-hidden">
                                <div className={`h-full rounded-full transition-all ${overloaded ? 'bg-red-400' : 'bg-blue-400'}`} style={{ width: `${Math.min((booked / WEEKLY_CAPACITY) * 100, 100)}%` }}></div>
                             </div>
@@ -2895,9 +2899,18 @@ export function DesignSchedulerScreen() {
                                     )}
                                   </div>)}
                               </div>
-                              {/* Day hours indicator — weekdays only */}
-                              {!isWeekend && (dayHours > 0 || overtimeHours > 0) && (<div className={`text-[8px] font-bold text-center pb-0.5 relative z-10 ${isDayOverloaded ? 'text-red-600' : 'text-blue-500/70'}`}>
-                                  {formatHoursAsHm(dayHours)}/{DAILY_CAPACITY}h{overtimeHours > 0 ? ` + ${formatHoursAsHm(overtimeHours)} OT` : ''}
+                              {/* Day hours indicator — weekdays only; total matches name-line week sum.
+                                  Always shown (even at 0h) so free capacity reads as "0h/8h available"
+                                  rather than blank space that's ambiguous with "not loaded yet". */}
+                              {!isWeekend && (<div
+                                className={`text-[8px] font-bold text-center pb-0.5 relative z-10 ${isDayOverloaded ? 'text-red-600' : dayHours > 0 || overtimeHours > 0 ? 'text-blue-500/70' : 'text-slate-400'}`}
+                                title={overtimeHours > 0
+                                  ? `${formatHoursAsHm(dayHours + overtimeHours)} total = ${formatHoursAsHm(dayHours)} regular + ${formatHoursAsHm(overtimeHours)} OT`
+                                  : dayHours > 0
+                                    ? `${formatHoursAsHm(dayHours)} regular / ${DAILY_CAPACITY}h capacity`
+                                    : `${DAILY_CAPACITY}h available`}
+                              >
+                                  {formatDayWorkloadFooter(dayHours, overtimeHours, DAILY_CAPACITY)}
                                 </div>)}
                             </div>);
                 })}

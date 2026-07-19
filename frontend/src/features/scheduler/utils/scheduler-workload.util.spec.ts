@@ -1,12 +1,20 @@
 import { describe, expect, it } from "vitest";
 import {
   countDesignerWeekSlots,
+  formatDayWorkloadFooter,
   resolveAssignmentScheduledHours,
   sumDesignerWeekWorkload,
   sumSlotTotalHours,
 } from "./scheduler-workload.util";
 
 describe("scheduler-workload.util", () => {
+  it("formats day footers with total first when OT is present", () => {
+    expect(formatDayWorkloadFooter(8, 0)).toBe("8h/8h");
+    expect(formatDayWorkloadFooter(8, 1 + 10 / 60)).toBe("9h 10m (8h/8h + 1h 10m OT)");
+    expect(formatDayWorkloadFooter(0, 2)).toBe("2h (0h/8h + 2h OT)");
+    expect(formatDayWorkloadFooter(0, 0)).toBe("0h/8h");
+  });
+
   it("subtracts approved OT from assignedHours when scheduledHours is missing", () => {
     expect(resolveAssignmentScheduledHours({ assignedHours: 10, approvedOvertimeHours: 2 })).toBe(8);
     expect(resolveAssignmentScheduledHours({ scheduledHours: 8, assignedHours: 10, approvedOvertimeHours: 2 })).toBe(8);

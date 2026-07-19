@@ -237,7 +237,88 @@ function SchedulerRow({ day, daySlot, dayDate, onOtClick, onOpenTask }) {
   );
 }
 
-export default function SchedulerGrid({ schedule, weekDates = [], designerId, isDesignerMode, visibleDays, onOpenTask }) {
+function SchedulerGridSkeleton({ weekDates = [], visibleDays }) {
+  return (
+    <div className="border border-slate-300 rounded-sm overflow-hidden text-xs" aria-busy="true" aria-label="Loading schedule">
+      <div className="flex bg-[#f0f3fa] text-slate-600 text-xs uppercase font-semibold outline outline-1 outline-slate-200 shadow-sm" style={{ minHeight: 32 }}>
+        <div className="w-[100px] shrink-0 px-2 py-2 border-r border-slate-200 flex items-center">DAY</div>
+        {HOUR_COLS.slice(0, NORMAL_COL_COUNT).map((h) => (
+          <div
+            key={`sk-h-${h}`}
+            className="flex-1 flex items-center justify-center text-[10px] font-semibold border-r border-slate-200 px-0.5 text-center"
+            style={{ minWidth: 0 }}
+          >
+            {h}
+          </div>
+        ))}
+        {HOUR_COLS.slice(NORMAL_COL_COUNT).map((h) => (
+          <div
+            key={`sk-h-ot-${h}`}
+            className="flex-1 flex items-center justify-center text-[10px] font-semibold border-r border-slate-200 px-0.5 text-center bg-red-50/50"
+            style={{ minWidth: 0 }}
+          >
+            {h}
+          </div>
+        ))}
+      </div>
+      {visibleDays.map((dayIndex) => {
+        const day = DAYS[dayIndex];
+        if (!day) return null;
+        const isWeekend = dayIndex >= 5;
+        const dayDate = weekDates[dayIndex];
+        const dayLabel = dayDate
+          ? `${dayDate.toLocaleDateString("en-US", { weekday: "short" })} ${dayDate.getDate()}`
+          : day;
+        const barWidths = ["38%", "52%", "28%", "64%"];
+        return (
+          <div
+            key={`sk-row-${day}`}
+            className="flex border-b border-slate-100 items-stretch animate-pulse"
+            style={{ minHeight: 56 }}
+          >
+            <div
+              className={`w-[100px] shrink-0 py-1.5 px-2 flex items-center border-r border-slate-200 ${isWeekend ? "bg-slate-50" : "bg-white"}`}
+            >
+              <span className={`text-[11px] font-semibold tracking-tight ${isWeekend ? "text-slate-400" : "text-slate-900"}`}>
+                {dayLabel}
+              </span>
+            </div>
+            <div
+              className={`flex-1 relative grid ${isWeekend ? "bg-slate-100" : "bg-white"}`}
+              style={{ gridTemplateColumns: `repeat(${TOTAL_COLS}, minmax(0, 1fr))` }}
+            >
+              {Array.from({ length: TOTAL_COLS }).map((_, index) => (
+                <div
+                  key={`sk-cell-${day}-${index}`}
+                  className={`border-r border-slate-100 ${
+                    isWeekend
+                      ? "bg-slate-100 border-slate-200"
+                      : index >= NORMAL_COL_COUNT
+                        ? "bg-red-50/40"
+                        : "bg-white"
+                  }`}
+                />
+              ))}
+              {!isWeekend && (
+                <div className="absolute inset-y-1 inset-x-2 flex items-center gap-2 pointer-events-none">
+                  {barWidths.map((width, i) => (
+                    <div
+                      key={`sk-bar-${day}-${i}`}
+                      className="h-5 rounded bg-slate-200/90"
+                      style={{ width }}
+                    />
+                  ))}
+                </div>
+              )}
+            </div>
+          </div>
+        );
+      })}
+    </div>
+  );
+}
+
+export default function SchedulerGrid({ schedule, weekDates = [], designerId, isDesignerMode, visibleDays, isLoading = false, onOpenTask }) {
   const router = useRouter();
   const effectiveVisibleDays = visibleDays ?? [0, 1, 2, 3, 4, 5, 6];
 
@@ -250,6 +331,10 @@ export default function SchedulerGrid({ schedule, weekDates = [], designerId, is
         );
       }
     : null;
+
+  if (isLoading) {
+    return <SchedulerGridSkeleton weekDates={weekDates} visibleDays={effectiveVisibleDays} />;
+  }
 
   return (
     <div className="border border-slate-300 rounded-sm overflow-hidden text-xs">

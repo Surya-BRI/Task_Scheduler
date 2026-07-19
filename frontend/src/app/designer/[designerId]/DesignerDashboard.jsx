@@ -139,6 +139,40 @@ function buildScheduledOnByTaskId(assignments, weekDates) {
   return result;
 }
 
+function formatScheduleTaskLabel(apiTask, taskId) {
+  if (apiTask?.revisionCode) {
+    return `${apiTask?.opNo ? apiTask.opNo + "-" : ""}${apiTask.revisionCode}`;
+  }
+  return apiTask?.opNo || `Task #${String(taskId ?? "").slice(0, 6)}`;
+}
+
+/** Prefer assignment-embedded task summary (already returned by API), then cached lists. */
+function resolveScheduleApiTask(assignment, taskById) {
+  return assignment?.task ?? taskById?.[assignment?.taskId] ?? null;
+}
+
+/**
+ * Merge assignee/cache tasks with summaries already attached on assignment rows
+ * so the grid never needs N× GET /tasks/:id on the critical path.
+ */
+function collectTasksForSchedule(assignments, assigneeTasks = [], scheduleTasks = []) {
+  const byId = {};
+  for (const task of scheduleTasks) {
+    if (task?.id) byId[task.id] = task;
+  }
+  for (const task of assigneeTasks) {
+    if (task?.id) byId[task.id] = task;
+  }
+  for (const row of assignments || []) {
+    if (isRequestRow(row) || !row?.taskId || !row.task) continue;
+    const id = row.task.id || row.taskId;
+    if (!id) continue;
+    // Keep richer assignee records when present; fill gaps from embedded summary.
+    byId[id] = byId[id] ? { ...row.task, ...byId[id], id } : { ...row.task, id };
+  }
+  return Object.values(byId);
+}
+
 function buildLiveScheduleData(assignments, tasksArr) {
   const taskById = Object.fromEntries((tasksArr || []).map((t) => [t.id, t]));
   const tasksMap = {};
@@ -176,23 +210,20 @@ function buildLiveScheduleData(assignments, tasksArr) {
     }
 
     const key = a.splitIndex != null ? `${a.taskId}_s${a.splitIndex}` : a.taskId;
-    const apiTask = taskById[a.taskId];
+    const apiTask = resolveScheduleApiTask(a, taskById);
     const approvedOvertimeHours = Number(a.approvedOvertimeHours) || 0;
     const scheduledHours = resolveAssignmentScheduledHours(a);
     if (!colorMap[a.taskId]) {
       colorMap[a.taskId] = DASH_COLORS[colorIdx % DASH_COLORS.length];
       colorIdx++;
     }
+    const label = formatScheduleTaskLabel(apiTask, a.taskId);
     tasksMap[key] = {
       id: key,
       parentId: a.parentId ?? (a.splitIndex != null ? a.taskId : null),
       designType: apiTask?.designType ?? apiTask?.project?.category ?? null,
-      name: apiTask?.revisionCode
-        ? `${apiTask?.opNo ? apiTask.opNo + '-' : ''}${apiTask.revisionCode}`
-        : apiTask?.opNo || `Task #${a.taskId.slice(0, 6)}`,
-      baseName: apiTask?.revisionCode
-        ? `${apiTask?.opNo ? apiTask.opNo + '-' : ''}${apiTask.revisionCode}`
-        : apiTask?.opNo || `Task #${a.taskId.slice(0, 6)}`,
+      name: label,
+      baseName: label,
       estimatedHours: scheduledHours,
       scheduledHours,
       approvedOvertimeHours,
@@ -292,6 +323,8 @@ export default function DesignerDashboard({ designer: designerProp } = {}) {
     });
     return initial;
   });
+  // Skeleton while week assignments load (initial + week nav). Background polls keep the grid.
+  const [isScheduleLoading, setIsScheduleLoading] = useState(true);
   const [dynamicStats, setDynamicStats] = useState(null);
   const [weekAssignments, setWeekAssignments] = useState([]);
   const [assigneeTasks, setAssigneeTasks] = useState([]);
@@ -353,10 +386,14 @@ export default function DesignerDashboard({ designer: designerProp } = {}) {
   const fetchInFlightRef = useRef(false);
 
   const fetchWeekAssignments = useCallback(async (clearFirst = false) => {
-    if (!erpId) return;
+    if (!erpId) {
+      setIsScheduleLoading(false);
+      return;
+    }
     // clearFirst (week navigation) must always proceed — only block concurrent background polls
     if (!clearFirst && fetchInFlightRef.current) return;
     fetchInFlightRef.current = true;
+    if (clearFirst) setIsScheduleLoading(true);
 
     const weekStartStr = fmtYmd(getWeekDays(currentDateRef.current)[0]);
     try {
@@ -377,6 +414,7 @@ export default function DesignerDashboard({ designer: designerProp } = {}) {
       if (clearFirst) {
         setScheduleData({});
         setWeekAssignments([]);
+        setDynamicStats(null);
       }
 
       const assignments = await listSchedulerAssignmentsForWeek(weekStartStr, erpId);
@@ -392,45 +430,57 @@ export default function DesignerDashboard({ designer: designerProp } = {}) {
 
       setWeekAssignments(rows);
 
-      // Enrich schedule labels from per-id fetches. Do NOT fold week-only rows into
-      // monthly/completed stats — those stay on the assigneeId task list only.
-      const weekTaskIds = [...new Set(rows.filter((r) => !isRequestRow(r) && UUID_RE.test(String(r.taskId ?? ""))).map((r) => r.taskId))];
-      const freshTasks = await Promise.all(
-        weekTaskIds.map((id) => apiClient.get(`/tasks/${id}`).catch(() => null))
+      // Paint immediately from assignment rows + embedded task summaries (no N× /tasks/:id).
+      const tasksForGrid = collectTasksForSchedule(
+        rows,
+        assigneeTasksRef.current,
+        scheduleTasksRef.current,
       );
-      const validFresh = freshTasks.filter(Boolean);
-      const freshMap = Object.fromEntries(validFresh.map((t) => [t.id, t]));
-
-      if (validFresh.length > 0) {
-        const assigneeIds = new Set(assigneeTasksRef.current.map((t) => t.id));
-        // Refresh status for tasks that already belong to this designer.
-        const updatedAssignee = assigneeTasksRef.current.map((t) => freshMap[t.id] ?? t);
-        applyAssigneeTasks(updatedAssignee);
-
-        const scheduleById = Object.fromEntries([
-          ...updatedAssignee.map((t) => [t.id, t]),
-          ...validFresh.map((t) => [t.id, t]),
-        ]);
-        for (const task of validFresh) scheduleById[task.id] = task;
-        scheduleTasksRef.current = Object.values(scheduleById);
-
-        // If a newly scheduled task isn't in the assignee list yet, refresh assignee stats
-        // so HOD and designer dashboards converge on the same monthly/completed numbers.
-        const hasNewAssigneeWork = validFresh.some((t) => !assigneeIds.has(t.id));
-        if (hasNewAssigneeWork) {
-          void refreshAssigneeTaskStats().catch(() => {});
-        }
-      }
-
-      const snapshot = buildLiveScheduleData(rows, scheduleTasksRef.current.length ? scheduleTasksRef.current : assigneeTasksRef.current);
+      scheduleTasksRef.current = tasksForGrid;
+      const snapshot = buildLiveScheduleData(rows, tasksForGrid);
       setScheduleData(snapshot.schedule);
       setDynamicStats(snapshot.stats);
+
+      // Background only: refresh assignee list if a scheduled task isn't in it yet
+      // (Active / Closed tables). Does not block the grid skeleton.
+      const assigneeIds = new Set(assigneeTasksRef.current.map((t) => t.id));
+      const hasMissingAssigneeTask = rows.some((r) => {
+        if (isRequestRow(r) || !UUID_RE.test(String(r.taskId ?? ""))) return false;
+        return !assigneeIds.has(r.taskId);
+      });
+      if (hasMissingAssigneeTask) {
+        void refreshAssigneeTaskStats().catch(() => {});
+      }
+
+      // Rare fallback: if API omitted a task summary, fetch only those ids off-path.
+      const missingSummaryIds = [
+        ...new Set(
+          rows
+            .filter((r) => !isRequestRow(r) && UUID_RE.test(String(r.taskId ?? "")) && !r.task)
+            .map((r) => r.taskId),
+        ),
+      ];
+      if (missingSummaryIds.length > 0) {
+        void Promise.all(missingSummaryIds.map((id) => apiClient.get(`/tasks/${id}`).catch(() => null)))
+          .then((fetched) => {
+            const valid = fetched.filter(Boolean);
+            if (!valid.length) return;
+            const byId = Object.fromEntries(scheduleTasksRef.current.map((t) => [t.id, t]));
+            for (const task of valid) byId[task.id] = task;
+            scheduleTasksRef.current = Object.values(byId);
+            const next = buildLiveScheduleData(rows, scheduleTasksRef.current);
+            setScheduleData(next.schedule);
+            setDynamicStats(next.stats);
+          })
+          .catch(() => {});
+      }
     } catch {
       // Swallow — next poll or user action will retry
     } finally {
       fetchInFlightRef.current = false;
+      if (clearFirst) setIsScheduleLoading(false);
     }
-  }, [erpId, refreshAssigneeTaskStats, applyAssigneeTasks]);
+  }, [erpId, refreshAssigneeTaskStats]);
 
   // Fetch week assignments whenever the viewed week changes — clear grid immediately
   useEffect(() => {
@@ -645,7 +695,7 @@ export default function DesignerDashboard({ designer: designerProp } = {}) {
         </div>
       </div>
 
-      <StatsBar stats={displayStats} isDesignerMode={isDesignerMode} isHOD={isHOD} isViewingOther={isViewingOther} />
+      <StatsBar stats={displayStats} isDesignerMode={isDesignerMode} isHOD={isHOD} isViewingOther={isViewingOther} isScheduleLoading={isScheduleLoading} />
 
       <div className="flex min-w-0 flex-1 gap-4 px-4 py-5 sm:px-6 sm:py-6">
         <div className="min-w-0 flex-[1_1_0%] flex flex-col gap-3">
@@ -673,6 +723,7 @@ export default function DesignerDashboard({ designer: designerProp } = {}) {
             weekDates={weekDates}
             designerId={erpId || designer.id}
             isDesignerMode={isDesignerMode}
+            isLoading={isScheduleLoading}
             onOpenTask={openTask}
           />
 
