@@ -61,14 +61,19 @@ const getRegularTaskHours = (task?: SchedulerDayTask | null) =>
   task?.isOvertime ? 0 : toPositiveHours(task?.scheduledHours ?? task?.estimatedHours);
 
 export type DayTaskLayout = {
+  /** Leave / regularization — render on their own strip above work tasks. */
+  systemBlockIds: string[];
+  /** Schedulable work that still fits in the normal 8h band. */
   visualRegularTaskIds: string[];
   overtimeTaskIds: string[];
 };
 
 /**
  * Splits a day's task ids for grid rendering.
- * Approved leave/regularization blocks always stay in the regular row and are
- * never pushed into the overtime strip when other tasks are added/removed.
+ * Approved leave/regularization blocks always stay in the regular capacity math and are
+ * never pushed into the overtime strip when other tasks are added/removed. They are
+ * returned separately so the UI can render them on their own strip (avoids equal-width
+ * crowding with work tasks).
  */
 export const partitionDayTaskIds = (
   rawTaskIds: string[],
@@ -107,14 +112,9 @@ export const partitionDayTaskIds = (
     }
   }
 
-  // Interleave leave with tasks by session (first-half leave left, tasks middle, second-half leave right).
-  const visualRegularTaskIds = sortRegularTaskIdsForVisualSession(
-    [...systemBlockIds, ...withinCapacityIds],
-    taskMap,
-  );
-
   return {
-    visualRegularTaskIds,
+    systemBlockIds: sortRegularTaskIdsForVisualSession(systemBlockIds, taskMap),
+    visualRegularTaskIds: withinCapacityIds,
     overtimeTaskIds: [...overtimeIds, ...overflowIds],
   };
 };

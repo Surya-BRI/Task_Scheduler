@@ -1,6 +1,11 @@
 "use client";
 import { useRouter } from "next/navigation";
+import { Calendar, ClipboardList } from "lucide-react";
 import { formatHoursAsHm } from "@/lib/format-duration";
+import {
+  getSystemBlockBadge,
+  getSystemBlockHatchStyle,
+} from "@/features/scheduler/utils/scheduler-system-block.ui";
 
 const HOUR_COLS = [
   "0-1 HR", "1-2 HR", "2-3 HR", "3-4 HR",
@@ -36,16 +41,33 @@ const TASK_BG = {
   "#1e3a5f": "bg-slate-100 border border-slate-300 text-slate-800",
 };
 
+function SystemBlockIcon({ requestType }) {
+  if (requestType === "LEAVE") {
+    return <Calendar className="h-2.5 w-2.5 shrink-0 opacity-80" aria-hidden="true" />;
+  }
+  if (requestType === "REGULARIZATION") {
+    return <ClipboardList className="h-2.5 w-2.5 shrink-0 opacity-80" aria-hidden="true" />;
+  }
+  return null;
+}
+
 function TaskBlock({ task, onOtClick, onOpenTask }) {
-  const bgClass = task.isOvertime
-    ? "bg-red-100 border border-red-300 text-red-800"
-    : task.colorClass || TASK_BG[task.color] || "bg-slate-100 border border-slate-300 text-slate-800";
+  const systemBadge = getSystemBlockBadge(task.requestType);
+  const hatchStyle = getSystemBlockHatchStyle(task.requestType);
+  const bgClass = systemBadge
+    ? (task.colorClass || "")
+    : task.isOvertime
+      ? "bg-red-100 border border-red-300 text-red-800"
+      : task.colorClass || TASK_BG[task.color] || "bg-slate-100 border border-slate-300 text-slate-800";
   const canRequestOvertime = onOtClick && !task.isSystemBlock && !task.isOvertime;
   const canOpenTask = onOpenTask && !task.isSystemBlock;
+  const label = task.requestLabel || task.label;
   return (
     <div className="h-full flex items-center w-full relative z-10 px-0.5 group/task">
       <div
-        className={`h-[24px] w-full min-w-0 rounded flex items-center justify-between px-1 shadow-sm transition-shadow truncate ${bgClass} ${canOpenTask ? "cursor-pointer hover:shadow-md" : ""}`}
+        className={`h-[24px] w-full min-w-0 rounded flex items-center justify-between px-1 transition-shadow truncate ${systemBadge ? "" : "shadow-sm"} ${bgClass} ${canOpenTask ? "cursor-pointer hover:shadow-md" : ""}`}
+        style={hatchStyle}
+        title={label}
         onClick={canOpenTask ? () => {
           const record = resolveSchedulerTaskRecord(task);
           if (!record) return;
@@ -61,10 +83,20 @@ function TaskBlock({ task, onOtClick, onOpenTask }) {
         role={canOpenTask ? "button" : undefined}
         tabIndex={canOpenTask ? 0 : undefined}
       >
-        <div className="text-[9px] font-semibold truncate leading-none mr-1 select-none pointer-events-none">{task.label}</div>
+        <div className="flex items-center gap-0.5 min-w-0 mr-1 select-none pointer-events-none">
+          <SystemBlockIcon requestType={task.requestType} />
+          {systemBadge ? (
+            <span className={`text-[7px] font-bold rounded px-0.5 py-px leading-none shrink-0 ${systemBadge.className}`}>
+              {systemBadge.label}
+            </span>
+          ) : null}
+          {!systemBadge && (
+            <div className="text-[9px] font-semibold truncate leading-none">{label}</div>
+          )}
+        </div>
         <div className="flex items-center gap-0.5 shrink-0">
           <span className="text-[8px] font-bold opacity-70">{formatHoursAsHm(task.estimatedHours || (task.endHr - task.startHr))}</span>
-          {task.isOvertime && (
+          {task.isOvertime && !systemBadge && (
             <span className="text-[7px] font-bold bg-red-500 text-white rounded px-0.5 py-px leading-none ml-0.5">OT</span>
           )}
           {canRequestOvertime && (
@@ -110,7 +142,7 @@ function SchedulerRow({ day, daySlot, dayDate, onOtClick, onOpenTask }) {
     >
       {/* Day label */}
       <div
-        className={`w-[180px] shrink-0 py-1.5 px-4 flex items-center border-r border-slate-200 z-10 transition-colors group-hover:bg-slate-50 ${isWeekend ? 'bg-slate-50' : 'bg-white'}`}
+        className={`w-[100px] shrink-0 py-1.5 px-2 flex items-center border-r border-slate-200 z-10 transition-colors group-hover:bg-slate-50 ${isWeekend ? 'bg-slate-50' : 'bg-white'}`}
       >
         <div className="min-w-0">
           <span className={`text-[11px] font-semibold truncate tracking-tight block ${isWeekend ? 'text-slate-400' : 'text-slate-900'}`}>{dayLabel}</span>
@@ -223,12 +255,12 @@ export default function SchedulerGrid({ schedule, weekDates = [], designerId, is
     <div className="border border-slate-300 rounded-sm overflow-hidden text-xs">
       {/* Header row */}
       <div className="flex bg-[#f0f3fa] text-slate-600 text-xs uppercase font-semibold outline outline-1 outline-slate-200 shadow-sm" style={{ minHeight: 32 }}>
-        <div className="w-[180px] shrink-0 px-4 py-2 border-r border-slate-200 flex items-center">DAY</div>
+        <div className="w-[100px] shrink-0 px-2 py-2 border-r border-slate-200 flex items-center">DAY</div>
         {/* Normal hour headers */}
         {HOUR_COLS.slice(0, NORMAL_COL_COUNT).map((h) => (
           <div
             key={h}
-            className="flex-1 flex items-center justify-center text-[10px] font-semibold border-r border-slate-200 px-2 text-center"
+            className="flex-1 flex items-center justify-center text-[10px] font-semibold border-r border-slate-200 px-0.5 text-center"
             style={{ minWidth: 0 }}
           >
             {h}
@@ -238,7 +270,7 @@ export default function SchedulerGrid({ schedule, weekDates = [], designerId, is
         {HOUR_COLS.slice(NORMAL_COL_COUNT).map((h) => (
           <div
             key={h}
-            className="flex-1 flex items-center justify-center text-[10px] font-semibold border-r border-slate-200 px-2 text-center bg-red-50/50"
+            className="flex-1 flex items-center justify-center text-[10px] font-semibold border-r border-slate-200 px-0.5 text-center bg-red-50/50"
             style={{ minWidth: 0 }}
           >
             {h}

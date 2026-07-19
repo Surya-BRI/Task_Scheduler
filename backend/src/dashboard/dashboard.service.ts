@@ -343,9 +343,12 @@ export class DashboardService {
     const reworkCount = counts['REWORK'] ?? 0;
     const statusOnHold = counts['ON_HOLD'] ?? 0;
     const fragmentOnlyCount = fragmentOnlyTaskIds.size;
-    // Exclude REWORK from Active (shown separately) and fragment-only holds from Active
-    // (they are counted under onHold).
-    const activeDisplay = Math.max(0, buckets.active - reworkCount - fragmentOnlyCount);
+    // In-review (DESIGN_COMPLETED / HOD / Sales) sits with Active on the overview donut
+    // so submitted-but-not-closed work is not dropped from the chart total.
+    const activeDisplay = Math.max(
+      0,
+      buckets.active + buckets.inReview - reworkCount - fragmentOnlyCount,
+    );
     const onHoldDisplay = statusOnHold + fragmentOnlyCount;
     const donutTotal = Math.max(1, activeDisplay + onHoldDisplay + completed);
 
