@@ -118,6 +118,10 @@ const EMPTY_DONUT_SLICE = { value: 0, pct: 0, color: "#94a3b8" };
  *
  * Monthly / weekly closed counts use Closed only (via completedAt).
  */
+/**
+ * @param {Array<object>} tasks
+ * @param {{ now?: Date, viewWeekStart?: Date | null, viewWeekEnd?: Date | null }} [options]
+ */
 export function computeDesignerTaskStats(tasks, { now = new Date(), viewWeekStart = null, viewWeekEnd = null } = {}) {
   if (!Array.isArray(tasks) || tasks.length === 0) {
     return {
