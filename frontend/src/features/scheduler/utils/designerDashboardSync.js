@@ -205,6 +205,7 @@ const buildDaySlot = (taskIds, tasksMap) => {
 };
 
 export const buildDesignerSnapshot = (tasksMap, designerScheduleByDayIndex = {}) => {
+  /** @type {Record<string, ReturnType<typeof buildDaySlot>>} */
   const schedule = {};
   const dayTaskRecordIds = {};
   const assignedRecordIds = [];

@@ -2,7 +2,11 @@
 import { useRouter } from "next/navigation";
 import { formatHoursAsHm } from "@/lib/format-duration";
 
-export default function StatsBar({ stats, isDesignerMode = true, isHOD = false, isViewingOther = false }) {
+function StatPulse({ widthClass = "w-10" }) {
+  return <span className={`inline-block h-3 ${widthClass} rounded bg-slate-200 animate-pulse align-middle`} aria-hidden="true" />;
+}
+
+export default function StatsBar({ stats, isDesignerMode = true, isHOD = false, isViewingOther = false, isScheduleLoading = false }) {
   const router = useRouter();
   const {
     workLoad,
@@ -22,7 +26,7 @@ export default function StatsBar({ stats, isDesignerMode = true, isHOD = false, 
       <div className="flex items-center gap-1.5">
         <span className="inline-block h-2.5 w-2.5 rounded-full bg-green-500 shrink-0" />
         <span className="font-semibold text-slate-700">
-          This Week Slots: {slotCount}
+          This Week Slots: {isScheduleLoading ? <StatPulse widthClass="w-6" /> : slotCount}
         </span>
       </div>
 
@@ -32,7 +36,7 @@ export default function StatsBar({ stats, isDesignerMode = true, isHOD = false, 
       <div className="flex items-center gap-1.5">
         <span className="inline-block h-2.5 w-2.5 rounded-full bg-green-500 shrink-0" />
         <span className="font-semibold text-slate-700">
-          This Week Hours: {hoursLabel}
+          This Week Hours: {isScheduleLoading ? <StatPulse widthClass="w-14" /> : hoursLabel}
         </span>
       </div>
 
@@ -42,7 +46,9 @@ export default function StatsBar({ stats, isDesignerMode = true, isHOD = false, 
       <div className="flex items-center gap-1.5">
         <span className="inline-block h-2.5 w-2.5 rounded-full bg-red-500 shrink-0" />
         <span className="font-semibold text-slate-700">
-          Work Till: {workTill.label}{workTill.hours > 0 ? ` - ${formatHoursAsHm(workTill.hours)}` : ""}
+          Work Till: {isScheduleLoading
+            ? <StatPulse widthClass="w-24" />
+            : <>{workTill.label}{workTill.hours > 0 ? ` - ${formatHoursAsHm(workTill.hours)}` : ""}</>}
         </span>
       </div>
 

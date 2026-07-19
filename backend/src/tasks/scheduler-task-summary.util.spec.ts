@@ -61,7 +61,7 @@ describe('scheduler-task-summary.util', () => {
   it('builds a queue filter for unassigned and on-hold tasks only', () => {
     expect(schedulerQueueWhere()).toEqual({
       AND: [
-        { status: { notIn: ['DESIGN_COMPLETED', 'CLIENT_ACCEPTED'] } },
+        { status: { notIn: ['CLIENT_ACCEPTED', 'CLIENT_REJECTED'] } },
         {
           OR: [
             { status: 'ON_HOLD' },

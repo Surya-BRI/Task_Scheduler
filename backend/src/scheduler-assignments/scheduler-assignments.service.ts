@@ -930,14 +930,36 @@ export class SchedulerAssignmentsService implements OnModuleInit {
       endDate?: Date | null;
     },
     actorUserId: string,
-  ): Promise<{ movedCount: number; affectedWeeks: string[] }> {
+  ): Promise<{ movedCount: number; affectedWeeks: string[]; cancelledOvertimeCount: number }> {
     const leaveStart = this.startOfUtcDay(new Date(leave.startDate));
     const leaveEnd = this.startOfUtcDay(new Date(leave.endDate ?? leave.startDate));
     if (!leave.userId || Number.isNaN(leaveStart.getTime()) || Number.isNaN(leaveEnd.getTime())) {
-      return { movedCount: 0, affectedWeeks: [] };
+      return { movedCount: 0, affectedWeeks: [], cancelledOvertimeCount: 0 };
     }
 
     const result = await this.prisma.$transaction(async (tx) => {
+      // Approved overtime requests are rendered as read-time virtual blocks (see
+      // findForWeekStart) with no backing SchedulerAssignment row, so the FIFO
+      // reschedule below can never see or move them. Cancel any that fall inside
+      // the leave window outright rather than leaving a stale OT commitment glued
+      // to a day the designer is now on leave.
+      const conflictingOvertimeRequests = await tx.overtimeRequest.findMany({
+        where: {
+          designerId: leave.userId,
+          status: 'APPROVED',
+          date: { gte: leaveStart, lte: leaveEnd },
+        },
+        select: { id: true },
+      });
+      let cancelledOvertimeCount = 0;
+      if (conflictingOvertimeRequests.length > 0) {
+        await tx.overtimeRequest.updateMany({
+          where: { id: { in: conflictingOvertimeRequests.map((r) => r.id) } },
+          data: { status: 'CANCELLED' },
+        });
+        cancelledOvertimeCount = conflictingOvertimeRequests.length;
+      }
+
       const schedulerRows = await tx.schedulerAssignment.findMany({
         where: {
           designerId: leave.userId,
@@ -959,7 +981,7 @@ export class SchedulerAssignmentsService implements OnModuleInit {
         });
 
       if (datedRows.length === 0) {
-        return { movedCount: 0, affectedWeeks: [] as string[] };
+        return { movedCount: 0, affectedWeeks: [] as string[], cancelledOvertimeCount };
       }
 
       const latestAssignmentDate = datedRows.reduce(
@@ -977,6 +999,7 @@ export class SchedulerAssignmentsService implements OnModuleInit {
             revokedAt: null,
             startDate: { lte: horizonEnd },
             OR: [{ endDate: null }, { endDate: { gte: leaveStart } }],
+            ...(leave.id ? { id: { not: leave.id } } : {}),
           },
           select: {
             id: true,
@@ -989,22 +1012,23 @@ export class SchedulerAssignmentsService implements OnModuleInit {
       ]);
 
       const leaveHoursByDate = new Map<string, number>();
-      for (const approvedLeave of approvedLeaves) {
-        const start = this.startOfUtcDay(new Date(approvedLeave.startDate));
-        const end = this.startOfUtcDay(new Date(approvedLeave.endDate ?? approvedLeave.startDate));
+      const accumulateLeaveHours = (entry: { type: string | null; startDate: Date; endDate: Date | null }) => {
+        const start = this.startOfUtcDay(new Date(entry.startDate));
+        const end = this.startOfUtcDay(new Date(entry.endDate ?? entry.startDate));
         for (let date = start; date <= end; date = this.addUtcDays(date, 1)) {
           const key = this.dateKey(date);
-          const blockedHours = this.leaveHoursForDate(
-            {
-              type: approvedLeave.type,
-              startDate: start,
-              endDate: end,
-            },
-            date,
-          );
+          const blockedHours = this.leaveHoursForDate({ type: entry.type, startDate: start, endDate: end }, date);
           leaveHoursByDate.set(key, Math.min(DAILY_CAPACITY, (leaveHoursByDate.get(key) ?? 0) + blockedHours));
         }
+      };
+      for (const approvedLeave of approvedLeaves) {
+        accumulateLeaveHours(approvedLeave);
       }
+      // `leave` is the request being approved right now — RequestsService.review runs this
+      // reschedule before persisting the leave row's own status to APPROVED, so the query
+      // above can't see it yet. Count it explicitly, otherwise capacity looks unaffected
+      // and no assignments get displaced onto/around the leave being approved.
+      accumulateLeaveHours({ type: leave.type, startDate: leaveStart, endDate: leaveEnd });
 
       const availableCapacity = (date: Date): number => {
         const key = this.dateKey(date);
@@ -1031,7 +1055,7 @@ export class SchedulerAssignmentsService implements OnModuleInit {
       }
 
       if (firstDisplacedIndex < 0) {
-        return { movedCount: 0, affectedWeeks: [] as string[] };
+        return { movedCount: 0, affectedWeeks: [] as string[], cancelledOvertimeCount };
       }
 
       const fixedUsage = new Map<string, number>();
@@ -1096,7 +1120,7 @@ export class SchedulerAssignmentsService implements OnModuleInit {
       }
 
       if (changedRows.length === 0) {
-        return { movedCount: 0, affectedWeeks: [] as string[] };
+        return { movedCount: 0, affectedWeeks: [] as string[], cancelledOvertimeCount };
       }
 
       const affectedWeekByKey = new Map<string, Date>();
@@ -1202,6 +1226,7 @@ export class SchedulerAssignmentsService implements OnModuleInit {
       return {
         movedCount: changedRows.length,
         affectedWeeks: affectedWeeks.map((date) => this.dateKey(date)),
+        cancelledOvertimeCount,
       };
     });
 
@@ -1237,6 +1262,40 @@ export class SchedulerAssignmentsService implements OnModuleInit {
           linkUrl: '/scheduler',
         })
         .catch((err) => this.logger.error('Failed to send leave-reschedule notification', err));
+      this.dashboardRealtime?.notifyUserNotificationRefresh(leave.userId);
+    }
+
+    if (result.cancelledOvertimeCount > 0) {
+      await this.activityLogger.log({
+        action: ActivityAction.OVERTIME_REQUEST_STATUS_CHANGED,
+        userId: actorUserId,
+        details: {
+          event: ActivityAction.OVERTIME_REQUEST_STATUS_CHANGED,
+          messageKey: 'overtime_cancelled_leave_conflict',
+          changes: {
+            cancelledCount: result.cancelledOvertimeCount,
+            newStatus: 'CANCELLED',
+          },
+          context: {
+            source: 'leave.approval',
+            leaveRequestId: leave.id ?? null,
+            designerId: leave.userId,
+            startDate: this.dateKey(leaveStart),
+            endDate: this.dateKey(leaveEnd),
+          },
+        },
+      });
+      this.dashboardRealtime?.notifyOverviewRefresh('overtime_leave_conflict_cancelled', {
+        updatedBy: actorUserId,
+      });
+      this.notificationsService
+        .create({
+          userId: leave.userId,
+          title: 'Approved Overtime Cancelled',
+          message: `${result.cancelledOvertimeCount} approved overtime ${result.cancelledOvertimeCount === 1 ? 'request was' : 'requests were'} cancelled because ${result.cancelledOvertimeCount === 1 ? 'it falls' : 'they fall'} on a day covered by your approved leave.`,
+          linkUrl: '/scheduler',
+        })
+        .catch((err) => this.logger.error('Failed to send overtime-cancellation notification', err));
       this.dashboardRealtime?.notifyUserNotificationRefresh(leave.userId);
     }
 
