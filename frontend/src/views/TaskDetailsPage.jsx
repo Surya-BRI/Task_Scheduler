@@ -1540,8 +1540,7 @@ export function TaskDetailsPage() {
   const isQsCompleted = normalizedQsStatus === 'completed'
   const isQs = _session?.role === 'QS'
   const isQsReadOnly = isQsCompleted || !isQs
-  // Approved rows are protected: deletion and status changes require elevated
-  // permissions (persisted rows are enforced server-side too).
+  // Approved rows cannot be deleted or have their status changed (also enforced server-side).
   const isApprovedSignRow = (row) => String(row?.status ?? '').trim().toLowerCase() === 'approved'
   const isLockedSignRowStatusField = (row, field) => field === 'status' && isApprovedSignRow(row)
   // Dirty when current rows differ from the last loaded/saved snapshot.

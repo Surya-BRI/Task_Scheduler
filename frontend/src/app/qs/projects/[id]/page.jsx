@@ -230,8 +230,7 @@ function QsProjectDetailContent() {
   const normalizedQsStatus = String(qsStatus?.status ?? '').trim().toLowerCase()
   const isQsCompleted = normalizedQsStatus === 'completed'
   const isQsReadOnly = isQsCompleted
-  // Approved rows are protected: deletion and status changes require elevated
-  // permissions (persisted rows are enforced server-side too).
+  // Approved rows cannot be deleted or have their status changed (also enforced server-side).
   const isApprovedRow = (row) => String(row?.status ?? '').trim().toLowerCase() === 'approved'
   const isLockedStatusField = (row, field) => field === 'status' && isApprovedRow(row)
 
