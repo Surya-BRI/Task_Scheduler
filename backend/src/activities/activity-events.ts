@@ -51,6 +51,22 @@ export const ActivityAction = {
 
 export type ActivityActionType = (typeof ActivityAction)[keyof typeof ActivityAction];
 
+/** Overtime + Regularization actions — excluded from Project/Task History timelines. */
+export const PROJECT_HISTORY_EXCLUDED_ACTIONS: readonly ActivityActionType[] = [
+  ActivityAction.REGULARIZATION_SUBMITTED,
+  ActivityAction.REGULARIZATION_APPROVED,
+  ActivityAction.REGULARIZATION_REJECTED,
+  ActivityAction.REGULARIZATION_STATUS_CHANGED,
+  ActivityAction.REGULARIZATION_AUTO_APPROVED,
+  ActivityAction.OVERTIME_REQUEST_SUBMITTED,
+  ActivityAction.OVERTIME_REQUEST_UPDATED,
+  ActivityAction.OVERTIME_REQUEST_APPROVED,
+  ActivityAction.OVERTIME_REQUEST_REJECTED,
+  ActivityAction.OVERTIME_REQUEST_WITHDRAWN,
+  ActivityAction.OVERTIME_REQUEST_STATUS_CHANGED,
+  ActivityAction.OVERTIME_AUTO_APPROVED,
+] as const;
+
 export type ActivityDetailsPayload = {
   event: string;
   messageKey: string;
