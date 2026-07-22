@@ -1,7 +1,7 @@
 import { DeadlineAlertsService } from './deadline-alerts.service';
 import { NotificationsService } from '../notifications/notifications.service';
 import { ActivityLoggerService } from '../activities/activity-logger.service';
-import { CronLockService } from '../common/services/cron-lock.service';
+import { CronLockService, LOCK_NOT_ACQUIRED } from '../common/services/cron-lock.service';
 
 describe('DeadlineAlertsService', () => {
   const prisma = {
@@ -15,7 +15,7 @@ describe('DeadlineAlertsService', () => {
   } as unknown as NotificationsService;
   const activityLogger = { log: jest.fn() } as unknown as ActivityLoggerService;
   const cronLockService = {
-    tryAcquire: jest.fn().mockResolvedValue(async () => {}),
+    withLock: jest.fn((_resource: string, fn: () => Promise<unknown>) => fn()),
   } as unknown as CronLockService;
 
   const service = new DeadlineAlertsService(
@@ -35,10 +35,12 @@ describe('DeadlineAlertsService', () => {
   });
 
   it('skips when cron lock is held by another instance', async () => {
-    cronLockService.tryAcquire = jest.fn().mockResolvedValue(null);
+    cronLockService.withLock = jest.fn().mockResolvedValue(LOCK_NOT_ACQUIRED);
     await service.checkDeadlines();
     expect(prisma.task.findMany).not.toHaveBeenCalled();
-    cronLockService.tryAcquire = jest.fn().mockResolvedValue(async () => {});
+    cronLockService.withLock = jest.fn((_resource: string, fn: () => Promise<unknown>) =>
+      fn(),
+    ) as unknown as CronLockService['withLock'];
   });
 
   it('skips deadline scan when no HOD/Admin users exist', async () => {

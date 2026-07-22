@@ -6,7 +6,7 @@ import { NotificationsService } from '../notifications/notifications.service';
 import { ActivityLoggerService } from '../activities/activity-logger.service';
 import { ActivityAction } from '../activities/activity-events';
 import { DashboardRealtimeService } from '../dashboard/dashboard-realtime.service';
-import { CronLockService } from '../common/services/cron-lock.service';
+import { CronLockService, LOCK_NOT_ACQUIRED } from '../common/services/cron-lock.service';
 import { taskViewPath } from '../common/utils/design-type.util';
 
 const DEADLINE_CRON_LOCK = 'TaskScheduler:DeadlineAlertsCron';
@@ -53,18 +53,14 @@ export class DeadlineAlertsService {
       return;
     }
 
-    const release = await this.cronLockService.tryAcquire(DEADLINE_CRON_LOCK);
-    if (!release) {
-      this.logger.debug('Deadline alerts skipped: lock held by another instance');
-      return;
-    }
-
     this.cronRunning = true;
     try {
-      await this.runDeadlineScan();
+      const result = await this.cronLockService.withLock(DEADLINE_CRON_LOCK, () => this.runDeadlineScan());
+      if (result === LOCK_NOT_ACQUIRED) {
+        this.logger.debug('Deadline alerts skipped: lock held by another instance');
+      }
     } finally {
       this.cronRunning = false;
-      await release();
     }
   }
 
