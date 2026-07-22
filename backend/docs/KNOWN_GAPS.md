@@ -16,13 +16,13 @@ Also tracked as item 11 in [SCHEDULER_FIXES_NEEDED.md](SCHEDULER_FIXES_NEEDED.md
 
 ---
 
-### 2. `ProjectCreateTaskModal.jsx`'s sign-type rows are still hardcoded
+### ~~2. `ProjectCreateTaskModal.jsx`'s sign-type rows are still hardcoded~~ — STALE, ALREADY FIXED
 
-**Issue:** the 2026-06-28 sign-rows refactor split `ProjectTaskDetail` (task-scoped design-work-hours spec) from `ProjectSignRow` (project-scoped ERP sign register, QS-managed) — see [SIGN-ROWS-ARCHITECTURE.md](../../docs/SIGN-ROWS-ARCHITECTURE.md). The QS sign register UI (`/qs/projects/[id]`) was updated to use the real `ProjectSignRow` model, but `ProjectCreateTaskModal.jsx`'s `SIGN_TYPE_ROWS` constant predates that refactor and is still a hardcoded placeholder list, not fetched from real `ErpTSSignageDetail`/`ProjectSignRow` data.
+**Was:** the 2026-06-28 sign-rows refactor split `ProjectTaskDetail` (task-scoped design-work-hours spec) from `ProjectSignRow` (project-scoped ERP sign register, QS-managed) — see [SIGN-ROWS-ARCHITECTURE.md](../../docs/SIGN-ROWS-ARCHITECTURE.md). This item claimed `ProjectCreateTaskModal.jsx` still used a hardcoded `SIGN_TYPE_ROWS` placeholder list predating that refactor.
 
-**Recommended fix:** replace `SIGN_TYPE_ROWS` with a fetch against the project's real sign rows (same data source the QS register screen uses) so task creation reflects actual ERP sign types instead of a fixed placeholder list.
+**Verified 2026-07-22:** no longer true. `ProjectCreateTaskModal.jsx` has no `SIGN_TYPE_ROWS` constant at all — it builds its rows via `buildRowsFromSignRows(signRows)`, where `signRows` is a prop passed in from `TaskDetailsPage.jsx`, which fetches it from the real `GET /projects/:id/sign-rows` endpoint (the same QS-submitted `ProjectSignRow` data the QS register screen uses). This fix must have landed after this doc entry was written; the doc just never got updated to match.
 
-**Files:** `frontend/src/features/projects/components/ProjectCreateTaskModal.jsx` (or wherever `SIGN_TYPE_ROWS` currently lives)
+**Files:** `frontend/src/components/ProjectCreateTaskModal.jsx` — `buildRowsFromSignRows`; `frontend/src/views/TaskDetailsPage.jsx` — `signRows` fetch + prop wiring
 
 ---
 
