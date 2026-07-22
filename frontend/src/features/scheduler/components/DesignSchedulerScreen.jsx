@@ -2875,19 +2875,15 @@ export function DesignSchedulerScreen() {
                                             return (
                                               <div
                                                 key={`${taskId}-${designer.id}-${dayIndex}-ot-${idx}`}
-                                                draggable
-                                                onDragStart={(e) => {
-                                                  handleDragStart(e, taskId, designer.id, dayIndex.toString());
-                                                  setCurrentDay(dayIndex);
-                                                }}
-                                                onDragEnd={() => setDropIndicator(null)}
+                                                draggable={false}
+                                                onDragStart={(e) => e.preventDefault()}
                                                 onClick={(e) => {
                                                   e.stopPropagation();
                                                   router.push(taskViewPathForRecord({ id: getDesignListRoutingTaskId(taskInfo), designType: taskInfo.designType }, { from: FROM_DESIGN_SCHEDULER }));
                                                 }}
-                                                className={`h-[18px] min-w-0 overflow-hidden rounded flex items-center justify-between px-1.5 cursor-grab active:cursor-grabbing shadow-sm ${taskInfo.colorClass}`}
+                                                className={`h-[18px] min-w-0 overflow-hidden rounded flex items-center justify-between px-1.5 cursor-default shadow-sm ${taskInfo.colorClass}`}
                                                 style={{ width: taskWidth, maxWidth: taskWidth }}
-                                                title={`${getTaskLabel(taskInfo)} approved overtime (${formatHoursAsHm(taskInfo.approvedOvertimeHours || taskInfo.estimatedHours)})`}
+                                                title={`${getTaskLabel(taskInfo)} approved overtime (${formatHoursAsHm(taskInfo.approvedOvertimeHours || taskInfo.estimatedHours)}) — approved overtime cannot be moved from the day it was issued`}
                                               >
                                                 <div className="text-[8px] font-semibold truncate leading-none mr-1 select-none">{getTaskLabel(taskInfo)}</div>
                                                 <div className="text-[7px] font-bold opacity-70 bg-black/5 rounded px-1 shrink-0">{formatHoursAsHm(taskInfo.approvedOvertimeHours || taskInfo.estimatedHours)}</div>
