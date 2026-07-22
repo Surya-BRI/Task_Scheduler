@@ -381,8 +381,35 @@ export function CreateTaskModal({ open, onClose, onCreated, submissionDate, reco
               }}
             />
             {selectedFiles.length > 0 || linkAttachments.length > 0 ? (
-              <div className="mt-2 rounded-md border border-slate-200 bg-slate-50 px-2 py-2 text-xs text-slate-600">
-                {[...selectedFiles.map((file) => file.name), ...linkAttachments.map((item) => item.fileName)].join(', ')}
+              <div className="mt-2 flex flex-wrap gap-2">
+                {selectedFiles.map((file, idx) => (
+                  <div key={`file-${idx}`} className="flex items-center gap-1.5 rounded-md border border-slate-200 bg-slate-50 px-2 py-1 text-xs text-slate-600">
+                    <span className="max-w-[160px] truncate">{file.name}</span>
+                    <button
+                      type="button"
+                      onClick={() => setSelectedFiles((prev) => prev.filter((_, i) => i !== idx))}
+                      className="shrink-0 text-red-500 hover:text-red-700"
+                      aria-label={`Remove ${file.name}`}
+                    >
+                      ×
+                    </button>
+                  </div>
+                ))}
+                {linkAttachments.map((item, idx) => (
+                  <div key={`link-${idx}`} className="flex items-center gap-1.5 rounded-md border border-blue-200 bg-blue-50 px-2 py-1 text-xs">
+                    <a href={item.url} target="_blank" rel="noopener noreferrer" className="max-w-[160px] truncate text-blue-600 hover:underline">
+                      {item.fileName}
+                    </a>
+                    <button
+                      type="button"
+                      onClick={() => setLinkAttachments((prev) => prev.filter((_, i) => i !== idx))}
+                      className="shrink-0 text-red-500 hover:text-red-700"
+                      aria-label={`Remove ${item.fileName}`}
+                    >
+                      ×
+                    </button>
+                  </div>
+                ))}
               </div>
             ) : null}
           </div>
