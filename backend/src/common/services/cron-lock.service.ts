@@ -5,6 +5,9 @@ import { PrismaService } from '../../prisma/prisma.service';
 const APPLOCK_ACQUIRED = 0;
 const APPLOCK_GRANTED_AFTER_WAIT = 1;
 
+/** Returned by `withLock` when the lock is already held (in-process or by another instance). */
+export const LOCK_NOT_ACQUIRED = Symbol('LOCK_NOT_ACQUIRED');
+
 /**
  * Prevents overlapping cron runs across processes using SQL Server app locks,
  * with an in-process guard for same-instance overlap.
@@ -17,32 +20,49 @@ export class CronLockService {
   constructor(private readonly prisma: PrismaService) {}
 
   /**
-   * Attempt to acquire a cron lock. Returns a release function, or null if already held.
+   * Runs `fn` while holding a cross-process SQL Server app lock on `resource`,
+   * returning `fn`'s result, or `LOCK_NOT_ACQUIRED` if the lock is already held.
+   *
+   * Acquire, `fn`, and release all run inside one `$transaction` so they share
+   * the same physical DB connection — `sp_getapplock`'s `@LockOwner = 'Session'`
+   * ties the lock to whichever connection acquired it, and running acquire/release
+   * as separate pooled calls (the previous `tryAcquire()` + detached release
+   * closure design) let Prisma's connection pool hand them different physical
+   * connections, causing "lock not currently held" release failures.
    */
-  async tryAcquire(
+  async withLock<T>(
     resource: string,
-    options: { waitMs?: number } = {},
-  ): Promise<(() => Promise<void>) | null> {
+    fn: () => Promise<T>,
+    options: { waitMs?: number; timeoutMs?: number } = {},
+  ): Promise<T | typeof LOCK_NOT_ACQUIRED> {
     if (this.inProcessLocks.has(resource)) {
-      return null;
+      return LOCK_NOT_ACQUIRED;
     }
-
-    const waitMs = options.waitMs ?? 0;
-    const acquired = await this.trySqlAppLock(resource, waitMs);
-    if (!acquired) {
-      return null;
-    }
-
     this.inProcessLocks.add(resource);
-    return async () => {
+
+    try {
+      return await this.prisma.$transaction(
+        async (tx) => {
+          const acquired = await this.trySqlAppLock(tx, resource, options.waitMs ?? 0);
+          if (!acquired) {
+            return LOCK_NOT_ACQUIRED;
+          }
+          try {
+            return await fn();
+          } finally {
+            await this.releaseSqlAppLock(tx, resource);
+          }
+        },
+        { timeout: options.timeoutMs ?? 5 * 60_000 },
+      );
+    } finally {
       this.inProcessLocks.delete(resource);
-      await this.releaseSqlAppLock(resource);
-    };
+    }
   }
 
-  private async trySqlAppLock(resource: string, waitMs: number): Promise<boolean> {
+  private async trySqlAppLock(tx: Prisma.TransactionClient, resource: string, waitMs: number): Promise<boolean> {
     try {
-      const rows = await this.prisma.$queryRaw<Array<{ result: number }>>(Prisma.sql`
+      const rows = await tx.$queryRaw<Array<{ result: number }>>(Prisma.sql`
         DECLARE @res INT;
         EXEC @res = sp_getapplock
           @Resource = ${resource},
@@ -63,9 +83,9 @@ export class CronLockService {
     }
   }
 
-  private async releaseSqlAppLock(resource: string): Promise<void> {
+  private async releaseSqlAppLock(tx: Prisma.TransactionClient, resource: string): Promise<void> {
     try {
-      await this.prisma.$executeRaw(Prisma.sql`
+      await tx.$executeRaw(Prisma.sql`
         EXEC sp_releaseapplock @Resource = ${resource}, @LockOwner = 'Session';
       `);
     } catch (err) {

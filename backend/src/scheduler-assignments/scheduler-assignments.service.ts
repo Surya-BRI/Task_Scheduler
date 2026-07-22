@@ -19,7 +19,7 @@ import {
   effectiveWorkSessionSeconds,
   workedHoursFromSeconds,
 } from '../common/utils/task-work-session-time.util';
-import { CronLockService } from '../common/services/cron-lock.service';
+import { CronLockService, LOCK_NOT_ACQUIRED } from '../common/services/cron-lock.service';
 import { PrismaService } from '../prisma/prisma.service';
 import { ActivityLoggerService } from '../activities/activity-logger.service';
 import { ActivityAction } from '../activities/activity-events';
@@ -467,18 +467,16 @@ export class SchedulerAssignmentsService implements OnModuleInit {
   /** Daily ~03:15 UTC — prune old week-save audit snapshots. */
   @Cron('15 3 * * *')
   async purgeExpiredAssignmentHistoryCron(): Promise<void> {
-    const release = await this.cronLockService.tryAcquire(HISTORY_PURGE_CRON_LOCK);
-    if (!release) {
+    const result = await this.cronLockService.withLock(HISTORY_PURGE_CRON_LOCK, async () => {
+      try {
+        await this.purgeExpiredAssignmentHistory();
+      } catch (err) {
+        const detail = err instanceof Error ? err.message : String(err);
+        this.logger.error(`Scheduler history purge failed: ${detail}`);
+      }
+    });
+    if (result === LOCK_NOT_ACQUIRED) {
       this.logger.debug('Scheduler history purge skipped: lock held by another instance');
-      return;
-    }
-    try {
-      await this.purgeExpiredAssignmentHistory();
-    } catch (err) {
-      const detail = err instanceof Error ? err.message : String(err);
-      this.logger.error(`Scheduler history purge failed: ${detail}`);
-    } finally {
-      await release();
     }
   }
 
