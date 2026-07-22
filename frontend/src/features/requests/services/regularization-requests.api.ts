@@ -29,6 +29,16 @@ export function listRegularizationPendingApprovals() {
   return apiClient.get<RegularizationRequestDto[]>('/regularization-requests/pending-approvals');
 }
 
+export function listRegularizationTeamRequests(filters?: { status?: string; designerId?: string }) {
+  const params = new URLSearchParams();
+  if (filters?.status?.trim()) params.set('status', filters.status.trim());
+  if (filters?.designerId?.trim()) params.set('designerId', filters.designerId.trim());
+  const qs = params.toString();
+  return apiClient.get<RegularizationRequestDto[]>(
+    `/regularization-requests/team-requests${qs ? `?${qs}` : ''}`,
+  );
+}
+
 export function getRegularizationRequest(id: string) {
   return apiClient.get<RegularizationRequestDto>(`/regularization-requests/${encodeURIComponent(id)}`);
 }
@@ -48,13 +58,27 @@ export function createRegularizationRequest(data: {
   return apiClient.post<RegularizationRequestDto>('/regularization-requests', data);
 }
 
+/** Rejection requires `comments` (1–2000 chars). Approval may optionally send `remarks`. */
 export function reviewRegularizationRequest(
   id: string,
   data: { status: 'Approved' | 'Rejected'; remarks?: string; comments?: string },
 ) {
+  const payload =
+    data.status === 'Rejected'
+      ? {
+          status: 'Rejected' as const,
+          comments: String(data.comments ?? data.remarks ?? '').trim(),
+        }
+      : {
+          status: 'Approved' as const,
+          ...(String(data.remarks ?? '').trim()
+            ? { remarks: String(data.remarks).trim() }
+            : {}),
+        };
+
   return apiClient.post<RegularizationRequestDto>(
     `/regularization-requests/${encodeURIComponent(id)}/review`,
-    data,
+    payload,
   );
 }
 
