@@ -1,6 +1,24 @@
 import { io, type Socket } from 'socket.io-client';
 import { env } from './env';
 
+/**
+ * Fetches a short-lived Socket.IO auth token via the same-origin BFF route
+ * (which holds the httpOnly session cookie). Needed because the socket
+ * connects directly to the backend origin (NEXT_PUBLIC_WS_ORIGIN) when the
+ * frontend is deployed somewhere that can't proxy the WS upgrade same-origin
+ * (e.g. Vercel) — the session cookie itself never reaches that origin.
+ */
+async function fetchWsToken(): Promise<string | null> {
+  try {
+    const response = await fetch('/api/auth/ws-token', { credentials: 'include', cache: 'no-store' });
+    if (!response.ok) return null;
+    const data = await response.json();
+    return typeof data?.token === 'string' ? data.token : null;
+  } catch {
+    return null;
+  }
+}
+
 function getSocketOrigin(): string {
   if (env.apiBaseUrl.startsWith('/')) {
     const wsOrigin = process.env.NEXT_PUBLIC_WS_ORIGIN?.trim();
@@ -65,6 +83,11 @@ export function connectDashboardRealtime(handlers: DashboardRealtimeHandlers): (
       transports: ['websocket', 'polling'],
       reconnection: true,
       reconnectionAttempts: 10,
+      // Function form re-fetches a fresh token before every connection attempt
+      // (initial + each reconnect), since the token is short-lived (2m).
+      auth: (cb) => {
+        fetchWsToken().then((token) => cb(token ? { token } : {}));
+      },
     });
 
     socket.on('dashboard:refresh', (payload: DashboardRefreshPayload) => {

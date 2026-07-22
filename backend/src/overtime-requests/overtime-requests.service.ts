@@ -29,6 +29,10 @@ export type OvertimeTaskOption = {
 
 type OvertimeDbClient = PrismaService | Prisma.TransactionClient;
 
+// Mirrors SCHEDULER_RULES.md's MAX_DAILY_HOURS absolute ceiling (also enforced
+// independently in scheduler-assignments.service.ts for the regular-hours side).
+const MAX_DAILY_HOURS = 12;
+
 @Injectable()
 export class OvertimeRequestsService {
   private readonly logger = new Logger(OvertimeRequestsService.name);
@@ -163,6 +167,39 @@ export class OvertimeRequestsService {
     });
     if (!assignment) {
       throw new ForbiddenException('You can only submit overtime for tasks assigned to you on the selected date.');
+    }
+  }
+
+  /**
+   * The 8h/12h daily ceiling was previously only enforced as display math on the
+   * frontend (designerDashboardSync.js clamping the rendered blocks) — nothing
+   * rejected persisting regular scheduled hours + approved OT hours above 12h
+   * on a single day. Since only one OT request per designer per day is allowed
+   * (see validatePolicyRules), the check only needs this one request's hours.
+   */
+  private async assertDailyCeilingNotExceeded(
+    client: OvertimeDbClient,
+    designerId: string,
+    date: Date,
+    approvedHours: number,
+  ): Promise<void> {
+    const weekStartDate = this.getStartOfWeek(date);
+    const dayIndex = this.dayIndexForDate(date, weekStartDate);
+    const regularAssignments = await client.schedulerAssignment.findMany({
+      where: { designerId, weekStartDate, dayIndex },
+      select: { assignedHours: true },
+    });
+    const regularHours = regularAssignments.reduce(
+      (sum, row) => sum + Number.parseFloat(String(row.assignedHours ?? 0)),
+      0,
+    );
+
+    if (regularHours + approvedHours > MAX_DAILY_HOURS) {
+      throw new BadRequestException(
+        `Approving ${approvedHours}h overtime would bring the designer's total for this day to ` +
+          `${(regularHours + approvedHours).toFixed(2)}h, exceeding the ${MAX_DAILY_HOURS}h daily ceiling ` +
+          `(${regularHours}h already regularly scheduled).`,
+      );
     }
   }
 
@@ -1087,8 +1124,16 @@ export class OvertimeRequestsService {
       };
 
       if (dto.status === 'APPROVED_BY_MANAGER') {
-        updateData.approvedHours =
-          this.parseOptionalHoursLabel(dto.approvedHours) ?? request.totalHours;
+        const approvedHoursValue = this.parseOptionalHoursLabel(dto.approvedHours) ?? request.totalHours;
+        if (request.designerId && request.date) {
+          await this.assertDailyCeilingNotExceeded(
+            this.prisma,
+            request.designerId,
+            new Date(request.date),
+            Number.parseFloat(String(approvedHoursValue ?? 0)),
+          );
+        }
+        updateData.approvedHours = approvedHoursValue;
         updateData.approvedById = reviewerId;
         updateData.approvedAt = new Date();
       } else {

@@ -729,7 +729,10 @@ export class SchedulerAssignmentsService implements OnModuleInit {
     return rows;
   }
 
-  private validateAssignments(assignments: SaveSchedulerWeekDto['assignments']) {
+  private validateAssignments(
+    assignments: SaveSchedulerWeekDto['assignments'],
+    approvedOvertimeHoursByDesignerDay?: Map<string, number>,
+  ) {
     const dayTotals = new Map<string, number>();
     const duplicateKey = new Set<string>();
 
@@ -754,9 +757,12 @@ export class SchedulerAssignmentsService implements OnModuleInit {
       duplicateKey.add(uniq);
 
       const capacityKey = `${row.designerId}|${row.dayIndex}`;
+      const approvedOvertimeHours = approvedOvertimeHoursByDesignerDay?.get(capacityKey) ?? 0;
       const next = (dayTotals.get(capacityKey) ?? 0) + Number(row.assignedHours);
-      if (next > MAX_DAILY_HOURS) {
-        throw new BadRequestException(`Capacity exceeded (> ${MAX_DAILY_HOURS}h) for designer ${row.designerId} day ${row.dayIndex}`);
+      if (next + approvedOvertimeHours > MAX_DAILY_HOURS) {
+        throw new BadRequestException(
+          `Capacity exceeded (> ${MAX_DAILY_HOURS}h combined regular + approved overtime) for designer ${row.designerId} day ${row.dayIndex}`,
+        );
       }
       dayTotals.set(capacityKey, next);
     }
@@ -2512,7 +2518,7 @@ export class SchedulerAssignmentsService implements OnModuleInit {
         ...(dto.overflow ?? []).map((o) => o.taskId),
       ]));
 
-      const [schedulableUsers, tasks, previousRows, weekRows, approvedLeaves] = await Promise.all([
+      const [schedulableUsers, tasks, previousRows, weekRows, approvedLeaves, approvedOvertimeRequests] = await Promise.all([
         designerIds.length > 0
           ? tx.user.findMany({
               where: { id: { in: designerIds }, role: { name: { in: [UserRole.DESIGNER, UserRole.HOD] } } },
@@ -2561,11 +2567,32 @@ export class SchedulerAssignmentsService implements OnModuleInit {
             user: { select: { fullName: true } },
           },
         }),
+        designerIds.length > 0
+          ? tx.overtimeRequest.findMany({
+              where: {
+                designerId: { in: designerIds },
+                status: 'APPROVED',
+                date: { gte: weekStartDate, lte: weekEndDate },
+              },
+              select: { designerId: true, date: true, approvedHours: true },
+            })
+          : Promise.resolve([]),
       ]);
       const week = weekRows[0] ?? null;
 
+      const approvedOvertimeHoursByDesignerDay = new Map<string, number>();
+      for (const request of approvedOvertimeRequests) {
+        if (!request.designerId || !request.date) continue;
+        const dayIndex = this.dayIndexForDate(new Date(request.date), weekStartDate);
+        if (dayIndex < 0 || dayIndex > 6) continue;
+        const hours = this.toHours(request.approvedHours);
+        if (!hours) continue;
+        const key = `${request.designerId}|${dayIndex}`;
+        approvedOvertimeHoursByDesignerDay.set(key, (approvedOvertimeHoursByDesignerDay.get(key) ?? 0) + hours);
+      }
+
       const mergedAssignments = this.buildMergedAssignmentsForValidation(previousRows, dto);
-      this.validateAssignments(mergedAssignments);
+      this.validateAssignments(mergedAssignments, approvedOvertimeHoursByDesignerDay);
       const payloadHash = this.stablePayloadHash(mergedAssignments);
 
       if (schedulableUsers.length !== designerIds.length) {
