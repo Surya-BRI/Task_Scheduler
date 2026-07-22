@@ -77,6 +77,18 @@ Do **not** set `NEXT_PUBLIC_API_BASE_URL` to the full `https://task-scheduler.ap
 
 Backend `CORS_ORIGIN` must include the frontend URL when `NODE_ENV=production`.
 
+### Frontend on Vercel — realtime dashboard socket
+
+Vercel runs Next.js as serverless/edge functions, not a persistent Node server, so it **cannot** proxy the `/socket.io` WebSocket upgrade the way `next.config.ts`'s `rewrites()` does for a PM2-hosted frontend (that path only works under `next start`). On Vercel, the socket must connect directly, cross-origin, to the real backend instead:
+
+| Variable | Value |
+|----------|-------|
+| `NEXT_PUBLIC_WS_ORIGIN` | `https://task-scheduler.app-brisigns.com` (the real backend origin — **not** the Vercel URL) |
+
+Backend `CORS_ORIGIN` must also include the Vercel frontend URL(s), comma-separated alongside any other allowed origins (`resolveCorsOrigins` splits on `,`) — this covers both the HTTP CORS in `main.ts` and the Socket.IO CORS in `SocketIoAdapter`.
+
+Auth for this cross-origin socket does **not** rely on the httpOnly session cookie (it lives on the frontend's own host and would never reach the backend's origin). Instead, `frontend/src/lib/realtime.ts` calls the same-origin BFF route `GET /api/auth/ws-token` (which _does_ have the cookie) before every connection/reconnection attempt; that route exchanges it for a short-lived (2 min) token from the backend's `GET /auth/ws-token` and passes it via the socket's `auth: { token }` handshake. No `NEXT_PUBLIC_WS_ORIGIN` means the socket falls back to same-origin (correct for the PM2-hosted case, where the cookie-based rewrite proxy already works and this token exchange is unnecessary but harmless).
+
 ## 5. DB Check Constraint (one-time / when status changes)
 Task status constraint must include:
 - `PENDING`

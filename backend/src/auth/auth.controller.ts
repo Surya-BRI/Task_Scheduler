@@ -71,4 +71,16 @@ export class AuthController {
   getMe(@CurrentUser() user: JwtPayload) {
     return this.authService.getMe(user.sub);
   }
+
+  /**
+   * Mints a short-lived token for the dashboard Socket.IO handshake. Called by the
+   * frontend's own same-origin BFF route (which holds the httpOnly session cookie),
+   * not directly by the browser — see frontend/src/app/api/auth/ws-token/route.ts.
+   */
+  @Get('ws-token')
+  @UseGuards(JwtAuthGuard)
+  async getWsToken(@CurrentUser() user: JwtPayload) {
+    const token = await this.authService.mintSocketToken(user.sub, user.email, user.role);
+    return { token };
+  }
 }
