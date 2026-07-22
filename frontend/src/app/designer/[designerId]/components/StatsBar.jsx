@@ -1,13 +1,11 @@
 "use client";
-import { useRouter } from "next/navigation";
 import { formatHoursAsHm } from "@/lib/format-duration";
 
 function StatPulse({ widthClass = "w-10" }) {
   return <span className={`inline-block h-3 ${widthClass} rounded bg-slate-200 animate-pulse align-middle`} aria-hidden="true" />;
 }
 
-export default function StatsBar({ stats, isDesignerMode = true, isHOD = false, isViewingOther = false, isScheduleLoading = false }) {
-  const router = useRouter();
+export default function StatsBar({ stats, isScheduleLoading = false }) {
   const {
     workLoad,
     workTill,
@@ -74,26 +72,13 @@ export default function StatsBar({ stats, isDesignerMode = true, isHOD = false, 
 
       <div className="h-4 w-px bg-slate-200 hidden sm:block" />
 
-      {/* Pending Regularization */}
-      {isDesignerMode ? (
-        <button
-          type="button"
-          onClick={() => router.push(`/designer/requests?tab=regularization`)}
-          className="flex items-center gap-1.5 hover:bg-slate-100 p-1 -m-1 rounded cursor-pointer transition-colors text-left"
-        >
-          <span className="inline-block h-2.5 w-2.5 rounded-full bg-orange-400 shrink-0" />
-          <span className="font-semibold text-slate-700">
-            Pending Regularization: {pendingRegularization}
-          </span>
-        </button>
-      ) : (
-        <div className="flex items-center gap-1.5 p-1 -m-1">
-          <span className="inline-block h-2.5 w-2.5 rounded-full bg-orange-400 shrink-0" />
-          <span className="font-semibold text-slate-700">
-            Pending Regularization: {pendingRegularization}
-          </span>
-        </div>
-      )}
+      {/* Pending Regularization — display only, not navigable */}
+      <div className="flex items-center gap-1.5">
+        <span className="inline-block h-2.5 w-2.5 rounded-full bg-orange-400 shrink-0" />
+        <span className="font-semibold text-slate-700">
+          Pending Regularization: {pendingRegularization}
+        </span>
+      </div>
     </div>
   );
 }

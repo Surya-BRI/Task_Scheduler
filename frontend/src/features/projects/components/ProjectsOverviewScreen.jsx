@@ -166,24 +166,26 @@ function InboxCard({ inbox, fmt, onNavigate, onRefresh, cardState, errorMessage,
   const handleReject = async () => {
     if (!rejectTarget) return;
     if (!isHodActionable(rejectTarget)) return;
-    if (!rejectRemarks.trim()) {
-      setActionError('Remarks are required when rejecting');
+    const trimmedRemarks = rejectRemarks.trim();
+    if (!trimmedRemarks || trimmedRemarks.length > 2000) {
+      setActionError('Remarks are required when rejecting (1–2000 characters)');
       return;
     }
     setActionError('');
     setActingId(rejectTarget.id);
     try {
       if (rejectTarget.requestType === 'leave') {
-        await reviewLeaveRequest(rejectTarget.id, { status: 'REJECTED', remarks: rejectRemarks.trim() });
+        await reviewLeaveRequest(rejectTarget.id, { status: 'REJECTED', remarks: trimmedRemarks });
       } else if (rejectTarget.requestType === 'overtime') {
         await reviewOvertimeRequest(rejectTarget.id, {
           status: 'REJECTED_BY_MANAGER',
-          comments: rejectRemarks.trim(),
+          comments: trimmedRemarks,
         });
       } else if (rejectTarget.requestType === 'regularization') {
+        // Backend ReviewRegularizationRequestDto requires `comments` when status is Rejected.
         await reviewRegularizationRequest(rejectTarget.id, {
           status: 'Rejected',
-          remarks: rejectRemarks.trim(),
+          comments: trimmedRemarks,
         });
       }
       setRejectTarget(null);
@@ -467,6 +469,7 @@ function InboxCard({ inbox, fmt, onNavigate, onRefresh, cardState, errorMessage,
           value={rejectRemarks}
           onChange={(e) => setRejectRemarks(e.target.value)}
           rows={3}
+          maxLength={2000}
           placeholder="Reason for rejection (required)"
           className={UI_INPUT_CLASS}
         />

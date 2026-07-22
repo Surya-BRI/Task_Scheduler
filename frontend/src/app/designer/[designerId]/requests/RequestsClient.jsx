@@ -34,7 +34,7 @@ import {
   createRegularizationRequest,
   getRegularizationRequest,
   listRegularizationTaskOptions,
-  listRegularizationPendingApprovals,
+  listRegularizationTeamRequests,
   listRegularizationRequests,
   reviewRegularizationRequest,
 } from "@/features/requests/services/regularization-requests.api";
@@ -417,7 +417,8 @@ export default function RequestsClient() {
     setHodInboxLoading(true);
     setHodInboxError(null);
     try {
-      const rows = await listRegularizationPendingApprovals();
+      // Team list includes Pending/Approved/Rejected so reviewed rows stay visible after refresh.
+      const rows = await listRegularizationTeamRequests();
       setHodPendingRequests(Array.isArray(rows) ? rows : []);
     } catch (e) {
       setHodPendingRequests([]);
@@ -783,16 +784,24 @@ export default function RequestsClient() {
 
   const submitReview = async () => {
     if (!reviewTarget?.id || !reviewTarget._reviewAction) return;
-    if (reviewTarget._reviewAction === "Rejected" && !reviewRemarks.trim()) {
-      toast.warning("Rejection remarks are required.");
-      return;
+    const trimmedRemarks = reviewRemarks.trim();
+    if (reviewTarget._reviewAction === "Rejected") {
+      if (!trimmedRemarks || trimmedRemarks.length > 2000) {
+        toast.warning("Rejection remarks are required (1–2000 characters).");
+        return;
+      }
     }
     setReviewSubmitting(true);
     try {
-      await reviewRegularizationRequest(reviewTarget.id, {
-        status: reviewTarget._reviewAction,
-        remarks: reviewRemarks.trim() || undefined,
-      });
+      // Backend ReviewRegularizationRequestDto requires `comments` when status is Rejected.
+      const payload =
+        reviewTarget._reviewAction === "Rejected"
+          ? { status: "Rejected", comments: trimmedRemarks }
+          : {
+              status: "Approved",
+              ...(trimmedRemarks ? { remarks: trimmedRemarks } : {}),
+            };
+      await reviewRegularizationRequest(reviewTarget.id, payload);
       setReviewTarget(null);
       setReviewRemarks("");
       await Promise.all([loadRegularization(), loadHodInbox()]);
@@ -1001,6 +1010,11 @@ export default function RequestsClient() {
     openOtReviewModal(request, "REJECTED_BY_MANAGER");
   };
 
+  const hodPendingRegularizationCount = useMemo(
+    () => hodPendingRequests.filter((req) => req.status === "Pending").length,
+    [hodPendingRequests],
+  );
+
   const unifiedRegularizationRows = useMemo(() => {
     const map = new Map();
     if (isHOD) {
@@ -1009,8 +1023,8 @@ export default function RequestsClient() {
         map.set(req.id, {
           ...req,
           _requester: req.designerName || "Designer",
-          _needsAction: true,
-          _source: "team-pending",
+          _needsAction: req.status === "Pending",
+          _source: "team",
         });
       }
     }
@@ -1179,9 +1193,9 @@ export default function RequestsClient() {
             {hodInboxError ? (
               <div className="ui-alert-error">{hodInboxError}</div>
             ) : null}
-            {isHOD && hodPendingRequests.length > 0 && !activeDesignerId ? (
+            {isHOD && hodPendingRegularizationCount > 0 && !activeDesignerId ? (
               <div className="ui-alert-info">
-                {hodPendingRequests.length} pending regularization request{hodPendingRequests.length === 1 ? "" : "s"} awaiting your review. Select a designer to view full context, or approve directly from the pending rows below.
+                {hodPendingRegularizationCount} pending regularization request{hodPendingRegularizationCount === 1 ? "" : "s"} awaiting your review. Select a designer to view full context, or approve directly from the pending rows below.
               </div>
             ) : null}
             {regularizationLoading ? (
@@ -1647,6 +1661,7 @@ export default function RequestsClient() {
           value={reviewRemarks}
           onChange={(e) => setReviewRemarks(e.target.value)}
           rows={3}
+          maxLength={2000}
           className={UI_INPUT_CLASS}
           placeholder={reviewTarget?._reviewAction === "Rejected" ? "Provide reason for rejection…" : "Optional approval note…"}
         />

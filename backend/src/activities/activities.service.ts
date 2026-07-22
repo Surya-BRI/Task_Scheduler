@@ -1,7 +1,7 @@
 import { ForbiddenException, Injectable } from '@nestjs/common';
 import { Prisma } from '@prisma/client';
 import { PrismaService } from '../prisma/prisma.service';
-import { ActivityAction } from './activity-events';
+import { ActivityAction, PROJECT_HISTORY_EXCLUDED_ACTIONS } from './activity-events';
 import { UserRole } from '../common/constants/roles.enum';
 
 const MILESTONE_ACTIONS = new Set([
@@ -275,8 +275,13 @@ export class ActivitiesService {
   private async queryActivities(input: FindInput) {
     const limit = Math.min(Math.max(input.limit ?? 30, 1), 100);
     const cursorDate = input.cursor ? new Date(input.cursor) : null;
+    const isProjectOrTaskHistory = Boolean(input.projectId || input.taskId);
+    const excludedActions: string[] = [ActivityAction.CHATTER_MENTION];
+    if (isProjectOrTaskHistory) {
+      excludedActions.push(...PROJECT_HISTORY_EXCLUDED_ACTIONS);
+    }
     const where: Record<string, unknown> = {
-      action: { not: ActivityAction.CHATTER_MENTION },
+      action: { notIn: excludedActions },
     };
     if (cursorDate && !Number.isNaN(cursorDate.getTime())) {
       where.createdAt = { lt: cursorDate };
