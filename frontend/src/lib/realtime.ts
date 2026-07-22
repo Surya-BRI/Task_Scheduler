@@ -78,7 +78,12 @@ export function connectDashboardRealtime(handlers: DashboardRealtimeHandlers): (
   try {
     socket = io(`${getSocketOrigin()}/dashboard`, {
       path: '/socket.io',
-      addTrailingSlash: false,
+      // true (the library default) so requests hit `/socket.io/` — the backend's
+      // nginx reverse proxy 301-redirects the bare `/socket.io` path to add the
+      // slash, and browsers refuse to follow a redirect during a WS handshake.
+      // Safe for the same-origin/PM2 rewrite path too: next.config.ts's
+      // skipTrailingSlashRedirect already makes Next.js indifferent to either form.
+      addTrailingSlash: true,
       withCredentials: true,
       transports: ['websocket', 'polling'],
       reconnection: true,
