@@ -2453,10 +2453,13 @@ export function DesignSchedulerScreen() {
         const dayTasks = (schedules[designerId] || {})[dayIndex.toString()] || [];
         return dayTasks.reduce((acc, taskId) => acc + getOvertimeTaskHours(tasks[taskId]), 0);
     };
+    /** Regular + OT (+ leave/reg as regular) — used for overload (past normal 8h day). */
+    const getDayTotalHours = (designerId, dayIndex) =>
+        sumTaskTotalHours(tasks, (schedules[designerId] || {})[dayIndex.toString()] || []);
     const getDesignerBookedHours = (designerId) =>
         sumDesignerWeekWorkload(tasks, schedules[designerId] || {});
     const isDesignerOverloaded = (designerId) => {
-        return WEEKDAY_INDICES.some((dayIndex) => getDayHours(designerId, dayIndex) > DAILY_CAPACITY);
+        return WEEKDAY_INDICES.some((dayIndex) => getDayTotalHours(designerId, dayIndex) > DAILY_CAPACITY);
     };
     const totalScheduledHours = useMemo(() => designers.reduce((acc, designer) => {
         return acc + sumDesignerWeekWorkload(tasks, schedules[designer.id] || {});
@@ -2464,8 +2467,8 @@ export function DesignSchedulerScreen() {
     const totalDesignersCount = designers.length;
     const overloadedCount = useMemo(() => designers.filter((designer) => WEEKDAY_INDICES.some((dayIndex) => {
         const dayTasks = (schedules[designer.id] || {})[dayIndex.toString()] || [];
-        return sumTaskHours(tasks, dayTasks) > DAILY_CAPACITY;
-    })).length, [schedules, tasks]);
+        return sumTaskTotalHours(tasks, dayTasks) > DAILY_CAPACITY;
+    })).length, [schedules, tasks, designers]);
     const totalScheduledTaskCount = useMemo(() => Object.values(schedules).reduce((acc, curr) => acc + Object.values(curr).flat().length, 0), [schedules]);
 
     const openDesignerDashboard = useCallback((designerId) => {
@@ -2771,8 +2774,9 @@ export function DesignSchedulerScreen() {
                     const isPastDay = !isWeekend && isPastDayIndex(dayIndex, currentDate);
                     const dayHours = getDayHours(designer.id, dayIndex);
                     const overtimeHours = getDayOvertimeHours(designer.id, dayIndex);
-                    const isDayOverloaded = dayHours > DAILY_CAPACITY;
-                    const gravityPct = Math.min((dayHours / DAILY_CAPACITY) * 100, 100);
+                    const dayTotalHours = dayHours + overtimeHours;
+                    const isDayOverloaded = dayTotalHours > DAILY_CAPACITY;
+                    const gravityPct = Math.min((dayTotalHours / DAILY_CAPACITY) * 100, 100);
                     return (<div key={dayIndex} className={`border-r relative flex flex-col transition-colors overflow-hidden
                                 ${isWeekend
                             ? 'bg-slate-100 border-slate-200 cursor-not-allowed'
@@ -2782,8 +2786,8 @@ export function DesignSchedulerScreen() {
                                 ? 'border-slate-100 bg-red-50/40'
                                 : 'border-slate-100 hover:bg-blue-50/30'}
                               `} onDragOver={isWeekend ? undefined : handleDragOver} onDrop={isWeekend ? undefined : (e) => { void handleDropToDay(e, designer.id, dayIndex); }}>
-                              {/* Gravity fill bar (background) — weekdays only */}
-                              {!isWeekend && dayHours > 0 && (<div className={`absolute bottom-0 left-0 right-0 transition-all opacity-20 ${isDayOverloaded ? 'bg-red-400' : 'bg-blue-400'}`} style={{ height: `${gravityPct}%` }}/>)}
+                              {/* Gravity fill bar (background) — weekdays only; fill vs total booked */}
+                              {!isWeekend && dayTotalHours > 0 && (<div className={`absolute bottom-0 left-0 right-0 transition-all opacity-20 ${isDayOverloaded ? 'bg-red-400' : 'bg-blue-400'}`} style={{ height: `${gravityPct}%` }}/>)}
                               {/* Tasks list: leave/reg, work, and OT stay on separate strips. */}
                               <div className="flex-1 min-h-0 p-1 relative z-10">
                                 {isWeekend ? (<div className="w-full h-full flex items-center justify-center">

@@ -24,12 +24,18 @@ import {
   parseRequestedHoursLabel,
 } from "@/lib/overtime-constants";
 import { apiClient } from "@/lib/api-client";
-import { getTaskRequiredHours } from "@/lib/task-hours";
 import {
   COMPLETED_TASK_STATUSES,
   computeDesignerTaskStats,
   normalizeTaskStatus,
 } from "@/features/scheduler/utils/designer-task-stats.util";
+import { listSchedulerAssignmentsForWeek } from "@/features/scheduler/services/scheduler-assignments.api";
+import {
+  buildLiveScheduleFromAssignments,
+  formatWorkTillLabel,
+} from "@/features/scheduler/utils/live-schedule-from-assignments";
+import { formatLocalYyyyMmDd } from "@/features/scheduler/utils/schedulerNavigationState";
+import { getWeekDays } from "@/features/scheduler/utils/schedulerWeek";
 import {
   createRegularizationRequest,
   getRegularizationRequest,
@@ -122,12 +128,14 @@ function toInitials(name) {
   return (parts[0][0] + parts[parts.length - 1][0]).toUpperCase();
 }
 
-function taskHours(task) {
-  return getTaskRequiredHours(task);
-}
-
 function computeStatsFromTasks(tasks) {
-  if (!Array.isArray(tasks) || tasks.length === 0) return null;
+  if (!Array.isArray(tasks) || tasks.length === 0) {
+    return {
+      monthlyTaskCount: 0,
+      weeklyCompletedCount: 0,
+      score: 0,
+    };
+  }
 
   const now = new Date();
   // Monthly Closed + Tasks Closed This Week must match DesignerDashboard.
@@ -139,31 +147,11 @@ function computeStatsFromTasks(tasks) {
     viewWeekStart: weekStart,
     viewWeekEnd: weekEnd,
   });
-  const onHold = tasks.filter((t) => normalizeTaskStatus(t.status) === "ON_HOLD");
   const completed = tasks.filter((t) => COMPLETED_TASK_STATUSES.has(normalizeTaskStatus(t.status)));
-  const active = tasks.filter((t) => {
-    const status = normalizeTaskStatus(t.status);
-    return status && status !== "ON_HOLD" && !COMPLETED_TASK_STATUSES.has(status);
-  });
-
-  const workLoadHours = [...active, ...onHold].reduce((acc, t) => acc + taskHours(t), 0);
-  const upcomingDeadline = active
-    .filter((t) => t.dueDate)
-    .map((t) => new Date(t.dueDate))
-    .filter((d) => !Number.isNaN(d.getTime()) && d > now)
-    .sort((a, b) => a - b)[0] ?? null;
-
   const total = tasks.length || 1;
   const score = Math.round((completed.length / total) * 100);
 
   return {
-    workLoad: { tasks: active.length + onHold.length, hours: workLoadHours },
-    workTill: upcomingDeadline
-      ? {
-          label: upcomingDeadline.toLocaleDateString("en-US", { weekday: "long", month: "short", day: "numeric" }),
-          hours: 0,
-        }
-      : { label: "-", hours: 0 },
     monthlyTaskCount: taskStats.monthlyCompletedCount,
     weeklyCompletedCount: taskStats.weeklyCompletedCount,
     score,
@@ -576,27 +564,37 @@ export default function RequestsClient() {
       return;
     }
     try {
-      const tasksRes = await apiClient.get(`/tasks?limit=200&assigneeId=${encodeURIComponent(designerId)}`);
+      const weekDates = getWeekDays(new Date());
+      const weekStartStr = formatLocalYyyyMmDd(weekDates[0]);
+      const [tasksRes, assignments] = await Promise.all([
+        apiClient.get(`/tasks?limit=200&assigneeId=${encodeURIComponent(designerId)}`),
+        listSchedulerAssignmentsForWeek(weekStartStr, designerId).catch(() => []),
+      ]);
       const taskRows = Array.isArray(tasksRes)
         ? tasksRes
         : Array.isArray(tasksRes?.data)
           ? tasksRes.data
           : [];
-      const computed = computeStatsFromTasks(taskRows);
-      if (!computed) {
-        setStats((prev) => ({
-          ...prev,
-          workLoad: DEFAULT_STATS.workLoad,
-          workTill: DEFAULT_STATS.workTill,
-          monthlyTaskCount: DEFAULT_STATS.monthlyTaskCount,
-          weeklyCompletedCount: DEFAULT_STATS.weeklyCompletedCount,
-          score: DEFAULT_STATS.score,
-        }));
-        return;
-      }
+      const taskStats = computeStatsFromTasks(taskRows);
+      const rows = Array.isArray(assignments) ? assignments : [];
+      const snapshot = buildLiveScheduleFromAssignments(rows, taskRows);
+      const workTillLabel =
+        snapshot.stats.lastWorkDayIndex != null
+          ? formatWorkTillLabel(weekDates[snapshot.stats.lastWorkDayIndex])
+          : null;
+
       setStats((prev) => ({
         ...prev,
-        ...computed,
+        workLoad: {
+          tasks: snapshot.stats.tasks ?? 0,
+          hours: snapshot.stats.hours ?? 0,
+        },
+        workTill: workTillLabel
+          ? { label: workTillLabel, hours: snapshot.stats.lastWorkDayHours ?? 0 }
+          : DEFAULT_STATS.workTill,
+        monthlyTaskCount: taskStats.monthlyTaskCount,
+        weeklyCompletedCount: taskStats.weeklyCompletedCount,
+        score: taskStats.score,
       }));
     } catch {
       setStats((prev) => ({
