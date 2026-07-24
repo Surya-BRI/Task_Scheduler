@@ -16,7 +16,18 @@ import {
 import {
   TIMER_SYNC_EVENT,
   TIMER_REMOTE_PAUSE_EVENT,
+  TIMER_LIFECYCLE_EVENT,
   findRunningTimerTaskId,
+  readTimerState,
+  writeTimerState,
+  readPauseLog,
+  appendPauseLog,
+  clearPauseLog,
+  writePauseLog,
+  timerStorageKey,
+  lifecycleStorageKey,
+  writeTaskLifecycleSync,
+  isTimerLockedStatus,
 } from './design-list-task-timer-storage'
 import { useActiveRunningTaskContext } from './ActiveRunningTaskProvider'
 import { ACTIVE_TIMER_BLOCKED_MESSAGE } from './use-active-running-task-id'
@@ -43,61 +54,24 @@ function saveTimerStateToDb(taskId, accumulatedSeconds, pauseLog, runStartedAt, 
     })
 }
 
-const TIMER_SYNC_EVENT_LEGACY = TIMER_SYNC_EVENT
-
-function storageKey(taskId) {
-  return `design_list_task_timer_${taskId}`
-}
-
-function pauseStorageKey(taskId) {
-  return `design_list_task_pauses_${taskId}`
-}
-
 function readPersisted(taskId) {
-  if (typeof window === 'undefined') return { accumulatedSeconds: 0, runStartAt: null }
-  try {
-    const raw = sessionStorage.getItem(storageKey(taskId))
-    if (!raw) return { accumulatedSeconds: 0, runStartAt: null }
-    const parsed = JSON.parse(raw)
-    const accumulatedSeconds =
-      typeof parsed.accumulatedSeconds === 'number' ? parsed.accumulatedSeconds : 0
-    const runStartAt = typeof parsed.runStartAt === 'number' ? parsed.runStartAt : null
-    return { accumulatedSeconds, runStartAt }
-  } catch {
-    return { accumulatedSeconds: 0, runStartAt: null }
-  }
+  return readTimerState(taskId)
 }
 
 function writePersisted(taskId, accumulatedSeconds, runStartAt) {
-  if (typeof window === 'undefined') return
-  sessionStorage.setItem(storageKey(taskId), JSON.stringify({ accumulatedSeconds, runStartAt }))
-  window.dispatchEvent(
-    new CustomEvent(TIMER_SYNC_EVENT_LEGACY, {
-      detail: { taskId, accumulatedSeconds, runStartAt },
-    }),
-  )
+  writeTimerState(taskId, accumulatedSeconds, runStartAt)
 }
 
 function readPersistedPauses(taskId) {
-  if (typeof window === 'undefined') return []
-  try {
-    const raw = sessionStorage.getItem(pauseStorageKey(taskId))
-    return raw ? JSON.parse(raw) : []
-  } catch {
-    return []
-  }
+  return readPauseLog(taskId)
 }
 
 function appendPause(taskId, reason, durationSeconds) {
-  if (typeof window === 'undefined') return
-  const existing = readPersistedPauses(taskId)
-  existing.push({ reason, durationSeconds })
-  sessionStorage.setItem(pauseStorageKey(taskId), JSON.stringify(existing))
+  appendPauseLog(taskId, reason, durationSeconds)
 }
 
 function clearPersistedPauses(taskId) {
-  if (typeof window === 'undefined') return
-  sessionStorage.removeItem(pauseStorageKey(taskId))
+  clearPauseLog(taskId)
 }
 
 const FIVE_MIN_SECONDS = 5 * 60
@@ -177,7 +151,7 @@ export function ProjectTaskTimer({
     'System issue',
   ]
 
-  const isLocked = !['DESIGN_PLANNED', 'IN_PROGRESS', 'REWORK'].includes(taskStatus)
+  const isLocked = isTimerLockedStatus(taskStatus)
   const playPauseLocked = isLocked || timerHandedOff
   const isRunning = runStartAt !== null && !playPauseLocked
 
@@ -191,7 +165,7 @@ export function ProjectTaskTimer({
 
   useEffect(() => {
     setTimerHandedOff(false)
-    const locked = !['DESIGN_PLANNED', 'IN_PROGRESS', 'REWORK'].includes(taskStatus)
+    const locked = isTimerLockedStatus(taskStatus)
 
     if (locked) {
       // For submitted/locked tasks show the last submitted session duration
@@ -237,7 +211,7 @@ export function ProjectTaskTimer({
         if (restoredPauses.length > 0) {
           const existing = readPersistedPauses(taskId)
           if (existing.length === 0) {
-            sessionStorage.setItem(pauseStorageKey(taskId), JSON.stringify(restoredPauses))
+            writePauseLog(taskId, restoredPauses)
           }
         }
       })
@@ -286,20 +260,51 @@ export function ProjectTaskTimer({
       }
     }
 
-    function onStorage(event) {
-      if (event.key !== storageKey(taskId)) return
+    function onLifecycle(event) {
+      if (event?.detail?.taskId !== taskId) return
       syncFromStorage()
+      const nextStatus = event.detail?.status
+      if (isTimerLockedStatus(nextStatus)) {
+        setRunStartAt(null)
+        setShowPauseDropdown(false)
+        setShowCompleteModal(false)
+        setShowSubmitConfirm(false)
+      }
+      onStatusChange?.()
     }
 
-    window.addEventListener(TIMER_SYNC_EVENT_LEGACY, onTimerSync)
+    function onStorage(event) {
+      if (!event.key) return
+      if (event.key === timerStorageKey(taskId) || event.key === lifecycleStorageKey(taskId)) {
+        syncFromStorage()
+        if (event.key === lifecycleStorageKey(taskId)) {
+          try {
+            const parsed = event.newValue ? JSON.parse(event.newValue) : null
+            if (isTimerLockedStatus(parsed?.status)) {
+              setRunStartAt(null)
+              setShowPauseDropdown(false)
+              setShowCompleteModal(false)
+              setShowSubmitConfirm(false)
+            }
+          } catch {
+            // ignore
+          }
+          onStatusChange?.()
+        }
+      }
+    }
+
+    window.addEventListener(TIMER_SYNC_EVENT, onTimerSync)
     window.addEventListener(TIMER_REMOTE_PAUSE_EVENT, onRemotePause)
+    window.addEventListener(TIMER_LIFECYCLE_EVENT, onLifecycle)
     window.addEventListener('storage', onStorage)
     return () => {
-      window.removeEventListener(TIMER_SYNC_EVENT_LEGACY, onTimerSync)
+      window.removeEventListener(TIMER_SYNC_EVENT, onTimerSync)
       window.removeEventListener(TIMER_REMOTE_PAUSE_EVENT, onRemotePause)
+      window.removeEventListener(TIMER_LIFECYCLE_EVENT, onLifecycle)
       window.removeEventListener('storage', onStorage)
     }
-  }, [taskId])
+  }, [taskId, onStatusChange])
 
   useEffect(() => {
     if (!runStartAt || playPauseLocked) return undefined
@@ -553,9 +558,10 @@ export function ProjectTaskTimer({
     setSubmitting(true)
     try {
       await apiClient.post(`/tasks/${taskId}/submit-work`, formData)
-      // Reset timer + clear pause log
+      // Reset timer + clear pause log and broadcast so other tabs stop + refresh
       writePersisted(taskId, 0, null)
       clearPersistedPauses(taskId)
+      writeTaskLifecycleSync(taskId, { status: 'DESIGN_COMPLETED', action: 'submit' })
       setAccumulatedSeconds(0)
       setRunStartAt(null)
       setShowPauseDropdown(false)
@@ -566,6 +572,7 @@ export function ProjectTaskTimer({
       setShowSubmitConfirm(false)
       setShowCompleteModal(false)
       onSubmitComplete?.()
+      onStatusChange?.()
     } catch (err) {
       alert(err?.message || 'Submission failed. Please try again.')
     } finally {

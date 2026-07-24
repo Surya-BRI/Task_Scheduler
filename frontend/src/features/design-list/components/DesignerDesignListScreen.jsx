@@ -2,14 +2,12 @@
 
 import { useEffect, useMemo, useRef, useState } from "react";
 import { useRouter } from "next/navigation";
-import { Check, ChevronDown, Clock, Filter, GalleryVerticalEnd, LayoutGrid, List, Pause, Play, Search, Square } from "lucide-react";
-import { toast } from "sonner";
+import { Check, ChevronDown, Clock, Filter, GalleryVerticalEnd, LayoutGrid, List, Search } from "lucide-react";
 import { Navbar } from "@/components/Navbar";
 import { ProjectTaskTimer } from "@/components/ProjectTaskTimer";
-import { ActiveRunningTaskProvider, useActiveRunningTaskContext } from "@/components/ActiveRunningTaskProvider";
-import { ACTIVE_TIMER_BLOCKED_MESSAGE } from "@/components/use-active-running-task-id";
+import { ActiveRunningTaskProvider } from "@/components/ActiveRunningTaskProvider";
 import { getSession } from "@/lib/mock-auth";
-import { FROM_DESIGNER_QUEUE, taskSummaryPath, taskViewPathForRecord } from "@/lib/design-list-routes";
+import { FROM_DESIGNER_QUEUE, taskViewPathForRecord } from "@/lib/design-list-routes";
 import { apiClient } from "@/lib/api-client";
 import { DESIGNER_BOARD_COLUMNS, DESIGNER_QUEUE_FILTER_STATUSES, getStatusLabel, mapTaskToDesignRow, matchDateRange } from "../task-view-model";
 
@@ -215,9 +213,55 @@ const Table = ({ data }) => {
 
 const Board = ({ data }) => {
   const router = useRouter();
-  const { activeRunningTaskId } = useActiveRunningTaskContext() ?? {};
   const columns = DESIGNER_BOARD_COLUMNS;
-  return <div className="flex min-h-0 flex-1 items-start gap-4 overflow-auto px-4 pb-6 sm:px-6">{columns.map((col) => <div key={col.status} className="flex-1 min-w-[280px] flex flex-col gap-4"><div className={`sticky top-0 z-10 px-4 py-2 rounded-xl flex items-center gap-2 font-semibold shadow-sm ${getStatusColor(col.status)}`}><span className={`w-2 h-2 rounded-full ${getStatusDot(col.status)}`} />{col.title}</div><div className="flex flex-col gap-3">{data.filter((d) => d.status === col.status).map((item) => <div key={item.id} onClick={() => router.push(taskDetailPath(item))} className={`p-2.5 min-h-[84px] rounded-lg border flex flex-col cursor-pointer hover:ring-1 hover:ring-blue-300/60 ${getStatusColor(item.status).replace("text-", "text-slate-900 border-").split(" ")[0]} bg-opacity-50`}><div className="text-[10px] border-b border-slate-200/50 pb-1 mb-1 whitespace-nowrap overflow-hidden text-ellipsis"><span className="font-semibold text-slate-900">{item.opNo}</span> | <span className="text-slate-700">{item.projectNo}</span>{item.typeOfDesign && item.typeOfDesign !== "—" ? <> | <span className="text-slate-600">{item.typeOfDesign}</span></> : null}</div><div className="text-xs font-medium mb-1.5 text-slate-800 truncate leading-tight">{item.businessUnit} - {item.name}</div><div className="flex items-center justify-between mt-auto gap-1"><div className={`flex items-center gap-1 text-[9px] font-semibold uppercase tracking-wider ${item.agingDays > 20 ? "text-red-500" : "text-slate-600"}`}><div className={`p-0.5 rounded flex shrink-0 ${getStatusColor(item.status)}`}><Clock size={10} className="text-slate-700" /></div>Aging {item.agingDays}d</div>{item.status !== "COMPLETED" && item.status !== "APPROVED" && <div className="flex items-center gap-0.5 shrink-0" onClick={(e) => e.stopPropagation()}><button type="button" onClick={() => { const taskId = String(item.id); if (activeRunningTaskId && activeRunningTaskId !== taskId) { toast.warning(ACTIVE_TIMER_BLOCKED_MESSAGE); return; } router.push(taskDetailPath(item, { autostart: "1" })); }} className={`grid h-6 w-6 place-items-center rounded-full bg-white/90 text-emerald-600 ring-1 ring-slate-200 hover:bg-emerald-50 ${activeRunningTaskId && activeRunningTaskId !== String(item.id) ? "opacity-30 cursor-not-allowed" : ""}`} title={activeRunningTaskId && activeRunningTaskId !== String(item.id) ? ACTIVE_TIMER_BLOCKED_MESSAGE : "Start timer"}><Play size={11} className="fill-current" /></button><button type="button" onClick={() => router.push(taskDetailPath(item, { openPause: "1" }))} className="grid h-6 w-6 place-items-center rounded-full bg-white/90 text-amber-500 ring-1 ring-slate-200 hover:bg-amber-50" title="Pause timer"><Pause size={11} /></button><button type="button" onClick={() => router.push(taskDetailPath(item, { openComplete: "1" }))} className="grid h-6 w-6 place-items-center rounded-full bg-white/90 text-red-600 ring-1 ring-slate-200 hover:bg-red-50" title="Stop and submit"><Square size={10} className="fill-current" /></button></div>}</div></div>)}</div></div>)}</div>;
+  return (
+    <div className="flex min-h-0 flex-1 items-start gap-4 overflow-auto px-4 pb-6 sm:px-6">
+      {columns.map((col) => (
+        <div key={col.status} className="flex-1 min-w-[280px] flex flex-col gap-4">
+          <div className={`sticky top-0 z-10 px-4 py-2 rounded-xl flex items-center gap-2 font-semibold shadow-sm ${getStatusColor(col.status)}`}>
+            <span className={`w-2 h-2 rounded-full ${getStatusDot(col.status)}`} />
+            {col.title}
+          </div>
+          <div className="flex flex-col gap-3">
+            {data.filter((d) => d.status === col.status).map((item) => (
+              <div
+                key={item.id}
+                onClick={() => router.push(taskDetailPath(item))}
+                className={`p-2.5 min-h-[84px] rounded-lg border flex flex-col cursor-pointer hover:ring-1 hover:ring-blue-300/60 ${getStatusColor(item.status).replace("text-", "text-slate-900 border-").split(" ")[0]} bg-opacity-50`}
+              >
+                <div className="text-[10px] border-b border-slate-200/50 pb-1 mb-1 whitespace-nowrap overflow-hidden text-ellipsis">
+                  <span className="font-semibold text-slate-900">{item.opNo}</span>
+                  {" | "}
+                  <span className="text-slate-700">{item.projectNo}</span>
+                  {item.typeOfDesign && item.typeOfDesign !== "—" ? (
+                    <>
+                      {" | "}
+                      <span className="text-slate-600">{item.typeOfDesign}</span>
+                    </>
+                  ) : null}
+                </div>
+                <div className="text-xs font-medium mb-1.5 text-slate-800 truncate leading-tight">
+                  {item.businessUnit} - {item.name}
+                </div>
+                <div className="flex items-center justify-between mt-auto gap-1">
+                  <div className={`flex items-center gap-1 text-[9px] font-semibold uppercase tracking-wider ${item.agingDays > 20 ? "text-red-500" : "text-slate-600"}`}>
+                    <div className={`p-0.5 rounded flex shrink-0 ${getStatusColor(item.status)}`}>
+                      <Clock size={10} className="text-slate-700" />
+                    </div>
+                    Aging {item.agingDays}d
+                  </div>
+                  {/* Same timer controls + lock rules as list view (ProjectTaskTimer). */}
+                  <div className="shrink-0" onClick={(e) => e.stopPropagation()}>
+                    <ProjectTaskTimer taskId={String(item.id)} taskStatus={item.status} inline />
+                  </div>
+                </div>
+              </div>
+            ))}
+          </div>
+        </div>
+      ))}
+    </div>
+  );
 };
 
 export function DesignerDesignListScreen() {

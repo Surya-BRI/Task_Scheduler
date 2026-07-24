@@ -7,6 +7,10 @@ import { CreateTaskModal } from '../components/CreateTaskModal'
 import { ProjectCreateTaskModal } from '../components/ProjectCreateTaskModal'
 import { Navbar } from '../components/Navbar'
 import { ProjectTaskTimer } from '../components/ProjectTaskTimer'
+import {
+  applyRemoteTimerPause,
+  writeTaskLifecycleSync,
+} from '../components/design-list-task-timer-storage'
 import { apiClient } from '@/lib/api-client'
 import { fetchProjectActivities, fetchTaskActivities } from '@/features/team-activity/services/activities.api'
 import {
@@ -1413,6 +1417,11 @@ export function TaskDetailsPage() {
         ...(reworkFileArg?.url ? { reworkAttachmentUrl: reworkFileArg.url, reworkAttachmentName: reworkFileArg.name } : {}),
         ...(reworkLinkArg?.url ? { reworkLinkUrl: reworkLinkArg.url, reworkLinkName: reworkLinkArg.name } : {}),
       })
+      // Freeze any running local timer and notify other tabs (hold / complete / etc.).
+      await applyRemoteTimerPause(taskId, {
+        fetchTimerState: () => apiClient.get(`/tasks/${taskId}/timer-state`).catch(() => null),
+      })
+      writeTaskLifecycleSync(taskId, { status: newStatus, action: 'status_change' })
       if (newStatus === 'REWORK') {
         toast.success('Rework issued — same task returned to the designer.')
       } else if (newStatus === 'CLIENT_REJECTED' && res?.newRevisionTaskNo) {
