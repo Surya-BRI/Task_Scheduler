@@ -119,6 +119,41 @@ export class RegularizationRequestsService implements RegularizationRequestsCont
     return date;
   }
 
+  private getDayWindow(date: Date): { dayStart: Date; dayEnd: Date } {
+    const dayStart = new Date(Date.UTC(date.getUTCFullYear(), date.getUTCMonth(), date.getUTCDate()));
+    const dayEnd = new Date(dayStart);
+    dayEnd.setUTCHours(23, 59, 59, 999);
+    return { dayStart, dayEnd };
+  }
+
+  /**
+   * Regularization is for attendance on a working day. Any approved leave covering
+   * that calendar date (full-day or half-day) blocks create and approve.
+   */
+  private async assertNoApprovedLeaveBlockingRegularization(
+    designerId: string,
+    date: Date,
+  ): Promise<void> {
+    const { dayStart, dayEnd } = this.getDayWindow(date);
+    const leaves = await this.prisma.leaveRequest.findMany({
+      where: {
+        userId: designerId,
+        status: { in: ['Approved', 'APPROVED', 'approved'] },
+        revokedAt: null,
+        startDate: { lte: dayEnd },
+        OR: [{ endDate: null }, { endDate: { gte: dayStart } }],
+      },
+      select: { id: true },
+      take: 1,
+    });
+
+    if (leaves.length > 0) {
+      throw new BadRequestException(
+        'Cannot submit regularization because the designer has approved leave for this date.',
+      );
+    }
+  }
+
   private async findSchedulerAssignmentForDate(
     designerId: string,
     taskId: string,
@@ -524,6 +559,10 @@ export class RegularizationRequestsService implements RegularizationRequestsCont
   ): Promise<RegularizationRequestView> {
     this.assertDesignerOwnership(submitterId, role, dto.designerId);
     assertRegularizationDateAllowed(dto.date);
+    await this.assertNoApprovedLeaveBlockingRegularization(
+      dto.designerId,
+      this.parseDateOnly(dto.date, 'date'),
+    );
 
     if (dto.reason?.trim() === 'Other' && !dto.notes?.trim()) {
       throw new BadRequestException('Notes are required when reason is Other');
@@ -676,6 +715,13 @@ export class RegularizationRequestsService implements RegularizationRequestsCont
     const remarks = (dto.remarks ?? dto.comments ?? '').trim();
     if (dto.status === 'Rejected' && !remarks) {
       throw new BadRequestException('Rejection remarks are required');
+    }
+
+    if (dto.status === 'Approved') {
+      await this.assertNoApprovedLeaveBlockingRegularization(
+        existing.designerId,
+        this.parseDateOnly(existing.date, 'date'),
+      );
     }
 
     // The scheduler assignment this request was validated against at submission time may
