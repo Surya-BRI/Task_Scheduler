@@ -44,6 +44,9 @@ describe('RegularizationRequestsService', () => {
     schedulerWeek: {
       upsert: jest.fn(),
     },
+    leaveRequest: {
+      findMany: jest.fn(),
+    },
   };
 
   const mockActivityLogger = {
@@ -76,6 +79,7 @@ describe('RegularizationRequestsService', () => {
     });
     mockPrismaService.schedulerAssignment.findFirst.mockResolvedValue({ id: 'sa1' });
     mockPrismaService.schedulerAssignment.findMany.mockResolvedValue([]);
+    mockPrismaService.leaveRequest.findMany.mockResolvedValue([]);
     mockPrismaService.regularizationRequest.create.mockResolvedValue({
       id: '44444444-4444-4444-4444-444444444444',
       designerId,
@@ -138,6 +142,18 @@ describe('RegularizationRequestsService', () => {
         }),
       );
       expect(mockPrismaService.regularizationRequest.create).toHaveBeenCalled();
+    });
+
+    it('should reject regularization when the designer has approved leave on that date', async () => {
+      mockPrismaService.leaveRequest.findMany.mockResolvedValue([{ id: 'leave-1' }]);
+
+      await expect(service.create(designerId, UserRole.DESIGNER, baseDto())).rejects.toThrow(
+        BadRequestException,
+      );
+      await expect(service.create(designerId, UserRole.DESIGNER, baseDto())).rejects.toThrow(
+        /approved leave/i,
+      );
+      expect(mockPrismaService.regularizationRequest.create).not.toHaveBeenCalled();
     });
   });
 
