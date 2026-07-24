@@ -4,6 +4,7 @@
  */
 
 import { buildSessionForUser } from './designers';
+import { clearSchedulerNavState } from '@/features/scheduler/utils/schedulerNavigationState';
 
 export type AppSession = ReturnType<typeof buildSessionForUser> & {
   designerId?: string;
@@ -39,6 +40,7 @@ export function clearSession() {
   sessionCache = null;
   sessionLoaded = false;
   clearLegacyAuthStorage();
+  clearSchedulerNavState();
 }
 
 export function isSessionLoaded() {

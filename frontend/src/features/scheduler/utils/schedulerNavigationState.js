@@ -71,6 +71,16 @@ export function writeSchedulerNavState(state) {
   }
 }
 
+/** Drop saved week/view/search so logout → login does not restore the last OP filter. */
+export function clearSchedulerNavState() {
+  if (typeof window === "undefined") return;
+  try {
+    sessionStorage.removeItem(SCHEDULER_NAV_STATE_KEY);
+  } catch {
+    // ignore quota / privacy mode errors
+  }
+}
+
 export function parseSchedulerNavFromSearchParams(searchParams) {
   if (!searchParams) return null;
 
