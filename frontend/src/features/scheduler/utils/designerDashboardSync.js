@@ -1,6 +1,7 @@
 import {
   countDesignerWeekSlots,
   sumDesignerWeekWorkload,
+  sumSlotTotalHours,
 } from "./scheduler-workload.util";
 
 export const SCHEDULER_DASHBOARD_SYNC_KEY = "design_scheduler_snapshot_v1";
@@ -231,12 +232,11 @@ export const buildDesignerSnapshot = (tasksMap, designerScheduleByDayIndex = {})
     const daySlot = buildDaySlot(taskIds, tasksMap);
     schedule[dayName] = daySlot;
     if (dayIndex <= 4) {
-      const visibleDayHours =
-        daySlot.tasks.reduce((total, task) => total + task.estimatedHours, 0) +
-        (daySlot.overflowTasks ?? []).reduce((total, task) => total + task.estimatedHours, 0);
-      if (visibleDayHours > 0) {
+      // Same total as week workload / HOD day sum (regular + OT + leave/reg) — not the 12h visual cap.
+      const dayTotalHours = sumSlotTotalHours(tasksMap, taskIds);
+      if (dayTotalHours > 0) {
         lastWorkDayIndex = dayIndex;
-        lastWorkDayHours = visibleDayHours;
+        lastWorkDayHours = dayTotalHours;
       }
     }
     for (const recordId of daySlot.rawRecordIds || []) {

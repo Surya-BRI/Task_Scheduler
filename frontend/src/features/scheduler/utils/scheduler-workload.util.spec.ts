@@ -78,9 +78,10 @@ describe("scheduler-workload.util", () => {
     const blocks = snapshot.schedule.Friday.tasks;
     expect(blocks).toHaveLength(2);
     expect(blocks[0]).toMatchObject({ startHr: 0, endHr: 8, isOvertime: false });
-    // Clamped at the 12h daily ceiling.
+    // Visual pack is clamped at the 12h daily ceiling; Work Till / week stats stay uncapped.
     expect(blocks[1]).toMatchObject({ startHr: 8, endHr: 12, isOvertime: true });
-    expect(snapshot.stats.lastWorkDayHours).toBe(12);
+    expect(snapshot.stats.lastWorkDayHours).toBe(14);
+    expect(snapshot.stats.hours).toBe(14);
   });
 
   it("packs approved OT after the regular blocks, never overlapping an overloaded day", async () => {

@@ -10,11 +10,12 @@ import WeeksSection from "./components/WeeksSection";
 import {
   SCHEDULER_DASHBOARD_SYNC_EVENT,
   SCHEDULER_DASHBOARD_SYNC_KEY,
-  buildDesignerSnapshot,
 } from "@/features/scheduler/utils/designerDashboardSync";
-import { resolveAssignmentScheduledHours } from "@/features/scheduler/utils/scheduler-workload.util";
+import {
+  buildLiveScheduleFromAssignments,
+  formatWorkTillLabel,
+} from "@/features/scheduler/utils/live-schedule-from-assignments";
 import { computeDesignerTaskStats } from "@/features/scheduler/utils/designer-task-stats.util";
-import { getSystemBlockColorClass } from "@/features/scheduler/utils/scheduler-system-block.ui";
 import {
   DEFAULT_SCHEDULER_REFERENCE_DATE,
   formatSchedulerDateRangeText,
@@ -33,19 +34,6 @@ function fmtYmd(date) {
   const m = String(date.getMonth() + 1).padStart(2, "0");
   const d = String(date.getDate()).padStart(2, "0");
   return `${y}-${m}-${d}`;
-}
-
-function getOrdinal(n) {
-  const s = ["th", "st", "nd", "rd"];
-  const v = n % 100;
-  return n + (s[(v - 20) % 10] || s[v] || s[0]);
-}
-
-function formatWorkTillLabel(date) {
-  if (!date) return null;
-  const d = date instanceof Date ? date : new Date(date);
-  if (isNaN(d.getTime())) return null;
-  return `${d.toLocaleDateString("en-US", { weekday: "long" })} ${getOrdinal(d.getDate())}`;
 }
 
 async function fetchAllDesignerTasks(erpId) {
@@ -67,42 +55,8 @@ async function fetchAllDesignerTasks(erpId) {
   }, firstRows);
 }
 
-const DASH_COLORS = [
-  "bg-blue-100 border border-blue-300 text-blue-800",
-  "bg-emerald-100 border border-emerald-300 text-emerald-800",
-  "bg-violet-100 border border-violet-300 text-violet-800",
-  "bg-amber-100 border border-amber-300 text-amber-800",
-  "bg-rose-100 border border-rose-300 text-rose-800",
-  "bg-teal-100 border border-teal-300 text-teal-800",
-  "bg-orange-100 border border-orange-300 text-orange-800",
-];
-
-const toPositiveHours = (value) => {
-  const parsed = Number(value);
-  return Number.isFinite(parsed) && parsed > 0 ? parsed : 0;
-};
-
 function isRequestRow(row) {
   return row?.requestType === "LEAVE" || row?.requestType === "REGULARIZATION";
-}
-
-function getRequestRowHours(row) {
-  if (row?.requestType === "LEAVE") return toPositiveHours(row.leaveHours ?? row.scheduledHours ?? row.assignedHours);
-  if (row?.requestType === "REGULARIZATION") {
-    return toPositiveHours(row.regularizationHours ?? row.scheduledHours ?? row.assignedHours);
-  }
-  return 0;
-}
-
-function getRequestRowLabel(row) {
-  if (row?.requestLabel) return row.requestLabel;
-  if (row?.requestType === "LEAVE") {
-    const parts = ["Approved leave"];
-    if (row.leaveSession) parts.push(row.leaveSession);
-    return parts.join(" - ");
-  }
-  if (row?.requestType === "REGULARIZATION") return "Approved regularization";
-  return "Request";
 }
 
 function formatScheduledOnLabel(date) {
@@ -139,18 +93,6 @@ function buildScheduledOnByTaskId(assignments, weekDates) {
   return result;
 }
 
-function formatScheduleTaskLabel(apiTask, taskId) {
-  if (apiTask?.revisionCode) {
-    return `${apiTask?.opNo ? apiTask.opNo + "-" : ""}${apiTask.revisionCode}`;
-  }
-  return apiTask?.opNo || `Task #${String(taskId ?? "").slice(0, 6)}`;
-}
-
-/** Prefer assignment-embedded task summary (already returned by API), then cached lists. */
-function resolveScheduleApiTask(assignment, taskById) {
-  return assignment?.task ?? taskById?.[assignment?.taskId] ?? null;
-}
-
 /**
  * Merge assignee/cache tasks with summaries already attached on assignment rows
  * so the grid never needs N× GET /tasks/:id on the critical path.
@@ -171,73 +113,6 @@ function collectTasksForSchedule(assignments, assigneeTasks = [], scheduleTasks 
     byId[id] = byId[id] ? { ...row.task, ...byId[id], id } : { ...row.task, id };
   }
   return Object.values(byId);
-}
-
-function buildLiveScheduleData(assignments, tasksArr) {
-  const taskById = Object.fromEntries((tasksArr || []).map((t) => [t.id, t]));
-  const tasksMap = {};
-  const scheduleByDayIndex = {};
-  let colorIdx = 0;
-  const colorMap = {};
-
-  (assignments || []).forEach((a) => {
-    if (isRequestRow(a)) {
-      const hours = getRequestRowHours(a);
-      if (!hours) return;
-      const requestId = a.requestType === "LEAVE"
-        ? a.leaveRequestIds?.[0] ?? a.id
-        : a.regularizationRequestIds?.[0] ?? a.id;
-      const key = `${String(a.requestType).toLowerCase()}-${requestId}-${a.dayIndex}`;
-      tasksMap[key] = {
-        id: key,
-        name: getRequestRowLabel(a),
-        baseName: getRequestRowLabel(a),
-        estimatedHours: hours,
-        scheduledHours: hours,
-        approvedOvertimeHours: 0,
-        colorClass: getSystemBlockColorClass(a.requestType)
-          ?? "bg-slate-100 border border-slate-300 text-slate-800",
-        isLocked: true,
-        isSystemBlock: true,
-        requestType: a.requestType,
-        leaveSession: a.leaveSession ?? null,
-        requestLabel: a.requestLabel ?? getRequestRowLabel(a),
-      };
-      const dayStr = String(a.dayIndex);
-      if (!scheduleByDayIndex[dayStr]) scheduleByDayIndex[dayStr] = [];
-      scheduleByDayIndex[dayStr].push(key);
-      return;
-    }
-
-    const key = a.splitIndex != null ? `${a.taskId}_s${a.splitIndex}` : a.taskId;
-    const apiTask = resolveScheduleApiTask(a, taskById);
-    const approvedOvertimeHours = Number(a.approvedOvertimeHours) || 0;
-    const scheduledHours = resolveAssignmentScheduledHours(a);
-    if (!colorMap[a.taskId]) {
-      colorMap[a.taskId] = DASH_COLORS[colorIdx % DASH_COLORS.length];
-      colorIdx++;
-    }
-    const label = formatScheduleTaskLabel(apiTask, a.taskId);
-    tasksMap[key] = {
-      id: key,
-      parentId: a.parentId ?? (a.splitIndex != null ? a.taskId : null),
-      designType: apiTask?.designType ?? apiTask?.project?.category ?? null,
-      name: label,
-      baseName: label,
-      estimatedHours: scheduledHours,
-      scheduledHours,
-      approvedOvertimeHours,
-      colorClass: colorMap[a.taskId],
-      overtimeColorClass: "bg-red-100 border border-red-300 text-red-800",
-      splitIndex: a.splitIndex,
-      totalParts: a.totalParts,
-    };
-    const dayStr = String(a.dayIndex);
-    if (!scheduleByDayIndex[dayStr]) scheduleByDayIndex[dayStr] = [];
-    scheduleByDayIndex[dayStr].push(key);
-  });
-
-  return buildDesignerSnapshot(tasksMap, scheduleByDayIndex);
 }
 
 const DEFAULT_STATS = {
@@ -437,7 +312,7 @@ export default function DesignerDashboard({ designer: designerProp } = {}) {
         scheduleTasksRef.current,
       );
       scheduleTasksRef.current = tasksForGrid;
-      const snapshot = buildLiveScheduleData(rows, tasksForGrid);
+      const snapshot = buildLiveScheduleFromAssignments(rows, tasksForGrid);
       setScheduleData(snapshot.schedule);
       setDynamicStats(snapshot.stats);
 
@@ -468,7 +343,7 @@ export default function DesignerDashboard({ designer: designerProp } = {}) {
             const byId = Object.fromEntries(scheduleTasksRef.current.map((t) => [t.id, t]));
             for (const task of valid) byId[task.id] = task;
             scheduleTasksRef.current = Object.values(byId);
-            const next = buildLiveScheduleData(rows, scheduleTasksRef.current);
+            const next = buildLiveScheduleFromAssignments(rows, scheduleTasksRef.current);
             setScheduleData(next.schedule);
             setDynamicStats(next.stats);
           })
