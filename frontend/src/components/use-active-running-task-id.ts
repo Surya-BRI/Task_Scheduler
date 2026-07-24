@@ -1,14 +1,18 @@
 'use client'
 
 import { useCallback, useEffect, useMemo, useState } from 'react'
-import { TIMER_SYNC_EVENT, findRunningTimerTaskId } from './design-list-task-timer-storage'
+import {
+  TIMER_SYNC_EVENT,
+  TIMER_LIFECYCLE_EVENT,
+  findRunningTimerTaskId,
+} from './design-list-task-timer-storage'
 
 export const ACTIVE_TIMER_BLOCKED_MESSAGE =
   'Pause or complete the task that is currently running before starting another.'
 
 /**
- * Which task has an active running clock in this browser tab.
- * Uses sessionStorage only — a paused timer (runStartAt null) never blocks others.
+ * Which task has an active running clock in this browser (shared across tabs via localStorage).
+ * A paused timer (runStartAt null) never blocks others.
  */
 export function useActiveRunningTaskId() {
   const [syncTick, setSyncTick] = useState(0)
@@ -17,8 +21,18 @@ export function useActiveRunningTaskId() {
     function onSync() {
       setSyncTick((n) => n + 1)
     }
+    function onStorage(event: StorageEvent) {
+      if (!event.key?.startsWith('design_list_task_timer_')) return
+      onSync()
+    }
     window.addEventListener(TIMER_SYNC_EVENT, onSync)
-    return () => window.removeEventListener(TIMER_SYNC_EVENT, onSync)
+    window.addEventListener(TIMER_LIFECYCLE_EVENT, onSync)
+    window.addEventListener('storage', onStorage)
+    return () => {
+      window.removeEventListener(TIMER_SYNC_EVENT, onSync)
+      window.removeEventListener(TIMER_LIFECYCLE_EVENT, onSync)
+      window.removeEventListener('storage', onStorage)
+    }
   }, [])
 
   const activeRunningTaskId = useMemo(() => {
