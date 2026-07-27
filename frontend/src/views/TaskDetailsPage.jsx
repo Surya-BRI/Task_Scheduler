@@ -37,6 +37,8 @@ import {
 } from '@/features/chatter/utils/chatter-draft-handlers'
 import { emitChatterRefresh, onChatterRefresh } from '@/features/chatter/utils/chatter-events'
 import { mergeChatterPostLists } from '@/features/chatter/utils/chatter-merge'
+import { useTaskLifecycleRefresh } from '@/hooks/use-task-lifecycle-refresh'
+import { connectDashboardRealtime } from '@/lib/realtime'
 import {
   isChatterUuid,
   resolveTaskIdForChatter,
@@ -1277,6 +1279,7 @@ export function TaskDetailsPage() {
   const [submittedSession, setSubmittedSession] = useState(null)
   const [prevRevisionSession, setPrevRevisionSession] = useState(null)
   const [prevRevisionLoading, setPrevRevisionLoading] = useState(false)
+  const recordStatusRef = useRef(null)
 
   useEffect(() => {
     let alive = true
@@ -1403,6 +1406,14 @@ export function TaskDetailsPage() {
     }
   }, [recordId, queryOpNo, queryProjectCode, queryDesignType, from, taskRefreshCounter])
 
+  // Refresh status/details even when ProjectTaskTimer is not mounted (HOD/Sales, post-submit, etc.).
+  // Realtime for this page is owned by the chatter effect below (one socket).
+  useTaskLifecycleRefresh({
+    taskId,
+    enabled: Boolean(taskId),
+    enableRealtime: false,
+    onRefresh: () => setTaskRefreshCounter((c) => c + 1),
+  })
 
   const launchAutostart = searchParams.get('autostart') === '1'
   const launchPauseModal = searchParams.get('openPause') === '1'
@@ -1510,6 +1521,7 @@ export function TaskDetailsPage() {
     chatterMessage.trim().length > 0 && !resolvingProjectId && !resolvingTaskId
   const hasExistingTask = Boolean(taskId || isUuid(record?.taskId ?? record?.id))
   const taskStatus = record?.status ?? null
+  recordStatusRef.current = taskStatus
   const isTerminalStatus = taskStatus === 'CLIENT_ACCEPTED' || taskStatus === 'CLIENT_REJECTED'
   const isPostSubmitStatus = ['DESIGN_COMPLETED', 'HOD_REVIEW', 'SALES_REVIEW', 'REWORK', 'CLIENT_ACCEPTED', 'CLIENT_REJECTED', 'ON_HOLD'].includes(taskStatus)
   const TIMER_ACTIVE_STATUSES = ['DESIGN_PLANNED', 'IN_PROGRESS', 'REWORK']
@@ -1962,7 +1974,7 @@ export function TaskDetailsPage() {
   }, [activeTab, fetchChatterPosts])
 
   useEffect(() => {
-    return onChatterRefresh((detail) => {
+    const applyChatterRefresh = (detail = {}) => {
       if (detail.taskId && taskId && detail.taskId !== taskId) return
       if (detail.projectId && projectId && detail.projectId !== projectId) return
       if (activeTab === 'chatter') {
@@ -1970,7 +1982,38 @@ export function TaskDetailsPage() {
       } else {
         chatterRefreshPendingRef.current = true
       }
+    }
+    const offLocal = onChatterRefresh(applyChatterRefresh)
+    const offSocket = connectDashboardRealtime({
+      onChatterRefresh: applyChatterRefresh,
+      onDashboardRefresh: (payload) => {
+        if (!taskId) return
+        if (payload?.taskId && String(payload.taskId) === String(taskId)) {
+          setTaskRefreshCounter((c) => c + 1)
+          return
+        }
+        const changed = payload?.changedTaskIds
+        if (Array.isArray(changed) && changed.some((id) => String(id) === String(taskId))) {
+          setTaskRefreshCounter((c) => c + 1)
+        }
+      },
+      onTimerUpdated: (payload) => {
+        if (!taskId || String(payload.taskId) !== String(taskId)) return
+        const nextStatus = payload.taskStatus
+        const alreadyThere = nextStatus && recordStatusRef.current === nextStatus
+        if (nextStatus && !alreadyThere) {
+          setRecord((prev) => (prev ? { ...prev, status: nextStatus } : prev))
+        }
+        // Other tabs need a refetch; skip if this tab already shows that status (submitter).
+        if (!alreadyThere && (nextStatus || payload.sessionClosed)) {
+          setTaskRefreshCounter((c) => c + 1)
+        }
+      },
     })
+    return () => {
+      offLocal()
+      offSocket()
+    }
   }, [activeTab, fetchChatterPosts, projectId, taskId])
 
   const fetchProjectTasks = useCallback(async () => {
@@ -2507,7 +2550,13 @@ export function TaskDetailsPage() {
                           launchPauseModal={launchPauseModal}
                           launchCompleteModal={launchCompleteModal}
                           onConsumedLaunchFlags={clearTimerLaunchParams}
-                          onSubmitComplete={() => setTaskRefreshCounter((c) => c + 1)}
+                          onSubmitComplete={() => {
+                            // Optimistic UI first; one background refetch for history/logged time.
+                            setRecord((prev) =>
+                              prev ? { ...prev, status: 'DESIGN_COMPLETED' } : prev,
+                            )
+                            setTaskRefreshCounter((c) => c + 1)
+                          }}
                           onStatusChange={() => setTaskRefreshCounter((c) => c + 1)}
                         />
                       ) : null}

@@ -34,6 +34,7 @@ import {
 } from '@/features/chatter/utils/chatter-draft-handlers'
 import { emitChatterRefresh, onChatterRefresh } from '@/features/chatter/utils/chatter-events'
 import { mergeChatterPostLists } from '@/features/chatter/utils/chatter-merge'
+import { connectDashboardRealtime } from '@/lib/realtime'
 import {
   isChatterUuid,
   resolveTaskIdForChatter,
@@ -679,7 +680,7 @@ export function RetailProjectPage() {
   }, [activeTab, fetchChatterPosts])
 
   useEffect(() => {
-    return onChatterRefresh((detail) => {
+    const applyChatterRefresh = (detail = {}) => {
       if (detail.taskId && taskId && detail.taskId !== taskId) return
       if (detail.projectId && projectId && detail.projectId !== projectId) return
       if (activeTab === 'chatter') {
@@ -687,7 +688,15 @@ export function RetailProjectPage() {
       } else {
         chatterRefreshPendingRef.current = true
       }
+    }
+    const offLocal = onChatterRefresh(applyChatterRefresh)
+    const offSocket = connectDashboardRealtime({
+      onChatterRefresh: applyChatterRefresh,
     })
+    return () => {
+      offLocal()
+      offSocket()
+    }
   }, [activeTab, fetchChatterPosts, projectId, taskId])
 
   const focusPostId = searchParams.get('postId')
