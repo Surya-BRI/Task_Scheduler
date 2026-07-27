@@ -1255,31 +1255,35 @@ export class TasksService {
     const task = await this.prisma.task.findUnique({ where: { id }, select: TASK_SELECT });
     if (!task) throw new NotFoundException('Task not found');
     await this.assertQsTaskAccess(id, userId, role);
-    const withUrls = await this.withSignedAttachmentUrls(task);
-    const schedulerHours = await this.getSchedulerHoursForTask(id, userId);
+    // Signed URLs and scheduler hours are independent — run together to cut open latency.
+    const [withUrls, schedulerHours] = await Promise.all([
+      this.withSignedAttachmentUrls(task),
+      this.getSchedulerHoursForTask(id, userId),
+    ]);
     return { ...this.normalizeTaskForApi(withUrls), schedulerHours };
   }
 
   private async getSchedulerHoursForTask(taskId: string, viewerUserId?: string) {
-    const rows = await this.prisma.schedulerAssignment.findMany({
-      where: { taskId },
-      select: {
-        designerId: true,
-        dayIndex: true,
-        assignedHours: true,
-        isLocked: true,
-        designer: { select: { fullName: true } },
-      },
-      orderBy: [{ designerId: 'asc' }, { dayIndex: 'asc' }],
-    });
-
-    const sessions = await this.prisma.taskWorkSession.findMany({
-      where: {
-        taskId,
-        status: { in: ['Draft', 'HandedOff', 'Submitted'] },
-      },
-      select: { designerId: true, durationSeconds: true, runStartedAt: true, status: true },
-    });
+    const [rows, sessions] = await Promise.all([
+      this.prisma.schedulerAssignment.findMany({
+        where: { taskId },
+        select: {
+          designerId: true,
+          dayIndex: true,
+          assignedHours: true,
+          isLocked: true,
+          designer: { select: { fullName: true } },
+        },
+        orderBy: [{ designerId: 'asc' }, { dayIndex: 'asc' }],
+      }),
+      this.prisma.taskWorkSession.findMany({
+        where: {
+          taskId,
+          status: { in: ['Draft', 'HandedOff', 'Submitted'] },
+        },
+        select: { designerId: true, durationSeconds: true, runStartedAt: true, status: true },
+      }),
+    ]);
 
     const loggedSecondsByDesigner = new Map<string, number>();
     for (const session of sessions) {
