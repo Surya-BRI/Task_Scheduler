@@ -15,7 +15,6 @@ import {
   List,
   Search,
   UserRound,
-  UserRoundPlus,
 } from "lucide-react";
 import { Navbar } from "@/components/Navbar";
 import { apiClient } from "@/lib/api-client";
@@ -260,7 +259,89 @@ const Board = ({ data, workflowFrom }) => {
   ];
 
   return (
-    <div className="flex min-h-0 flex-1 items-start gap-4 overflow-auto px-4 pb-6 sm:px-6">{columns.map((col) => (<div key={col.status} className="flex-1 min-w-[280px] flex flex-col gap-4"><div className={`sticky top-0 z-10 px-4 py-2 rounded-xl flex items-center gap-2 font-semibold shadow-sm ${getStatusColor(col.status)}`}><span className={`w-2 h-2 rounded-full ${getStatusDot(col.status)}`} />{col.title}</div><div className="flex flex-col gap-3">{data.filter((d) => d.status === col.status).map((item) => (<div key={`${col.status}-${item.id}`} onClick={() => router.push(recordDetailPath(item, workflowFrom))} className={`p-2.5 min-h-[84px] rounded-lg border flex flex-col cursor-pointer hover:ring-1 hover:ring-blue-300/60 ${getStatusColor(item.status).replace("text-", "text-slate-900 border-").split(" ")[0]} bg-opacity-50`}><div className="text-[10px] border-b border-slate-200/50 pb-1 mb-1 whitespace-nowrap overflow-hidden text-ellipsis"><span className="font-semibold text-slate-900">{item.opNo}</span> | <span className="text-slate-700">{item.projectNo}</span>{item.typeOfDesign && item.typeOfDesign !== "—" ? <> | <span className="text-slate-600">{item.typeOfDesign}</span></> : null}</div><div className="text-xs font-medium mb-1.5 text-slate-800 truncate leading-tight">{item.businessUnit} - {item.name}</div><div className="flex items-center justify-between mt-auto gap-1">{isOverdue(item) && <span className="inline-flex items-center gap-1 rounded bg-red-100 px-1.5 py-0.5 text-[9px] font-semibold text-red-600 border border-red-200"><span className="inline-block h-1.5 w-1.5 rounded-full bg-red-500 shrink-0" />Overdue · {item.deadline}</span>}<div className={`flex items-center gap-1 text-[9px] font-semibold uppercase tracking-wider ${item.agingDays > 20 ? "text-red-500" : "text-slate-600"}`}><div className={`p-0.5 rounded flex shrink-0 ${getStatusColor(item.status)}`}><Clock size={10} className="text-slate-700" /></div>Aging {item.agingDays}d</div><div className="flex items-center gap-0.5 shrink-0" onClick={(e) => e.stopPropagation()}><button type="button" onClick={() => router.push(recordTabPath(item, "activity", workflowFrom))} className="grid h-6 w-6 place-items-center rounded-full bg-white/90 text-slate-600 ring-1 ring-slate-200 hover:text-emerald-600" title="Activity"><History size={11} /></button><button type="button" onClick={() => router.push(recordTabPath(item, "chatter", workflowFrom))} className="grid h-6 w-6 place-items-center rounded-full bg-white/90 text-slate-600 ring-1 ring-slate-200 hover:text-violet-600" title="Chatter"><UserRoundPlus size={11} /></button></div></div></div>))}</div></div>))}</div>
+    <div className="flex min-h-0 flex-1 items-start gap-4 overflow-auto px-4 pb-6 sm:px-6">
+      {columns.map((col) => (
+        <div key={col.status} className="flex-1 min-w-[280px] flex flex-col gap-4">
+          <div className={`sticky top-0 z-10 px-4 py-2 rounded-xl flex items-center gap-2 font-semibold shadow-sm ${getStatusColor(col.status)}`}>
+            <span className={`w-2 h-2 rounded-full ${getStatusDot(col.status)}`} />
+            {col.title}
+          </div>
+          <div className="flex flex-col gap-3">
+            {data.filter((d) => d.status === col.status).map((item) => (
+              <div
+                key={`${col.status}-${item.id}`}
+                onClick={() => router.push(recordDetailPath(item, workflowFrom))}
+                className={`p-2.5 min-h-[84px] rounded-lg border flex flex-col cursor-pointer hover:ring-1 hover:ring-blue-300/60 ${getStatusColor(item.status).replace("text-", "text-slate-900 border-").split(" ")[0]} bg-opacity-50`}
+              >
+                <div className="text-[10px] border-b border-slate-200/50 pb-1 mb-1 whitespace-nowrap overflow-hidden text-ellipsis">
+                  <span className="font-semibold text-slate-900">{item.opNo}</span>
+                  {" | "}
+                  <span className="text-slate-700">{item.projectNo}</span>
+                  {item.typeOfDesign && item.typeOfDesign !== "—" ? (
+                    <>
+                      {" | "}
+                      <span className="text-slate-600">{item.typeOfDesign}</span>
+                    </>
+                  ) : null}
+                </div>
+                <div className="text-xs font-medium mb-1.5 text-slate-800 truncate leading-tight">
+                  {item.businessUnit} - {item.name}
+                </div>
+                <div className="flex items-center justify-between mt-auto gap-1">
+                  {isOverdue(item) && (
+                    <span className="inline-flex items-center gap-1 rounded bg-red-100 px-1.5 py-0.5 text-[9px] font-semibold text-red-600 border border-red-200">
+                      <span className="inline-block h-1.5 w-1.5 rounded-full bg-red-500 shrink-0" />
+                      Overdue · {item.deadline}
+                    </span>
+                  )}
+                  <div className={`flex items-center gap-1 text-[9px] font-semibold uppercase tracking-wider ${item.agingDays > 20 ? "text-red-500" : "text-slate-600"}`}>
+                    <div className={`p-0.5 rounded flex shrink-0 ${getStatusColor(item.status)}`}>
+                      <Clock size={10} className="text-slate-700" />
+                    </div>
+                    Aging {item.agingDays}d
+                  </div>
+                  {/* Same action set as list view (no timer on HOD list). */}
+                  <div className="flex items-center gap-0.5 shrink-0 text-slate-400" onClick={(e) => e.stopPropagation()}>
+                    <button
+                      type="button"
+                      onClick={() => router.push(recordDetailPath(item, workflowFrom))}
+                      className="grid h-6 w-6 place-items-center rounded-full bg-white/90 ring-1 ring-slate-200 hover:text-blue-600"
+                      title="View details"
+                    >
+                      <Eye className="h-3.5 w-3.5" />
+                    </button>
+                    <button
+                      type="button"
+                      onClick={() => router.push(recordTabPath(item, "chatter", workflowFrom))}
+                      className="grid h-6 w-6 place-items-center rounded-full bg-white/90 ring-1 ring-slate-200 hover:text-slate-600"
+                      title="Links & chatter"
+                    >
+                      <Link2 className="h-3.5 w-3.5" />
+                    </button>
+                    <button
+                      type="button"
+                      onClick={() => router.push(recordTabPath(item, "activity", workflowFrom))}
+                      className="grid h-6 w-6 place-items-center rounded-full bg-white/90 ring-1 ring-slate-200 hover:text-emerald-600"
+                      title="Activity history"
+                    >
+                      <History className="h-3.5 w-3.5" />
+                    </button>
+                    <button
+                      type="button"
+                      onClick={() => router.push(recordDetailPath(item, workflowFrom))}
+                      className="grid h-6 w-6 place-items-center rounded-full bg-white/90 ring-1 ring-slate-200 hover:text-violet-600"
+                      title="Assignee"
+                    >
+                      <UserRound className="h-3.5 w-3.5" />
+                    </button>
+                  </div>
+                </div>
+              </div>
+            ))}
+          </div>
+        </div>
+      ))}
+    </div>
   );
 };
 
