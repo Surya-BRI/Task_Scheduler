@@ -43,7 +43,14 @@ describe('TasksService', () => {
     taskDesigner: { findUnique: jest.fn(), findMany: jest.fn(), create: jest.fn(), deleteMany: jest.fn() },
     schedulerAssignment: { findMany: jest.fn(), deleteMany: jest.fn() },
     user: { findMany: jest.fn(), findUnique: jest.fn() },
-    taskWorkSession: { findFirst: jest.fn(), findMany: jest.fn(), update: jest.fn() },
+    taskWorkSession: {
+      findFirst: jest.fn(),
+      findMany: jest.fn(),
+      findUnique: jest.fn(),
+      update: jest.fn(),
+      updateMany: jest.fn(),
+      create: jest.fn(),
+    },
     project: { findFirst: jest.fn(), findMany: jest.fn(), update: jest.fn(), create: jest.fn() },
     projectTaskDetail: { create: jest.fn() },
     retailTaskDetail: { create: jest.fn() },
@@ -60,6 +67,7 @@ describe('TasksService', () => {
     notifyOverviewRefresh: jest.fn(),
     notifyUserNotificationRefresh: jest.fn(),
     notifyTimerPaused: jest.fn(),
+    notifyTimerUpdated: jest.fn(),
   };
 
   const service = new TasksService(prisma, taskFilesService, activityLogger, notificationsService, dashboardRealtime);
@@ -192,6 +200,14 @@ describe('TasksService', () => {
       expect(createCall.title).toBe('Timer Paused — T-100');
       expect(createCall.linkUrl).toBe(`/project-task-view/${TASK_ID}`);
       expect(dashboardRealtime.notifyTimerPaused).toHaveBeenCalledWith(DESIGNER_ID, TASK_ID, false);
+      expect(dashboardRealtime.notifyTimerUpdated).toHaveBeenCalledWith(
+        DESIGNER_ID,
+        expect.objectContaining({
+          taskId: TASK_ID,
+          runStartedAt: null,
+          sessionClosed: false,
+        }),
+      );
     });
 
     it('does not notify when closeSession is true (session fully handed off)', async () => {
@@ -199,6 +215,15 @@ describe('TasksService', () => {
 
       expect(notificationsService.create).not.toHaveBeenCalled();
       expect(dashboardRealtime.notifyTimerPaused).toHaveBeenCalledWith(DESIGNER_ID, TASK_ID, true);
+      expect(dashboardRealtime.notifyTimerUpdated).toHaveBeenCalledWith(
+        DESIGNER_ID,
+        expect.objectContaining({
+          taskId: TASK_ID,
+          runStartedAt: null,
+          sessionClosed: true,
+          handedOff: true,
+        }),
+      );
     });
 
     it('does not notify when closeSession is false but there was no running timer', async () => {
@@ -208,6 +233,101 @@ describe('TasksService', () => {
 
       expect(notificationsService.create).not.toHaveBeenCalled();
       expect(dashboardRealtime.notifyTimerPaused).not.toHaveBeenCalled();
+    });
+  });
+
+  describe('saveTimerState', () => {
+    const DESIGNER_ID = 'ffffffff-1111-4222-8333-444444444444';
+
+    beforeEach(() => {
+      prisma.task.findUnique.mockResolvedValue({ id: TASK_ID });
+      prisma.taskWorkSession.findFirst.mockResolvedValue(null);
+      prisma.taskWorkSession.create.mockImplementation(async ({ data }: any) => ({
+        id: 'session-new',
+        taskId: TASK_ID,
+        designerId: DESIGNER_ID,
+        durationSeconds: data.durationSeconds,
+        pauseLog: data.pauseLog ?? null,
+        runStartedAt: data.runStartedAt ?? null,
+        status: 'Draft',
+      }));
+      prisma.taskWorkSession.update.mockResolvedValue({});
+      prisma.taskWorkSession.updateMany.mockResolvedValue({ count: 1 });
+      prisma.taskWorkSession.findUnique.mockResolvedValue(null);
+    });
+
+    it('returns authoritative state and stamps server runStartedAt on start', async () => {
+      const before = Date.now();
+      const result = await service.saveTimerState(TASK_ID, DESIGNER_ID, {
+        accumulatedSeconds: 0,
+        runStartedAt: '2020-01-01T00:00:00.000Z',
+      } as any);
+      const after = Date.now();
+
+      expect(result.sessionId).toBe('session-new');
+      expect(result.accumulatedSeconds).toBe(0);
+      expect(result.runStartedAt).toEqual(expect.any(String));
+      const stamped = Date.parse(result.runStartedAt!);
+      expect(stamped).toBeGreaterThanOrEqual(before - 1000);
+      expect(stamped).toBeLessThanOrEqual(after + 1000);
+      expect(dashboardRealtime.notifyTimerUpdated).toHaveBeenCalledWith(
+        DESIGNER_ID,
+        expect.objectContaining({
+          taskId: TASK_ID,
+          accumulatedSeconds: 0,
+          runStartedAt: result.runStartedAt,
+        }),
+      );
+    });
+
+    it('rejects starting when another task is already running', async () => {
+      prisma.taskWorkSession.findFirst
+        .mockResolvedValueOnce(null) // handedOff check
+        .mockResolvedValueOnce({ taskId: 'other-task' }); // other running
+
+      await expect(
+        service.saveTimerState(TASK_ID, DESIGNER_ID, {
+          accumulatedSeconds: 0,
+          runStartedAt: '2026-07-24T10:00:00.000Z',
+        } as any),
+      ).rejects.toThrow('currently running');
+      expect(dashboardRealtime.notifyTimerUpdated).not.toHaveBeenCalled();
+    });
+
+    it('pauses by folding server elapsed into durationSeconds', async () => {
+      const startedAt = new Date(Date.now() - 30_000);
+      const draft = {
+        id: 'session-1',
+        taskId: TASK_ID,
+        designerId: DESIGNER_ID,
+        durationSeconds: 100,
+        pauseLog: null,
+        runStartedAt: startedAt,
+        status: 'Draft',
+      };
+      prisma.taskWorkSession.findFirst
+        .mockResolvedValueOnce(null) // handedOff
+        .mockResolvedValueOnce(draft) // existing
+        .mockResolvedValueOnce({ ...draft, durationSeconds: 130, runStartedAt: null }); // latest after pause
+
+      const result = await service.saveTimerState(TASK_ID, DESIGNER_ID, {
+        accumulatedSeconds: 1,
+        runStartedAt: null,
+      } as any);
+
+      expect(prisma.taskWorkSession.updateMany).toHaveBeenCalledWith(
+        expect.objectContaining({
+          data: expect.objectContaining({
+            runStartedAt: null,
+            durationSeconds: expect.any(Number),
+          }),
+        }),
+      );
+      const written = (prisma.taskWorkSession.updateMany as jest.Mock).mock.calls[0][0].data
+        .durationSeconds as number;
+      expect(written).toBeGreaterThanOrEqual(129);
+      expect(result.runStartedAt).toBeNull();
+      expect(dashboardRealtime.notifyTimerUpdated).toHaveBeenCalled();
     });
   });
 

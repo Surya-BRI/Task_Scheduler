@@ -73,26 +73,24 @@ export function readTimerRunStartAt(taskId: string): number | null {
   return readTimerState(taskId).runStartAt
 }
 
-function readTimerAccumulatedSeconds(taskId: string): number {
-  return readTimerState(taskId).accumulatedSeconds
-}
-
 /**
- * Persist timer clock and notify same-tab listeners.
+ * Cache the timer clock locally and notify same-tab listeners.
  * Other tabs pick this up via the native `storage` event on localStorage.
+ * Callers should only write confirmed server state (or intentional clears).
  */
 export function writeTimerState(
   taskId: string,
   accumulatedSeconds: number,
   runStartAt: number | null,
+  _options?: { force?: boolean },
 ) {
   const store = browserStorage()
   if (!store || !taskId) return
   const key = timerStorageKey(taskId)
   migrateLegacySessionKey(key)
+
   try {
     store.setItem(key, JSON.stringify({ accumulatedSeconds, runStartAt }))
-    // Drop any leftover session copy so this tab doesn't re-migrate stale data.
     sessionStorage.removeItem(key)
   } catch {
     // ignore
@@ -104,8 +102,62 @@ export function writeTimerState(
   )
 }
 
-function writePausedTimerState(taskId: string, accumulatedSeconds: number) {
-  writeTimerState(taskId, accumulatedSeconds, null)
+export type ServerTimerState = {
+  accumulatedSeconds?: number
+  runStartedAt?: string | null
+  pauseLog?: string | null
+  handedOff?: boolean
+  locked?: boolean
+  sessionClosed?: boolean
+  sessionId?: string | null
+}
+
+/**
+ * Adopt authoritative server timer state into the local cache and notify listeners.
+ * This is the only write path that should update the live clock from the network/socket.
+ */
+export function applyServerTimerState(
+  taskId: string,
+  state: ServerTimerState | null | undefined,
+): TimerPersistedState {
+  const empty = { accumulatedSeconds: 0, runStartAt: null as number | null }
+  if (!taskId || !state) return empty
+
+  const accumulatedSeconds =
+    typeof state.accumulatedSeconds === 'number' ? Math.max(0, state.accumulatedSeconds) : 0
+  let runStartAt: number | null = null
+  if (!state.handedOff && state.runStartedAt) {
+    const parsed = Date.parse(state.runStartedAt)
+    if (!Number.isNaN(parsed)) runStartAt = parsed
+  }
+
+  writeTimerState(taskId, accumulatedSeconds, runStartAt, { force: true })
+
+  if (typeof state.pauseLog === 'string' && state.pauseLog.trim()) {
+    try {
+      const parsed = JSON.parse(state.pauseLog) as PauseLogEntry[]
+      if (Array.isArray(parsed)) writePauseLog(taskId, parsed)
+    } catch {
+      // ignore malformed pause log
+    }
+  }
+
+  // Stop listeners when the server clears the run. `handedOff` is only true for real
+  // handoffs — submit uses sessionClosed without handedOff and must not show that banner.
+  if (state.handedOff || state.sessionClosed || state.locked) {
+    window.dispatchEvent(
+      new CustomEvent(TIMER_REMOTE_PAUSE_EVENT, {
+        detail: {
+          taskId,
+          accumulatedSeconds,
+          handedOff: Boolean(state.handedOff),
+          sessionClosed: Boolean(state.sessionClosed),
+        },
+      }),
+    )
+  }
+
+  return { accumulatedSeconds, runStartAt }
 }
 
 export type PauseLogEntry = { reason: string; durationSeconds: number }
@@ -196,56 +248,69 @@ export function readTaskLifecycleSync(taskId: string): TaskLifecyclePayload | nu
   }
 }
 
-export type RemoteTimerState = {
-  accumulatedSeconds?: number
-  handedOff?: boolean
-  locked?: boolean
-}
+export type RemoteTimerState = ServerTimerState
 
 /**
- * Stop a locally running timer immediately when the server freezes it on handoff,
- * then optionally align accumulated seconds from timer-state.
+ * Apply a remote pause/handoff. Prefer payload fields; optionally fetch timer-state to fill gaps.
  */
 export async function applyRemoteTimerPause(
   taskId: string,
   options: {
     sessionClosed?: boolean
+    accumulatedSeconds?: number
+    runStartedAt?: string | null
+    handedOff?: boolean
+    locked?: boolean
     fetchTimerState?: () => Promise<RemoteTimerState | null | undefined>
   } = {},
 ): Promise<boolean> {
   if (typeof window === 'undefined' || !taskId) return false
 
-  const runStartAt = readTimerRunStartAt(taskId)
-  if (runStartAt == null) return false
-
-  const liveSeconds =
-    readTimerAccumulatedSeconds(taskId) + Math.max(0, Math.floor((Date.now() - runStartAt) / 1000))
-  writePausedTimerState(taskId, liveSeconds)
-
-  let accumulatedSeconds = liveSeconds
-  let handedOff = Boolean(options.sessionClosed)
-  try {
-    const data = await options.fetchTimerState?.()
-    if (data) {
-      if (typeof data.accumulatedSeconds === 'number') {
-        accumulatedSeconds = data.accumulatedSeconds
-        writePausedTimerState(taskId, accumulatedSeconds)
-      }
-      handedOff = Boolean(data.handedOff || data.locked || options.sessionClosed)
-    }
-  } catch {
-    // Keep the locally frozen value if timer-state cannot be fetched.
+  let state: ServerTimerState = {
+    accumulatedSeconds: options.accumulatedSeconds,
+    runStartedAt: options.runStartedAt ?? null,
+    handedOff: options.handedOff,
+    locked: options.locked,
+    sessionClosed: options.sessionClosed,
   }
 
-  window.dispatchEvent(
-    new CustomEvent(TIMER_REMOTE_PAUSE_EVENT, {
-      detail: { taskId, accumulatedSeconds, handedOff, sessionClosed: Boolean(options.sessionClosed) },
-    }),
-  )
-  return true
+  const needsFetch =
+    typeof state.accumulatedSeconds !== 'number' ||
+    (state.runStartedAt === undefined && !options.sessionClosed)
+
+  if (needsFetch && options.fetchTimerState) {
+    try {
+      const data = await options.fetchTimerState()
+      if (data) {
+        state = {
+          ...data,
+          sessionClosed: Boolean(options.sessionClosed || data.sessionClosed),
+          handedOff: Boolean(options.handedOff || data.handedOff),
+          locked: Boolean(options.locked || data.locked || options.sessionClosed),
+        }
+      }
+    } catch {
+      // fall through with whatever we have
+    }
+  }
+
+  if (typeof state.accumulatedSeconds !== 'number') {
+    const local = readTimerState(taskId)
+    const live =
+      local.runStartAt != null
+        ? local.accumulatedSeconds + Math.max(0, Math.floor((Date.now() - local.runStartAt) / 1000))
+        : local.accumulatedSeconds
+    state.accumulatedSeconds = live
+  }
+
+  const wasRunning = readTimerRunStartAt(taskId) != null
+  state.runStartedAt = null
+  state.locked = Boolean(state.locked || state.handedOff || options.sessionClosed)
+  applyServerTimerState(taskId, state)
+  return wasRunning || Boolean(options.sessionClosed || options.handedOff || options.locked)
 }
 
-/** First task id with a running timer in localStorage (optionally excluding one). */
+/** First task id with a running timer in localStorage cache (optionally excluding one). */
 export function findRunningTimerTaskId(excludeTaskId?: string): string | null {
   const store = browserStorage()
   if (!store) return null
@@ -257,7 +322,6 @@ export function findRunningTimerTaskId(excludeTaskId?: string): string | null {
     migrateLegacySessionKey(key)
     if (readTimerRunStartAt(taskId) != null) return taskId
   }
-  // Also scan sessionStorage leftovers not yet migrated.
   try {
     for (let i = 0; i < sessionStorage.length; i += 1) {
       const key = sessionStorage.key(i)
@@ -283,23 +347,23 @@ export function hasLocalTimerEntry(taskId: string): boolean {
 }
 
 /**
- * Resolve which task (if any) has an active running clock for this designer.
- * Local storage wins; stale server state after pause is ignored.
+ * Resolve which task has an active running clock.
+ * Server id wins when present; otherwise fall back to local cache.
+ * A local paused entry for the server task means the server id is stale.
  */
 export function resolveActiveRunningTaskId(
   serverTaskId: string | null | undefined,
   excludeTaskId?: string,
 ): string | null {
-  const local = findRunningTimerTaskId(excludeTaskId)
-  if (local) return local
-
-  if (!serverTaskId || serverTaskId === excludeTaskId) return null
-
-  if (hasLocalTimerEntry(serverTaskId) && readTimerRunStartAt(serverTaskId) == null) {
-    return null
+  if (serverTaskId && serverTaskId !== excludeTaskId) {
+    if (hasLocalTimerEntry(serverTaskId) && readTimerRunStartAt(serverTaskId) == null) {
+      // Server said running but cache already shows paused — trust cache pause.
+    } else {
+      return serverTaskId
+    }
   }
 
-  return serverTaskId
+  return findRunningTimerTaskId(excludeTaskId)
 }
 
 /** Statuses where the designer may run the work timer. */

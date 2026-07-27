@@ -1,6 +1,6 @@
 ﻿"use client";
 
-import { useEffect, useMemo, useRef, useState } from "react";
+import { useEffect, useMemo, useRef, useState, useCallback } from "react";
 import { useRouter } from "next/navigation";
 import {
   Check,
@@ -18,6 +18,7 @@ import {
 } from "lucide-react";
 import { Navbar } from "@/components/Navbar";
 import { apiClient } from "@/lib/api-client";
+import { useTaskLifecycleRefresh } from "@/hooks/use-task-lifecycle-refresh";
 import { FROM_DESIGN_LIST, taskSummaryPath, taskViewPathForRecord } from "@/lib/design-list-routes";
 import { getStatusLabel, mapTaskToDesignRow, matchDateRange } from "../task-view-model";
 
@@ -351,11 +352,20 @@ export function DesignListScreen({ workflowFrom = FROM_DESIGN_LIST }) {
   const [viewMode, setViewMode] = useState("list");
   const [page, setPage] = useState(1);
   const [filters, setFilters] = useState({ type: "", status: "", salesPerson: "", startDate: "", endDate: "", searchQuery: "" });
+  const [listRefreshTick, setListRefreshTick] = useState(0);
+  const [listLoading, setListLoading] = useState(true);
 
   useEffect(() => { setPage(1); }, [filters, viewMode]);
 
+  const reloadList = useCallback(() => {
+    setListRefreshTick((n) => n + 1);
+  }, []);
+
+  useTaskLifecycleRefresh({ onRefresh: reloadList, debounceMs: 400 });
+
   useEffect(() => {
     let mounted = true;
+    setListLoading(true);
     const params = new URLSearchParams();
     params.set("page", "1");
     params.set("limit", "500");
@@ -365,9 +375,11 @@ export function DesignListScreen({ workflowFrom = FROM_DESIGN_LIST }) {
       if (!mounted) return;
       const rows = Array.isArray(res?.data) ? res.data.map(mapTaskToDesignRow) : [];
       setAllDesigns(rows);
-    }).catch(() => { if (mounted) setAllDesigns([]); });
+    }).catch(() => { if (mounted) setAllDesigns([]); }).finally(() => {
+      if (mounted) setListLoading(false);
+    });
     return () => { mounted = false; };
-  }, [filters.searchQuery, filters.status]);
+  }, [filters.searchQuery, filters.status, listRefreshTick]);
 
   const filteredDesigns = useMemo(() => allDesigns.filter((d) => {
     if (
@@ -393,8 +405,27 @@ export function DesignListScreen({ workflowFrom = FROM_DESIGN_LIST }) {
       <Navbar />
       <div className="flex-1 flex flex-col min-h-0">
         <div className="shrink-0"><Toolbar viewMode={viewMode} setViewMode={setViewMode} filters={filters} setFilters={setFilters} salesPersons={uniqueSalesPersons} /></div>
-        {viewMode === "list" ? <Table data={designs} workflowFrom={workflowFrom} /> : <Board data={designs} workflowFrom={workflowFrom} />}
-        <div className="shrink-0 flex items-center justify-between border-t border-slate-200 bg-white px-4 py-2.5 sm:px-6 text-xs text-slate-600"><span className="font-medium">Showing {total === 0 ? 0 : start + 1}–{Math.min(start + PAGE_SIZE, total)} of {total}</span><div className="flex items-center gap-2"><button type="button" onClick={() => setPage((p) => Math.max(1, p - 1))} disabled={currentPage === 1} className="rounded-md border border-slate-300 px-2.5 py-1 text-xs font-medium disabled:cursor-not-allowed disabled:opacity-50 hover:bg-slate-50">Prev</button><span className="min-w-[7rem] text-center text-xs font-medium text-slate-700">Page {currentPage} / {totalPages}</span><button type="button" onClick={() => setPage((p) => Math.min(totalPages, p + 1))} disabled={currentPage === totalPages} className="rounded-md border border-slate-300 px-2.5 py-1 text-xs font-medium disabled:cursor-not-allowed disabled:opacity-50 hover:bg-slate-50">Next</button></div></div>
+        {listLoading ? (
+          <div className="flex min-h-0 flex-1 flex-col px-4 pb-6 sm:px-6" aria-busy="true" aria-label="Loading tasks">
+            <div className="ui-surface h-full overflow-hidden p-3">
+              <div className="mb-3 h-8 animate-pulse rounded bg-slate-100" />
+              {Array.from({ length: 10 }).map((_, i) => (
+                <div key={i} className="mb-2 flex items-center gap-3 animate-pulse">
+                  <div className="h-4 w-16 rounded bg-slate-100" />
+                  <div className="h-4 w-28 rounded bg-slate-100" />
+                  <div className="h-4 flex-1 rounded bg-slate-100" />
+                  <div className="h-4 w-20 rounded bg-slate-100" />
+                  <div className="h-4 w-24 rounded bg-slate-100" />
+                </div>
+              ))}
+            </div>
+          </div>
+        ) : viewMode === "list" ? (
+          <Table data={designs} workflowFrom={workflowFrom} />
+        ) : (
+          <Board data={designs} workflowFrom={workflowFrom} />
+        )}
+        <div className="shrink-0 flex items-center justify-between border-t border-slate-200 bg-white px-4 py-2.5 sm:px-6 text-xs text-slate-600"><span className="font-medium">{listLoading ? "Loading…" : <>Showing {total === 0 ? 0 : start + 1}–{Math.min(start + PAGE_SIZE, total)} of {total}</>}</span><div className="flex items-center gap-2"><button type="button" onClick={() => setPage((p) => Math.max(1, p - 1))} disabled={listLoading || currentPage === 1} className="rounded-md border border-slate-300 px-2.5 py-1 text-xs font-medium disabled:cursor-not-allowed disabled:opacity-50 hover:bg-slate-50">Prev</button><span className="min-w-[7rem] text-center text-xs font-medium text-slate-700">Page {currentPage} / {totalPages}</span><button type="button" onClick={() => setPage((p) => Math.min(totalPages, p + 1))} disabled={listLoading || currentPage === totalPages} className="rounded-md border border-slate-300 px-2.5 py-1 text-xs font-medium disabled:cursor-not-allowed disabled:opacity-50 hover:bg-slate-50">Next</button></div></div>
       </div>
     </div>
   );

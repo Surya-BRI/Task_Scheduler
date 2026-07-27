@@ -14,7 +14,7 @@ import {
 import { connectDashboardRealtime } from '@/lib/realtime'
 import { hasDepartmentManagerAccess } from '@/lib/workflow-roles'
 import { apiClient } from '@/lib/api-client'
-import { applyRemoteTimerPause } from '@/components/design-list-task-timer-storage'
+import { applyRemoteTimerPause, applyServerTimerState } from '@/components/design-list-task-timer-storage'
 import { toast } from 'sonner'
 
 const NAV_ITEMS = [
@@ -245,9 +245,17 @@ function NotificationDropdown({ session }) {
     document.addEventListener('visibilitychange', onVisible)
     const disconnectRealtime = connectDashboardRealtime({
       onNotificationsRefresh: () => void loadNotifications(),
+      onTimerUpdated: (payload) => {
+        // Cache only — open task pages refresh status from the same event (taskStatus).
+        applyServerTimerState(payload.taskId, payload)
+      },
       onTimerPaused: (payload) => {
         void applyRemoteTimerPause(payload.taskId, {
           sessionClosed: Boolean(payload.sessionClosed),
+          accumulatedSeconds: payload.accumulatedSeconds,
+          runStartedAt: payload.runStartedAt ?? null,
+          handedOff: payload.handedOff,
+          locked: payload.locked,
           fetchTimerState: () => apiClient.get(`/tasks/${payload.taskId}/timer-state`),
         }).then((applied) => {
           if (!applied) return
