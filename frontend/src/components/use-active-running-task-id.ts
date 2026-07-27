@@ -23,7 +23,7 @@ export function useActiveRunningTaskId() {
 
   const refreshServerRunning = useCallback(() => {
     apiClient
-      .get('/tasks/running-timer')
+      .get<{ taskId?: string | null; runStartedAt?: string | null } | null>('/tasks/running-timer')
       .then((data) => {
         const id = data?.taskId ? String(data.taskId) : null
         setServerRunningTaskId(id)
