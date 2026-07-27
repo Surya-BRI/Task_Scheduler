@@ -1,5 +1,5 @@
-import { IsInt, IsOptional, IsString, Min } from 'class-validator';
-import { Type } from 'class-transformer';
+import { IsInt, IsOptional, IsString, IsUrl, Min, ValidateIf } from 'class-validator';
+import { Transform, Type } from 'class-transformer';
 
 export class SubmitWorkDto {
   @Type(() => Number)
@@ -8,6 +8,12 @@ export class SubmitWorkDto {
   durationSeconds: number;
 
   @IsOptional()
+  @Transform(({ value }) => (typeof value === 'string' ? value.trim() : value))
+  @ValidateIf((_, value) => value != null && String(value).trim() !== '')
+  @IsUrl(
+    { protocols: ['https'], require_protocol: true },
+    { message: 'submissionLink must be a valid https:// URL' },
+  )
   @IsString()
   submissionLink?: string;
 

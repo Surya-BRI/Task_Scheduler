@@ -58,18 +58,7 @@ function clearPersistedPauses(taskId) {
   clearPauseLog(taskId)
 }
 
-const FIVE_MIN_SECONDS = 5 * 60
-
-// Credited work (pause / submit / handoff) rounds UP to the next 5-minute step so any
-// nonzero effort is never saved as 0 minutes (e.g. 3m20s → 5m). The on-screen clock
-// stays exact — including seconds — so designers don't see 0 jump to 5m while working.
-function roundUpTo5Min(totalSeconds) {
-  const s = Math.max(0, totalSeconds)
-  if (s <= 0) return 0
-  return Math.ceil(s / FIVE_MIN_SECONDS) * FIVE_MIN_SECONDS
-}
-
-/** Exact clock for the live timer UI (no 5-minute rounding). */
+/** Exact clock for the live timer UI. */
 function formatHms(totalSeconds) {
   const s = Math.max(0, Math.floor(totalSeconds))
   const h = Math.floor(s / 3600)
@@ -89,6 +78,16 @@ function formatHm(totalSeconds) {
 function liveTotalSeconds(accumulatedSeconds, runStartAt) {
   if (!runStartAt) return accumulatedSeconds
   return accumulatedSeconds + Math.floor((Date.now() - runStartAt) / 1000)
+}
+
+/** Submission links must be absolute https:// URLs (rejects plain text / http). */
+function isValidHttpsUrl(value) {
+  try {
+    const url = new URL(String(value ?? '').trim())
+    return url.protocol === 'https:'
+  } catch {
+    return false
+  }
 }
 
 export function ProjectTaskTimer({
@@ -118,6 +117,7 @@ export function ProjectTaskTimer({
   const [selectedFiles, setSelectedFiles] = useState([])
   const [submissionMode, setSubmissionMode] = useState('file')
   const [submissionLink, setSubmissionLink] = useState('')
+  const [linkError, setLinkError] = useState('')
   const [timerHandedOff, setTimerHandedOff] = useState(false)
   const [showEndOfDayPrompt, setShowEndOfDayPrompt] = useState(false)
   const [endOfDaySlot, setEndOfDaySlot] = useState(null)
@@ -661,13 +661,19 @@ export function ProjectTaskTimer({
 
   const submitComplete = async () => {
     const hasFiles = selectedFiles.length > 0
-    const hasLink = submissionLink.trim().length > 0
+    const trimmedLink = submissionLink.trim()
+    const hasLink = trimmedLink.length > 0
     if (!hasFiles && !hasLink) return
+    if (hasLink && !isValidHttpsUrl(trimmedLink)) {
+      setLinkError('Enter a valid https:// link')
+      setShowSubmitConfirm(false)
+      return
+    }
 
     const pauseLog = readPersistedPauses(taskId)
     const formData = new FormData()
-    formData.append('durationSeconds', String(roundUpTo5Min(displaySeconds)))
-    if (hasLink) formData.append('submissionLink', submissionLink.trim())
+    formData.append('durationSeconds', String(Math.max(0, Math.floor(displaySeconds))))
+    if (hasLink) formData.append('submissionLink', trimmedLink)
     if (pauseLog.length) formData.append('pauseLog', JSON.stringify(pauseLog))
     selectedFiles.forEach((f) => formData.append('files', f))
 
@@ -688,6 +694,7 @@ export function ProjectTaskTimer({
       setSelectedFiles([])
       setSubmissionMode('file')
       setSubmissionLink('')
+      setLinkError('')
       setShowSubmitConfirm(false)
       setShowCompleteModal(false)
       // Single parent refresh — avoid onStatusChange + lifecycle double/triple loadTask.
@@ -704,6 +711,7 @@ export function ProjectTaskTimer({
     setSelectedFiles([])
     setSubmissionMode('file')
     setSubmissionLink('')
+    setLinkError('')
     setShowCompleteModal(false)
   }
 
@@ -735,8 +743,14 @@ export function ProjectTaskTimer({
 
   const requestSubmitReview = () => {
     const hasFiles = selectedFiles.length > 0
-    const hasLink = submissionLink.trim().length > 0
+    const trimmedLink = submissionLink.trim()
+    const hasLink = trimmedLink.length > 0
     if (!hasFiles && !hasLink) return
+    if (hasLink && !isValidHttpsUrl(trimmedLink)) {
+      setLinkError('Enter a valid https:// link (e.g. https://…)')
+      return
+    }
+    setLinkError('')
     setShowSubmitConfirm(true)
   }
 
@@ -987,10 +1001,18 @@ export function ProjectTaskTimer({
                     key={showCompleteModal ? 'link-open' : 'link-closed'}
                     type="url"
                     defaultValue={submissionLink ?? ''}
-                    onChange={(e) => setSubmissionLink(e.target.value)}
-                    placeholder="Paste OneDrive or any shareable link"
-                    className="mt-2 w-full rounded-lg border border-slate-200 bg-white px-3 py-2.5 text-sm text-slate-900 shadow-sm outline-none transition placeholder:text-slate-400 focus:border-blue-400 focus:ring-2 focus:ring-blue-500/20"
+                    onChange={(e) => {
+                      setSubmissionLink(e.target.value)
+                      setLinkError('')
+                    }}
+                    placeholder="https://…"
+                    className={`mt-2 w-full rounded-lg border bg-white px-3 py-2.5 text-sm text-slate-900 shadow-sm outline-none transition placeholder:text-slate-400 focus:ring-2 ${
+                      linkError
+                        ? 'border-red-400 focus:border-red-400 focus:ring-red-500/20'
+                        : 'border-slate-200 focus:border-blue-400 focus:ring-blue-500/20'
+                    }`}
                   />
+                  {linkError ? <p className="mt-1.5 text-xs font-medium text-red-600">{linkError}</p> : null}
                 </div>
               )}
             </div>
@@ -1006,7 +1028,16 @@ export function ProjectTaskTimer({
               <button
                 type="button"
                 onClick={requestSubmitReview}
-                disabled={selectedFiles.length < 1 && submissionLink.trim().length < 1}
+                disabled={
+                  (() => {
+                    const trimmed = submissionLink.trim()
+                    const hasValidLink = isValidHttpsUrl(trimmed)
+                    const hasFiles = selectedFiles.length > 0
+                    if (!hasFiles && !hasValidLink) return true
+                    if (trimmed.length > 0 && !hasValidLink) return true
+                    return false
+                  })()
+                }
                 className="rounded-lg border border-blue-200 bg-blue-50 px-5 py-2 text-sm font-semibold text-blue-800 shadow-sm transition hover:bg-blue-100 focus:outline-none focus-visible:ring-2 focus-visible:ring-blue-300 focus-visible:ring-offset-2 disabled:cursor-not-allowed disabled:opacity-45"
               >
                 Submit

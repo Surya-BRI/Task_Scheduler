@@ -24,7 +24,7 @@ import {
 } from './scheduler-task-summary.util';
 import {
   effectiveWorkSessionSeconds,
-  roundWorkSecondsUpTo5Min,
+  normalizeWorkSeconds,
   workedHoursFromSeconds,
 } from '../common/utils/task-work-session-time.util';
 import { utcDateOnlyString } from '../common/utils/date-window.util';
@@ -1404,8 +1404,7 @@ export class TasksService {
         totalSeconds += session.durationSeconds;
       }
     }
-    const rounded = roundWorkSecondsUpTo5Min(totalSeconds);
-    return { totalSeconds: rounded, hadRunningTimer };
+    return { totalSeconds: normalizeWorkSeconds(totalSeconds), hadRunningTimer };
   }
 
   async update(id: string, dto: UpdateTaskDto) {
@@ -2242,14 +2241,26 @@ export class TasksService {
     const session = await this.prisma.$transaction(async (tx) => {
       const draft = await tx.taskWorkSession.findFirst({
         where: { taskId, designerId: userId, status: { in: ['Draft', 'HandedOff'] } },
+        orderBy: { createdAt: 'desc' },
       });
+
+      const clientSeconds = normalizeWorkSeconds(dto.durationSeconds);
+      let serverSeconds = 0;
+      if (draft) {
+        serverSeconds =
+          draft.status === 'Draft'
+            ? effectiveWorkSessionSeconds(draft.durationSeconds, draft.runStartedAt)
+            : normalizeWorkSeconds(draft.durationSeconds);
+      }
+      // Never let a stale tab under-write server-known elapsed time.
+      const durationSeconds = Math.max(clientSeconds, serverSeconds);
 
       let session;
       if (draft) {
         session = await tx.taskWorkSession.update({
           where: { id: draft.id },
           data: {
-            durationSeconds: dto.durationSeconds,
+            durationSeconds,
             submissionLink: dto.submissionLink?.trim() || null,
             pauseLog: dto.pauseLog || draft.pauseLog || null,
             runStartedAt: null,
@@ -2262,7 +2273,7 @@ export class TasksService {
           data: {
             taskId,
             designerId: userId,
-            durationSeconds: dto.durationSeconds,
+            durationSeconds,
             submissionLink: dto.submissionLink?.trim() || null,
             pauseLog: dto.pauseLog || null,
             status: 'Submitted',
@@ -2317,7 +2328,7 @@ export class TasksService {
       taskId,
       userId,
       sessionId: session.id,
-      durationSeconds: dto.durationSeconds,
+      durationSeconds: session.durationSeconds,
       fileCount: uploadedFiles.length,
       hasLink: !!dto.submissionLink,
     }).catch((err) => this.logger.error('submitWork side effects failed', err));
@@ -2619,10 +2630,21 @@ export class TasksService {
       }
 
       if (existing) {
+        // Start/resume (and any non-pause sync): never let a stale tab regress banked time.
+        // If a run is already live, fold it into the bank first so that elapsed is not dropped
+        // when we stamp a fresh server runStartedAt.
+        const serverBanked = existing.runStartedAt
+          ? effectiveWorkSessionSeconds(existing.durationSeconds, existing.runStartedAt)
+          : normalizeWorkSeconds(existing.durationSeconds);
+        const durationSeconds = Math.max(
+          normalizeWorkSeconds(dto.accumulatedSeconds),
+          serverBanked,
+        );
+
         await tx.taskWorkSession.update({
           where: { id: existing.id },
           data: {
-            durationSeconds: dto.accumulatedSeconds,
+            durationSeconds,
             pauseLog: dto.pauseLog ?? existing.pauseLog,
             ...(runStartedAt !== undefined ? { runStartedAt } : {}),
           },
@@ -2634,7 +2656,7 @@ export class TasksService {
         data: {
           taskId,
           designerId: userId,
-          durationSeconds: dto.accumulatedSeconds,
+          durationSeconds: normalizeWorkSeconds(dto.accumulatedSeconds),
           pauseLog: dto.pauseLog ?? null,
           runStartedAt: runStartedAt ?? null,
           status: 'Draft',
@@ -2675,7 +2697,7 @@ export class TasksService {
     const handedOffSeconds = handedOff.reduce((sum, row) => sum + row.durationSeconds, 0);
 
     if (!draft) {
-      const totalSeconds = roundWorkSecondsUpTo5Min(handedOffSeconds);
+      const totalSeconds = normalizeWorkSeconds(handedOffSeconds);
       return {
         workedSeconds: totalSeconds,
         workedHours: workedHoursFromSeconds(totalSeconds),
@@ -2687,8 +2709,8 @@ export class TasksService {
 
     const effectiveSeconds = effectiveWorkSessionSeconds(draft.durationSeconds, draft.runStartedAt);
     const totalEffective = handedOffSeconds + effectiveSeconds;
-    const frozenSeconds = roundWorkSecondsUpTo5Min(totalEffective);
-    const draftFrozenOnly = roundWorkSecondsUpTo5Min(effectiveSeconds);
+    const frozenSeconds = normalizeWorkSeconds(totalEffective);
+    const draftFrozenOnly = normalizeWorkSeconds(effectiveSeconds);
     const hadRunningTimer = draft.runStartedAt != null;
 
     if (closeSession) {

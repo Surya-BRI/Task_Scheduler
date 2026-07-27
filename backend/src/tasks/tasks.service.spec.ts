@@ -329,6 +329,81 @@ describe('TasksService', () => {
       expect(result.runStartedAt).toBeNull();
       expect(dashboardRealtime.notifyTimerUpdated).toHaveBeenCalled();
     });
+
+    it('does not let a stale start regress banked durationSeconds', async () => {
+      const draft = {
+        id: 'session-1',
+        taskId: TASK_ID,
+        designerId: DESIGNER_ID,
+        durationSeconds: 2400,
+        pauseLog: null,
+        runStartedAt: null,
+        status: 'Draft',
+      };
+      prisma.taskWorkSession.findFirst
+        .mockResolvedValueOnce(null) // handedOff
+        .mockResolvedValueOnce(null) // other running
+        .mockResolvedValueOnce(draft); // existing
+      prisma.taskWorkSession.findUnique.mockResolvedValue({
+        ...draft,
+        durationSeconds: 2400,
+        runStartedAt: new Date(),
+      });
+
+      await service.saveTimerState(TASK_ID, DESIGNER_ID, {
+        accumulatedSeconds: 600, // stale tab
+        runStartedAt: '2026-07-24T10:00:00.000Z',
+      } as any);
+
+      expect(prisma.taskWorkSession.update).toHaveBeenCalledWith(
+        expect.objectContaining({
+          data: expect.objectContaining({
+            durationSeconds: 2400,
+          }),
+        }),
+      );
+    });
+  });
+
+  describe('submitWork', () => {
+    const DESIGNER_ID = 'ffffffff-1111-4222-8333-444444444444';
+
+    beforeEach(() => {
+      prisma.task.findUnique.mockResolvedValue({
+        ...existingTask,
+        id: TASK_ID,
+        startedAt: new Date('2026-07-01T00:00:00.000Z'),
+      });
+      prisma.taskWorkSessionFile = { createMany: jest.fn().mockResolvedValue({ count: 0 }) };
+      prisma.task.update.mockResolvedValue({});
+      taskFilesService.uploadTaskFile = jest.fn();
+      jest.spyOn(service as any, 'runSubmitWorkSideEffects').mockResolvedValue(undefined);
+    });
+
+    it('keeps server elapsed when client submit duration is stale/lower', async () => {
+      const startedAt = new Date(Date.now() - 60_000);
+      const draft = {
+        id: 'session-1',
+        taskId: TASK_ID,
+        designerId: DESIGNER_ID,
+        durationSeconds: 3500,
+        pauseLog: null,
+        runStartedAt: startedAt,
+        status: 'Draft',
+      };
+      prisma.taskWorkSession.findFirst.mockResolvedValue(draft);
+      prisma.taskWorkSession.update.mockImplementation(async ({ data }: any) => ({
+        ...draft,
+        ...data,
+      }));
+
+      await service.submitWork(TASK_ID, DESIGNER_ID, { durationSeconds: 300 } as any, []);
+
+      const written = (prisma.taskWorkSession.update as jest.Mock).mock.calls[0][0].data
+        .durationSeconds as number;
+      expect(written).toBeGreaterThanOrEqual(3559);
+      expect(written).toBeLessThanOrEqual(3565);
+    });
   });
 
   describe('resolveNextPhase — smart phase suggestion tie-break', () => {

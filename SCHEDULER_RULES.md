@@ -12,7 +12,7 @@ If code and these rules conflict, fix the code.
 | `DAILY_CAPACITY` | 8h | Normal working hours per day |
 | `MAX_DAILY_HOURS` | 12h | Absolute ceiling — backend rejects any day above this |
 | `WEEKDAY_INDICES` | [0,1,2,3,4] | Mon–Fri only (Sat/Sun blocked) |
-| `MIN_SPLIT_HOURS` | 5min (0.0833h) | Smallest allowed split part — matches the timer's 5-minute rounding granularity (was 1h) |
+| `MIN_SPLIT_HOURS` | 5min (0.0833h) | Smallest allowed split part for optimizer/drag splits (was 1h) |
 
 ---
 
@@ -169,8 +169,8 @@ Runs as a React effect whenever `schedules` reference changes and `loadedFromErp
 - The original designer's `TaskWorkSession` record is separately left untouched; it remains the payroll/audit record of the work they actually did
 - This only accounts for time logged via the in-app timer (`save-timer`/`submit-work`), not manual status changes
 - **No pause is required before a reassignment.** `workedHours` reflects whatever was saved as of the designer's last Play/Pause/Stop click — the HOD's drag can't reach into the designer's own browser tab to force a pause, so if the timer is still actively running when the drag happens, the number can undercount by however long they've been going since that last sync. The handoff toast is a `toast.warning` with a description flagging this, but the drag is never blocked on it
-- The live timer UI shows **exact** elapsed time including seconds (`Xh Ym ZZs`). Credited/logged time is still rounded UP to the next **5-minute** step on **submit** and for handoff/`workedHours` (any nonzero effort is credited at least 5 minutes, e.g. 3m20s → 5m, never 0m) — pause/draft saves keep exact seconds so the clock does not jump while working. Scheduler toasts still show credited remainder as `Xh Ym`, never decimal hours
-- Hours are rounded to 2 decimal places wherever they cross the wire (`workedHours` from the backend, `remainingHours`/`loggedHours` on the frontend) since 5-minute buckets don't divide evenly in decimal hours (20min = 0.3333...h) and the save DTO caps at 2 decimal places — 2-decimal precision is well within half a 5-minute bucket, so it always reconstructs to the correct minute count
+- The live timer UI and saved session duration use **exact** elapsed seconds (`Xh Ym ZZs` on screen; `durationSeconds` stored as-is on pause, submit, and handoff freeze). Scheduler toasts still show credited remainder as `Xh Ym`, never decimal hours
+- Hours are rounded to 2 decimal places wherever they cross the wire as decimal hours (`workedHours` from the backend, `remainingHours`/`loggedHours` on the frontend) because the save DTO caps at 2 decimal places (e.g. 20min = 0.33h). The underlying `durationSeconds` remains exact.
 
 ---
 
