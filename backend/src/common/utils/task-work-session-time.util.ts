@@ -10,16 +10,15 @@ export function effectiveWorkSessionSeconds(
   return base + elapsed;
 }
 
-/** Round up to 5-minute buckets (matches designer timer). */
-export function roundWorkSecondsUpTo5Min(seconds: number): number {
+/** Exact whole seconds (non-negative). */
+export function normalizeWorkSeconds(seconds: number): number {
   const safe = Number.isFinite(seconds) ? Math.max(0, Math.floor(seconds)) : 0;
-  if (safe <= 0) return 0;
-  return Math.ceil(safe / 300) * 300;
+  return safe;
 }
 
-/** Decimal hours for scheduler cards (2 dp), after 5-minute round-up. */
+/** Decimal hours for scheduler cards (2 dp) from exact logged seconds. */
 export function workedHoursFromSeconds(seconds: number): number {
-  const rounded = roundWorkSecondsUpTo5Min(seconds);
-  if (rounded <= 0) return 0;
-  return Math.round((rounded / 3600) * 100) / 100;
+  const exact = normalizeWorkSeconds(seconds);
+  if (exact <= 0) return 0;
+  return Math.round((exact / 3600) * 100) / 100;
 }
