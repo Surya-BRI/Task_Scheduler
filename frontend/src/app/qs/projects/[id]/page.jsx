@@ -131,8 +131,8 @@ function QsProjectDetailContent() {
   const [signRows, setSignRows] = useState([])
   // Snapshot of the rows as last loaded/saved; used to detect a dirty state.
   const [savedRowsSnapshot, setSavedRowsSnapshot] = useState(() => serializeSignRows([]))
-  // Snapshot of the rows as loaded/last submitted; "Save Rows" does not reset
-  // this, so "Submit QS Update" stays enabled after saving changed rows.
+  // Snapshot of the rows as loaded/last submitted. Save clears unsaved dirty state
+  // but leaves this snapshot so Submit stays available for saved-but-unsubmitted work.
   const [submittedRowsSnapshot, setSubmittedRowsSnapshot] = useState(() => serializeSignRows([]))
   const [qsStatus, setQsStatus] = useState(null)
   const [signRowsLoading, setSignRowsLoading] = useState(false)
@@ -247,13 +247,15 @@ function QsProjectDetailContent() {
     [signRows, savedRowsSnapshot],
   )
 
-  // Dirty when current rows differ from the state at load / last submission.
-  // Saving rows keeps this true, so a saved-but-not-yet-submitted change still
-  // allows resubmission; reverting every change disables the button again.
+  // True when current rows differ from load / last submission. After a successful
+  // Save (and with no further edits), Submit is enabled; any new edit disables it
+  // again until the latest changes are saved.
   const hasChangesSinceSubmit = useMemo(
     () => serializeSignRows(signRows) !== submittedRowsSnapshot,
     [signRows, submittedRowsSnapshot],
   )
+  const canSubmitQsUpdate =
+    !isQsReadOnly && !signRowsSaving && !qsSubmitting && hasChangesSinceSubmit && !hasUnsavedChanges
 
   const resolvedOpNo = String(project?.salesForceCode ?? project?.opNo ?? queryOp ?? '').trim()
   const resolvedName = project?.name ?? project?.projectName ?? projectCode
@@ -297,6 +299,10 @@ function QsProjectDetailContent() {
     if (qsSubmittingRef.current || signRowsSavingRef.current) return
     if (!projectId || isQsReadOnly) {
       toast.error('This QS update has already been submitted.', { id: 'qs-submit' })
+      return
+    }
+    if (hasUnsavedChanges) {
+      toast.error('Please save your changes before submitting.', { id: 'qs-submit' })
       return
     }
     if (!hasChangesSinceSubmit) {
@@ -437,13 +443,15 @@ function QsProjectDetailContent() {
                 <button
                   type="button"
                   onClick={handleSubmitQsUpdate}
-                  disabled={isQsReadOnly || signRowsSaving || qsSubmitting || !hasChangesSinceSubmit}
+                  disabled={!canSubmitQsUpdate}
                   title={
                     isQsReadOnly
                       ? 'QS update already submitted'
-                      : !hasChangesSinceSubmit
-                        ? 'Make a change before submitting'
-                        : undefined
+                      : hasUnsavedChanges
+                        ? 'Please save your changes before submitting'
+                        : !hasChangesSinceSubmit
+                          ? 'Make a change before submitting'
+                          : undefined
                   }
                   aria-busy={qsSubmitting}
                   className="inline-flex items-center gap-1.5 rounded-md bg-emerald-600 px-3 py-1 text-[11px] font-semibold text-white transition hover:bg-emerald-700 disabled:cursor-not-allowed disabled:opacity-60"
