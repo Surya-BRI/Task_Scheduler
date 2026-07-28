@@ -499,8 +499,45 @@ function QsProjectDetailContent() {
                     ))
                   ) : signRows.length === 0 ? (
                     <tr>
-                      <td colSpan={13} className="px-3 py-6 text-center text-slate-500">
-                        No rows yet. Click + Add Row.
+                      <td colSpan={13} className="px-4 py-10 text-center">
+                        <div className="mx-auto flex max-w-md flex-col items-center gap-2">
+                          <p className="text-sm font-semibold text-slate-800">
+                            No Sign Rows added yet
+                          </p>
+                          <p className="text-xs leading-relaxed text-slate-500">
+                            Click{' '}
+                            <span className="font-semibold text-slate-700">+ Add Row</span>
+                            {' '}to create the first entry, then fill in the required QS/sign
+                            details (sign type, quantities, plan code, area/zone, status, and related fields).
+                          </p>
+                          {!isQsReadOnly && (
+                            <button
+                              type="button"
+                              onClick={() =>
+                                setSignRows([
+                                  {
+                                    tNo: '',
+                                    no: '',
+                                    signType: '',
+                                    planCode: '',
+                                    estQty: '',
+                                    qsQty: '',
+                                    areaZone: '',
+                                    levelParcel: '',
+                                    sequence: '',
+                                    status: '',
+                                    comment: '',
+                                    contRef: '',
+                                    signFamily: '',
+                                  },
+                                ])
+                              }
+                              className="mt-1 inline-flex items-center rounded-md bg-[#10a6e3] px-3 py-1.5 text-[11px] font-semibold text-white transition hover:bg-[#0f96cd]"
+                            >
+                              + Add Row
+                            </button>
+                          )}
+                        </div>
                       </td>
                     </tr>
                   ) : (() => {
