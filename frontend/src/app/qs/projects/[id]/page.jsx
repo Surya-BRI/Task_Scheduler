@@ -7,6 +7,7 @@ import { toast } from 'sonner'
 import { Navbar } from '@/components/Navbar'
 import { Button } from '@/components/ui/button'
 import { Modal } from '@/components/ui/Modal'
+import { QsStatusIndicator } from '@/components/ui/QsStatusIndicator'
 import { apiClient } from '@/lib/api-client'
 import { useRoleGuard } from '@/lib/use-role-guard'
 import { useDesignListStore } from '@/state/DesignListContext'
@@ -404,17 +405,9 @@ function QsProjectDetailContent() {
           {/* Sign rows section */}
           <div className="rounded-lg border border-slate-200 bg-white p-4 shadow-sm">
             <div className="mb-2 flex items-center justify-between">
-              <div className="flex items-center gap-2">
+              <div className="flex flex-wrap items-center gap-2">
                 <p className="text-xs font-semibold text-slate-700">Sign Rows</p>
-                {isQsReadOnly ? (
-                  <span className="rounded-full border border-emerald-200 bg-emerald-50 px-2 py-0.5 text-[10px] font-semibold text-emerald-700">
-                    Completed - Read Only
-                  </span>
-                ) : qsStatus?.status ? (
-                  <span className="rounded-full border border-blue-200 bg-blue-50 px-2 py-0.5 text-[10px] font-semibold text-blue-700">
-                    QS {qsStatus.status}
-                  </span>
-                ) : null}
+                <QsStatusIndicator status={qsStatus?.status} />
               </div>
               <div className="ml-auto flex shrink-0 flex-wrap items-center justify-end gap-2" role="group" aria-label="Sign row actions: save first, then submit">
                 <button
