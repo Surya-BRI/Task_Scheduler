@@ -1351,15 +1351,16 @@ export class TasksService {
     );
     const junctionDesignerIds = (task.taskDesigners ?? [])
       .map((entry: { designer?: { id?: string } | null }) => entry.designer?.id ?? null)
-      .filter(Boolean) as string[];
-    const ownsTask =
-      Boolean(userId) &&
-      (task.assigneeId === userId || junctionDesignerIds.includes(userId));
-    const myPending =
-      Boolean(userId) && pendingReallocation?.requesterId === userId;
+      .filter((id): id is string => Boolean(id));
+    const ownsTask = Boolean(
+      userId &&
+        (task.assigneeId === userId || junctionDesignerIds.includes(userId)),
+    );
+    const myPending = Boolean(userId && pendingReallocation?.requesterId === userId);
     // Logged-remainder-only owners (post-reallocation) have 0 unlocked hours — hide CTA.
-    const viewerCanRequestReallocation =
-      Boolean(userId) && statusOk && ownsTask && viewerRemainingHours >= 0.01 && !myPending;
+    const viewerCanRequestReallocation = Boolean(
+      userId && statusOk && ownsTask && viewerRemainingHours >= 0.01 && !myPending,
+    );
 
     return {
       ...this.normalizeTaskForApi(withUrls),
