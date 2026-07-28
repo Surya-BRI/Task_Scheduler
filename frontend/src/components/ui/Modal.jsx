@@ -1,5 +1,6 @@
 'use client';
 
+import { useEffect } from 'react';
 import { X } from 'lucide-react';
 
 const SIZE_CLASS = {
@@ -19,6 +20,18 @@ export function Modal({
   closeOnBackdrop = true,
   closeDisabled = false,
 }) {
+  useEffect(() => {
+    if (!open || closeDisabled || typeof onClose !== 'function') return undefined;
+    function onKeyDown(event) {
+      if (event.key === 'Escape') {
+        event.preventDefault();
+        onClose();
+      }
+    }
+    window.addEventListener('keydown', onKeyDown);
+    return () => window.removeEventListener('keydown', onKeyDown);
+  }, [open, closeDisabled, onClose]);
+
   if (!open) return null;
 
   return (

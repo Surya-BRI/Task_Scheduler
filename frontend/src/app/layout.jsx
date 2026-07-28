@@ -36,11 +36,12 @@ export default function RootLayout({ children }) {
         <DesignProviders>{children}</DesignProviders>
         <Toaster
           position="top-right"
+          richColors
+          closeButton
+          style={{ zIndex: 9999 }}
           toastOptions={{
+            duration: 4000,
             style: {
-              background: "#ffffff",
-              color: "#1e293b",
-              border: "1px solid #e2e8f0",
               boxShadow: "0 4px 12px rgba(0,0,0,0.08)",
               fontSize: "13px",
               borderRadius: "8px",
