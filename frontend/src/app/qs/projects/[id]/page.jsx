@@ -1,6 +1,6 @@
 'use client'
 
-import React, { useEffect, useMemo, useState, Suspense } from 'react'
+import React, { useEffect, useMemo, useRef, useState, Suspense } from 'react'
 import { useParams, useRouter, useSearchParams } from 'next/navigation'
 import { ChevronLeft, Trash2 } from 'lucide-react'
 import { toast } from 'sonner'
@@ -139,6 +139,9 @@ function QsProjectDetailContent() {
   const [signRowsSaving, setSignRowsSaving] = useState(false)
   const [qsSubmitting, setQsSubmitting] = useState(false)
   const [deleteConfirm, setDeleteConfirm] = useState(null) // { idx, family }
+  // Sync locks so rapid clicks cannot fire duplicate requests before React re-renders.
+  const signRowsSavingRef = useRef(false)
+  const qsSubmittingRef = useRef(false)
 
   // ── resolve project UUID + meta ──
   useEffect(() => {
@@ -262,11 +265,12 @@ function QsProjectDetailContent() {
 
   // ── handlers ──
   async function handleSaveSignRows() {
-    if (signRowsSaving) return
+    if (signRowsSavingRef.current || qsSubmittingRef.current) return
     if (!projectId || isQsReadOnly) {
       toast.error('Completed QS projects are read-only.', { id: 'qs-sign-rows-save' })
       return
     }
+    signRowsSavingRef.current = true
     setSignRowsSaving(true)
     try {
       const rows = normalizeSignRowsForSave(signRows)
@@ -284,12 +288,13 @@ function QsProjectDetailContent() {
     } catch (error) {
       toast.error(friendlyError(error, 'Failed to save sign rows'), { id: 'qs-sign-rows-save' })
     } finally {
+      signRowsSavingRef.current = false
       setSignRowsSaving(false)
     }
   }
 
   async function handleSubmitQsUpdate() {
-    if (qsSubmitting) return
+    if (qsSubmittingRef.current || signRowsSavingRef.current) return
     if (!projectId || isQsReadOnly) {
       toast.error('This QS update has already been submitted.', { id: 'qs-submit' })
       return
@@ -298,6 +303,7 @@ function QsProjectDetailContent() {
       toast.error('Make at least one change before submitting a QS update.', { id: 'qs-submit' })
       return
     }
+    qsSubmittingRef.current = true
     setQsSubmitting(true)
     try {
       const rows = normalizeSignRowsForSubmit(signRows)
@@ -331,6 +337,7 @@ function QsProjectDetailContent() {
     } catch (error) {
       toast.error(friendlyError(error, 'Failed to submit QS update'), { id: 'qs-submit' })
     } finally {
+      qsSubmittingRef.current = false
       setQsSubmitting(false)
     }
   }
@@ -408,6 +415,7 @@ function QsProjectDetailContent() {
                   type="button"
                   onClick={handleSaveSignRows}
                   disabled={isQsReadOnly || signRowsSaving || qsSubmitting || !hasUnsavedChanges}
+                  aria-busy={signRowsSaving}
                   title={
                     isQsReadOnly
                       ? 'QS update already submitted'

@@ -1271,6 +1271,9 @@ export function TaskDetailsPage() {
   const [qsStatus, setQsStatus] = useState(null)
   const [qsSubmitting, setQsSubmitting] = useState(false)
   const [deleteConfirm, setDeleteConfirm] = useState(null) // { idx, family }
+  // Sync locks so rapid clicks cannot fire duplicate requests before React re-renders.
+  const signRowsSavingRef = useRef(false)
+  const qsSubmittingRef = useRef(false)
   const [projectId, setProjectId] = useState('')
   const [taskId, setTaskId] = useState('')
   const [projectFiles, setProjectFiles] = useState([])
@@ -2360,12 +2363,13 @@ export function TaskDetailsPage() {
   }
 
   async function handleSaveSignRows() {
-    if (signRowsSaving) return
+    if (signRowsSavingRef.current || qsSubmittingRef.current) return
     if (!projectId) return
     if (isQsReadOnly) {
       toast.error('Completed QS projects are read-only.', { id: 'qs-sign-rows-save' })
       return
     }
+    signRowsSavingRef.current = true
     setSignRowsSaving(true)
     try {
       const rows = normalizeSignRowsForSave(signRows)
@@ -2386,6 +2390,7 @@ export function TaskDetailsPage() {
       toast.error(friendlyError(error, 'Failed to save sign rows'), { id: 'qs-sign-rows-save' })
       return
     } finally {
+      signRowsSavingRef.current = false
       setSignRowsSaving(false)
     }
     try {
@@ -2396,7 +2401,7 @@ export function TaskDetailsPage() {
   }
 
   async function handleSubmitQsUpdate() {
-    if (qsSubmitting) return
+    if (qsSubmittingRef.current || signRowsSavingRef.current) return
     if (!projectId) return
     if (isQsReadOnly) {
       toast.error('This QS update has already been submitted.', { id: 'qs-submit' })
@@ -2406,6 +2411,7 @@ export function TaskDetailsPage() {
       toast.error('Make at least one change before submitting a QS update.', { id: 'qs-submit' })
       return
     }
+    qsSubmittingRef.current = true
     setQsSubmitting(true)
     try {
       const rows = normalizeSignRowsForSubmit(signRows)
@@ -2440,6 +2446,7 @@ export function TaskDetailsPage() {
       toast.error(friendlyError(error, 'Failed to submit QS update'), { id: 'qs-submit' })
       return
     } finally {
+      qsSubmittingRef.current = false
       setQsSubmitting(false)
     }
     try {
@@ -3004,6 +3011,7 @@ export function TaskDetailsPage() {
                                   type="button"
                                   onClick={handleSaveSignRows}
                                   disabled={isQsReadOnly || signRowsSaving || qsSubmitting || !hasUnsavedSignRowChanges}
+                                  aria-busy={signRowsSaving}
                                   title={
                                     isQsReadOnly
                                       ? 'QS update already submitted'
