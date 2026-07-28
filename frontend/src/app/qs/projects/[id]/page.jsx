@@ -2,9 +2,11 @@
 
 import React, { useEffect, useMemo, useState, Suspense } from 'react'
 import { useParams, useRouter, useSearchParams } from 'next/navigation'
-import { ChevronLeft } from 'lucide-react'
+import { ChevronLeft, Trash2 } from 'lucide-react'
 import { toast } from 'sonner'
 import { Navbar } from '@/components/Navbar'
+import { Button } from '@/components/ui/button'
+import { Modal } from '@/components/ui/Modal'
 import { apiClient } from '@/lib/api-client'
 import { useRoleGuard } from '@/lib/use-role-guard'
 
@@ -381,7 +383,7 @@ function QsProjectDetailContent() {
                 ) : null}
               </div>
               {!isQsReadOnly && (
-                <div className="flex gap-2">
+                <div className="ml-auto flex shrink-0 gap-2" role="group" aria-label="Primary sign row actions">
                   <button
                     type="button"
                     onClick={handleSaveSignRows}
@@ -408,14 +410,14 @@ function QsProjectDetailContent() {
               <table className="w-full text-[11px]">
                 <thead className="bg-slate-100 text-slate-600">
                   <tr>
-                    {['Sign Type', 'No', 'T.No', 'Est QTY', 'Qs QTY', 'Seq', 'Status', 'Cont.Ref',
-                      'Plan Code', 'Area/Zone', 'Level/Parcel', 'Comment', ''].map((h) => (
+                    {['Actions', 'Sign Type', 'No', 'T.No', 'Est QTY', 'Qs QTY', 'Seq', 'Status', 'Cont.Ref',
+                      'Plan Code', 'Area/Zone', 'Level/Parcel', 'Comment'].map((h) => (
                       <th
                         key={h}
-                        className={`px-1.5 py-0.5 text-left text-[9px] font-semibold whitespace-nowrap border-r border-slate-200 last:border-r-0${h === 'Sign Type' ? ' w-[220px] min-w-[220px]' : ''}`}
+                        className={`px-1.5 py-0.5 text-left text-[9px] font-semibold whitespace-nowrap border-r border-slate-200 last:border-r-0${h === 'Sign Type' ? ' w-[220px] min-w-[220px]' : ''}${h === 'Actions' ? ' w-[72px] min-w-[72px]' : ''}`}
                       >
-                        {h}
-                        {h && h !== 'Comment' && <span className="ml-0.5 text-red-600" title="Required">*</span>}
+                        {h === 'Actions' ? <span className="sr-only">Actions</span> : h}
+                        {h && h !== 'Comment' && h !== 'Actions' && <span className="ml-0.5 text-red-600" title="Required">*</span>}
                       </th>
                     ))}
                   </tr>
@@ -448,15 +450,29 @@ function QsProjectDetailContent() {
                     return groups.map(({ family, rows }) => (
                       <React.Fragment key={`fam-${family}`}>
                         <tr>
+                          <td className="bg-white border-r border-slate-300" aria-hidden />
                           <td className="pl-0 pr-2 py-1 bg-white">
                             <span className="inline-flex items-center border-l-4 border-l-blue-500 bg-slate-50 pl-2 pr-3 py-1 text-xs font-semibold uppercase tracking-wide text-blue-600">
                               {family}
                             </span>
                           </td>
-                          <td colSpan={12} className="bg-white" />
+                          <td colSpan={11} className="bg-white" />
                         </tr>
                         {rows.map((row) => (
                           <tr key={row.id ?? row._idx} className="hover:bg-slate-50">
+                            <td className="px-1 py-0.5 border-r border-slate-300 align-middle">
+                              {!isQsReadOnly && !isApprovedRow(row) && (
+                                <button
+                                  type="button"
+                                  onClick={() => setDeleteConfirm({ idx: row._idx, family })}
+                                  aria-label={`Delete row from ${family}`}
+                                  className="inline-flex items-center gap-1 rounded border border-red-300 bg-red-50 px-2 py-0.5 text-[11px] font-semibold text-red-700 transition-colors hover:border-red-600 hover:bg-red-600 hover:text-white focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-red-400 focus-visible:ring-offset-1"
+                                >
+                                  <Trash2 className="h-3 w-3 shrink-0" aria-hidden />
+                                  Delete
+                                </button>
+                              )}
+                            </td>
                             {['signType', 'no', 'tNo', 'estQty', 'qsQty', 'sequence', 'status', 'contRef',
                                'planCode', 'areaZone', 'levelParcel', 'comment'].map((field) => (
                               <td key={field} className={`p-0 border-r border-slate-300 last:border-r-0${field === 'signType' ? ' relative group w-[220px] min-w-[220px]' : ''}`}>
@@ -487,17 +503,6 @@ function QsProjectDetailContent() {
                                 )}
                               </td>
                             ))}
-                            <td className="px-1 py-0.5 border-r border-slate-300 last:border-r-0">
-                              {!isQsReadOnly && !isApprovedRow(row) && (
-                                <button
-                                  type="button"
-                                  onClick={() => setDeleteConfirm({ idx: row._idx, family })}
-                                  className="flex items-center justify-center rounded border border-red-200 bg-red-50 px-2 py-0.5 text-[11px] font-semibold text-red-500 transition-colors hover:border-red-500 hover:bg-red-500 hover:text-white"
-                                >
-                                  Delete
-                                </button>
-                              )}
-                            </td>
                           </tr>
                         ))}
                         {!isQsReadOnly && (
@@ -534,37 +539,42 @@ function QsProjectDetailContent() {
         </div>
       </main>
 
-      {deleteConfirm && (
-        <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/40">
-          <div className="w-full max-w-sm rounded-lg border border-slate-200 bg-white p-5 shadow-xl">
-            <p className="text-sm font-semibold text-slate-800">Delete Row?</p>
-            <p className="mt-1 text-xs text-slate-500">
-              Are you sure you want to delete this row from{' '}
-              <span className="font-semibold text-blue-600">{deleteConfirm.family}</span>?
-              This cannot be undone.
-            </p>
-            <div className="mt-4 flex justify-end gap-2">
-              <button
-                type="button"
-                onClick={() => setDeleteConfirm(null)}
-                className="rounded border border-slate-300 px-3 py-1.5 text-xs font-medium text-slate-600 hover:bg-slate-50"
-              >
-                Cancel
-              </button>
-              <button
-                type="button"
-                onClick={() => {
-                  setSignRows((prev) => prev.filter((_, i) => i !== deleteConfirm.idx))
-                  setDeleteConfirm(null)
-                }}
-                className="rounded bg-red-500 px-3 py-1.5 text-xs font-semibold text-white hover:bg-red-600"
-              >
-                Delete
-              </button>
-            </div>
-          </div>
-        </div>
-      )}
+      <Modal
+        open={Boolean(deleteConfirm)}
+        onClose={() => setDeleteConfirm(null)}
+        title="Delete Row?"
+        size="sm"
+        footer={(
+          <>
+            <Button
+              type="button"
+              variant="secondary"
+              autoFocus
+              onClick={() => setDeleteConfirm(null)}
+              className="px-3 py-1.5 text-xs"
+            >
+              Cancel
+            </Button>
+            <Button
+              type="button"
+              variant="danger"
+              onClick={() => {
+                setSignRows((prev) => prev.filter((_, i) => i !== deleteConfirm.idx))
+                setDeleteConfirm(null)
+              }}
+              className="px-3 py-1.5 text-xs"
+            >
+              Delete
+            </Button>
+          </>
+        )}
+      >
+        <p className="text-sm text-slate-600">
+          Are you sure you want to delete this row from{' '}
+          <span className="font-semibold text-blue-600">{deleteConfirm?.family}</span>?
+          This cannot be undone.
+        </p>
+      </Modal>
     </div>
   )
 }
