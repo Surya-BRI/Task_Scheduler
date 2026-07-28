@@ -1,7 +1,7 @@
 "use client";
 
 import { useEffect, useMemo, useRef, useState, useCallback } from "react";
-import { useRouter } from "next/navigation";
+import { useRouter, useSearchParams } from "next/navigation";
 import {
   Check,
   ChevronDown,
@@ -22,6 +22,7 @@ import { useTaskLifecycleRefresh } from "@/hooks/use-task-lifecycle-refresh";
 import { FROM_DESIGN_LIST, taskSummaryPath, taskViewPathForRecord } from "@/lib/design-list-routes";
 import { getStatusLabel, mapTaskToDesignRow, matchDateRange } from "../task-view-model";
 import { TypeOfDesignChip } from "@/lib/ui/TypeOfDesignChip";
+import { ReallocationQueuePanel } from "./ReallocationQueuePanel";
 
 const getStatusColor = (status) => {
   switch (status) {
@@ -349,6 +350,13 @@ const Board = ({ data, workflowFrom }) => {
 
 export function DesignListScreen({ workflowFrom = FROM_DESIGN_LIST }) {
   const PAGE_SIZE = 100;
+  const searchParams = useSearchParams();
+  const viewParam = searchParams.get("view");
+  const highlightReallocationId = searchParams.get("reallocationId")?.trim() || "";
+  const [listMode, setListMode] = useState(
+    viewParam === "reallocation" ? "reallocation" : "all",
+  );
+  const isReallocation = listMode === "reallocation";
   const [allDesigns, setAllDesigns] = useState([]);
   const [viewMode, setViewMode] = useState("list");
   const [page, setPage] = useState(1);
@@ -356,7 +364,11 @@ export function DesignListScreen({ workflowFrom = FROM_DESIGN_LIST }) {
   const [listRefreshTick, setListRefreshTick] = useState(0);
   const [listLoading, setListLoading] = useState(true);
 
-  useEffect(() => { setPage(1); }, [filters, viewMode]);
+  useEffect(() => {
+    if (viewParam === "reallocation") setListMode("reallocation");
+  }, [viewParam]);
+
+  useEffect(() => { setPage(1); }, [filters, viewMode, listMode]);
 
   const reloadList = useCallback(() => {
     setListRefreshTick((n) => n + 1);
@@ -365,6 +377,7 @@ export function DesignListScreen({ workflowFrom = FROM_DESIGN_LIST }) {
   useTaskLifecycleRefresh({ onRefresh: reloadList, debounceMs: 400 });
 
   useEffect(() => {
+    if (isReallocation) return undefined;
     let mounted = true;
     setListLoading(true);
     const params = new URLSearchParams();
@@ -380,7 +393,7 @@ export function DesignListScreen({ workflowFrom = FROM_DESIGN_LIST }) {
       if (mounted) setListLoading(false);
     });
     return () => { mounted = false; };
-  }, [filters.searchQuery, filters.status, listRefreshTick]);
+  }, [filters.searchQuery, filters.status, listRefreshTick, isReallocation]);
 
   const filteredDesigns = useMemo(() => allDesigns.filter((d) => {
     if (
@@ -405,28 +418,61 @@ export function DesignListScreen({ workflowFrom = FROM_DESIGN_LIST }) {
     <div className="app-shell h-screen flex flex-col overflow-hidden font-sans">
       <Navbar />
       <div className="flex-1 flex flex-col min-h-0">
-        <div className="shrink-0"><Toolbar viewMode={viewMode} setViewMode={setViewMode} filters={filters} setFilters={setFilters} salesPersons={uniqueSalesPersons} /></div>
-        {listLoading ? (
-          <div className="flex min-h-0 flex-1 flex-col px-4 pb-6 sm:px-6" aria-busy="true" aria-label="Loading tasks">
-            <div className="ui-surface h-full overflow-hidden p-3">
-              <div className="mb-3 h-8 animate-pulse rounded bg-slate-100" />
-              {Array.from({ length: 10 }).map((_, i) => (
-                <div key={i} className="mb-2 flex items-center gap-3 animate-pulse">
-                  <div className="h-4 w-16 rounded bg-slate-100" />
-                  <div className="h-4 w-28 rounded bg-slate-100" />
-                  <div className="h-4 flex-1 rounded bg-slate-100" />
-                  <div className="h-4 w-20 rounded bg-slate-100" />
-                  <div className="h-4 w-24 rounded bg-slate-100" />
-                </div>
-              ))}
+        <div className="shrink-0 border-b border-slate-200 bg-white px-4 py-2 sm:px-6">
+          <div className="flex flex-col gap-2 sm:flex-row sm:items-center sm:justify-between">
+            <div className="flex flex-col gap-2 sm:flex-row sm:items-center sm:gap-4">
+              <h1 className="text-lg font-semibold tracking-tight text-slate-900">Design List</h1>
+              <div className="inline-flex rounded-md border border-slate-300 bg-slate-50 p-0.5 text-xs font-semibold">
+                <button
+                  type="button"
+                  onClick={() => setListMode("all")}
+                  className={`rounded px-3 py-1.5 transition-colors ${
+                    !isReallocation ? "bg-white text-slate-900 shadow-sm" : "text-slate-500 hover:text-slate-700"
+                  }`}
+                >
+                  All
+                </button>
+                <button
+                  type="button"
+                  onClick={() => setListMode("reallocation")}
+                  className={`rounded px-3 py-1.5 transition-colors ${
+                    isReallocation ? "bg-white text-slate-900 shadow-sm" : "text-slate-500 hover:text-slate-700"
+                  }`}
+                >
+                  Reallocation
+                </button>
+              </div>
             </div>
           </div>
-        ) : viewMode === "list" ? (
-          <Table data={designs} workflowFrom={workflowFrom} />
+        </div>
+        {isReallocation ? (
+          <ReallocationQueuePanel highlightId={highlightReallocationId} />
         ) : (
-          <Board data={designs} workflowFrom={workflowFrom} />
+          <>
+            <div className="shrink-0"><Toolbar viewMode={viewMode} setViewMode={setViewMode} filters={filters} setFilters={setFilters} salesPersons={uniqueSalesPersons} /></div>
+            {listLoading ? (
+              <div className="flex min-h-0 flex-1 flex-col px-4 pb-6 sm:px-6" aria-busy="true" aria-label="Loading tasks">
+                <div className="ui-surface h-full overflow-hidden p-3">
+                  <div className="mb-3 h-8 animate-pulse rounded bg-slate-100" />
+                  {Array.from({ length: 10 }).map((_, i) => (
+                    <div key={i} className="mb-2 flex items-center gap-3 animate-pulse">
+                      <div className="h-4 w-16 rounded bg-slate-100" />
+                      <div className="h-4 w-28 rounded bg-slate-100" />
+                      <div className="h-4 flex-1 rounded bg-slate-100" />
+                      <div className="h-4 w-20 rounded bg-slate-100" />
+                      <div className="h-4 w-24 rounded bg-slate-100" />
+                    </div>
+                  ))}
+                </div>
+              </div>
+            ) : viewMode === "list" ? (
+              <Table data={designs} workflowFrom={workflowFrom} />
+            ) : (
+              <Board data={designs} workflowFrom={workflowFrom} />
+            )}
+            <div className="shrink-0 flex items-center justify-between border-t border-slate-200 bg-white px-4 py-2.5 sm:px-6 text-xs text-slate-600"><span className="font-medium">{listLoading ? "Loading…" : <>Showing {total === 0 ? 0 : start + 1}–{Math.min(start + PAGE_SIZE, total)} of {total}</>}</span><div className="flex items-center gap-2"><button type="button" onClick={() => setPage((p) => Math.max(1, p - 1))} disabled={listLoading || currentPage === 1} className="rounded-md border border-slate-300 px-2.5 py-1 text-xs font-medium disabled:cursor-not-allowed disabled:opacity-50 hover:bg-slate-50">Prev</button><span className="min-w-[7rem] text-center text-xs font-medium text-slate-700">Page {currentPage} / {totalPages}</span><button type="button" onClick={() => setPage((p) => Math.min(totalPages, p + 1))} disabled={listLoading || currentPage === totalPages} className="rounded-md border border-slate-300 px-2.5 py-1 text-xs font-medium disabled:cursor-not-allowed disabled:opacity-50 hover:bg-slate-50">Next</button></div></div>
+          </>
         )}
-        <div className="shrink-0 flex items-center justify-between border-t border-slate-200 bg-white px-4 py-2.5 sm:px-6 text-xs text-slate-600"><span className="font-medium">{listLoading ? "Loading�" : <>Showing {total === 0 ? 0 : start + 1}�{Math.min(start + PAGE_SIZE, total)} of {total}</>}</span><div className="flex items-center gap-2"><button type="button" onClick={() => setPage((p) => Math.max(1, p - 1))} disabled={listLoading || currentPage === 1} className="rounded-md border border-slate-300 px-2.5 py-1 text-xs font-medium disabled:cursor-not-allowed disabled:opacity-50 hover:bg-slate-50">Prev</button><span className="min-w-[7rem] text-center text-xs font-medium text-slate-700">Page {currentPage} / {totalPages}</span><button type="button" onClick={() => setPage((p) => Math.min(totalPages, p + 1))} disabled={listLoading || currentPage === totalPages} className="rounded-md border border-slate-300 px-2.5 py-1 text-xs font-medium disabled:cursor-not-allowed disabled:opacity-50 hover:bg-slate-50">Next</button></div></div>
       </div>
     </div>
   );

@@ -645,7 +645,7 @@ export default function DesignerDashboard({ designer: designerProp } = {}) {
                   onClick={() => router.push(`/designer/requests`)}
                   className="ui-chip-button bg-[#e6e8fc] text-[#5d5baf] border border-[#d2d5f8] hover:bg-[#d8dcfb] font-semibold"
                 >
-                  Overtime Request
+                  Overtime / Reallocation
                 </button>
               </div>
             )}

@@ -79,6 +79,10 @@ model User {
   overtimeApproved         OvertimeRequest[]          @relation("OvertimeApprovedBy")
   overtimeRejected         OvertimeRequest[]          @relation("OvertimeRejectedBy")
   overtimeApprovalHistories OvertimeApprovalHistory[]  @relation("OvertimeActionBy")
+  reallocationAsRequester  ReallocationRequest[]      @relation("ReallocationRequester")
+  reallocationAsSuggested  ReallocationRequest[]      @relation("ReallocationSuggested")
+  reallocationAsTarget     ReallocationRequest[]      @relation("ReallocationTarget")
+  reallocationAsApprover   ReallocationRequest[]      @relation("ReallocationApprover")
 
   createdAt DateTime @default(dbgenerated("sysutcdatetime()"))
   updatedAt DateTime @default(dbgenerated("sysutcdatetime()")) @updatedAt
@@ -187,6 +191,7 @@ model Task {
   activityLogs           ActivityLog[]
   regularizationRequests RegularizationRequest[]
   overtimeRequests       OvertimeRequest[]
+  reallocationRequests   ReallocationRequest[]
   schedulerAssignments   SchedulerAssignment[]
   schedulerFragments     SchedulerTaskFragment[]
   retailDetails          RetailTaskDetail[]
@@ -554,6 +559,31 @@ model RegularizationRequest {
 
   @@index([designerId, status], name: "IX_ErpTSRegularizationRequest_designerId_status")
   @@map("ErpTSRegularizationRequest")
+}
+
+model ReallocationRequest {
+  id                  String    @id @default(dbgenerated("newid()")) @db.UniqueIdentifier
+  taskId              String    @db.UniqueIdentifier
+  task                Task      @relation(fields: [taskId], references: [id], onDelete: NoAction, onUpdate: NoAction)
+  requesterId         String    @db.UniqueIdentifier
+  requester           User      @relation("ReallocationRequester", fields: [requesterId], references: [id], onDelete: NoAction, onUpdate: NoAction)
+  suggestedDesignerId String    @db.UniqueIdentifier
+  suggestedDesigner   User      @relation("ReallocationSuggested", fields: [suggestedDesignerId], references: [id], onDelete: NoAction, onUpdate: NoAction)
+  targetDesignerId    String?   @db.UniqueIdentifier
+  targetDesigner      User?     @relation("ReallocationTarget", fields: [targetDesignerId], references: [id], onDelete: NoAction, onUpdate: NoAction)
+  reason              String    @db.NVarChar(Max)
+  status              String    @default("Pending") @db.NVarChar(50)
+  approverId          String?   @db.UniqueIdentifier
+  approver            User?     @relation("ReallocationApprover", fields: [approverId], references: [id], onDelete: NoAction, onUpdate: NoAction)
+  approverRemarks     String?   @db.NVarChar(Max)
+  reviewedAt          DateTime? @db.DateTime2
+  createdAt           DateTime  @default(dbgenerated("sysutcdatetime()"))
+  updatedAt           DateTime  @default(dbgenerated("sysutcdatetime()")) @updatedAt
+
+  @@index([requesterId, status], name: "IX_ErpTSReallocationRequest_requesterId_status")
+  @@index([taskId, status], name: "IX_ErpTSReallocationRequest_taskId_status")
+  @@index([status, createdAt(sort: Desc)], name: "IX_ErpTSReallocationRequest_status_createdAt")
+  @@map("ErpTSReallocationRequest")
 }
 
 model OvertimeRequest {

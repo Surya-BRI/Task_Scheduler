@@ -13,6 +13,7 @@ import { TasksModule } from './tasks/tasks.module';
 import { DesignListModule } from './design-list/design-list.module';
 import { RegularizationRequestsModule } from './regularization-requests/regularization-requests.module';
 import { OvertimeRequestsModule } from './overtime-requests/overtime-requests.module';
+import { ReallocationRequestsModule } from './reallocation-requests/reallocation-requests.module';
 import { SchedulerAssignmentsModule } from './scheduler-assignments/scheduler-assignments.module';
 import { ChatterPostsModule } from './chatter-posts/chatter-posts.module';
 import configuration from './config/configuration';
@@ -48,6 +49,7 @@ import { DeadlineAlertsModule } from './deadline-alerts/deadline-alerts.module';
     DesignListModule,
     RegularizationRequestsModule,
     OvertimeRequestsModule,
+    ReallocationRequestsModule,
     SchedulerAssignmentsModule,
     ChatterPostsModule,
     ActivitiesModule,

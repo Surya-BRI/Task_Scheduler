@@ -1,11 +1,11 @@
 'use client'
 
-import { useEffect, useState } from 'react'
+import { Suspense, useEffect, useState } from 'react'
 import { useRouter } from 'next/navigation'
 import { getSession } from '@/lib/mock-auth'
 import { DesignListScreen } from '@/features/design-list/components/DesignListScreen'
 
-export default function DesignListPage() {
+function DesignListPageInner() {
   const router = useRouter()
   const [role, setRole] = useState(null)
 
@@ -16,7 +16,6 @@ export default function DesignListPage() {
       return
     }
     if (session.role === 'DESIGNER') {
-      // Designers always see their own work list
       router.replace('/design-list/tasks')
       return
     }
@@ -28,11 +27,18 @@ export default function DesignListPage() {
       router.replace('/sales/design-list')
       return
     }
-    // HOD — show full list
     setRole('HOD')
   }, [router])
 
   if (role !== 'HOD') return null
 
   return <DesignListScreen />
+}
+
+export default function DesignListPage() {
+  return (
+    <Suspense fallback={null}>
+      <DesignListPageInner />
+    </Suspense>
+  )
 }

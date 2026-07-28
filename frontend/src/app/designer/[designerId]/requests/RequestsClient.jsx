@@ -5,7 +5,7 @@ import { toast } from "sonner";
 import { usePathname, useRouter, useSearchParams } from "next/navigation";
 import { Navbar } from "@/components/Navbar";
 import StatsBar from "../components/StatsBar";
-import { Clock3, FileClock, TimerReset } from "lucide-react";
+import { Clock3, FileClock, TimerReset, ArrowLeftRight } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { Modal } from "@/components/ui/Modal";
 import { RequestActionCell } from "@/components/ui/RequestActionCell";
@@ -52,6 +52,7 @@ import {
   listOvertimeRequests,
   reviewOvertimeRequest,
 } from "@/features/requests/services/overtime-requests.api";
+import ReallocationRequestsSection from "@/features/requests/components/ReallocationRequestsSection";
 import { buildDesignSchedulerPath } from "@/features/scheduler/utils/schedulerNavigationState";
 
 const UUID_RE = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
@@ -202,9 +203,13 @@ export default function RequestsClient() {
     ? "regularization"
     : searchParams.get("overtimeId")
       ? "overtime"
-      : rawTab === "regularization"
-        ? "regularization"
-        : "overtime";
+      : searchParams.get("reallocationId")
+        ? "reallocation"
+        : rawTab === "regularization"
+          ? "regularization"
+          : rawTab === "reallocation"
+            ? "reallocation"
+            : "overtime";
 
   useEffect(() => {
     if (searchParams.get("regularizationId")) {
@@ -214,6 +219,10 @@ export default function RequestsClient() {
     } else if (searchParams.get("overtimeId")) {
       setTimeout(() => {
         document.getElementById("overtime")?.scrollIntoView({ behavior: "smooth", block: "start" });
+      }, 100);
+    } else if (searchParams.get("reallocationId") || rawTab === "reallocation") {
+      setTimeout(() => {
+        document.getElementById("reallocation")?.scrollIntoView({ behavior: "smooth", block: "start" });
       }, 100);
     }
     // eslint-disable-next-line react-hooks/exhaustive-deps
@@ -226,6 +235,13 @@ export default function RequestsClient() {
     } else {
       next.set("tab", tab);
     }
+    // Avoid stale deep-links from another request type.
+    if (tab !== "reallocation") {
+      next.delete("reallocationId");
+      next.delete("taskId");
+    }
+    if (tab !== "regularization") next.delete("regularizationId");
+    if (tab !== "overtime") next.delete("overtimeId");
     const qs = next.toString();
     router.replace(qs ? `${pathname}?${qs}` : pathname, { scroll: false });
   };
@@ -1138,8 +1154,10 @@ export default function RequestsClient() {
         <div className="w-full space-y-6">
           <div className="flex flex-wrap items-center justify-between gap-3">
             <div>
-              <h1 className="text-2xl font-semibold tracking-tight text-slate-900">Regularization & Overtime</h1>
-              <p className="mt-1 text-sm text-slate-500">Submit and track your regularization and overtime requests.</p>
+              <h1 className="text-2xl font-semibold tracking-tight text-slate-900">Requests</h1>
+              <p className="mt-1 text-sm text-slate-500">
+                Overtime, regularization, and reallocation — leave stays in Leave Planner.
+              </p>
             </div>
             <button
               type="button"
@@ -1168,7 +1186,24 @@ export default function RequestsClient() {
               <TimerReset className="h-4 w-4" />
               Regularization Requests
             </button>
+            <button
+              type="button"
+              onClick={() => handleTabChange("reallocation")}
+              className={`ui-module-tab ${activeTab === "reallocation" ? "ui-module-tab-active" : ""}`}
+            >
+              <ArrowLeftRight className="h-4 w-4" />
+              Reallocation Requests
+            </button>
           </div>
+
+          {activeTab === "reallocation" && (
+            <ReallocationRequestsSection
+              isHOD={isHOD}
+              activeDesignerId={activeDesignerId}
+              prefillTaskId={searchParams.get("taskId")?.trim() || ""}
+              highlightId={searchParams.get("reallocationId")?.trim() || ""}
+            />
+          )}
 
           {activeTab === "regularization" && (
             <section id="regularization" className="ui-surface scroll-mt-24">

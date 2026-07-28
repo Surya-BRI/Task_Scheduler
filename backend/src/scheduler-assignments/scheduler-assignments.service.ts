@@ -3255,4 +3255,369 @@ export class SchedulerAssignmentsService implements OnModuleInit {
       });
     }
   }
+
+  /** Public Rule 10 check for a single new (task, designer) pairing. */
+  async assertDesignerOnProjectTeam(taskId: string, designerId: string): Promise<void> {
+    const task = await this.prisma.task.findUnique({
+      where: { id: taskId },
+      select: {
+        id: true,
+        project: {
+          select: {
+            technicalHead: true,
+            teamLead: true,
+            subTeamLead: true,
+            designers: true,
+          },
+        },
+      },
+    });
+    if (!task) throw new NotFoundException('Task not found');
+    const project = task.project;
+    if (!project) return;
+
+    const normalize = (value: string) => value.trim().toLowerCase();
+    const teamNames = new Set(
+      [project.technicalHead, project.teamLead, project.subTeamLead, ...(project.designers?.split(',') ?? [])]
+        .map((name) => (name ? normalize(name) : ''))
+        .filter(Boolean),
+    );
+    if (teamNames.size === 0) return;
+
+    const designer = await this.prisma.user.findUnique({
+      where: { id: designerId },
+      select: { id: true, fullName: true },
+    });
+    if (!designer || !teamNames.has(normalize(designer.fullName))) {
+      throw new BadRequestException(
+        `${designer?.fullName ?? designerId} is not on this project's team.`,
+      );
+    }
+  }
+
+  /**
+   * Whole-designer remaining handoff for an approved reallocation request.
+   * Keeps locked logged-remainder cards on the source designer; packs remaining
+   * hours onto the target after existing cards (append by position).
+   */
+  async applyReallocationHandoff(params: {
+    taskId: string;
+    fromDesignerId: string;
+    toDesignerId: string;
+    assignedBy: string;
+    workedSeconds: number;
+  }): Promise<{
+    remainingHoursMoved: number;
+    affectedWeekStarts: string[];
+    unplacedHours: number;
+  }> {
+    const { taskId, fromDesignerId, toDesignerId, assignedBy } = params;
+    if (fromDesignerId === toDesignerId) {
+      throw new BadRequestException('Target designer must be different from the requester.');
+    }
+
+    await this.assertDesignerOnProjectTeam(taskId, toDesignerId);
+
+    // Remote SQL Server latency makes the default 5s interactive-tx timeout fail (P2028).
+    const result = await this.prisma.$transaction(async (tx) => {
+      const rows = await tx.schedulerAssignment.findMany({
+        where: { taskId, designerId: fromDesignerId },
+        orderBy: [{ weekStartDate: 'asc' }, { dayIndex: 'asc' }, { position: 'asc' }],
+      });
+      if (rows.length === 0) {
+        throw new BadRequestException('Requester has no scheduled parts left for this task.');
+      }
+
+      const weekStarts = Array.from(
+        new Set(rows.map((r) => this.dateKey(new Date(r.weekStartDate!)))),
+      );
+      const weeks = await tx.schedulerWeek.findMany({
+        where: { weekStartDate: { in: weekStarts.map((k) => new Date(`${k}T00:00:00.000Z`)) } },
+        select: { weekStartDate: true, isLocked: true },
+      });
+      const lockedWeekKeys = new Set(
+        weeks.filter((w) => w.isLocked).map((w) => this.dateKey(new Date(w.weekStartDate))),
+      );
+
+      let workedRemainingSeconds = Math.max(0, Math.floor(params.workedSeconds || 0));
+      let remainingHoursToMove = 0;
+      let earliestMoveDate: Date | null = null;
+      const affectedWeekStarts = new Set<string>();
+      const idsToDelete: string[] = [];
+
+      for (const row of rows) {
+        const weekKey = this.dateKey(new Date(row.weekStartDate!));
+        const assignedHours = this.toHours(row.assignedHours);
+        const assignedSeconds = Math.round(assignedHours * 3600);
+        const alreadyLocked = Boolean(row.isLocked);
+
+        if (alreadyLocked) {
+          affectedWeekStarts.add(weekKey);
+          continue;
+        }
+
+        if (lockedWeekKeys.has(weekKey)) {
+          throw new BadRequestException(
+            `Cannot reallocate: week ${weekKey} is locked. Unlock it before approving.`,
+          );
+        }
+
+        const loggedSeconds = Math.min(workedRemainingSeconds, assignedSeconds);
+        workedRemainingSeconds -= loggedSeconds;
+        const loggedHours = Math.round((loggedSeconds / 3600) * 100) / 100;
+        const remHours = Math.round(Math.max(0, assignedHours - loggedHours) * 100) / 100;
+        const rowDate = this.addUtcDays(new Date(row.weekStartDate!), Number(row.dayIndex ?? 0));
+
+        if (loggedHours > 0.001 && remHours < 0.01) {
+          await tx.schedulerAssignment.update({
+            where: { id: row.id },
+            data: {
+              assignedHours: new Prisma.Decimal(loggedHours),
+              isLocked: true,
+              notes: row.notes?.includes('logged') ? row.notes : 'logged remainder',
+            },
+          });
+          affectedWeekStarts.add(weekKey);
+          continue;
+        }
+
+        if (loggedHours > 0.001) {
+          await tx.schedulerAssignment.update({
+            where: { id: row.id },
+            data: {
+              assignedHours: new Prisma.Decimal(loggedHours),
+              isLocked: true,
+              notes: row.notes?.includes('logged') ? row.notes : 'logged remainder',
+            },
+          });
+          affectedWeekStarts.add(weekKey);
+        } else {
+          idsToDelete.push(row.id);
+          affectedWeekStarts.add(weekKey);
+        }
+
+        if (remHours >= 0.01) {
+          remainingHoursToMove = Math.round((remainingHoursToMove + remHours) * 100) / 100;
+          if (!earliestMoveDate || rowDate < earliestMoveDate) earliestMoveDate = rowDate;
+        }
+      }
+
+      if (idsToDelete.length > 0) {
+        await tx.schedulerAssignment.deleteMany({ where: { id: { in: idsToDelete } } });
+      }
+
+      if (remainingHoursToMove < 0.01) {
+        throw new BadRequestException('Nothing left to reallocate — all scheduled hours are already logged.');
+      }
+
+      const today = this.startOfUtcDay(new Date());
+      const packStart =
+        earliestMoveDate && earliestMoveDate.getTime() > today.getTime()
+          ? earliestMoveDate
+          : today;
+      const packEnd = this.addUtcDays(packStart, 28);
+
+      const [holidayKeys, approvedLeaves, existingTargetRows, packWeeks] = await Promise.all([
+        this.loadHolidayKeys(tx, packStart, packEnd),
+        tx.leaveRequest.findMany({
+          where: {
+            userId: toDesignerId,
+            status: { in: ['Approved', 'APPROVED', 'approved'] },
+            revokedAt: null,
+            startDate: { lte: packEnd },
+            OR: [{ endDate: null }, { endDate: { gte: packStart } }],
+          },
+          select: { type: true, startDate: true, endDate: true },
+        }),
+        tx.schedulerAssignment.findMany({
+          where: {
+            designerId: toDesignerId,
+            weekStartDate: { gte: this.weekStartForDate(packStart), lte: this.weekStartForDate(packEnd) },
+          },
+          select: {
+            weekStartDate: true,
+            dayIndex: true,
+            assignedHours: true,
+            position: true,
+          },
+        }),
+        tx.schedulerWeek.findMany({
+          where: {
+            weekStartDate: {
+              gte: this.weekStartForDate(packStart),
+              lte: this.weekStartForDate(packEnd),
+            },
+            isLocked: true,
+          },
+          select: { weekStartDate: true },
+        }),
+      ]);
+
+      const destLockedWeeks = new Set(
+        packWeeks.map((w) => this.dateKey(new Date(w.weekStartDate))),
+      );
+      const usedByDay = new Map<string, number>();
+      const maxPosByDay = new Map<string, number>();
+      for (const r of existingTargetRows) {
+        const ws = this.dateKey(new Date(r.weekStartDate!));
+        const key = `${ws}|${r.dayIndex ?? 0}`;
+        usedByDay.set(key, (usedByDay.get(key) ?? 0) + this.toHours(r.assignedHours));
+        maxPosByDay.set(key, Math.max(maxPosByDay.get(key) ?? -1, Number(r.position ?? 0)));
+      }
+
+      const leaveHoursForCandidate = (date: Date): number => {
+        let hours = 0;
+        for (const leave of approvedLeaves) {
+          hours += this.leaveHoursForDate(leave, date);
+        }
+        return Math.min(DAILY_CAPACITY, hours);
+      };
+
+      let hoursRemaining = remainingHoursToMove;
+      const placements: Array<{ weekStart: string; dayIndex: number; hours: number }> = [];
+      const touchedWeekStarts = new Set<string>();
+      let cursor = packStart;
+
+      while (hoursRemaining > 0.001 && cursor <= packEnd) {
+        const key = this.dateKey(cursor);
+        const leaveBlocked =
+          this.isWeekend(cursor) || holidayKeys.has(key) ? DAILY_CAPACITY : leaveHoursForCandidate(cursor);
+        if (leaveBlocked >= DAILY_CAPACITY) {
+          cursor = this.addUtcDays(cursor, 1);
+          continue;
+        }
+
+        const candidateWeekStart = this.weekStartForDate(cursor);
+        const weekKey = this.dateKey(candidateWeekStart);
+        if (destLockedWeeks.has(weekKey) || lockedWeekKeys.has(weekKey)) {
+          cursor = this.addUtcDays(cursor, 1);
+          continue;
+        }
+
+        const candidateDayIndex = this.dayIndexForDate(cursor, candidateWeekStart);
+        const dayKey = `${weekKey}|${candidateDayIndex}`;
+        const alreadyUsed = usedByDay.get(dayKey) ?? 0;
+        const available = Math.max(0, DAILY_CAPACITY - alreadyUsed - leaveBlocked);
+        if (available <= 0.001) {
+          cursor = this.addUtcDays(cursor, 1);
+          continue;
+        }
+
+        const placeHours = Math.round(Math.min(available, hoursRemaining) * 100) / 100;
+        if (!touchedWeekStarts.has(weekKey)) {
+          await tx.schedulerWeek.upsert({
+            where: { weekStartDate: candidateWeekStart },
+            create: {
+              weekStartDate: candidateWeekStart,
+              version: 1,
+              isLocked: false,
+              updatedBy: assignedBy,
+              lastPayloadHash: null,
+            },
+            update: { version: { increment: 1 }, updatedBy: assignedBy, lastPayloadHash: null },
+          });
+          touchedWeekStarts.add(weekKey);
+        }
+
+        const nextPos = (maxPosByDay.get(dayKey) ?? -1) + 1;
+        maxPosByDay.set(dayKey, nextPos);
+        usedByDay.set(dayKey, alreadyUsed + placeHours);
+
+        await tx.schedulerAssignment.create({
+          data: {
+            designerId: toDesignerId,
+            taskId,
+            dayIndex: candidateDayIndex,
+            assignedHours: new Prisma.Decimal(placeHours),
+            parentId: taskId,
+            splitIndex: 1,
+            totalParts: 1,
+            position: nextPos,
+            weekStartDate: candidateWeekStart,
+            weekEndDate: this.weekEndForWeekStart(candidateWeekStart),
+            notes: null,
+            isLocked: false,
+            isPinned: false,
+            assignedBy,
+          },
+        });
+
+        placements.push({ weekStart: weekKey, dayIndex: candidateDayIndex, hours: placeHours });
+        affectedWeekStarts.add(weekKey);
+        hoursRemaining = Math.round((hoursRemaining - placeHours) * 100) / 100;
+        cursor = this.addUtcDays(cursor, 1);
+      }
+
+      const unplacedHours = Math.max(0, hoursRemaining);
+      if (placements.length === 0) {
+        throw new BadRequestException(
+          'Could not place remaining hours on the target designer within the next 4 weeks.',
+        );
+      }
+
+      // Sync ownership from live assignment designers for this task.
+      const liveRows = await tx.schedulerAssignment.findMany({
+        where: { taskId },
+        select: { designerId: true },
+      });
+      const designerIds = Array.from(
+        new Set(liveRows.map((r) => r.designerId).filter((id): id is string => Boolean(id))),
+      );
+
+      await tx.taskDesigner.deleteMany({ where: { taskId } });
+      if (designerIds.length > 0) {
+        await tx.taskDesigner.createMany({
+          data: designerIds.map((designerId) => ({ taskId, designerId })),
+        });
+      }
+
+      if (designerIds.length === 1) {
+        await tx.task.update({
+          where: { id: taskId },
+          data: { assigneeId: designerIds[0] },
+        });
+      } else if (designerIds.length > 1) {
+        await tx.task.update({
+          where: { id: taskId },
+          data: { assigneeId: null },
+        });
+      }
+
+      // Recompute split indices for this task.
+      const allParts = await tx.schedulerAssignment.findMany({
+        where: { taskId },
+        orderBy: [{ weekStartDate: 'asc' }, { dayIndex: 'asc' }, { position: 'asc' }],
+        select: { id: true },
+      });
+      const totalParts = allParts.length;
+      if (totalParts > 0) {
+        await Promise.all(
+          allParts.map((part, index) =>
+            tx.schedulerAssignment.update({
+              where: { id: part.id },
+              data: {
+                parentId: taskId,
+                splitIndex: totalParts > 1 ? index + 1 : null,
+                totalParts: totalParts > 1 ? totalParts : null,
+              },
+            }),
+          ),
+        );
+      }
+
+      return {
+        remainingHoursMoved: remainingHoursToMove - unplacedHours,
+        affectedWeekStarts: Array.from(affectedWeekStarts).sort(),
+        unplacedHours,
+      };
+    }, { timeout: 60_000, maxWait: 20_000 });
+
+    this.dashboardRealtime?.notifyOverviewRefresh('task_reallocated', {
+      taskId,
+      affectedWeekStarts: result.affectedWeekStarts,
+      changedTaskIds: [taskId],
+    });
+
+    return result;
+  }
 }

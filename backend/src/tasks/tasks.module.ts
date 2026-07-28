@@ -11,6 +11,6 @@ import { NotificationsModule } from '../notifications/notifications.module';
   imports: [PrismaModule, ActivitiesModule, DashboardModule, NotificationsModule],
   controllers: [TasksController],
   providers: [TasksService, TaskFilesService],
-  exports: [TaskFilesService],
+  exports: [TaskFilesService, TasksService],
 })
 export class TasksModule {}

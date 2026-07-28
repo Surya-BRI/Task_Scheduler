@@ -19,6 +19,11 @@ export type DashboardRealtimeEvent =
   | 'scheduler_week_unlocked'
   | 'regularization_approved'
   | 'regularization_rejected'
+  | 'reallocation_requested'
+  | 'reallocation_approved'
+  | 'reallocation_rejected'
+  | 'reallocation_cancelled'
+  | 'task_reallocated'
   | 'chatter_post_created'
   | 'chatter_updated'
   | 'notification_created';

@@ -1314,16 +1314,71 @@ export class TasksService {
     if (!task) throw new NotFoundException('Task not found');
     await this.assertQsTaskAccess(id, userId, role);
     // Signed URLs, scheduler hours, and people labels are independent — run together.
-    const [withUrls, schedulerHours, people] = await Promise.all([
-      this.withSignedAttachmentUrls(task),
-      this.getSchedulerHoursForTask(id, userId),
-      this.getTaskPeopleLabels(id, task),
-    ]);
+    const [withUrls, schedulerHours, people, pendingReallocation, viewerRemainingHours] =
+      await Promise.all([
+        this.withSignedAttachmentUrls(task),
+        this.getSchedulerHoursForTask(id, userId),
+        this.getTaskPeopleLabels(id, task),
+        this.prisma.reallocationRequest.findFirst({
+          where: { taskId: id, status: 'Pending' },
+          orderBy: { createdAt: 'desc' },
+          select: {
+            id: true,
+            requesterId: true,
+            suggestedDesignerId: true,
+            reason: true,
+            requester: { select: { fullName: true } },
+            suggestedDesigner: { select: { fullName: true } },
+          },
+        }),
+        userId
+          ? this.prisma.schedulerAssignment
+              .findMany({
+                where: { taskId: id, designerId: userId, isLocked: { not: true } },
+                select: { assignedHours: true },
+              })
+              .then(
+                (rows) =>
+                  Math.round(
+                    rows.reduce((sum, r) => sum + Number(r.assignedHours ?? 0), 0) * 100,
+                  ) / 100,
+              )
+          : Promise.resolve(0),
+      ]);
+
+    const statusOk = ['DESIGN_PLANNED', 'IN_PROGRESS', 'REWORK'].includes(
+      String(task.status ?? '').toUpperCase(),
+    );
+    const junctionDesignerIds = (task.taskDesigners ?? [])
+      .map((entry: { designer?: { id?: string } | null }) => entry.designer?.id ?? null)
+      .filter((id): id is string => Boolean(id));
+    const ownsTask = Boolean(
+      userId &&
+        (task.assigneeId === userId || junctionDesignerIds.includes(userId)),
+    );
+    const myPending = Boolean(userId && pendingReallocation?.requesterId === userId);
+    // Logged-remainder-only owners (post-reallocation) have 0 unlocked hours — hide CTA.
+    const viewerCanRequestReallocation = Boolean(
+      userId && statusOk && ownsTask && viewerRemainingHours >= 0.01 && !myPending,
+    );
+
     return {
       ...this.normalizeTaskForApi(withUrls),
       schedulerHours,
       createdByName: people.createdByName,
       reviewerHodName: people.reviewerHodName,
+      pendingReallocation: pendingReallocation
+        ? {
+            id: pendingReallocation.id,
+            requesterId: pendingReallocation.requesterId,
+            requesterName: pendingReallocation.requester.fullName,
+            suggestedDesignerId: pendingReallocation.suggestedDesignerId,
+            suggestedDesignerName: pendingReallocation.suggestedDesigner.fullName,
+            reason: pendingReallocation.reason,
+          }
+        : null,
+      viewerCanRequestReallocation,
+      viewerRemainingScheduledHours: viewerRemainingHours,
     };
   }
 

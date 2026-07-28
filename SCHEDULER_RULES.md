@@ -190,6 +190,17 @@ Runs as a React effect whenever `schedules` reference changes and `loadedFromErp
 
 ---
 
+## Rule 13 — Designer Reallocation Request
+
+> A designer can request HOD to move **all remaining** scheduled parts of a task to another designer.
+
+- Request status is separate from task status (`Pending` / `Approved` / `Rejected` / `Cancelled`); task status is unchanged while pending
+- On approve: freeze requester timer; keep logged hours as locked cards on requester; pack remaining hours onto target **after existing cards** (same packing family as Rule 11 / overflow placement)
+- HOD reviews from Design List toggle **All | Reallocation** (`/design-list?view=reallocation`)
+- API: `/reallocation-requests` (create, cancel, pending-approvals, review)
+
+---
+
 ## What Is NOT Currently Handled
 
 | Case | Status |
