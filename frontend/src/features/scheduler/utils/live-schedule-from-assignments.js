@@ -1,6 +1,7 @@
 import { resolveAssignmentScheduledHours } from "./scheduler-workload.util";
 import { buildDesignerSnapshot } from "./designerDashboardSync";
 import { getSystemBlockColorClass } from "./scheduler-system-block.ui";
+import { resolveTaskBlockColorClass } from "@/lib/ui/design-type-colors";
 
 const DASH_COLORS = [
   "bg-blue-100 border border-blue-300 text-blue-800",
@@ -96,7 +97,12 @@ export function buildLiveScheduleFromAssignments(assignments, tasksArr) {
     const approvedOvertimeHours = Number(a.approvedOvertimeHours) || 0;
     const scheduledHours = resolveAssignmentScheduledHours(a);
     if (!colorMap[a.taskId]) {
-      colorMap[a.taskId] = DASH_COLORS[colorIdx % DASH_COLORS.length];
+      const fallback = DASH_COLORS[colorIdx % DASH_COLORS.length];
+      colorMap[a.taskId] = resolveTaskBlockColorClass(
+        apiTask?.designType,
+        fallback,
+        apiTask?.disciplineType,
+      );
       colorIdx++;
     }
     const label = formatScheduleTaskLabel(apiTask, a.taskId);

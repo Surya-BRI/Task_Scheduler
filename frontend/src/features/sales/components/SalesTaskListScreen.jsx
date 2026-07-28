@@ -8,6 +8,7 @@ import { Navbar } from '@/components/Navbar'
 import { apiClient } from '@/lib/api-client'
 import { taskViewPathForRecord, FROM_SALES_QUEUE } from '@/lib/design-list-routes'
 import { getStatusLabel, mapTaskToDesignRow } from '@/features/design-list/task-view-model'
+import { TypeOfDesignChip } from '@/lib/ui/TypeOfDesignChip'
 
 const getStatusColor = (status) => {
   switch (status) {
@@ -120,7 +121,7 @@ export default function SalesTaskListScreen() {
                         <div className="max-w-[180px] truncate" title={row.projectName}>{row.projectName}</div>
                       </td>
                       <td className="px-2 py-1 text-slate-500">{row.businessUnit || row.designType || '—'}</td>
-                      <td className="px-2 py-1 font-medium text-slate-800 whitespace-nowrap">{row.typeOfDesign || '—'}</td>
+                      <td className="px-2 py-1"><TypeOfDesignChip value={row.typeOfDesign} /></td>
                       <td className="px-2 py-1">
                         <span className={`inline-block rounded-full border px-1.5 py-0.5 text-[10px] font-medium leading-none ${getStatusColor(row.status)}`}>
                           {getStatusLabel(row.status)}
