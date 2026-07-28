@@ -83,6 +83,7 @@ export class TasksController {
     @Query('page', new DefaultValuePipe(1), ParseIntPipe) page = 1,
     @Query('limit', new DefaultValuePipe(20), ParseIntPipe) limit = 20,
     @Query('salesQueue') salesQueue?: string,
+    @Query('salesHistory') salesHistory?: string,
   ) {
     return this.tasksService.findAll(user.sub, user.role, {
       projectId,
@@ -94,6 +95,7 @@ export class TasksController {
       page,
       limit,
       salesQueue: salesQueue === 'true' || salesQueue === '1',
+      salesHistory: salesHistory === 'true' || salesHistory === '1',
     });
   }
 

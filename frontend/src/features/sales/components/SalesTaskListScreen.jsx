@@ -23,6 +23,7 @@ const getStatusColor = (status) => {
 
 export default function SalesTaskListScreen() {
   const router = useRouter()
+  const [listMode, setListMode] = useState('queue') // 'queue' | 'history'
   const [tasks, setTasks] = useState([])
   const [loading, setLoading] = useState(true)
   const [search, setSearch] = useState('')
@@ -30,7 +31,11 @@ export default function SalesTaskListScreen() {
   const fetchTasks = useCallback(async () => {
     setLoading(true)
     try {
-      const res = await apiClient.get('/tasks?limit=500&salesQueue=true')
+      const query =
+        listMode === 'history'
+          ? '/tasks?limit=500&salesHistory=true'
+          : '/tasks?limit=500&salesQueue=true'
+      const res = await apiClient.get(query)
       const raw = Array.isArray(res) ? res : (res?.data ?? [])
       setTasks(raw.map(mapTaskToDesignRow))
     } catch {
@@ -38,7 +43,7 @@ export default function SalesTaskListScreen() {
     } finally {
       setLoading(false)
     }
-  }, [])
+  }, [listMode])
 
   useEffect(() => { fetchTasks() }, [fetchTasks])
 
@@ -53,16 +58,40 @@ export default function SalesTaskListScreen() {
     )
   }, [tasks, search])
 
+  const isHistory = listMode === 'history'
+
   return (
     <div className="app-shell h-screen flex flex-col overflow-hidden font-sans">
       <Navbar lockPrimaryNav />
       <div className="flex-1 flex flex-col min-h-0">
         {/* Toolbar */}
         <div className="shrink-0 mb-4 mt-4 flex flex-col gap-4 px-4 sm:px-6 md:flex-row md:items-center md:justify-between">
-          <h1 className="flex items-center gap-2 text-2xl font-semibold tracking-tight text-slate-900 leading-none shrink-0">
-            <SalesReviewIcon className="h-6 w-6 shrink-0 text-slate-700" strokeWidth={1.75} />
-            Sales Review Queue
-          </h1>
+          <div className="flex flex-col gap-3 sm:flex-row sm:items-center sm:gap-4">
+            <h1 className="flex items-center gap-2 text-2xl font-semibold tracking-tight text-slate-900 leading-none shrink-0">
+              <SalesReviewIcon className="h-6 w-6 shrink-0 text-slate-700" strokeWidth={1.75} />
+              {isHistory ? 'Sales Review History' : 'Sales Review Queue'}
+            </h1>
+            <div className="inline-flex rounded-md border border-slate-300 bg-slate-50 p-0.5 text-xs font-semibold">
+              <button
+                type="button"
+                onClick={() => setListMode('queue')}
+                className={`rounded px-3 py-1.5 transition-colors ${
+                  !isHistory ? 'bg-white text-slate-900 shadow-sm' : 'text-slate-500 hover:text-slate-700'
+                }`}
+              >
+                Queue
+              </button>
+              <button
+                type="button"
+                onClick={() => setListMode('history')}
+                className={`rounded px-3 py-1.5 transition-colors ${
+                  isHistory ? 'bg-white text-slate-900 shadow-sm' : 'text-slate-500 hover:text-slate-700'
+                }`}
+              >
+                History
+              </button>
+            </div>
+          </div>
           <div className="flex items-center gap-2 md:ml-auto">
             <div className="relative">
               <Search className="pointer-events-none absolute left-3 top-1/2 h-4 w-4 -translate-y-1/2 text-slate-400" />
@@ -85,11 +114,47 @@ export default function SalesTaskListScreen() {
           </div>
         </div>
 
-        {/* Table */}
+        {/* Table — same design for queue and history */}
         {loading ? (
-          <div className="flex flex-1 items-center justify-center text-sm text-slate-400">Loading…</div>
+          <div className="flex min-h-0 flex-1 flex-col px-4 pb-6 sm:px-6" aria-busy="true" aria-label="Loading list">
+            <div className="ui-surface h-full overflow-auto">
+              <table className="w-full text-xs text-left leading-tight">
+                <thead className="ui-table-header sticky top-0 z-10 border-b border-slate-200">
+                  <tr>
+                    <th className="px-2 py-1.5">Task</th>
+                    <th className="px-2 py-1.5">Project</th>
+                    <th className="px-2 py-1.5">Business Unit</th>
+                    <th className="px-2 py-1.5">Design Type</th>
+                    <th className="px-2 py-1.5">Status</th>
+                    <th className="px-2 py-1.5">Created</th>
+                    <th className="px-2 py-1.5">Deadline</th>
+                    <th className="px-2 py-1.5">Aging</th>
+                  </tr>
+                </thead>
+                <tbody className="divide-y divide-slate-100">
+                  {Array.from({ length: 8 }).map((_, i) => (
+                    <tr key={`sales-list-skel-${i}`} className="animate-pulse">
+                      <td className="px-2 py-2">
+                        <div className="h-3 w-40 rounded bg-slate-200" />
+                        <div className="mt-1 h-2.5 w-16 rounded bg-slate-100" />
+                      </td>
+                      <td className="px-2 py-2"><div className="h-3 w-32 rounded bg-slate-100" /></td>
+                      <td className="px-2 py-2"><div className="h-3 w-20 rounded bg-slate-100" /></td>
+                      <td className="px-2 py-2"><div className="h-5 w-16 rounded-full bg-slate-100" /></td>
+                      <td className="px-2 py-2"><div className="h-5 w-20 rounded-full bg-slate-100" /></td>
+                      <td className="px-2 py-2"><div className="h-3 w-16 rounded bg-slate-100" /></td>
+                      <td className="px-2 py-2"><div className="h-3 w-16 rounded bg-slate-100" /></td>
+                      <td className="px-2 py-2"><div className="h-3 w-8 rounded bg-slate-100" /></td>
+                    </tr>
+                  ))}
+                </tbody>
+              </table>
+            </div>
+          </div>
         ) : filtered.length === 0 ? (
-          <div className="flex flex-1 items-center justify-center text-sm text-slate-500">No tasks in sales review.</div>
+          <div className="flex flex-1 items-center justify-center text-sm text-slate-500">
+            {isHistory ? 'No reviewed tasks yet.' : 'No tasks in sales review.'}
+          </div>
         ) : (
           <div className="flex min-h-0 flex-1 flex-col px-4 pb-6 sm:px-6">
             <div className="ui-surface h-full overflow-auto">
