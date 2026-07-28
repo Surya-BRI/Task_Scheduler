@@ -416,20 +416,21 @@ function QsProjectDetailContent() {
                   </span>
                 ) : null}
               </div>
-              <div className="ml-auto flex shrink-0 gap-2" role="group" aria-label="Primary sign row actions">
+              <div className="ml-auto flex shrink-0 flex-wrap items-center justify-end gap-2" role="group" aria-label="Sign row actions: save first, then submit">
                 <button
                   type="button"
                   onClick={handleSaveSignRows}
                   disabled={isQsReadOnly || signRowsSaving || qsSubmitting || !hasUnsavedChanges}
                   aria-busy={signRowsSaving}
+                  aria-disabled={isQsReadOnly || signRowsSaving || qsSubmitting || !hasUnsavedChanges}
                   title={
                     isQsReadOnly
                       ? 'QS update already submitted'
                       : !hasUnsavedChanges
                         ? 'No unsaved changes'
-                        : undefined
+                        : 'Save your changes (required before submit)'
                   }
-                  className="inline-flex items-center gap-1.5 rounded-md bg-[#10a6e3] px-3 py-1 text-[11px] font-semibold text-white transition hover:bg-[#0f96cd] disabled:cursor-not-allowed disabled:opacity-60"
+                  className="inline-flex items-center gap-1.5 rounded-md bg-[#10a6e3] px-3 py-1 text-[11px] font-semibold text-white shadow-sm transition hover:bg-[#0f96cd] focus:outline-none focus-visible:ring-2 focus-visible:ring-[#10a6e3]/40 focus-visible:ring-offset-1 disabled:cursor-not-allowed disabled:bg-slate-300 disabled:text-slate-500 disabled:shadow-none disabled:hover:bg-slate-300"
                 >
                   {signRowsSaving ? (
                     <>
@@ -444,6 +445,8 @@ function QsProjectDetailContent() {
                   type="button"
                   onClick={handleSubmitQsUpdate}
                   disabled={!canSubmitQsUpdate}
+                  aria-busy={qsSubmitting}
+                  aria-disabled={!canSubmitQsUpdate}
                   title={
                     isQsReadOnly
                       ? 'QS update already submitted'
@@ -451,14 +454,13 @@ function QsProjectDetailContent() {
                         ? 'Please save your changes before submitting'
                         : !hasChangesSinceSubmit
                           ? 'Make a change before submitting'
-                          : undefined
+                          : 'Submit saved QS update'
                   }
-                  aria-busy={qsSubmitting}
-                  className="inline-flex items-center gap-1.5 rounded-md bg-emerald-600 px-3 py-1 text-[11px] font-semibold text-white transition hover:bg-emerald-700 disabled:cursor-not-allowed disabled:opacity-60"
+                  className="inline-flex items-center gap-1.5 rounded-md border border-emerald-600 bg-white px-3 py-1 text-[11px] font-semibold text-emerald-700 transition hover:bg-emerald-50 focus:outline-none focus-visible:ring-2 focus-visible:ring-emerald-400/40 focus-visible:ring-offset-1 disabled:cursor-not-allowed disabled:border-slate-300 disabled:bg-slate-50 disabled:text-slate-400 disabled:hover:bg-slate-50"
                 >
                   {qsSubmitting ? (
                     <>
-                      <span className="inline-block h-3 w-3 animate-spin rounded-full border-2 border-white/40 border-t-white" aria-hidden />
+                      <span className="inline-block h-3 w-3 animate-spin rounded-full border-2 border-emerald-200 border-t-emerald-600" aria-hidden />
                       Submitting…
                     </>
                   ) : isQsReadOnly ? (
