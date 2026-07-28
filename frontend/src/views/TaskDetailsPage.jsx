@@ -3020,13 +3020,22 @@ export function TaskDetailsPage() {
                                   aria-busy={signRowsSaving}
                                   aria-disabled={isQsReadOnly || signRowsSaving || qsSubmitting || !hasUnsavedSignRowChanges}
                                   title={
-                                    isQsReadOnly
-                                      ? 'QS update already submitted'
-                                      : !hasUnsavedSignRowChanges
-                                        ? 'No unsaved changes'
-                                        : 'Save your changes (required before submit)'
+                                    signRowsSaving
+                                      ? 'Saving…'
+                                      : isQsReadOnly
+                                        ? 'QS update already submitted'
+                                        : !hasUnsavedSignRowChanges
+                                          ? 'No unsaved changes'
+                                          : 'Save your changes (required before submit)'
                                   }
-                                  className="inline-flex items-center gap-1.5 rounded-md bg-[#10a6e3] px-3 py-1 text-[11px] font-semibold text-white shadow-sm transition hover:bg-[#0f96cd] focus:outline-none focus-visible:ring-2 focus-visible:ring-[#10a6e3]/40 focus-visible:ring-offset-1 disabled:cursor-not-allowed disabled:bg-slate-300 disabled:text-slate-500 disabled:shadow-none disabled:hover:bg-slate-300"
+                                  className={
+                                    'inline-flex items-center gap-1.5 rounded-md px-3 py-1 text-[11px] font-semibold shadow-sm transition focus:outline-none focus-visible:ring-2 focus-visible:ring-[#10a6e3]/40 focus-visible:ring-offset-1 ' +
+                                    (signRowsSaving
+                                      ? 'cursor-wait bg-[#10a6e3] text-white opacity-90'
+                                      : isQsReadOnly || qsSubmitting || !hasUnsavedSignRowChanges
+                                        ? 'cursor-not-allowed bg-slate-300 text-slate-500 shadow-none'
+                                        : 'bg-[#10a6e3] text-white hover:bg-[#0f96cd]')
+                                  }
                                 >
                                   {signRowsSaving ? (
                                     <>
@@ -3040,19 +3049,28 @@ export function TaskDetailsPage() {
                                 <button
                                   type="button"
                                   onClick={handleSubmitQsUpdate}
-                                  disabled={!canSubmitQsUpdate}
+                                  disabled={qsSubmitting || !canSubmitQsUpdate}
                                   aria-busy={qsSubmitting}
-                                  aria-disabled={!canSubmitQsUpdate}
+                                  aria-disabled={qsSubmitting || !canSubmitQsUpdate}
                                   title={
-                                    isQsReadOnly
-                                      ? 'QS update already submitted'
-                                      : hasUnsavedSignRowChanges
-                                        ? 'Please save your changes before submitting'
-                                        : !hasSignRowChangesSinceSubmit
-                                          ? 'Make a change before submitting'
-                                          : 'Submit saved QS update'
+                                    qsSubmitting
+                                      ? 'Submitting…'
+                                      : isQsReadOnly
+                                        ? 'QS update already submitted'
+                                        : hasUnsavedSignRowChanges
+                                          ? 'Please save your changes before submitting'
+                                          : !hasSignRowChangesSinceSubmit
+                                            ? 'Make a change before submitting'
+                                            : 'Submit saved QS update'
                                   }
-                                  className="inline-flex items-center gap-1.5 rounded-md border border-emerald-600 bg-white px-3 py-1 text-[11px] font-semibold text-emerald-700 transition hover:bg-emerald-50 focus:outline-none focus-visible:ring-2 focus-visible:ring-emerald-400/40 focus-visible:ring-offset-1 disabled:cursor-not-allowed disabled:border-slate-300 disabled:bg-slate-50 disabled:text-slate-400 disabled:hover:bg-slate-50"
+                                  className={
+                                    'inline-flex items-center gap-1.5 rounded-md border px-3 py-1 text-[11px] font-semibold transition focus:outline-none focus-visible:ring-2 focus-visible:ring-emerald-400/40 focus-visible:ring-offset-1 ' +
+                                    (qsSubmitting
+                                      ? 'cursor-wait border-emerald-600 bg-white text-emerald-700 opacity-90'
+                                      : canSubmitQsUpdate
+                                        ? 'border-emerald-600 bg-white text-emerald-700 hover:bg-emerald-50'
+                                        : 'cursor-not-allowed border-slate-300 bg-slate-50 text-slate-400')
+                                  }
                                 >
                                   {qsSubmitting ? (
                                     <>
