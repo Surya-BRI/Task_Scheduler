@@ -7,11 +7,16 @@ import { toast } from 'sonner'
 import { Navbar } from '@/components/Navbar'
 import { Button } from '@/components/ui/button'
 import { Modal } from '@/components/ui/Modal'
+import { QsStatusIndicator } from '@/components/ui/QsStatusIndicator'
 import { apiClient } from '@/lib/api-client'
 import { useRoleGuard } from '@/lib/use-role-guard'
 import { useDesignListStore } from '@/state/DesignListContext'
 
 // ─── Sign row helpers (self-contained, no coupling to TaskDetailsPage) ───────
+
+/** Max length for QS sign-row comments (must match backend SIGN_ROW_COMMENT_MAX_LENGTH). */
+const SIGN_ROW_COMMENT_MAX_LENGTH = 250
+const SIGN_ROW_COMMENT_PLACEHOLDER = 'Provide a brief reason or relevant remarks.'
 
 const SIGN_ROW_SUBMIT_REQUIRED = [
   ['tNo', 'T.No'],
@@ -51,6 +56,17 @@ function normalizeOptionalInteger(value, label, rowNumber) {
   return number
 }
 
+function normalizeSignRowComment(value, rowNumber) {
+  // Single-line: collapse any pasted newlines, then trim edges.
+  const comment = String(value ?? '').replace(/[\r\n]+/g, ' ').trim()
+  if (comment.length > SIGN_ROW_COMMENT_MAX_LENGTH) {
+    throw new Error(
+      `Comment must be at most ${SIGN_ROW_COMMENT_MAX_LENGTH} characters in row ${rowNumber}.`,
+    )
+  }
+  return comment || undefined
+}
+
 function normalizeSignRow(row, index) {
   return {
     id: row.id || undefined,
@@ -64,7 +80,7 @@ function normalizeSignRow(row, index) {
     levelParcel: String(row.levelParcel ?? '').trim(),
     sequence: String(row.sequence ?? '').trim(),
     status: String(row.status ?? '').trim(),
-    comment: String(row.comment ?? '').trim() || undefined,
+    comment: normalizeSignRowComment(row.comment, index + 1),
     contRef: String(row.contRef ?? '').trim(),
     signFamily: String(row.signFamily ?? '').trim() || undefined,
   }
@@ -404,32 +420,34 @@ function QsProjectDetailContent() {
           {/* Sign rows section */}
           <div className="rounded-lg border border-slate-200 bg-white p-4 shadow-sm">
             <div className="mb-2 flex items-center justify-between">
-              <div className="flex items-center gap-2">
+              <div className="flex flex-wrap items-center gap-2">
                 <p className="text-xs font-semibold text-slate-700">Sign Rows</p>
-                {isQsReadOnly ? (
-                  <span className="rounded-full border border-emerald-200 bg-emerald-50 px-2 py-0.5 text-[10px] font-semibold text-emerald-700">
-                    Completed - Read Only
-                  </span>
-                ) : qsStatus?.status ? (
-                  <span className="rounded-full border border-blue-200 bg-blue-50 px-2 py-0.5 text-[10px] font-semibold text-blue-700">
-                    QS {qsStatus.status}
-                  </span>
-                ) : null}
+                <QsStatusIndicator status={qsStatus?.status} />
               </div>
-              <div className="ml-auto flex shrink-0 gap-2" role="group" aria-label="Primary sign row actions">
+              <div className="ml-auto flex shrink-0 flex-wrap items-center justify-end gap-2" role="group" aria-label="Sign row actions: save first, then submit">
                 <button
                   type="button"
                   onClick={handleSaveSignRows}
                   disabled={isQsReadOnly || signRowsSaving || qsSubmitting || !hasUnsavedChanges}
                   aria-busy={signRowsSaving}
+                  aria-disabled={isQsReadOnly || signRowsSaving || qsSubmitting || !hasUnsavedChanges}
                   title={
-                    isQsReadOnly
-                      ? 'QS update already submitted'
-                      : !hasUnsavedChanges
-                        ? 'No unsaved changes'
-                        : undefined
+                    signRowsSaving
+                      ? 'Saving…'
+                      : isQsReadOnly
+                        ? 'QS update already submitted'
+                        : !hasUnsavedChanges
+                          ? 'No unsaved changes'
+                          : 'Save your changes (required before submit)'
                   }
-                  className="inline-flex items-center gap-1.5 rounded-md bg-[#10a6e3] px-3 py-1 text-[11px] font-semibold text-white transition hover:bg-[#0f96cd] disabled:cursor-not-allowed disabled:opacity-60"
+                  className={
+                    'inline-flex items-center gap-1.5 rounded-md px-3 py-1 text-[11px] font-semibold shadow-sm transition focus:outline-none focus-visible:ring-2 focus-visible:ring-[#10a6e3]/40 focus-visible:ring-offset-1 ' +
+                    (signRowsSaving
+                      ? 'cursor-wait bg-[#10a6e3] text-white opacity-90'
+                      : isQsReadOnly || qsSubmitting || !hasUnsavedChanges
+                        ? 'cursor-not-allowed bg-slate-300 text-slate-500 shadow-none'
+                        : 'bg-[#10a6e3] text-white hover:bg-[#0f96cd]')
+                  }
                 >
                   {signRowsSaving ? (
                     <>
@@ -443,22 +461,32 @@ function QsProjectDetailContent() {
                 <button
                   type="button"
                   onClick={handleSubmitQsUpdate}
-                  disabled={!canSubmitQsUpdate}
-                  title={
-                    isQsReadOnly
-                      ? 'QS update already submitted'
-                      : hasUnsavedChanges
-                        ? 'Please save your changes before submitting'
-                        : !hasChangesSinceSubmit
-                          ? 'Make a change before submitting'
-                          : undefined
-                  }
+                  disabled={qsSubmitting || !canSubmitQsUpdate}
                   aria-busy={qsSubmitting}
-                  className="inline-flex items-center gap-1.5 rounded-md bg-emerald-600 px-3 py-1 text-[11px] font-semibold text-white transition hover:bg-emerald-700 disabled:cursor-not-allowed disabled:opacity-60"
+                  aria-disabled={qsSubmitting || !canSubmitQsUpdate}
+                  title={
+                    qsSubmitting
+                      ? 'Submitting…'
+                      : isQsReadOnly
+                        ? 'QS update already submitted'
+                        : hasUnsavedChanges
+                          ? 'Please save your changes before submitting'
+                          : !hasChangesSinceSubmit
+                            ? 'Make a change before submitting'
+                            : 'Submit saved QS update'
+                  }
+                  className={
+                    'inline-flex items-center gap-1.5 rounded-md border px-3 py-1 text-[11px] font-semibold transition focus:outline-none focus-visible:ring-2 focus-visible:ring-emerald-400/40 focus-visible:ring-offset-1 ' +
+                    (qsSubmitting
+                      ? 'cursor-wait border-emerald-600 bg-white text-emerald-700 opacity-90'
+                      : canSubmitQsUpdate
+                        ? 'border-emerald-600 bg-white text-emerald-700 hover:bg-emerald-50'
+                        : 'cursor-not-allowed border-slate-300 bg-slate-50 text-slate-400')
+                  }
                 >
                   {qsSubmitting ? (
                     <>
-                      <span className="inline-block h-3 w-3 animate-spin rounded-full border-2 border-white/40 border-t-white" aria-hidden />
+                      <span className="inline-block h-3 w-3 animate-spin rounded-full border-2 border-emerald-200 border-t-emerald-600" aria-hidden />
                       Submitting…
                     </>
                   ) : isQsReadOnly ? (
@@ -470,40 +498,84 @@ function QsProjectDetailContent() {
               </div>
             </div>
 
-            <div className="overflow-auto rounded-md border border-slate-200">
-              <table className="w-full text-[11px]">
-                <thead className="bg-slate-100 text-slate-600">
-                  <tr>
+            <div className="overflow-auto rounded-xl border border-slate-200/80 bg-white shadow-sm">
+              <table className="w-full min-w-[1100px] border-separate border-spacing-0 text-[11px]">
+                <thead>
+                  <tr className="bg-slate-50">
                     {['Actions', 'Sign Type', 'No', 'T.No', 'Est QTY', 'Qs QTY', 'Seq', 'Status', 'Cont.Ref',
                       'Plan Code', 'Area/Zone', 'Level/Parcel', 'Comment'].map((h) => (
                       <th
                         key={h}
-                        className={`px-1.5 py-0.5 text-left text-[9px] font-semibold whitespace-nowrap border-r border-slate-200 last:border-r-0${h === 'Sign Type' ? ' w-[220px] min-w-[220px]' : ''}${h === 'Actions' ? ' w-[72px] min-w-[72px]' : ''}`}
+                        className={`sticky top-0 z-10 border-b border-slate-200 bg-slate-50 px-2.5 py-2.5 text-left text-[10px] font-semibold uppercase tracking-wide text-slate-500 whitespace-nowrap${h === 'Sign Type' ? ' w-[220px] min-w-[220px]' : ''}${h === 'Actions' ? ' w-[88px] min-w-[88px]' : ''}${h === 'Comment' ? ' min-w-[200px]' : ''}`}
                       >
                         {h === 'Actions' ? <span className="sr-only">Actions</span> : h}
-                        {h && h !== 'Comment' && h !== 'Actions' && <span className="ml-0.5 text-red-600" title="Required">*</span>}
+                        {h && h !== 'Comment' && h !== 'Actions' && <span className="ml-0.5 font-normal normal-case tracking-normal text-red-500" title="Required">*</span>}
+                        {h === 'Comment' && (
+                          <span className="ml-1 font-normal normal-case tracking-normal text-slate-400" title={SIGN_ROW_COMMENT_PLACEHOLDER}>
+                            (max {SIGN_ROW_COMMENT_MAX_LENGTH})
+                          </span>
+                        )}
                       </th>
                     ))}
                   </tr>
                 </thead>
-                <tbody className="divide-y divide-slate-100">
+                <tbody>
                   {signRowsLoading ? (
                     Array.from({ length: 4 }).map((_, i) => (
                       <tr key={i} className="animate-pulse">
                         {Array.from({ length: 13 }).map((__, j) => (
-                          <td key={j} className="px-1 py-1.5">
-                            <div className="h-5 rounded bg-slate-200" />
+                          <td key={j} className="border-b border-slate-100 px-2.5 py-2">
+                            <div className="h-8 rounded-md bg-slate-100" />
                           </td>
                         ))}
                       </tr>
                     ))
                   ) : signRows.length === 0 ? (
                     <tr>
-                      <td colSpan={13} className="px-3 py-6 text-center text-slate-500">
-                        No rows yet. Click + Add Row.
+                      <td colSpan={13} className="px-4 py-12 text-center">
+                        <div className="mx-auto flex max-w-md flex-col items-center gap-2">
+                          <p className="text-sm font-semibold text-slate-800">
+                            No Sign Rows added yet
+                          </p>
+                          <p className="text-xs leading-relaxed text-slate-500">
+                            Click{' '}
+                            <span className="font-semibold text-slate-700">+ Add Row</span>
+                            {' '}to create the first entry, then fill in the required QS/sign
+                            details (sign type, quantities, plan code, area/zone, status, and related fields).
+                          </p>
+                          {!isQsReadOnly && (
+                            <button
+                              type="button"
+                              onClick={() =>
+                                setSignRows([
+                                  {
+                                    tNo: '',
+                                    no: '',
+                                    signType: '',
+                                    planCode: '',
+                                    estQty: '',
+                                    qsQty: '',
+                                    areaZone: '',
+                                    levelParcel: '',
+                                    sequence: '',
+                                    status: '',
+                                    comment: '',
+                                    contRef: '',
+                                    signFamily: '',
+                                  },
+                                ])
+                              }
+                              className="mt-1 inline-flex items-center rounded-md bg-[#10a6e3] px-3 py-1.5 text-[11px] font-semibold text-white transition hover:bg-[#0f96cd]"
+                            >
+                              + Add Row
+                            </button>
+                          )}
+                        </div>
                       </td>
                     </tr>
                   ) : (() => {
+                    const inputClass =
+                      'h-8 w-full rounded-md border border-slate-200 bg-white px-2.5 text-[11px] text-slate-800 shadow-sm transition placeholder:text-slate-400 focus:border-[#10a6e3] focus:outline-none focus:ring-2 focus:ring-[#10a6e3]/20 disabled:cursor-not-allowed disabled:bg-slate-50 disabled:text-slate-500'
                     const groups = signRows.reduce((acc, row, idx) => {
                       const family = String(row.signFamily ?? '').trim() || 'Other'
                       let g = acc.find((x) => x.family === family)
@@ -513,24 +585,29 @@ function QsProjectDetailContent() {
                     }, [])
                     return groups.map(({ family, rows }) => (
                       <React.Fragment key={`fam-${family}`}>
-                        <tr>
-                          <td className="bg-white border-r border-slate-300" aria-hidden />
-                          <td className="pl-0 pr-2 py-1 bg-white">
-                            <span className="inline-flex items-center border-l-4 border-l-blue-500 bg-slate-50 pl-2 pr-3 py-1 text-xs font-semibold uppercase tracking-wide text-blue-600">
+                        <tr className="bg-slate-50/70">
+                          <td className="border-b border-slate-100 px-2.5 py-2" aria-hidden />
+                          <td colSpan={12} className="border-b border-slate-100 px-2.5 py-2">
+                            <span className="inline-flex items-center gap-2 rounded-md bg-sky-50 px-2.5 py-1 text-[10px] font-semibold uppercase tracking-wider text-sky-700 ring-1 ring-inset ring-sky-100">
+                              <span className="h-1.5 w-1.5 rounded-full bg-sky-500" aria-hidden />
                               {family}
                             </span>
                           </td>
-                          <td colSpan={11} className="bg-white" />
                         </tr>
-                        {rows.map((row) => (
-                          <tr key={row.id ?? row._idx} className="hover:bg-slate-50">
-                            <td className="px-1 py-0.5 border-r border-slate-300 align-middle">
+                        {rows.map((row, rowPos) => (
+                          <tr
+                            key={row.id ?? row._idx}
+                            className={`border-b border-slate-100 transition-colors hover:bg-sky-50/50 ${
+                              rowPos % 2 === 0 ? 'bg-white' : 'bg-slate-50/40'
+                            }`}
+                          >
+                            <td className="px-2.5 py-2 align-middle">
                               {!isQsReadOnly && !isApprovedRow(row) && (
                                 <button
                                   type="button"
                                   onClick={() => setDeleteConfirm({ idx: row._idx, family })}
                                   aria-label={`Delete row from ${family}`}
-                                  className="inline-flex items-center gap-1 rounded border border-red-300 bg-red-50 px-2 py-0.5 text-[11px] font-semibold text-red-700 transition-colors hover:border-red-600 hover:bg-red-600 hover:text-white focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-red-400 focus-visible:ring-offset-1"
+                                  className="inline-flex items-center gap-1 rounded-md border border-red-200 bg-red-50 px-2 py-1 text-[10px] font-semibold text-red-600 transition-colors hover:border-red-500 hover:bg-red-600 hover:text-white focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-red-400 focus-visible:ring-offset-1"
                                 >
                                   <Trash2 className="h-3 w-3 shrink-0" aria-hidden />
                                   Delete
@@ -539,15 +616,47 @@ function QsProjectDetailContent() {
                             </td>
                             {['signType', 'no', 'tNo', 'estQty', 'qsQty', 'sequence', 'status', 'contRef',
                                'planCode', 'areaZone', 'levelParcel', 'comment'].map((field) => (
-                              <td key={field} className={`p-0 border-r border-slate-300 last:border-r-0${field === 'signType' ? ' relative group w-[220px] min-w-[220px]' : ''}`}>
+                              <td
+                                key={field}
+                                className={`px-2.5 py-2 align-middle${field === 'signType' ? ' relative group w-[220px] min-w-[220px]' : ''}${field === 'comment' ? ' min-w-[200px]' : ''}`}
+                              >
                                 {isLockedStatusField(row, field) ? (
                                   <input
                                     value={row[field] ?? ''}
                                     readOnly
                                     tabIndex={-1}
                                     title="Approved status is locked and cannot be changed."
-                                    className="h-6 w-full cursor-not-allowed border border-slate-400 bg-slate-50 px-1.5 text-[11px] text-slate-500 focus:outline-none"
+                                    className={`${inputClass} cursor-not-allowed bg-slate-50 text-slate-500 shadow-none`}
                                   />
+                                ) : field === 'comment' ? (
+                                  <div className="relative">
+                                    <input
+                                      type="text"
+                                      value={row.comment ?? ''}
+                                      onChange={(e) => {
+                                        const next = e.target.value.replace(/[\r\n]+/g, ' ').slice(0, SIGN_ROW_COMMENT_MAX_LENGTH)
+                                        setSignRows((prev) =>
+                                          prev.map((r, i) => (i === row._idx ? { ...r, comment: next } : r)),
+                                        )
+                                      }}
+                                      disabled={isQsReadOnly}
+                                      maxLength={SIGN_ROW_COMMENT_MAX_LENGTH}
+                                      placeholder={SIGN_ROW_COMMENT_PLACEHOLDER}
+                                      title={SIGN_ROW_COMMENT_PLACEHOLDER}
+                                      aria-describedby={`sign-row-comment-count-${row._idx}`}
+                                      className={`${inputClass} pr-12`}
+                                    />
+                                    <span
+                                      id={`sign-row-comment-count-${row._idx}`}
+                                      className={`pointer-events-none absolute inset-y-0 right-2.5 flex items-center text-[9px] tabular-nums ${
+                                        String(row.comment ?? '').length >= SIGN_ROW_COMMENT_MAX_LENGTH
+                                          ? 'text-amber-700'
+                                          : 'text-slate-400'
+                                      }`}
+                                    >
+                                      {String(row.comment ?? '').length}/{SIGN_ROW_COMMENT_MAX_LENGTH}
+                                    </span>
+                                  </div>
                                 ) : (
                                 <input
                                   value={row[field] ?? ''}
@@ -557,11 +666,11 @@ function QsProjectDetailContent() {
                                     )
                                   }
                                   disabled={isQsReadOnly}
-                                  className="h-6 w-full border border-slate-400 px-1.5 text-[11px] text-slate-900 focus:border-blue-500 focus:outline-none focus:ring-1 focus:ring-blue-300 disabled:bg-slate-50 disabled:text-slate-500"
+                                  className={inputClass}
                                 />
                                 )}
                                 {field === 'signType' && row[field] && (
-                                  <div className="pointer-events-none absolute left-0 top-full z-50 mt-1 hidden max-w-[260px] rounded border border-slate-200 bg-white px-3 py-2 text-[11px] text-slate-800 shadow-lg group-hover:block">
+                                  <div className="pointer-events-none absolute left-2.5 top-full z-50 mt-1 hidden max-w-[260px] rounded-lg border border-slate-200 bg-white px-3 py-2 text-[11px] text-slate-800 shadow-lg group-hover:block">
                                     {row[field]}
                                   </div>
                                 )}
@@ -571,7 +680,7 @@ function QsProjectDetailContent() {
                         ))}
                         {!isQsReadOnly && (
                           <tr>
-                            <td colSpan={13} className="px-0 py-0.5 bg-white">
+                            <td colSpan={13} className="border-b border-slate-100 bg-white px-2.5 py-2 text-right">
                               <button
                                 type="button"
                                 onClick={() =>
@@ -585,7 +694,7 @@ function QsProjectDetailContent() {
                                     return next
                                   })
                                 }
-                                className="float-right mr-1 my-0.5 rounded px-2 py-0.5 text-[10px] font-semibold text-white bg-[#10a6e3] hover:bg-[#0f96cd]"
+                                className="inline-flex items-center rounded-md bg-[#10a6e3] px-2.5 py-1 text-[10px] font-semibold text-white shadow-sm transition hover:bg-[#0f96cd]"
                               >
                                 + Add Row
                               </button>
