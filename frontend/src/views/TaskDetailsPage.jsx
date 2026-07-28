@@ -2358,9 +2358,10 @@ export function TaskDetailsPage() {
   }
 
   async function handleSaveSignRows() {
+    if (signRowsSaving) return
     if (!projectId) return
     if (isQsReadOnly) {
-      toast.error('Completed QS projects are read-only.')
+      toast.error('Completed QS projects are read-only.', { id: 'qs-sign-rows-save' })
       return
     }
     setSignRowsSaving(true)
@@ -2378,12 +2379,17 @@ export function TaskDetailsPage() {
       if (nextRows.length !== rows.length) {
         throw new Error('Sign Family rows were saved but could not be verified. Please refresh and check again.')
       }
-      toast.success(`Sign Family rows saved (${nextRows.length}).`)
-      await fetchActivities({ append: false, cursor: null })
+      toast.success('QS rows saved successfully.', { id: 'qs-sign-rows-save' })
     } catch (error) {
-      toast.error(friendlyError(error, 'Failed to save sign rows'))
+      toast.error(friendlyError(error, 'Failed to save sign rows'), { id: 'qs-sign-rows-save' })
+      return
     } finally {
       setSignRowsSaving(false)
+    }
+    try {
+      await fetchActivities({ append: false, cursor: null })
+    } catch {
+      // Save already succeeded; activity refresh failures must not replace the success toast.
     }
   }
 

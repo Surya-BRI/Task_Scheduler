@@ -260,8 +260,9 @@ function QsProjectDetailContent() {
 
   // ── handlers ──
   async function handleSaveSignRows() {
+    if (signRowsSaving) return
     if (!projectId || isQsReadOnly) {
-      toast.error('Completed QS projects are read-only.')
+      toast.error('Completed QS projects are read-only.', { id: 'qs-sign-rows-save' })
       return
     }
     setSignRowsSaving(true)
@@ -277,9 +278,9 @@ function QsProjectDetailContent() {
       if (nextRows.length !== rows.length) {
         throw new Error('Rows saved but could not be verified. Please refresh.')
       }
-      toast.success(`Sign rows saved (${nextRows.length}).`)
+      toast.success('QS rows saved successfully.', { id: 'qs-sign-rows-save' })
     } catch (error) {
-      toast.error(friendlyError(error, 'Failed to save sign rows'))
+      toast.error(friendlyError(error, 'Failed to save sign rows'), { id: 'qs-sign-rows-save' })
     } finally {
       setSignRowsSaving(false)
     }
