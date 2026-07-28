@@ -1,5 +1,6 @@
 "use client";
 import { useEffect, useState } from "react";
+import { TypeOfDesignChip } from "@/lib/ui/TypeOfDesignChip";
 
 export default function WeeksSection({ completedTasksByWeek, onOpenTask }) {
   const weekKeys = Object.keys(completedTasksByWeek);
@@ -92,9 +93,7 @@ function CompletedTable({ tasks, onOpenTask }) {
                 <span className="block truncate" title={task.projectDetails}>{task.projectDetails}</span>
               </td>
               <td className="py-2.5 px-3">
-                {task.designType ? (
-                  <span className="rounded bg-blue-50 px-1.5 py-0.5 text-[10px] font-medium text-blue-600 whitespace-nowrap">{task.designType}</span>
-                ) : <span className="text-slate-400">—</span>}
+                <TypeOfDesignChip value={task.designType} />
               </td>
               <td className="py-2.5 px-3">
                 <span className="rounded-full bg-emerald-100 px-2 py-0.5 text-[10px] font-semibold text-emerald-700">
