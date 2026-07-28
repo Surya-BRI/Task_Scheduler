@@ -220,6 +220,8 @@ export type TaskFilters = {
   limit?: number;
   /** When true, SALESPERSON list is limited to SALES_REVIEW (sales review queue). */
   salesQueue?: boolean;
+  /** When true, SALESPERSON list shows tasks they already reviewed (left the queue). */
+  salesHistory?: boolean;
 };
 
 export type NextRevisionQuery = {
@@ -1157,12 +1159,34 @@ export class TasksService {
   }
 
   async findAll(userId: string, role: UserRole, filters: TaskFilters = {}) {
-    const { projectId, status, excludeStatuses, priority, assigneeId, search, page = 1, limit = 20, salesQueue = false } = filters;
+    const {
+      projectId,
+      status,
+      excludeStatuses,
+      priority,
+      assigneeId,
+      search,
+      page = 1,
+      limit = 20,
+      salesQueue = false,
+      salesHistory = false,
+    } = filters;
     const skip = (page - 1) * limit;
 
-    // Role-based base filters — preserve sales review queue when salesQueue=true
-    const baseWhere: Record<string, unknown> =
-      role === UserRole.SALESPERSON && salesQueue ? { status: 'SALES_REVIEW' } : {};
+    // Role-based base filters — preserve sales review queue / history when requested
+    let baseWhere: Record<string, unknown> = {};
+    if (role === UserRole.SALESPERSON && salesQueue) {
+      baseWhere = { status: 'SALES_REVIEW' };
+    } else if (role === UserRole.SALESPERSON && salesHistory) {
+      const historyTaskIds = await this.findSalesHistoryTaskIds(userId, Math.max(limit * page, 500));
+      if (historyTaskIds.length === 0) {
+        return { data: [], total: 0, page, limit, totalPages: 0 };
+      }
+      baseWhere = {
+        id: { in: historyTaskIds },
+        status: { not: 'SALES_REVIEW' },
+      };
+    }
     const addAndFilter = (condition: Record<string, unknown>) => {
       baseWhere.AND = [...((baseWhere.AND as Record<string, unknown>[] | undefined) ?? []), condition];
     };
@@ -1238,6 +1262,40 @@ export class TasksService {
     };
   }
 
+  /**
+   * Task ids the salesperson already decided on after Sales Review
+   * (accepted / rejected / rework / hold / other status leave from SALES_REVIEW).
+   */
+  private async findSalesHistoryTaskIds(salesUserId: string, take = 500): Promise<string[]> {
+    const rows = await this.prisma.activityLog.findMany({
+      where: {
+        userId: salesUserId,
+        taskId: { not: null },
+        OR: [
+          { action: ActivityAction.CLIENT_APPROVED },
+          { action: ActivityAction.CLIENT_REJECTED_TASK },
+          {
+            action: ActivityAction.STATUS_CHANGED,
+            details: { contains: '"oldStatus":"SALES_REVIEW"' },
+          },
+        ],
+      },
+      select: { taskId: true, createdAt: true },
+      orderBy: { createdAt: 'desc' },
+      take: Math.min(Math.max(take, 50), 1000),
+    });
+
+    const seen = new Set<string>();
+    const ids: string[] = [];
+    for (const row of rows) {
+      const id = row.taskId;
+      if (!id || seen.has(id)) continue;
+      seen.add(id);
+      ids.push(id);
+    }
+    return ids;
+  }
+
   /** Sidebar backlog only — unassigned + on-hold, excluding completed. */
   async findSchedulerQueue(): Promise<{ data: SchedulerTaskSummaryDto[] }> {
     const rows = await this.prisma.task.findMany({
@@ -1255,12 +1313,74 @@ export class TasksService {
     const task = await this.prisma.task.findUnique({ where: { id }, select: TASK_SELECT });
     if (!task) throw new NotFoundException('Task not found');
     await this.assertQsTaskAccess(id, userId, role);
-    // Signed URLs and scheduler hours are independent — run together to cut open latency.
-    const [withUrls, schedulerHours] = await Promise.all([
+    // Signed URLs, scheduler hours, and people labels are independent — run together.
+    const [withUrls, schedulerHours, people] = await Promise.all([
       this.withSignedAttachmentUrls(task),
       this.getSchedulerHoursForTask(id, userId),
+      this.getTaskPeopleLabels(id, task),
     ]);
-    return { ...this.normalizeTaskForApi(withUrls), schedulerHours };
+    return {
+      ...this.normalizeTaskForApi(withUrls),
+      schedulerHours,
+      createdByName: people.createdByName,
+      reviewerHodName: people.reviewerHodName,
+    };
+  }
+
+  /**
+   * Created By = actor of TASK_CREATED (Sales or HOD).
+   * Reviewer HOD = HOD/Admin who first assigned the task (activity), else retail hodName / technicalHead.
+   */
+  private async getTaskPeopleLabels(
+    taskId: string,
+    task: {
+      technicalHead?: string | null;
+      retailDetails?: Array<{ hodName?: string | null }> | null;
+    },
+  ) {
+    const [created, assignedRows] = await Promise.all([
+      this.prisma.activityLog.findFirst({
+        where: { taskId, action: ActivityAction.TASK_CREATED },
+        orderBy: { createdAt: 'asc' },
+        select: { user: { select: { fullName: true } } },
+      }),
+      this.prisma.activityLog.findMany({
+        where: { taskId, action: ActivityAction.ASSIGNED_TASK },
+        orderBy: { createdAt: 'asc' },
+        take: 20,
+        select: {
+          user: {
+            select: {
+              fullName: true,
+              role: { select: { name: true } },
+            },
+          },
+        },
+      }),
+    ]);
+
+    const createdByName = created?.user?.fullName?.trim() || null;
+
+    const retailHod =
+      (task.retailDetails ?? [])
+        .map((line) => String(line?.hodName ?? '').trim())
+        .find((name) => name.length > 0) || null;
+
+    const hodAssigner = assignedRows.find((row) => {
+      const roleName = String(row.user?.role?.name ?? '').toUpperCase();
+      return roleName === 'HOD' || roleName === 'ADMIN';
+    });
+    const anyAssigner = assignedRows[0]?.user?.fullName?.trim() || null;
+    const technicalHead = String(task.technicalHead ?? '').trim() || null;
+
+    const reviewerHodName =
+      hodAssigner?.user?.fullName?.trim() ||
+      retailHod ||
+      technicalHead ||
+      anyAssigner ||
+      null;
+
+    return { createdByName, reviewerHodName };
   }
 
   private async getSchedulerHoursForTask(taskId: string, viewerUserId?: string) {
@@ -1337,10 +1457,18 @@ export class TasksService {
       .sort((a, b) => b.assignedHours - a.assignedHours);
 
     const totalAssignedHours = Math.round(parts.reduce((sum, part) => sum + part.assignedHours, 0) * 100) / 100;
-    const totalLoggedHours = Math.round(
-      parts.reduce((sum, part) => sum + part.loggedHours, 0) * 100,
-    ) / 100;
+    // Sum all work sessions (Draft/HandedOff/Submitted), not only designers still on the grid.
+    let totalLoggedSeconds = 0;
+    for (const seconds of loggedSecondsByDesigner.values()) {
+      totalLoggedSeconds += seconds;
+    }
+    const totalLoggedHours = workedHoursFromSeconds(totalLoggedSeconds);
     const myPart = viewerUserId ? parts.find((part) => part.designerId === viewerUserId) : undefined;
+    // Designer may have submitted time without a remaining assignment row — still expose myLoggedHours.
+    const myLoggedSeconds = viewerUserId ? (loggedSecondsByDesigner.get(viewerUserId) ?? 0) : 0;
+    const myLoggedHours =
+      myPart?.loggedHours ??
+      (myLoggedSeconds > 0 ? workedHoursFromSeconds(myLoggedSeconds) : null);
 
     let myApprovedOvertimeHours: number | null = null;
     let myPendingOvertimeHours: number | null = null;
@@ -1372,7 +1500,7 @@ export class TasksService {
       totalLoggedHours,
       myHours: myPart?.assignedHours ?? null,
       myAssignedHours: myPart?.assignedHours ?? null,
-      myLoggedHours: myPart?.loggedHours ?? null,
+      myLoggedHours,
       myOverAssignedHours: myPart?.overAssignedHours ?? null,
       myApprovedOvertimeHours,
       myPendingOvertimeHours,

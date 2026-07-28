@@ -836,9 +836,14 @@ function mapTaskToRecord(task) {
     }
   }
   const providedAssets = Array.from(assetsMap.values())
+  const reviewerHodFromApi = String(task.reviewerHodName ?? '').trim()
   const reviewerHodRaw =
-    (task.retailDetails ?? []).find((line) => String(line?.hodName ?? '').trim())?.hodName ?? '-'
+    reviewerHodFromApi ||
+    (task.retailDetails ?? []).find((line) => String(line?.hodName ?? '').trim())?.hodName ||
+    task.technicalHead ||
+    '-'
   const reviewerHod = prettifyHodName(reviewerHodRaw)
+  const createdByName = String(task.createdByName ?? '').trim() || '-'
   const retailDesignTypes = [
     ...new Set(
       (task.retailDetails ?? [])
@@ -864,6 +869,7 @@ function mapTaskToRecord(task) {
     revisionCode: task.revisionCode ?? null,
     status: normalizeStatusCode(task.status ?? 'DESIGN_NEW'),
     priority: task.priority ?? '-',
+    createdByName,
     reviewerHod,
     providedAssets,
     hoursRequired,
@@ -2665,12 +2671,15 @@ export function TaskDetailsPage() {
                             value={(() => {
                               const sh = record.schedulerHours;
                               if (!sh) return '-';
-                              if (isHodManagementMode) {
+                              // Sales/HOD/Admin review the whole task — use totals, not the viewer's own timer.
+                              if (isHodManagementMode || isSales || isAdmin || !isDesignerWorkMode) {
                                 const logged = sh.totalLoggedHours ?? 0;
                                 return logged > 0 ? formatHoursAsHm(logged) : '-';
                               }
                               const mine = sh.myLoggedHours ?? 0;
-                              return mine > 0 ? formatHoursAsHm(mine) : '-';
+                              if (mine > 0) return formatHoursAsHm(mine);
+                              const logged = sh.totalLoggedHours ?? 0;
+                              return logged > 0 ? formatHoursAsHm(logged) : '-';
                             })()}
                           />
                           <DetailRow
@@ -2678,9 +2687,13 @@ export function TaskDetailsPage() {
                             value={(() => {
                               const sh = record.schedulerHours;
                               if (!sh) return '-';
-                              const viewerId = _session?.designerId ?? _session?.id ?? null;
-                              const assigned = isHodManagementMode ? (sh.totalAssignedHours ?? sh.totalHours) : (sh.myAssignedHours ?? sh.myHours);
-                              const logged = isHodManagementMode ? (sh.totalLoggedHours ?? 0) : (sh.myLoggedHours ?? 0);
+                              const useTaskTotals = isHodManagementMode || isSales || isAdmin || !isDesignerWorkMode;
+                              const assigned = useTaskTotals
+                                ? (sh.totalAssignedHours ?? sh.totalHours)
+                                : (sh.myAssignedHours ?? sh.myHours ?? sh.totalAssignedHours ?? sh.totalHours);
+                              const logged = useTaskTotals
+                                ? (sh.totalLoggedHours ?? 0)
+                                : (sh.myLoggedHours ?? sh.totalLoggedHours ?? 0);
                               if (assigned == null || assigned <= 0) return '-';
                               const rem = Math.max(0, assigned - logged);
                               return formatHoursAsHm(rem);
@@ -2696,7 +2709,7 @@ export function TaskDetailsPage() {
                         <div className="space-y-0.5">
                           <DetailRow label="Created Date" value={record.created ?? '-'} />
                           <DetailRow label="Deadline" value={record.deadline ?? '-'} />
-                          <DetailRow label="Created By" value={taskAuditInfo.createdByHod} />
+                          <DetailRow label="Created By" value={record.createdByName || taskAuditInfo.createdByHod || '-'} />
                           <DetailRow label="Reviewer HOD" value={record.reviewerHod ?? '-'} />
                           <DetailRow label="Assigned To" value={record.assignedTo ?? 'Unassigned'} />
                         </div>
