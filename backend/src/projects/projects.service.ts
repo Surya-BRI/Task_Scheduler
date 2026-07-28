@@ -729,6 +729,32 @@ END;
     return SIGN_ROW_FIELDS.some((f) => (before?.[f] ?? null) !== (after[f] ?? null));
   }
 
+  /** Rejects submit when the client payload differs from already-persisted rows. */
+  private assertSubmitPayloadMatchesSavedRows(
+    existingRows: Array<Record<string, unknown> & { id: string }>,
+    incomingRows: Array<Record<string, unknown> & { id?: string }>,
+  ) {
+    if (incomingRows.length !== existingRows.length) {
+      throw new BadRequestException('Please save your changes before submitting.');
+    }
+    const existingById = new Map(existingRows.map((row) => [row.id, row]));
+    for (const row of incomingRows) {
+      const id = typeof row.id === 'string' ? row.id.trim() : row.id;
+      if (!id || !existingById.has(String(id))) {
+        throw new BadRequestException('Please save your changes before submitting.');
+      }
+      const existing = existingById.get(String(id))!;
+      const { id: _ignored, ...data } = row;
+      if (this.hasSignRowChanges(existing, data)) {
+        throw new BadRequestException('Please save your changes before submitting.');
+      }
+      existingById.delete(String(id));
+    }
+    if (existingById.size > 0) {
+      throw new BadRequestException('Please save your changes before submitting.');
+    }
+  }
+
   async getSignRows(projectId: string, userId?: string, role?: UserRole) {
     await this.assertProjectAccess(projectId, userId, role);
     return this.prisma.projectSignRow.findMany({ where: { projectId }, orderBy: { createdAt: 'asc' } });
@@ -848,7 +874,13 @@ END;
     if (previousStatus.status === QS_STATUS_COMPLETED) {
       throw new BadRequestException('This QS project has already been submitted and is read-only.');
     }
-    const savedRows = await this.saveSignRows(projectId, { rows: dto.rows }, userId, role);
+    // Submit must use already-persisted rows only — never apply unsaved client edits.
+    const rowsToSubmit = this.normalizeSignRowsDto(dto);
+    const existingRows = await this.prisma.projectSignRow.findMany({
+      where: { projectId },
+      orderBy: { createdAt: 'asc' },
+    });
+    this.assertSubmitPayloadMatchesSavedRows(existingRows, rowsToSubmit);
     const nextStatus = await this.setProjectQsStatus(projectId, QS_STATUS_COMPLETED, userId);
     await this.activityLogger.log({
       action: ActivityAction.QS_UPDATE_SUBMITTED,
@@ -857,13 +889,13 @@ END;
         event: ActivityAction.QS_UPDATE_SUBMITTED,
         messageKey: 'qs_update_submitted',
         projectSnapshot: { id: project.id, projectNo: project.projectNo, name: project.name },
-        changes: { rowCount: savedRows.length, oldStatus: previousStatus.status, newStatus: nextStatus.status },
+        changes: { rowCount: existingRows.length, oldStatus: previousStatus.status, newStatus: nextStatus.status },
         context: { source: 'projects.submitQsUpdate', submittedByRole: role ?? null },
       },
     });
 
     const hodUsers = await this.prisma.user.findMany({ where: { role: { name: { in: ['HOD', 'ADMIN'] } } }, select: { id: true } });
-    const message = `${project.projectNo ? `${project.projectNo} — ` : ''}${project.name} QS update submitted with ${savedRows.length} sign row(s).`;
+    const message = `${project.projectNo ? `${project.projectNo} — ` : ''}${project.name} QS update submitted with ${existingRows.length} sign row(s).`;
     for (const hod of hodUsers) {
       this.notificationsService
         .create({ userId: hod.id, title: 'QS Update Submitted', message, linkUrl: `/project-task-creation/${project.projectNo}?from=projects-list&projectCode=${project.projectNo}&designType=Project` })
@@ -871,6 +903,6 @@ END;
       this.dashboardRealtime?.notifyUserNotificationRefresh(hod.id);
     }
 
-    return { status: nextStatus.status, qsStatus: nextStatus, rows: savedRows };
+    return { status: nextStatus.status, qsStatus: nextStatus, rows: existingRows };
   }
 }

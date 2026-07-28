@@ -7,6 +7,8 @@ import { CreateTaskModal } from '../components/CreateTaskModal'
 import { ProjectCreateTaskModal } from '../components/ProjectCreateTaskModal'
 import { Navbar } from '../components/Navbar'
 import { ProjectTaskTimer } from '../components/ProjectTaskTimer'
+import { Button } from '@/components/ui/button'
+import { Modal } from '@/components/ui/Modal'
 import {
   applyRemoteTimerPause,
   writeTaskLifecycleSync,
@@ -58,6 +60,7 @@ import {
 } from '@/lib/design-list-routes'
 import { getSession } from '@/lib/mock-auth'
 import { hasHodWorkflowAccess } from '@/lib/workflow-roles'
+import { useDesignListStore } from '@/state/DesignListContext'
 import {
   formatHoursAsHm,
   formatSchedulerAssignedHours,
@@ -1208,6 +1211,7 @@ export function TaskDetailsPage() {
   const pathname = usePathname()
   const searchParams = useSearchParams()
   const params = useParams()
+  const { setRecords } = useDesignListStore()
   const routeId = params?.taskId ?? params?.id
   const queryOpNo = searchParams.get('opNo')
   const queryProjectCode = searchParams.get('projectCode')
@@ -1259,14 +1263,17 @@ export function TaskDetailsPage() {
   const [signRows, setSignRows] = useState([])
   // Snapshot of the rows as last loaded/saved; used to detect unsaved changes.
   const [savedRowsSnapshot, setSavedRowsSnapshot] = useState(() => serializeSignRows([]))
-  // Snapshot of the rows as loaded/last submitted; "Save Rows" does not reset
-  // this, so "Submit QS Update" stays enabled after saving changed rows.
+  // Snapshot of the rows as loaded/last submitted. Save clears unsaved dirty state
+  // but leaves this snapshot so Submit stays available for saved-but-unsubmitted work.
   const [submittedRowsSnapshot, setSubmittedRowsSnapshot] = useState(() => serializeSignRows([]))
   const [signRowsLoading, setSignRowsLoading] = useState(false)
   const [signRowsSaving, setSignRowsSaving] = useState(false)
   const [qsStatus, setQsStatus] = useState(null)
   const [qsSubmitting, setQsSubmitting] = useState(false)
   const [deleteConfirm, setDeleteConfirm] = useState(null) // { idx, family }
+  // Sync locks so rapid clicks cannot fire duplicate requests before React re-renders.
+  const signRowsSavingRef = useRef(false)
+  const qsSubmittingRef = useRef(false)
   const [projectId, setProjectId] = useState('')
   const [taskId, setTaskId] = useState('')
   const [projectFiles, setProjectFiles] = useState([])
@@ -1597,13 +1604,15 @@ export function TaskDetailsPage() {
     () => serializeSignRows(signRows) !== savedRowsSnapshot,
     [signRows, savedRowsSnapshot],
   )
-  // Dirty when current rows differ from the state at load / last submission.
-  // Saving rows keeps this true, so a saved-but-not-yet-submitted change still
-  // allows resubmission; reverting every change disables the button again.
+  // True when current rows differ from load / last submission. After a successful
+  // Save (and with no further edits), Submit is enabled; any new edit disables it
+  // again until the latest changes are saved.
   const hasSignRowChangesSinceSubmit = useMemo(
     () => serializeSignRows(signRows) !== submittedRowsSnapshot,
     [signRows, submittedRowsSnapshot],
   )
+  const canSubmitQsUpdate =
+    !isQsReadOnly && !signRowsSaving && !qsSubmitting && hasSignRowChangesSinceSubmit && !hasUnsavedSignRowChanges
   const isProjectTeamComplete =
     Boolean(technicalHead.trim()) &&
     Boolean(teamLead.trim()) &&
@@ -2356,11 +2365,13 @@ export function TaskDetailsPage() {
   }
 
   async function handleSaveSignRows() {
+    if (signRowsSavingRef.current || qsSubmittingRef.current) return
     if (!projectId) return
     if (isQsReadOnly) {
-      toast.error('Completed QS projects are read-only.')
+      toast.error('Completed QS projects are read-only.', { id: 'qs-sign-rows-save' })
       return
     }
+    signRowsSavingRef.current = true
     setSignRowsSaving(true)
     try {
       const rows = normalizeSignRowsForSave(signRows)
@@ -2376,41 +2387,78 @@ export function TaskDetailsPage() {
       if (nextRows.length !== rows.length) {
         throw new Error('Sign Family rows were saved but could not be verified. Please refresh and check again.')
       }
-      toast.success(`Sign Family rows saved (${nextRows.length}).`)
-      await fetchActivities({ append: false, cursor: null })
+      toast.success('QS rows saved successfully.', { id: 'qs-sign-rows-save' })
     } catch (error) {
-      toast.error(friendlyError(error, 'Failed to save sign rows'))
+      toast.error(friendlyError(error, 'Failed to save sign rows'), { id: 'qs-sign-rows-save' })
+      return
     } finally {
+      signRowsSavingRef.current = false
       setSignRowsSaving(false)
+    }
+    try {
+      await fetchActivities({ append: false, cursor: null })
+    } catch {
+      // Save already succeeded; activity refresh failures must not replace the success toast.
     }
   }
 
   async function handleSubmitQsUpdate() {
+    if (qsSubmittingRef.current || signRowsSavingRef.current) return
     if (!projectId) return
     if (isQsReadOnly) {
-      toast.error('This QS update has already been submitted.')
+      toast.error('This QS update has already been submitted.', { id: 'qs-submit' })
+      return
+    }
+    if (hasUnsavedSignRowChanges) {
+      toast.error('Please save your changes before submitting.', { id: 'qs-submit' })
       return
     }
     if (!hasSignRowChangesSinceSubmit) {
-      toast.error('Make at least one change before submitting a QS update.')
+      toast.error('Make at least one change before submitting a QS update.', { id: 'qs-submit' })
       return
     }
+    qsSubmittingRef.current = true
     setQsSubmitting(true)
     try {
       const rows = normalizeSignRowsForSubmit(signRows)
       const response = await apiClient.post(`/projects/${projectId}/qs-submit`, { rows })
-      const nextRows = Array.isArray(response?.rows) ? response.rows : await apiClient.get(`/projects/${projectId}/sign-rows`)
+      const nextRows = Array.isArray(response?.rows)
+        ? response.rows
+        : await apiClient.get(`/projects/${projectId}/sign-rows`)
       const submittedRows = Array.isArray(nextRows) ? nextRows : []
+      const nextStatus =
+        response?.qsStatus ??
+        (await apiClient.get(`/projects/${projectId}/qs-status`).catch(() => null)) ??
+        { status: response?.status ?? 'Completed' }
       setSignRows(submittedRows)
       setSavedRowsSnapshot(serializeSignRows(submittedRows))
       setSubmittedRowsSnapshot(serializeSignRows(submittedRows))
-      setQsStatus(response?.qsStatus ?? { status: response?.status ?? 'Completed' })
-      toast.success('QS update submitted. Project is now read-only.')
-      await fetchActivities({ append: false, cursor: null })
+      setQsStatus(nextStatus)
+      const completedStatus = String(nextStatus?.status ?? 'Completed')
+      setRecords((prev) =>
+        prev.map((row) => {
+          const matchesProject =
+            row.id === projectId ||
+            row.projectCode === record?.projectCode ||
+            row.projectNo === record?.projectCode ||
+            row.projectCode === queryProjectCode ||
+            row.projectNo === queryProjectCode
+          return matchesProject ? { ...row, status: completedStatus } : row
+        }),
+      )
+      // Only confirm success after the backend accepted the submission.
+      toast.success('QS Update submitted successfully.', { id: 'qs-submit', duration: 5000 })
     } catch (error) {
-      toast.error(friendlyError(error, 'Failed to submit QS update'))
+      toast.error(friendlyError(error, 'Failed to submit QS update'), { id: 'qs-submit' })
+      return
     } finally {
+      qsSubmittingRef.current = false
       setQsSubmitting(false)
+    }
+    try {
+      await fetchActivities({ append: false, cursor: null })
+    } catch {
+      // Submit already succeeded; activity refresh failures must not replace the success toast.
     }
   }
 
@@ -2963,25 +3011,57 @@ export function TaskDetailsPage() {
                                 </span>
                               ) : null}
                             </div>
-                            {!isQsReadOnly ? (
-                              <div className="flex gap-2">
+                            {isQs ? (
+                              <div className="ml-auto flex shrink-0 gap-2" role="group" aria-label="Primary sign row actions">
                                 <button
                                   type="button"
                                   onClick={handleSaveSignRows}
-                                  disabled={signRowsSaving || qsSubmitting || !hasUnsavedSignRowChanges}
-                                  title={!hasUnsavedSignRowChanges ? 'No unsaved changes' : undefined}
-                                  className="rounded-md bg-[#10a6e3] px-3 py-1 text-[11px] font-semibold text-white transition hover:bg-[#0f96cd] disabled:cursor-not-allowed disabled:opacity-60"
+                                  disabled={isQsReadOnly || signRowsSaving || qsSubmitting || !hasUnsavedSignRowChanges}
+                                  aria-busy={signRowsSaving}
+                                  title={
+                                    isQsReadOnly
+                                      ? 'QS update already submitted'
+                                      : !hasUnsavedSignRowChanges
+                                        ? 'No unsaved changes'
+                                        : undefined
+                                  }
+                                  className="inline-flex items-center gap-1.5 rounded-md bg-[#10a6e3] px-3 py-1 text-[11px] font-semibold text-white transition hover:bg-[#0f96cd] disabled:cursor-not-allowed disabled:opacity-60"
                                 >
-                                  {signRowsSaving ? 'Saving…' : 'Save Rows'}
+                                  {signRowsSaving ? (
+                                    <>
+                                      <span className="inline-block h-3 w-3 animate-spin rounded-full border-2 border-white/40 border-t-white" aria-hidden />
+                                      Saving…
+                                    </>
+                                  ) : (
+                                    'Save Rows'
+                                  )}
                                 </button>
                                 <button
                                   type="button"
                                   onClick={handleSubmitQsUpdate}
-                                  disabled={signRowsSaving || qsSubmitting || !hasSignRowChangesSinceSubmit}
-                                  title={!hasSignRowChangesSinceSubmit ? 'Make a change before submitting' : undefined}
-                                  className="rounded-md bg-emerald-600 px-3 py-1 text-[11px] font-semibold text-white transition hover:bg-emerald-700 disabled:cursor-not-allowed disabled:opacity-60"
+                                  disabled={!canSubmitQsUpdate}
+                                  title={
+                                    isQsReadOnly
+                                      ? 'QS update already submitted'
+                                      : hasUnsavedSignRowChanges
+                                        ? 'Please save your changes before submitting'
+                                        : !hasSignRowChangesSinceSubmit
+                                          ? 'Make a change before submitting'
+                                          : undefined
+                                  }
+                                  aria-busy={qsSubmitting}
+                                  className="inline-flex items-center gap-1.5 rounded-md bg-emerald-600 px-3 py-1 text-[11px] font-semibold text-white transition hover:bg-emerald-700 disabled:cursor-not-allowed disabled:opacity-60"
                                 >
-                                  {qsSubmitting ? 'Submitting…' : 'Submit QS Update'}
+                                  {qsSubmitting ? (
+                                    <>
+                                      <span className="inline-block h-3 w-3 animate-spin rounded-full border-2 border-white/40 border-t-white" aria-hidden />
+                                      Submitting…
+                                    </>
+                                  ) : isQsCompleted ? (
+                                    'Submitted'
+                                  ) : (
+                                    'Submit QS Update'
+                                  )}
                                 </button>
                               </div>
                             ) : null}
@@ -2990,11 +3070,11 @@ export function TaskDetailsPage() {
                             <table className="w-full text-[11px]">
                               <thead className="bg-slate-100 text-slate-600">
                                 <tr>
-                                  {['Sign Type','No','T.No','Est QTY','Qs QTY','Seq','Status','Cont.Ref',
-                                      'Plan Code','Area/Zone','Level/Parcel','Comment',''].map((h) => (
-                                    <th key={h} className="px-1.5 py-0.5 text-left text-[9px] font-semibold whitespace-nowrap border-r border-slate-200 last:border-r-0">
-                                      {h}
-                                      {h && h !== 'Comment' && <span className="ml-0.5 text-red-600" title="Required">*</span>}
+                                  {['Actions','Sign Type','No','T.No','Est QTY','Qs QTY','Seq','Status','Cont.Ref',
+                                      'Plan Code','Area/Zone','Level/Parcel','Comment'].map((h) => (
+                                    <th key={h} className={`px-1.5 py-0.5 text-left text-[9px] font-semibold whitespace-nowrap border-r border-slate-200 last:border-r-0${h === 'Actions' ? ' w-[72px] min-w-[72px]' : ''}`}>
+                                      {h === 'Actions' ? <span className="sr-only">Actions</span> : h}
+                                      {h && h !== 'Comment' && h !== 'Actions' && <span className="ml-0.5 text-red-600" title="Required">*</span>}
                                     </th>
                                   ))}
                                 </tr>
@@ -3023,15 +3103,29 @@ export function TaskDetailsPage() {
                                   return signRowGroups.map(({ family, rows }) => (
                                     <React.Fragment key={`fam-${family}`}>
                                       <tr>
+                                        <td className="bg-white border-r border-slate-300" aria-hidden />
                                         <td className="pl-0 pr-2 py-1 bg-white">
                                           <span className="inline-flex items-center border-l-4 border-l-blue-500 bg-slate-50 pl-2 pr-3 py-1 text-xs font-semibold uppercase tracking-wide text-blue-600">
                                             {family}
                                           </span>
                                         </td>
-                                        <td colSpan={12} className="bg-white" />
+                                        <td colSpan={11} className="bg-white" />
                                       </tr>
                                       {rows.map((row) => (
                                         <tr key={row.id ?? row._idx} className="hover:bg-slate-50">
+                                          <td className="px-1 py-0.5 border-r border-slate-300 align-middle">
+                                            {!isQsReadOnly && !isApprovedSignRow(row) ? (
+                                              <button
+                                                type="button"
+                                                onClick={() => setDeleteConfirm({ idx: row._idx, family })}
+                                                aria-label={`Delete row from ${family}`}
+                                                className="inline-flex items-center gap-1 rounded border border-red-300 bg-red-50 px-2 py-0.5 text-[11px] font-semibold text-red-700 transition-colors hover:border-red-600 hover:bg-red-600 hover:text-white focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-red-400 focus-visible:ring-offset-1"
+                                              >
+                                                <Trash2 className="h-3 w-3 shrink-0" aria-hidden />
+                                                Delete
+                                              </button>
+                                            ) : null}
+                                          </td>
                                           {['signType','no','tNo','estQty','qsQty','sequence','status','contRef',
                                               'planCode','areaZone','levelParcel','comment'].map((field) => (
                                             <td key={field} className={`p-0 border-r border-slate-300 last:border-r-0${field === 'signType' ? ' relative group' : ''}`}>
@@ -3058,17 +3152,6 @@ export function TaskDetailsPage() {
                                               )}
                                             </td>
                                           ))}
-                                          <td className="px-1 py-0.5">
-                                            {!isQsReadOnly && !isApprovedSignRow(row) ? (
-                                              <button
-                                                type="button"
-                                                onClick={() => setDeleteConfirm({ idx: row._idx, family })}
-                                                className="flex items-center justify-center rounded border border-red-200 bg-red-50 px-2 py-0.5 text-[11px] font-semibold text-red-500 transition-colors hover:border-red-500 hover:bg-red-500 hover:text-white"
-                                              >
-                                                Delete
-                                              </button>
-                                            ) : null}
-                                          </td>
                                         </tr>
                                       ))}
                                       {!isQsReadOnly ? (
@@ -3732,37 +3815,42 @@ export function TaskDetailsPage() {
         </div>
       )}
 
-      {deleteConfirm && (
-        <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/40">
-          <div className="w-full max-w-sm rounded-lg border border-slate-200 bg-white p-5 shadow-xl">
-            <p className="text-sm font-semibold text-slate-800">Delete Row?</p>
-            <p className="mt-1 text-xs text-slate-500">
-              Are you sure you want to delete this row from{' '}
-              <span className="font-semibold text-blue-600">{deleteConfirm.family}</span>?
-              This cannot be undone.
-            </p>
-            <div className="mt-4 flex justify-end gap-2">
-              <button
-                type="button"
-                onClick={() => setDeleteConfirm(null)}
-                className="rounded border border-slate-300 px-3 py-1.5 text-xs font-medium text-slate-600 hover:bg-slate-50"
-              >
-                Cancel
-              </button>
-              <button
-                type="button"
-                onClick={() => {
-                  setSignRows((prev) => prev.filter((_, i) => i !== deleteConfirm.idx))
-                  setDeleteConfirm(null)
-                }}
-                className="rounded bg-red-500 px-3 py-1.5 text-xs font-semibold text-white hover:bg-red-600"
-              >
-                Delete
-              </button>
-            </div>
-          </div>
-        </div>
-      )}
+      <Modal
+        open={Boolean(deleteConfirm)}
+        onClose={() => setDeleteConfirm(null)}
+        title="Delete Row?"
+        size="sm"
+        footer={(
+          <>
+            <Button
+              type="button"
+              variant="secondary"
+              autoFocus
+              onClick={() => setDeleteConfirm(null)}
+              className="px-3 py-1.5 text-xs"
+            >
+              Cancel
+            </Button>
+            <Button
+              type="button"
+              variant="danger"
+              onClick={() => {
+                setSignRows((prev) => prev.filter((_, i) => i !== deleteConfirm.idx))
+                setDeleteConfirm(null)
+              }}
+              className="px-3 py-1.5 text-xs"
+            >
+              Delete
+            </Button>
+          </>
+        )}
+      >
+        <p className="text-sm text-slate-600">
+          Are you sure you want to delete this row from{' '}
+          <span className="font-semibold text-blue-600">{deleteConfirm?.family}</span>?
+          This cannot be undone.
+        </p>
+      </Modal>
     </div>
   )
 }
