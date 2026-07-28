@@ -6,6 +6,7 @@ import {
   getSystemBlockBadge,
   getSystemBlockHatchStyle,
 } from "@/features/scheduler/utils/scheduler-system-block.ui";
+import { formatRetailDesignTypeLabel } from "@/lib/ui/design-type-colors";
 
 const HOUR_COLS = [
   "0-1 HR", "1-2 HR", "2-3 HR", "3-4 HR",
@@ -62,12 +63,14 @@ function TaskBlock({ task, onOtClick, onOpenTask }) {
   const canRequestOvertime = onOtClick && !task.isSystemBlock && !task.isOvertime;
   const canOpenTask = onOpenTask && !task.isSystemBlock;
   const label = task.requestLabel || task.label;
+  const designTypeLabel = formatRetailDesignTypeLabel(task.designType);
+  const blockTitle = designTypeLabel ? `${label} — ${designTypeLabel}` : label;
   return (
     <div className="h-full flex items-center w-full relative z-10 px-0.5 group/task">
       <div
         className={`h-[24px] w-full min-w-0 rounded flex items-center justify-between px-1 transition-shadow truncate ${systemBadge ? "" : "shadow-sm"} ${bgClass} ${canOpenTask ? "cursor-pointer hover:shadow-md" : ""}`}
         style={hatchStyle}
-        title={label}
+        title={blockTitle}
         onClick={canOpenTask ? () => {
           const record = resolveSchedulerTaskRecord(task);
           if (!record) return;

@@ -44,6 +44,7 @@ import {
   resolveTaskIdForChatter,
 } from '@/features/chatter/utils/resolve-chatter-task-id'
 import { normalizeStatusCode, getStatusLabel } from '@/features/design-list/task-view-model'
+import { resolveDisciplinePillClass, resolveRetailDesignTypePillClass } from '@/lib/ui/design-type-colors'
 import {
   FROM_DESIGN_LIST,
   FROM_DESIGNER_QUEUE,
@@ -1022,11 +1023,19 @@ function getTaskStatusBadgeClass(normalizedStatus) {
 }
 
 const DISCIPLINE_PILL_CLASSES = {
-  Artwork:   'bg-blue-100 text-blue-700',
-  Technical: 'bg-orange-100 text-orange-700',
-  Location:  'bg-green-100 text-green-700',
-  'As-Built':'bg-purple-100 text-purple-700',
-  BIM:       'bg-teal-100 text-teal-700',
+  BIM: 'bg-teal-100 text-teal-700',
+}
+
+function DisciplinePill({ type }) {
+  if (!type) return <span className="text-slate-400">—</span>
+  const cls = resolveDisciplinePillClass(type)
+    ?? DISCIPLINE_PILL_CLASSES[type]
+    ?? 'bg-slate-100 text-slate-600 border border-slate-200'
+  return (
+    <span className={`inline-block rounded-full border px-2 py-0.5 text-[10px] font-medium leading-none ${cls}`}>
+      {type}
+    </span>
+  )
 }
 
 const RETAIL_TYPE_LABELS = {
@@ -1034,13 +1043,6 @@ const RETAIL_TYPE_LABELS = {
   PRESENTATION: 'Presentation',
   CLIENT_SUBMISSION: 'Client Submission',
   TECHNICAL_DRAWING: 'Technical Drawing',
-}
-
-const RETAIL_TYPE_PILL_CLASSES = {
-  'Estimation Purpose': 'bg-sky-100 text-sky-700',
-  Presentation: 'bg-violet-100 text-violet-700',
-  'Client Submission': 'bg-amber-100 text-amber-700',
-  'Technical Drawing': 'bg-teal-100 text-teal-700',
 }
 
 function formatRetailTypeLabel(task) {
@@ -1057,22 +1059,12 @@ function formatRetailTypeLabel(task) {
   return null
 }
 
-function DisciplinePill({ type }) {
-  if (!type) return <span className="text-slate-400">—</span>
-  const cls = DISCIPLINE_PILL_CLASSES[type] ?? 'bg-slate-100 text-slate-600'
-  return (
-    <span className={`inline-block rounded-full px-2 py-0.5 text-[10px] font-semibold ${cls}`}>
-      {type}
-    </span>
-  )
-}
-
 function RetailTypePill({ task }) {
   const label = formatRetailTypeLabel(task)
   if (!label) return <span className="text-slate-400">—</span>
-  const cls = RETAIL_TYPE_PILL_CLASSES[label] ?? 'bg-slate-100 text-slate-600'
+  const cls = resolveRetailDesignTypePillClass(label) ?? 'bg-slate-100 text-slate-600 border border-slate-200'
   return (
-    <span className={`inline-block rounded-full px-2 py-0.5 text-[10px] font-semibold ${cls}`}>
+    <span className={`inline-block rounded-full border px-2 py-0.5 text-[10px] font-medium leading-none ${cls}`}>
       {label}
     </span>
   )

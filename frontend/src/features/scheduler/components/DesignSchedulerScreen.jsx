@@ -70,6 +70,13 @@ import {
     sumSlotTotalHours,
     WEEKDAY_INDICES as WORKLOAD_WEEKDAY_INDICES,
 } from "../utils/scheduler-workload.util";
+import {
+    resolveDisciplineBlockClass,
+    resolveDisciplinePillClass,
+    resolveRetailDesignTypeBlockClass,
+    resolveRetailDesignTypePillClass,
+    resolveTaskBlockColorClass,
+} from "@/lib/ui/design-type-colors";
 // Only these backend events should trigger a scheduler reload for other HODs.
 // Capacity constants
 const DAILY_CAPACITY = 8; // 8hrs per day = normal capacity (green/blue)
@@ -409,27 +416,34 @@ function toInitials(fullName) {
 }
 
 const DISCIPLINE_CHIP_CLASSES = {
-  'Artwork':   'bg-blue-100 text-blue-700 border border-blue-200',
-  'Technical': 'bg-orange-100 text-orange-700 border border-orange-200',
-  'Location':  'bg-green-100 text-green-700 border border-green-200',
-  'As-Built':  'bg-purple-100 text-purple-700 border border-purple-200',
-  'BIM':       'bg-teal-100 text-teal-700 border border-teal-200',
+  'BIM': 'bg-teal-100 text-teal-700 border border-teal-200',
 }
 
 function getDisciplineChipClass(discipline) {
-  return DISCIPLINE_CHIP_CLASSES[discipline] ?? 'bg-slate-100 text-slate-600 border border-slate-200'
+  return resolveDisciplinePillClass(discipline)
+    ?? DISCIPLINE_CHIP_CLASSES[discipline]
+    ?? 'bg-slate-100 text-slate-600 border border-slate-200'
 }
 
 function getDesignTypeChipClass(designType) {
+    const retailPill = resolveRetailDesignTypePillClass(designType);
+    if (retailPill) return retailPill;
+    const disciplinePill = resolveDisciplinePillClass(designType);
+    if (disciplinePill) return disciplinePill;
     const t = String(designType ?? "").toLowerCase();
     if (t.includes("retail"))   return "bg-amber-100 text-amber-700 border border-amber-200";
     if (t.includes("project"))  return "bg-blue-100 text-blue-700 border border-blue-200";
     if (t.includes("sign"))     return "bg-violet-100 text-violet-700 border border-violet-200";
-    if (t.includes("artwork") || t.includes("art")) return "bg-rose-100 text-rose-700 border border-rose-200";
-    if (t.includes("technical") || t.includes("tech")) return "bg-teal-100 text-teal-700 border border-teal-200";
-    if (t.includes("location")) return "bg-emerald-100 text-emerald-700 border border-emerald-200";
     if (t.includes("plan"))     return "bg-sky-100 text-sky-700 border border-sky-200";
     return "bg-slate-100 text-slate-600 border border-slate-200";
+}
+
+function paletteColorClass(idx) {
+    return TASK_COLORS[((idx % TASK_COLORS.length) + TASK_COLORS.length) % TASK_COLORS.length];
+}
+
+function colorClassForDesignType(designType, fallbackIdx = 0, disciplineType) {
+    return resolveTaskBlockColorClass(designType, paletteColorClass(fallbackIdx), disciplineType);
 }
 
 function formatHoldDuration(holdStartedAt) {
@@ -492,7 +506,7 @@ function buildSidebarTaskFromQueueRecord(record, idx) {
         opNo: record.opNo || "",
         estimatedHours: Number(record.estimatedHours) || 0,
         status,
-        colorClass: TASK_COLORS[idx % TASK_COLORS.length],
+        colorClass: colorClassForDesignType(record.designType, idx, record.disciplineType),
         baseName: record.name,
         holdStartedAt: sourceStatus === "ON_HOLD"
             ? (record.holdStartedAt instanceof Date ? record.holdStartedAt : record.updatedAt)
@@ -520,7 +534,8 @@ function syncSidebarTasksFromQueue(records, prevTasks) {
         next[record.id] = {
             ...existing,
             ...sidebarTask,
-            colorClass: existing?.colorClass ?? sidebarTask.colorClass,
+            // Always refresh from design type so subtype edits update block color.
+            colorClass: sidebarTask.colorClass,
         };
     });
 
@@ -558,9 +573,7 @@ function buildMockSchedulerState(records, designers) {
             opNo: record.opNo || "",
             estimatedHours: Number(record.estimatedHours) || 0,
             status,
-            colorClass: status === "ON_HOLD" || status === "unassigned" && idx % 3 === 0
-                ? "bg-slate-50 border border-slate-200 text-slate-700"
-                : TASK_COLORS[idx % TASK_COLORS.length],
+            colorClass: colorClassForDesignType(record.designType, idx, record.disciplineType),
             baseName: record.name,
             holdStartedAt: status === "ON_HOLD"
                 ? (record.holdStartedAt instanceof Date ? record.holdStartedAt : record.updatedAt)
@@ -629,7 +642,7 @@ function buildSchedulerStateFromErpAssignments(records, rows, designers) {
                     disciplineType: fragBaseRecord.disciplineType || "",
                     priority: fragBaseRecord.priority || "",
                     baseName: fragBaseRecord.name,
-                    colorClass: TASK_COLORS[fragColorIdx % TASK_COLORS.length],
+                    colorClass: colorClassForDesignType(fragBaseRecord.designType, fragColorIdx, fragBaseRecord.disciplineType),
                 }
                 : {
                     projectId: null,
@@ -738,7 +751,10 @@ function buildSchedulerStateFromErpAssignments(records, rows, designers) {
                 disciplineType: baseRecord.disciplineType || "",
                 priority: baseRecord.priority || "",
                 baseName: baseRecord.name,
-                colorClass: firstPartEntry?.colorClass ?? TASK_COLORS[colorIdx % TASK_COLORS.length],
+                colorClass: resolveRetailDesignTypeBlockClass(baseRecord.designType)
+                    ?? resolveDisciplineBlockClass(baseRecord.disciplineType)
+                    ?? firstPartEntry?.colorClass
+                    ?? paletteColorClass(colorIdx),
             }
             : {
                 id: frontendId,
@@ -2610,7 +2626,7 @@ export function DesignSchedulerScreen() {
              </div>
 
              <div className="flex-1 overflow-y-auto space-y-1.5 pr-1 pb-4 custom-scrollbar">
-                {onHoldTasks.map(task => (<div key={task.id} draggable onDragStart={(e) => handleDragStart(e, task.id, "ON_HOLD")} onDragEnd={() => setDropIndicator(null)} onClick={() => router.push(taskViewPathForRecord({ id: getDesignListRoutingTaskId(task), designType: task.designType }, { from: FROM_DESIGN_SCHEDULER }))} className={`p-3.5 rounded-lg cursor-grab active:cursor-grabbing flex flex-col relative bg-white shadow-sm hover:shadow-md transition-shadow ${task.colorClass.replace(/bg-\S+/g, "")}`}>
+                {onHoldTasks.map(task => (<div key={task.id} draggable onDragStart={(e) => handleDragStart(e, task.id, "ON_HOLD")} onDragEnd={() => setDropIndicator(null)} onClick={() => router.push(taskViewPathForRecord({ id: getDesignListRoutingTaskId(task), designType: task.designType }, { from: FROM_DESIGN_SCHEDULER }))} className={`p-3.5 rounded-lg cursor-grab active:cursor-grabbing flex flex-col relative bg-white shadow-sm hover:shadow-md transition-shadow ${task.colorClass.replace(/bg-\S+/g, "").replace(/text-\S+/g, "")}`}>
                     <div className="flex justify-between items-start">
                       <span className="font-semibold text-[12px] leading-tight pr-5">{getTaskLabel(task)}</span>
                       <button
@@ -2645,7 +2661,7 @@ export function DesignSchedulerScreen() {
                     <div className="text-[9px] font-bold mt-1.5 bg-red-100 text-red-600 inline-block px-1.5 py-0.5 rounded uppercase self-start">Hold: {formatHoldDuration(task.holdStartedAt)}</div>
                   </div>))}
 
-                {!showOnlyOnHold && unassignedTasks.map(task => (<div key={task.id} draggable onDragStart={(e) => handleDragStart(e, task.id, "unassigned")} onDragEnd={() => setDropIndicator(null)} onClick={() => router.push(taskViewPathForRecord({ id: getDesignListRoutingTaskId(task), designType: task.designType }, { from: FROM_DESIGN_SCHEDULER }))} className={`p-3 rounded cursor-grab active:cursor-grabbing flex flex-col relative group bg-white shadow-sm hover:shadow-md transition-shadow ${task.colorClass.replace(/bg-\S+/g, "")}`}>
+                {!showOnlyOnHold && unassignedTasks.map(task => (<div key={task.id} draggable onDragStart={(e) => handleDragStart(e, task.id, "unassigned")} onDragEnd={() => setDropIndicator(null)} onClick={() => router.push(taskViewPathForRecord({ id: getDesignListRoutingTaskId(task), designType: task.designType }, { from: FROM_DESIGN_SCHEDULER }))} className={`p-3 rounded cursor-grab active:cursor-grabbing flex flex-col relative group bg-white shadow-sm hover:shadow-md transition-shadow ${task.colorClass.replace(/bg-\S+/g, "").replace(/text-\S+/g, "")}`}>
                     <div className="flex justify-between items-start">
                       <span className="font-semibold text-[12px] leading-tight pr-5">{getTaskLabel(task)}</span>
                       <button
