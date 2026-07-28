@@ -35,6 +35,47 @@ export function collectDesignerTaskSlices(
   return slices.sort((a, b) => a.dayIndex - b.dayIndex || a.id.localeCompare(b.id));
 }
 
+/** Whole seconds from decimal hours (assignment/DTO precision). */
+export function hoursToSeconds(hours: number): number {
+  const h = Number.isFinite(hours) ? Math.max(0, hours) : 0;
+  return Math.max(0, Math.round(h * 3600));
+}
+
+/**
+ * Decimal hours for scheduler assignment rows (2 dp, DTO @Min(0.01)).
+ * Zero stays zero; any positive seconds become at least 0.01h so a logged card can persist.
+ */
+export function secondsToAssignmentHours(seconds: number): number {
+  const s = Number.isFinite(seconds) ? Math.max(0, Math.floor(seconds)) : 0;
+  if (s <= 0) return 0;
+  return Math.max(0.01, Math.round((s / 3600) * 100) / 100);
+}
+
+/**
+ * Allocate total logged seconds across slices in day order (Mon before Tue).
+ * Locked "· logged" slices are credited first; remaining time fills active slices FIFO.
+ */
+export function allocateLoggedSecondsFifo(
+  slices: SchedulerSlice[],
+  totalLoggedSeconds: number,
+): Map<string, number> {
+  const map = new Map<string, number>();
+  let pool = Math.max(0, Math.floor(totalLoggedSeconds));
+
+  for (const slice of slices) {
+    const capacity = hoursToSeconds(slice.estimatedHours);
+    if (slice.isLoggedRemainder) {
+      map.set(slice.id, capacity);
+      pool = Math.max(0, pool - capacity);
+      continue;
+    }
+    const alloc = Math.min(pool, capacity);
+    map.set(slice.id, alloc);
+    pool = Math.max(0, pool - alloc);
+  }
+  return map;
+}
+
 /**
  * Allocate total logged hours across slices in day order (Mon before Tue).
  * Locked "· logged" slices are credited first; remaining time fills active slices FIFO.
@@ -43,18 +84,11 @@ export function allocateLoggedHoursFifo(
   slices: SchedulerSlice[],
   totalLoggedHours: number,
 ): Map<string, number> {
+  const secondsMap = allocateLoggedSecondsFifo(slices, hoursToSeconds(totalLoggedHours));
   const map = new Map<string, number>();
-  let pool = Math.max(0, totalLoggedHours);
-
-  for (const slice of slices) {
-    if (slice.isLoggedRemainder) {
-      map.set(slice.id, slice.estimatedHours);
-      pool = Math.round(Math.max(0, pool - slice.estimatedHours) * 100) / 100;
-      continue;
-    }
-    const alloc = Math.round(Math.min(pool, slice.estimatedHours) * 100) / 100;
-    map.set(slice.id, alloc);
-    pool = Math.round(Math.max(0, pool - alloc) * 100) / 100;
+  for (const [id, seconds] of secondsMap) {
+    // Preserve exact 2dp hour amounts used by older call sites / tests (no 0.01 floor here).
+    map.set(id, Math.round((seconds / 3600) * 100) / 100);
   }
   return map;
 }

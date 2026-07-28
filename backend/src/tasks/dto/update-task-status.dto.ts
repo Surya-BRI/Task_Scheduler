@@ -1,4 +1,5 @@
-import { IsArray, IsIn, IsOptional, IsString, IsUUID, MaxLength } from 'class-validator';
+import { IsArray, IsIn, IsOptional, IsString, IsUrl, IsUUID, MaxLength, ValidateIf } from 'class-validator';
+import { Transform } from 'class-transformer';
 
 export class UpdateTaskStatusDto {
   @IsString()
@@ -37,8 +38,14 @@ export class UpdateTaskStatusDto {
   @MaxLength(255)
   reworkAttachmentName?: string;
 
-  // External reference link
+  // External reference link — https only when provided
   @IsOptional()
+  @Transform(({ value }) => (typeof value === 'string' ? value.trim() : value))
+  @ValidateIf((_, value) => value != null && String(value).trim() !== '')
+  @IsUrl(
+    { protocols: ['https'], require_protocol: true },
+    { message: 'reworkLinkUrl must be a valid https:// URL' },
+  )
   @IsString()
   @MaxLength(2000)
   reworkLinkUrl?: string;

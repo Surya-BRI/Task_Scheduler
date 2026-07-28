@@ -1,7 +1,10 @@
 import {
   allocateLoggedHoursFifo,
+  allocateLoggedSecondsFifo,
   collectDesignerTaskSlices,
   countOtherActiveSlices,
+  hoursToSeconds,
+  secondsToAssignmentHours,
 } from './task-time-allocation';
 
 describe('task-time-allocation', () => {
@@ -47,5 +50,14 @@ describe('task-time-allocation', () => {
     const alloc = allocateLoggedHoursFifo(slices, 1.33);
     expect(alloc.get('mon-part')).toBe(1.33);
     expect(alloc.get('tue-part')).toBe(0);
+  });
+
+  it('allocates tiny logged seconds FIFO without collapsing to zero', () => {
+    const slices = collectDesignerTaskSlices(schedules, tasks, 'alex', 'task-1');
+    const alloc = allocateLoggedSecondsFifo(slices, 10);
+    expect(alloc.get('mon-part')).toBe(10);
+    expect(alloc.get('tue-part')).toBe(0);
+    expect(secondsToAssignmentHours(10)).toBe(0.01);
+    expect(hoursToSeconds(2)).toBe(7200);
   });
 });

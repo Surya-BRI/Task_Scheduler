@@ -60,11 +60,25 @@ export interface TimerPausedPayload {
   at: string;
 }
 
+/** Authoritative timer clock pushed to the designer's other tabs/devices. */
+export interface TimerUpdatedPayload {
+  taskId: string;
+  accumulatedSeconds: number;
+  runStartedAt: string | null;
+  /** When set (e.g. DESIGN_COMPLETED on submit), clients refresh task UI from this. */
+  taskStatus?: string | null;
+  handedOff?: boolean;
+  locked?: boolean;
+  sessionClosed?: boolean;
+  at: string;
+}
+
 type DashboardEmitter = {
   emitDashboardRefresh: (payload: DashboardRefreshPayload) => void;
   emitNotificationRefresh: (userId: string) => void;
   emitChatterRefresh: (payload: ChatterRefreshPayload) => void;
   emitTimerPaused: (userId: string, payload: TimerPausedPayload) => void;
+  emitTimerUpdated: (userId: string, payload: TimerUpdatedPayload) => void;
 };
 
 const OVERVIEW_ROLES: UserRole[] = [UserRole.HOD, UserRole.SALESPERSON];
@@ -116,6 +130,22 @@ export class DashboardRealtimeService {
       });
     } catch (err) {
       this.logger.warn(`Failed to emit timer paused: ${(err as Error).message}`);
+    }
+  }
+
+  /** Push authoritative draft-timer state to all of this designer's connected clients. */
+  notifyTimerUpdated(
+    userId: string,
+    payload: Omit<TimerUpdatedPayload, 'at'> & { at?: string },
+  ) {
+    if (!this.emitter || !userId || !payload?.taskId) return;
+    try {
+      this.emitter.emitTimerUpdated(userId, {
+        ...payload,
+        at: payload.at ?? new Date().toISOString(),
+      });
+    } catch (err) {
+      this.logger.warn(`Failed to emit timer updated: ${(err as Error).message}`);
     }
   }
 

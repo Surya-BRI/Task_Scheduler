@@ -19,47 +19,31 @@ import {
   TIMER_LIFECYCLE_EVENT,
   findRunningTimerTaskId,
   readTimerState,
-  writeTimerState,
   readPauseLog,
   appendPauseLog,
   clearPauseLog,
-  writePauseLog,
   timerStorageKey,
   lifecycleStorageKey,
-  writeTaskLifecycleSync,
+  applyServerTimerState,
   isTimerLockedStatus,
 } from './design-list-task-timer-storage'
 import { useActiveRunningTaskContext } from './ActiveRunningTaskProvider'
 import { ACTIVE_TIMER_BLOCKED_MESSAGE } from './use-active-running-task-id'
 
-function saveTimerStateToDb(taskId, accumulatedSeconds, pauseLog, runStartedAt, onForbidden) {
-  return apiClient
-    .post(`/tasks/${taskId}/save-timer`, {
-      accumulatedSeconds,
-      ...(pauseLog !== undefined ? { pauseLog: JSON.stringify(pauseLog) } : {}),
-      ...(runStartedAt !== undefined ? { runStartedAt } : {}),
-    })
-    .catch((err) => {
-      if (
-        runStartedAt &&
-        err instanceof Error &&
-        err.message.includes('currently running')
-      ) {
-        onForbidden?.()
-        return
-      }
-      if (runStartedAt == null && err instanceof Error) {
-        toast.error('Could not save paused timer — try again.')
-      }
-    })
+async function saveTimerStateToDb(taskId, accumulatedSeconds, pauseLog, runStartedAt) {
+  return apiClient.post(`/tasks/${taskId}/save-timer`, {
+    accumulatedSeconds,
+    ...(pauseLog !== undefined ? { pauseLog: JSON.stringify(pauseLog) } : {}),
+    ...(runStartedAt !== undefined ? { runStartedAt } : {}),
+  })
 }
 
 function readPersisted(taskId) {
   return readTimerState(taskId)
 }
 
-function writePersisted(taskId, accumulatedSeconds, runStartAt) {
-  writeTimerState(taskId, accumulatedSeconds, runStartAt)
+function adoptServerState(taskId, state) {
+  return applyServerTimerState(taskId, state)
 }
 
 function readPersistedPauses(taskId) {
@@ -74,18 +58,7 @@ function clearPersistedPauses(taskId) {
   clearPauseLog(taskId)
 }
 
-const FIVE_MIN_SECONDS = 5 * 60
-
-// Credited work (pause / submit / handoff) rounds UP to the next 5-minute step so any
-// nonzero effort is never saved as 0 minutes (e.g. 3m20s → 5m). The on-screen clock
-// stays exact — including seconds — so designers don't see 0 jump to 5m while working.
-function roundUpTo5Min(totalSeconds) {
-  const s = Math.max(0, totalSeconds)
-  if (s <= 0) return 0
-  return Math.ceil(s / FIVE_MIN_SECONDS) * FIVE_MIN_SECONDS
-}
-
-/** Exact clock for the live timer UI (no 5-minute rounding). */
+/** Exact clock for the live timer UI. */
 function formatHms(totalSeconds) {
   const s = Math.max(0, Math.floor(totalSeconds))
   const h = Math.floor(s / 3600)
@@ -105,6 +78,16 @@ function formatHm(totalSeconds) {
 function liveTotalSeconds(accumulatedSeconds, runStartAt) {
   if (!runStartAt) return accumulatedSeconds
   return accumulatedSeconds + Math.floor((Date.now() - runStartAt) / 1000)
+}
+
+/** Submission links must be absolute https:// URLs (rejects plain text / http). */
+function isValidHttpsUrl(value) {
+  try {
+    const url = new URL(String(value ?? '').trim())
+    return url.protocol === 'https:'
+  } catch {
+    return false
+  }
 }
 
 export function ProjectTaskTimer({
@@ -134,9 +117,11 @@ export function ProjectTaskTimer({
   const [selectedFiles, setSelectedFiles] = useState([])
   const [submissionMode, setSubmissionMode] = useState('file')
   const [submissionLink, setSubmissionLink] = useState('')
+  const [linkError, setLinkError] = useState('')
   const [timerHandedOff, setTimerHandedOff] = useState(false)
   const [showEndOfDayPrompt, setShowEndOfDayPrompt] = useState(false)
   const [endOfDaySlot, setEndOfDaySlot] = useState(null)
+  const [timerBusy, setTimerBusy] = useState(false)
   const activeRunningContext = useActiveRunningTaskContext()
   const completeFileInputRef = useRef(null)
   const launchConsumed = useRef(false)
@@ -152,8 +137,8 @@ export function ProjectTaskTimer({
   ]
 
   const isLocked = isTimerLockedStatus(taskStatus)
-  const playPauseLocked = isLocked || timerHandedOff
-  const isRunning = runStartAt !== null && !playPauseLocked
+  const playPauseLocked = isLocked || timerHandedOff || timerBusy
+  const isRunning = runStartAt !== null && !isLocked && !timerHandedOff
 
   const activeRunningTaskId = activeRunningContext?.activeRunningTaskId ?? findRunningTimerTaskId()
 
@@ -164,11 +149,11 @@ export function ProjectTaskTimer({
     activeRunningTaskId !== String(taskId)
 
   useEffect(() => {
+    setIsHydrated(false)
     setTimerHandedOff(false)
     const locked = isTimerLockedStatus(taskStatus)
 
     if (locked) {
-      // For submitted/locked tasks show the last submitted session duration
       apiClient
         .get(`/tasks/${taskId}/submitted-session`)
         .then((data) => {
@@ -179,43 +164,36 @@ export function ProjectTaskTimer({
       return
     }
 
-    const { accumulatedSeconds: acc, runStartAt: start } = readPersisted(taskId)
-    setAccumulatedSeconds(acc)
-    setRunStartAt(start)
+    // Instant paint from cache, then server always wins.
+    const cached = readPersisted(taskId)
+    setAccumulatedSeconds(cached.accumulatedSeconds)
+    setRunStartAt(cached.runStartAt)
 
     apiClient
       .get(`/tasks/${taskId}/timer-state`)
       .then((data) => {
-        if (!data) return
-        if (data.handedOff || data.locked) {
-          const restored = data.accumulatedSeconds ?? 0
-          setTimerHandedOff(true)
-          setAccumulatedSeconds(restored)
-          setRunStartAt(null)
-          writePersisted(taskId, restored, null)
+        if (!data) {
+          // No draft on server — clear stale cache so we don't invent a run.
+          const adopted = adoptServerState(taskId, {
+            accumulatedSeconds: 0,
+            runStartedAt: null,
+          })
+          setAccumulatedSeconds(adopted.accumulatedSeconds)
+          setRunStartAt(adopted.runStartAt)
           return
         }
-        const restored = data.accumulatedSeconds ?? 0
-        const restoredPauses = data.pauseLog ? JSON.parse(data.pauseLog) : []
-        const restoredRunStartAt = data.runStartedAt ? Date.parse(data.runStartedAt) : null
-        const hasDbRun = restoredRunStartAt != null && !Number.isNaN(restoredRunStartAt)
-        if (start === null && (hasDbRun || restored > acc || (restored === 0 && restoredPauses.length > 0))) {
-          setAccumulatedSeconds(restored)
-          setRunStartAt(hasDbRun ? restoredRunStartAt : null)
-          writePersisted(taskId, restored, hasDbRun ? restoredRunStartAt : null)
-        } else if (start !== null && hasDbRun) {
-          setAccumulatedSeconds(restored)
-          setRunStartAt(restoredRunStartAt)
-          writePersisted(taskId, restored, restoredRunStartAt)
+        if (data.handedOff) {
+          setTimerHandedOff(true)
+        } else {
+          setTimerHandedOff(false)
         }
-        if (restoredPauses.length > 0) {
-          const existing = readPersistedPauses(taskId)
-          if (existing.length === 0) {
-            writePauseLog(taskId, restoredPauses)
-          }
-        }
+        const adopted = adoptServerState(taskId, data)
+        setAccumulatedSeconds(adopted.accumulatedSeconds)
+        setRunStartAt(adopted.runStartAt)
       })
-      .catch(() => {})
+      .catch(() => {
+        // Keep cache paint if network fails; start/pause still require server.
+      })
       .finally(() => setIsHydrated(true))
   }, [taskId, taskStatus])
 
@@ -229,11 +207,6 @@ export function ProjectTaskTimer({
       launchConsumed.current = false
     }
   }, [launchAutostart, launchCompleteModal, launchPauseModal])
-
-  useEffect(() => {
-    if (!isHydrated) return
-    writePersisted(taskId, accumulatedSeconds, runStartAt)
-  }, [taskId, accumulatedSeconds, runStartAt, isHydrated])
 
   useEffect(() => {
     function syncFromStorage() {
@@ -255,8 +228,12 @@ export function ProjectTaskTimer({
           : readPersisted(taskId).accumulatedSeconds
       setAccumulatedSeconds(nextAcc)
       setRunStartAt(null)
-      if (event.detail.handedOff || event.detail.sessionClosed) {
+      if (event.detail.handedOff) {
         setTimerHandedOff(true)
+      } else if (event.detail.sessionClosed) {
+        // Submit closed the draft — refresh parent so status moves off the live timer.
+        setTimerHandedOff(false)
+        onStatusChange?.()
       }
     }
 
@@ -312,16 +289,26 @@ export function ProjectTaskTimer({
     return () => window.clearInterval(id)
   }, [runStartAt, playPauseLocked])
 
+  const applyAuthoritativeState = useCallback((state) => {
+    const adopted = adoptServerState(taskId, state)
+    setAccumulatedSeconds(adopted.accumulatedSeconds)
+    setRunStartAt(adopted.runStartAt)
+    // Only a real handoff shows the amber banner — not submit/locked.
+    if (state?.handedOff) {
+      setTimerHandedOff(true)
+    } else if (state && ('handedOff' in state || state.sessionClosed || state.locked)) {
+      setTimerHandedOff(false)
+    }
+    return adopted
+  }, [taskId])
+
   const freezeRunningClock = useCallback(() => {
     if (!runStartAt) return accumulatedSeconds
-    // Keep exact elapsed on screen / in draft; 5-minute round-up applies on submit (and
-    // handoff / workedHours on the backend).
     const total = liveTotalSeconds(accumulatedSeconds, runStartAt)
     setAccumulatedSeconds(total)
     setRunStartAt(null)
-    writePersisted(taskId, total, null)
     return total
-  }, [accumulatedSeconds, runStartAt, taskId])
+  }, [accumulatedSeconds, runStartAt])
 
   const closeEndOfDayPrompt = useCallback(() => {
     if (eodAutoPauseTimerRef.current) {
@@ -334,20 +321,32 @@ export function ProjectTaskTimer({
   }, [])
 
   const pauseForEndOfDay = useCallback(
-    (pauseReason, slot) => {
+    async (pauseReason, slot) => {
+      const prevAcc = accumulatedSeconds
+      const prevRun = runStartAt
       const frozen = freezeRunningClock()
       if (pauseReason) {
         appendPause(taskId, pauseReason, 0)
       }
       const updatedPauses = readPersistedPauses(taskId)
-      saveTimerStateToDb(taskId, frozen, updatedPauses, null)
-      if (slot != null) {
-        markEodPromptDismissed(taskId, localDateKey(), slot)
+      setTimerBusy(true)
+      try {
+        const state = await saveTimerStateToDb(taskId, frozen, updatedPauses, null)
+        applyAuthoritativeState(state)
+        if (slot != null) {
+          markEodPromptDismissed(taskId, localDateKey(), slot)
+        }
+        closeEndOfDayPrompt()
+        toast.info(pauseReason ? 'Timer paused for today.' : 'Timer paused.')
+      } catch {
+        setAccumulatedSeconds(prevAcc)
+        setRunStartAt(prevRun)
+        toast.error('Could not pause timer — try again.')
+      } finally {
+        setTimerBusy(false)
       }
-      closeEndOfDayPrompt()
-      toast.info(pauseReason ? 'Timer paused for today.' : 'Timer paused.')
     },
-    [closeEndOfDayPrompt, freezeRunningClock, taskId],
+    [accumulatedSeconds, applyAuthoritativeState, closeEndOfDayPrompt, freezeRunningClock, runStartAt, taskId],
   )
 
   const handleEndOfDayContinue = useCallback(() => {
@@ -376,14 +375,22 @@ export function ProjectTaskTimer({
       if (!start) return
 
       if (isOvernightRunningTimer(start)) {
-        const total = liveTotalSeconds(acc, start)
-        setAccumulatedSeconds(total)
-        setRunStartAt(null)
-        writePersisted(taskId, total, null)
-        appendPause(taskId, 'Overnight — timer paused automatically', 0)
-        saveTimerStateToDb(taskId, total, readPersistedPauses(taskId), null)
-        closeEndOfDayPrompt()
-        toast.warning('Timer was still running from yesterday and has been paused.')
+        void (async () => {
+          const total = liveTotalSeconds(acc, start)
+          setAccumulatedSeconds(total)
+          setRunStartAt(null)
+          appendPause(taskId, 'Overnight — timer paused automatically', 0)
+          try {
+            const state = await saveTimerStateToDb(taskId, total, readPersistedPauses(taskId), null)
+            applyAuthoritativeState(state)
+            closeEndOfDayPrompt()
+            toast.warning('Timer was still running from yesterday and has been paused.')
+          } catch {
+            setAccumulatedSeconds(acc)
+            setRunStartAt(start)
+            toast.error('Could not auto-pause overnight timer — try pausing manually.')
+          }
+        })()
         return
       }
 
@@ -400,7 +407,15 @@ export function ProjectTaskTimer({
     checkEndOfDay()
     const id = window.setInterval(checkEndOfDay, 60_000)
     return () => window.clearInterval(id)
-  }, [closeEndOfDayPrompt, isHydrated, isRunning, playPauseLocked, showEndOfDayPrompt, taskId])
+  }, [
+    applyAuthoritativeState,
+    closeEndOfDayPrompt,
+    isHydrated,
+    isRunning,
+    playPauseLocked,
+    showEndOfDayPrompt,
+    taskId,
+  ])
 
   useEffect(() => {
     if (!showEndOfDayPrompt || endOfDaySlot == null) return undefined
@@ -435,29 +450,63 @@ export function ProjectTaskTimer({
       if (otherRunning) {
         toast.warning(ACTIVE_TIMER_BLOCKED_MESSAGE)
       } else if (!start0) {
-        setAccumulatedSeconds(acc0)
-        setRunStartAt(Date.now())
+        void (async () => {
+          try {
+            const state = await saveTimerStateToDb(taskId, acc0, undefined, new Date().toISOString())
+            applyAuthoritativeState(state)
+            apiClient
+              .patch(`/tasks/${taskId}/status`, { status: 'IN_PROGRESS' })
+              .catch(() => {})
+              .finally(() => onStatusChange?.())
+          } catch (err) {
+            if (err instanceof Error && err.message.includes('currently running')) {
+              toast.warning(ACTIVE_TIMER_BLOCKED_MESSAGE)
+            } else {
+              toast.error('Could not start timer — try again.')
+            }
+          }
+        })()
       }
     }
 
     if (launchPauseModal && start0) {
-      setAccumulatedSeconds(totalNow)
-      setRunStartAt(null)
-      setShowPauseDropdown(true)
+      void (async () => {
+        try {
+          const state = await saveTimerStateToDb(taskId, totalNow, undefined, null)
+          applyAuthoritativeState(state)
+          setShowPauseDropdown(true)
+        } catch {
+          toast.error('Could not pause timer — try again.')
+        }
+      })()
     }
 
     if (launchCompleteModal && totalNow > 0) {
-      setAccumulatedSeconds(totalNow)
-      setRunStartAt(null)
-      setShowCompleteModal(true)
+      void (async () => {
+        if (start0) {
+          try {
+            const state = await saveTimerStateToDb(taskId, totalNow, undefined, null)
+            applyAuthoritativeState(state)
+          } catch {
+            toast.error('Could not prepare submit — try again.')
+            return
+          }
+        } else {
+          setAccumulatedSeconds(totalNow)
+          setRunStartAt(null)
+        }
+        setShowCompleteModal(true)
+      })()
     }
 
     queueMicrotask(() => onConsumedLaunchFlags?.())
   }, [
+    applyAuthoritativeState,
     launchAutostart,
     launchCompleteModal,
     launchPauseModal,
     onConsumedLaunchFlags,
+    onStatusChange,
     taskId,
   ])
 
@@ -482,35 +531,63 @@ export function ProjectTaskTimer({
     }
   }, [showCompleteModal, showSubmitConfirm])
 
-  const handleStart = () => {
-    if (isRunning || playPauseLocked) return
+  const handleStart = async () => {
+    if (isRunning || playPauseLocked || timerBusy) return
     if (isStartBlockedByOther) {
       toast.warning(ACTIVE_TIMER_BLOCKED_MESSAGE)
       return
     }
-    const startedAt = Date.now()
-    setRunStartAt(startedAt)
-    writePersisted(taskId, accumulatedSeconds, startedAt)
-    saveTimerStateToDb(taskId, accumulatedSeconds, undefined, new Date(startedAt).toISOString(), () => {
+    setTimerBusy(true)
+    try {
+      // Start intent — server stamps runStartedAt; client ISO is ignored for clock authority.
+      const state = await saveTimerStateToDb(
+        taskId,
+        accumulatedSeconds,
+        undefined,
+        new Date().toISOString(),
+      )
+      applyAuthoritativeState(state)
+      apiClient
+        .patch(`/tasks/${taskId}/status`, { status: 'IN_PROGRESS' })
+        .catch(() => {})
+        .finally(() => {
+          onStatusChange?.()
+        })
+    } catch (err) {
       setRunStartAt(null)
-      writePersisted(taskId, accumulatedSeconds, null)
-      toast.warning(ACTIVE_TIMER_BLOCKED_MESSAGE)
-    })
-    // Move task to IN_PROGRESS so it reflects active work
-    apiClient.patch(`/tasks/${taskId}/status`, { status: 'IN_PROGRESS' })
-      .catch(() => {})
-      .finally(() => { onStatusChange?.() })
+      if (err instanceof Error && err.message.includes('currently running')) {
+        toast.warning(ACTIVE_TIMER_BLOCKED_MESSAGE)
+      } else {
+        toast.error('Could not start timer — check your connection and try again.')
+      }
+    } finally {
+      setTimerBusy(false)
+    }
   }
 
-  const handlePauseClick = () => {
-    if (!isRunning) return
+  const handlePauseClick = async () => {
+    if (!isRunning || timerBusy) return
+    const prevAcc = accumulatedSeconds
+    const prevRun = runStartAt
     const frozen = freezeRunningClock()
     pauseStartedAt.current = Date.now()
     setShowPauseDropdown(true)
-    saveTimerStateToDb(taskId, frozen, undefined, null)
+    setTimerBusy(true)
+    try {
+      const state = await saveTimerStateToDb(taskId, frozen, undefined, null)
+      applyAuthoritativeState(state)
+    } catch {
+      setAccumulatedSeconds(prevAcc)
+      setRunStartAt(prevRun)
+      setShowPauseDropdown(false)
+      pauseStartedAt.current = null
+      toast.error('Could not pause timer — try again.')
+    } finally {
+      setTimerBusy(false)
+    }
   }
 
-  const applyPauseReason = () => {
+  const applyPauseReason = async () => {
     const reason = pauseReason.trim()
     if (!reason) return
     const durationSeconds = pauseStartedAt.current
@@ -521,23 +598,62 @@ export function ProjectTaskTimer({
     setPauseReason('')
     setShowPauseDropdown(false)
     const updatedPauses = readPersistedPauses(taskId)
-    saveTimerStateToDb(taskId, accumulatedSeconds, updatedPauses, null)
+    setTimerBusy(true)
+    try {
+      const state = await saveTimerStateToDb(taskId, accumulatedSeconds, updatedPauses, null)
+      applyAuthoritativeState(state)
+    } catch {
+      toast.error('Could not save pause reason — try again.')
+    } finally {
+      setTimerBusy(false)
+    }
   }
 
-  const cancelPauseReason = () => {
+  const cancelPauseReason = async () => {
     pauseStartedAt.current = null
     setPauseReason('')
     setShowPauseDropdown(false)
-    const resumedAt = Date.now()
-    setRunStartAt(resumedAt)
-    writePersisted(taskId, accumulatedSeconds, resumedAt)
-    saveTimerStateToDb(taskId, accumulatedSeconds, undefined, new Date(resumedAt).toISOString())
+    setTimerBusy(true)
+    try {
+      const state = await saveTimerStateToDb(
+        taskId,
+        accumulatedSeconds,
+        undefined,
+        new Date().toISOString(),
+      )
+      applyAuthoritativeState(state)
+    } catch (err) {
+      if (err instanceof Error && err.message.includes('currently running')) {
+        toast.warning(ACTIVE_TIMER_BLOCKED_MESSAGE)
+      } else {
+        toast.error('Could not resume timer — try again.')
+      }
+    } finally {
+      setTimerBusy(false)
+    }
   }
 
-  const handleStopClick = () => {
+  const handleStopClick = async () => {
     const total = liveTotalSeconds(accumulatedSeconds, runStartAt)
     if (total < 1) return
-    freezeRunningClock()
+    if (runStartAt) {
+      const prevAcc = accumulatedSeconds
+      const prevRun = runStartAt
+      const frozen = freezeRunningClock()
+      setTimerBusy(true)
+      try {
+        const state = await saveTimerStateToDb(taskId, frozen, undefined, null)
+        applyAuthoritativeState(state)
+      } catch {
+        setAccumulatedSeconds(prevAcc)
+        setRunStartAt(prevRun)
+        toast.error('Could not pause timer before submit — try again.')
+        setTimerBusy(false)
+        return
+      } finally {
+        setTimerBusy(false)
+      }
+    }
     setShowCompleteModal(true)
   }
 
@@ -545,34 +661,44 @@ export function ProjectTaskTimer({
 
   const submitComplete = async () => {
     const hasFiles = selectedFiles.length > 0
-    const hasLink = submissionLink.trim().length > 0
+    const trimmedLink = submissionLink.trim()
+    const hasLink = trimmedLink.length > 0
     if (!hasFiles && !hasLink) return
+    if (hasLink && !isValidHttpsUrl(trimmedLink)) {
+      setLinkError('Enter a valid https:// link')
+      setShowSubmitConfirm(false)
+      return
+    }
 
     const pauseLog = readPersistedPauses(taskId)
     const formData = new FormData()
-    formData.append('durationSeconds', String(roundUpTo5Min(displaySeconds)))
-    if (hasLink) formData.append('submissionLink', submissionLink.trim())
+    formData.append('durationSeconds', String(Math.max(0, Math.floor(displaySeconds))))
+    if (hasLink) formData.append('submissionLink', trimmedLink)
     if (pauseLog.length) formData.append('pauseLog', JSON.stringify(pauseLog))
     selectedFiles.forEach((f) => formData.append('files', f))
 
     setSubmitting(true)
     try {
       await apiClient.post(`/tasks/${taskId}/submit-work`, formData)
-      // Reset timer + clear pause log and broadcast so other tabs stop + refresh
-      writePersisted(taskId, 0, null)
+      applyAuthoritativeState({
+        accumulatedSeconds: 0,
+        runStartedAt: null,
+        handedOff: false,
+        locked: false,
+        sessionClosed: true,
+        taskStatus: 'DESIGN_COMPLETED',
+      })
       clearPersistedPauses(taskId)
-      writeTaskLifecycleSync(taskId, { status: 'DESIGN_COMPLETED', action: 'submit' })
-      setAccumulatedSeconds(0)
-      setRunStartAt(null)
       setShowPauseDropdown(false)
       setPauseReason('')
       setSelectedFiles([])
       setSubmissionMode('file')
       setSubmissionLink('')
+      setLinkError('')
       setShowSubmitConfirm(false)
       setShowCompleteModal(false)
+      // Single parent refresh — avoid onStatusChange + lifecycle double/triple loadTask.
       onSubmitComplete?.()
-      onStatusChange?.()
     } catch (err) {
       alert(err?.message || 'Submission failed. Please try again.')
     } finally {
@@ -585,6 +711,7 @@ export function ProjectTaskTimer({
     setSelectedFiles([])
     setSubmissionMode('file')
     setSubmissionLink('')
+    setLinkError('')
     setShowCompleteModal(false)
   }
 
@@ -616,8 +743,14 @@ export function ProjectTaskTimer({
 
   const requestSubmitReview = () => {
     const hasFiles = selectedFiles.length > 0
-    const hasLink = submissionLink.trim().length > 0
+    const trimmedLink = submissionLink.trim()
+    const hasLink = trimmedLink.length > 0
     if (!hasFiles && !hasLink) return
+    if (hasLink && !isValidHttpsUrl(trimmedLink)) {
+      setLinkError('Enter a valid https:// link (e.g. https://…)')
+      return
+    }
+    setLinkError('')
     setShowSubmitConfirm(true)
   }
 
@@ -680,7 +813,9 @@ export function ProjectTaskTimer({
             <span className={inline
               ? 'font-mono text-[11px] font-semibold tabular-nums tracking-tight text-slate-700'
               : 'font-mono text-sm font-medium tabular-nums tracking-tight text-slate-900'}>
-              {formatHms(displaySeconds)}
+              {isHydrated ? formatHms(displaySeconds) : (
+                <span className={`inline-block rounded bg-slate-200 animate-pulse ${inline ? 'h-3 w-14' : 'h-4 w-20'}`} aria-hidden />
+              )}
             </span>
           </div>
           <>
@@ -866,10 +1001,18 @@ export function ProjectTaskTimer({
                     key={showCompleteModal ? 'link-open' : 'link-closed'}
                     type="url"
                     defaultValue={submissionLink ?? ''}
-                    onChange={(e) => setSubmissionLink(e.target.value)}
-                    placeholder="Paste OneDrive or any shareable link"
-                    className="mt-2 w-full rounded-lg border border-slate-200 bg-white px-3 py-2.5 text-sm text-slate-900 shadow-sm outline-none transition placeholder:text-slate-400 focus:border-blue-400 focus:ring-2 focus:ring-blue-500/20"
+                    onChange={(e) => {
+                      setSubmissionLink(e.target.value)
+                      setLinkError('')
+                    }}
+                    placeholder="https://…"
+                    className={`mt-2 w-full rounded-lg border bg-white px-3 py-2.5 text-sm text-slate-900 shadow-sm outline-none transition placeholder:text-slate-400 focus:ring-2 ${
+                      linkError
+                        ? 'border-red-400 focus:border-red-400 focus:ring-red-500/20'
+                        : 'border-slate-200 focus:border-blue-400 focus:ring-blue-500/20'
+                    }`}
                   />
+                  {linkError ? <p className="mt-1.5 text-xs font-medium text-red-600">{linkError}</p> : null}
                 </div>
               )}
             </div>
@@ -885,7 +1028,16 @@ export function ProjectTaskTimer({
               <button
                 type="button"
                 onClick={requestSubmitReview}
-                disabled={selectedFiles.length < 1 && submissionLink.trim().length < 1}
+                disabled={
+                  (() => {
+                    const trimmed = submissionLink.trim()
+                    const hasValidLink = isValidHttpsUrl(trimmed)
+                    const hasFiles = selectedFiles.length > 0
+                    if (!hasFiles && !hasValidLink) return true
+                    if (trimmed.length > 0 && !hasValidLink) return true
+                    return false
+                  })()
+                }
                 className="rounded-lg border border-blue-200 bg-blue-50 px-5 py-2 text-sm font-semibold text-blue-800 shadow-sm transition hover:bg-blue-100 focus:outline-none focus-visible:ring-2 focus-visible:ring-blue-300 focus-visible:ring-offset-2 disabled:cursor-not-allowed disabled:opacity-45"
               >
                 Submit

@@ -1,6 +1,6 @@
 import {
   effectiveWorkSessionSeconds,
-  roundWorkSecondsUpTo5Min,
+  normalizeWorkSeconds,
   workedHoursFromSeconds,
 } from './task-work-session-time.util';
 
@@ -12,15 +12,16 @@ describe('task-work-session-time.util', () => {
     expect(effectiveWorkSessionSeconds(600, runStartedAt, now)).toBe(600 + 25 * 60);
   });
 
-  it('roundWorkSecondsUpTo5Min rounds up to 5-minute buckets', () => {
-    expect(roundWorkSecondsUpTo5Min(0)).toBe(0);
-    expect(roundWorkSecondsUpTo5Min(1)).toBe(300);
-    expect(roundWorkSecondsUpTo5Min(600)).toBe(600);
-    expect(roundWorkSecondsUpTo5Min(601)).toBe(900);
+  it('normalizeWorkSeconds keeps exact whole seconds', () => {
+    expect(normalizeWorkSeconds(0)).toBe(0);
+    expect(normalizeWorkSeconds(1)).toBe(1);
+    expect(normalizeWorkSeconds(200)).toBe(200);
+    expect(normalizeWorkSeconds(601.9)).toBe(601);
   });
 
-  it('workedHoursFromSeconds returns 2dp hours', () => {
+  it('workedHoursFromSeconds returns 2dp hours from exact seconds', () => {
     expect(workedHoursFromSeconds(25 * 60)).toBe(0.42);
     expect(workedHoursFromSeconds(20 * 60)).toBe(0.33);
+    expect(workedHoursFromSeconds(200)).toBe(0.06); // 3m20s — no 5-minute round-up
   });
 });

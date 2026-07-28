@@ -23,9 +23,11 @@ import {
 } from "../services/scheduler-assignments.api";
 import { freezeDraftWorkSession, peekDraftWorkSession } from "../services/task-timer.api";
 import {
-    allocateLoggedHoursFifo,
+    allocateLoggedSecondsFifo,
     collectDesignerTaskSlices,
     countOtherActiveSlices,
+    hoursToSeconds,
+    secondsToAssignmentHours,
 } from "../utils/task-time-allocation";
 import {
     DEFAULT_SCHEDULER_REFERENCE_DATE,
@@ -73,7 +75,7 @@ import {
 const DAILY_CAPACITY = 8; // 8hrs per day = normal capacity (green/blue)
 const MAX_DAILY_HOURS = 12; // absolute max assignable per day
 const WEEKLY_CAPACITY = 40; // 5 working days × 8hrs
-const MIN_SPLIT_HOURS = 5 / 60; // 5 minutes — smallest allowed split part, matching the timer's 5-minute rounding granularity
+const MIN_SPLIT_HOURS = 5 / 60; // 5 minutes — smallest allowed split part for optimizer/drag splits
 const WEEKDAY_INDICES = WORKLOAD_WEEKDAY_INDICES;
 const ALL_DAY_INDICES = [0, 1, 2, 3, 4, 5, 6];
 const isWeekdayIndex = (dayIndex) => WEEKDAY_INDICES.includes(dayIndex);
@@ -1839,36 +1841,48 @@ export function DesignSchedulerScreen() {
             const canonicalTaskId = droppedTask.parentId ?? taskId;
             const designerSlices = collectDesignerTaskSlices(schedules, tasks, sourceId, canonicalTaskId);
             const otherActiveSlices = countOtherActiveSlices(designerSlices, taskId);
-            let totalLoggedHours = Math.round(toPositiveHours(droppedTask.workedHours) * 100) / 100;
+            // Prefer exact seconds from peek so sub-~18s work is not collapsed by 2dp hours.
+            let totalLoggedSeconds = hoursToSeconds(toPositiveHours(droppedTask.workedHours));
             try {
                 const peek = await peekDraftWorkSession(canonicalTaskId, sourceId);
-                if (peek?.workedHours != null) {
-                    totalLoggedHours = Math.round(toPositiveHours(peek.workedHours) * 100) / 100;
+                if (peek?.workedSeconds != null) {
+                    totalLoggedSeconds = Math.max(0, Math.floor(Number(peek.workedSeconds) || 0));
+                } else if (peek?.workedHours != null) {
+                    totalLoggedSeconds = hoursToSeconds(toPositiveHours(peek.workedHours));
                 }
                 handoffHadRunningTimer = Boolean(peek?.hadRunningTimer);
             }
             catch (error) {
                 console.warn("Unable to peek draft timer before handoff", { canonicalTaskId, sourceId, error });
             }
-            const allocation = allocateLoggedHoursFifo(designerSlices, totalLoggedHours);
-            const sliceLoggedHours = Math.round(toPositiveHours(allocation.get(taskId)) * 100) / 100;
+            const allocation = allocateLoggedSecondsFifo(designerSlices, totalLoggedSeconds);
+            const sliceLoggedSeconds = Math.max(0, Math.floor(Number(allocation.get(taskId)) || 0));
             const scheduledForThisBlock = toPositiveHours(droppedTask.estimatedHours);
+            const scheduledSeconds = hoursToSeconds(scheduledForThisBlock);
 
-            if (sliceLoggedHours > 0) {
-                const remainingHours = Math.round(Math.max(0, scheduledForThisBlock - sliceLoggedHours) * 100) / 100;
-                if (remainingHours <= 0) {
+            const freezeSourceTimer = async () => {
+                try {
+                    await freezeDraftWorkSession(canonicalTaskId, sourceId, {
+                        closeSession: otherActiveSlices === 0,
+                    });
+                }
+                catch (error) {
+                    console.warn("Unable to freeze draft timer before handoff", { canonicalTaskId, sourceId, error });
+                }
+            };
+
+            if (sliceLoggedSeconds > 0) {
+                const remainingSeconds = Math.max(0, scheduledSeconds - sliceLoggedSeconds);
+                if (remainingSeconds <= 0) {
                     toast.info(`${droppedTask.baseName ?? droppedTask.name} — all ${formatHoursAsHm(scheduledForThisBlock)} on this slice already logged. Nothing left to reassign.`);
                     return;
                 }
-                if (remainingHours < scheduledForThisBlock) {
-                    try {
-                        await freezeDraftWorkSession(canonicalTaskId, sourceId, {
-                            closeSession: otherActiveSlices === 0,
-                        });
-                    }
-                    catch (error) {
-                        console.warn("Unable to freeze draft timer before handoff", { canonicalTaskId, sourceId, error });
-                    }
+                if (remainingSeconds < scheduledSeconds) {
+                    await freezeSourceTimer();
+                    const sliceLoggedHours = secondsToAssignmentHours(sliceLoggedSeconds);
+                    // Keep assigned hours summing to the original slice (DTO 2dp), not
+                    // independently rounded remaining-seconds which can overshoot.
+                    const remainingHours = Math.round(Math.max(0.01, scheduledForThisBlock - sliceLoggedHours) * 100) / 100;
                     const remainderId = getNextTaskId();
                     effectiveDroppedTask = {
                         ...droppedTask,
@@ -1889,6 +1903,15 @@ export function DesignSchedulerScreen() {
                             : undefined,
                     );
                 }
+            } else if (handoffHadRunningTimer) {
+                // Gap 2: this slice has 0 FIFO logged seconds, but the designer timer is still
+                // running — pause/finalize it so time does not keep ticking after the move.
+                await freezeSourceTimer();
+                toast.warning(
+                    otherActiveSlices > 0
+                        ? `Timer paused for ${designers.find((d) => d.id === sourceId)?.name ?? "the previous designer"} — they'll need to press Start again for their other scheduled slices on this task.`
+                        : `Running timer for ${designers.find((d) => d.id === sourceId)?.name ?? "the previous designer"} was finalized at handoff.`,
+                );
             }
         }
         // Builds and commits (or opens the overtime modal for) a placement on a specific day,

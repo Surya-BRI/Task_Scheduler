@@ -2004,12 +2004,8 @@ export class SchedulerAssignmentsService implements OnModuleInit {
           approvedOvertimeHours,
           assignedHours: scheduledHours + approvedOvertimeHours,
           overtimeRequestIds: approvedOvertime?.requestIds ?? [],
-          // Logged work time is rounded UP to 5-minute steps on the frontend timer so any
-          // nonzero effort is never credited as 0; round up defensively here too so older
-          // unrounded rows don't leak odd fractions or collapse to 0. 5-minute buckets
-          // (1/12h) don't divide evenly in decimal (e.g. 20min = 0.3333...h), so the
-          // result is also rounded to 2 decimal places — well within half a 5-minute
-          // bucket of precision, so it always reconstructs to the correct minute count.
+          // Logged work time is stored as exact seconds; convert to 2dp hours for the
+          // wire/DTO (e.g. 20min = 0.33h) so handoff math stays within assignedHours precision.
           workedHours: workedHoursFromSeconds(workedSeconds),
         });
       });

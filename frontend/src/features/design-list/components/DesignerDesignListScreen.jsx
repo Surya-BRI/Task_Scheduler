@@ -1,6 +1,6 @@
 ﻿"use client";
 
-import { useEffect, useMemo, useRef, useState } from "react";
+import { useEffect, useMemo, useRef, useState, useCallback } from "react";
 import { useRouter } from "next/navigation";
 import { Check, ChevronDown, Clock, Filter, GalleryVerticalEnd, LayoutGrid, List, Search } from "lucide-react";
 import { Navbar } from "@/components/Navbar";
@@ -9,6 +9,7 @@ import { ActiveRunningTaskProvider } from "@/components/ActiveRunningTaskProvide
 import { getSession } from "@/lib/mock-auth";
 import { FROM_DESIGNER_QUEUE, taskViewPathForRecord } from "@/lib/design-list-routes";
 import { apiClient } from "@/lib/api-client";
+import { useTaskLifecycleRefresh } from "@/hooks/use-task-lifecycle-refresh";
 import { DESIGNER_BOARD_COLUMNS, DESIGNER_QUEUE_FILTER_STATUSES, getStatusLabel, mapTaskToDesignRow, matchDateRange } from "../task-view-model";
 
 const getStatusColor = (status) => {
@@ -264,11 +265,30 @@ const Board = ({ data }) => {
   );
 };
 
+const ListSkeleton = () => (
+  <div className="flex min-h-0 flex-1 flex-col px-4 pb-6 sm:px-6" aria-busy="true" aria-label="Loading tasks">
+    <div className="ui-surface h-full overflow-hidden p-3">
+      <div className="mb-3 h-8 animate-pulse rounded bg-slate-100" />
+      {Array.from({ length: 8 }).map((_, i) => (
+        <div key={i} className="mb-2 flex items-center gap-3 animate-pulse">
+          <div className="h-4 w-16 rounded bg-slate-100" />
+          <div className="h-4 w-28 rounded bg-slate-100" />
+          <div className="h-4 flex-1 rounded bg-slate-100" />
+          <div className="h-4 w-20 rounded bg-slate-100" />
+          <div className="h-4 w-24 rounded bg-slate-100" />
+        </div>
+      ))}
+    </div>
+  </div>
+);
+
 export function DesignerDesignListScreen() {
   const [designerIdentity, setDesignerIdentity] = useState({ id: "", name: "Designer" });
   const [allDesigns, setAllDesigns] = useState([]);
   const [viewMode, setViewMode] = useState("list");
   const [filters, setFilters] = useState({ type: "", status: "", startDate: "", endDate: "", searchQuery: "" });
+  const [listRefreshTick, setListRefreshTick] = useState(0);
+  const [listLoading, setListLoading] = useState(true);
 
   useEffect(() => {
     const session = getSession();
@@ -279,8 +299,15 @@ export function DesignerDesignListScreen() {
     setDesignerIdentity({ id: "", name: "Designer" });
   }, []);
 
+  const reloadList = useCallback(() => {
+    setListRefreshTick((n) => n + 1);
+  }, []);
+
+  useTaskLifecycleRefresh({ onRefresh: reloadList, debounceMs: 400 });
+
   useEffect(() => {
     let mounted = true;
+    setListLoading(true);
     const params = new URLSearchParams();
     params.set("page", "1");
     params.set("limit", "500");
@@ -290,9 +317,11 @@ export function DesignerDesignListScreen() {
       if (!mounted) return;
       const rows = Array.isArray(res?.data) ? res.data.map(mapTaskToDesignRow) : [];
       setAllDesigns(rows);
-    }).catch(() => { if (mounted) setAllDesigns([]); });
+    }).catch(() => { if (mounted) setAllDesigns([]); }).finally(() => {
+      if (mounted) setListLoading(false);
+    });
     return () => { mounted = false; };
-  }, [filters.searchQuery, filters.status]);
+  }, [filters.searchQuery, filters.status, listRefreshTick]);
 
   const filteredDesigns = useMemo(() => allDesigns.filter((d) => {
     if (filters.type && d.designType !== filters.type) return false;
@@ -305,10 +334,19 @@ export function DesignerDesignListScreen() {
       <Navbar lockPrimaryNav />
       <div className="flex-1 flex flex-col min-h-0">
         <div className="shrink-0"><Toolbar viewMode={viewMode} setViewMode={setViewMode} filters={filters} setFilters={setFilters} designerName={designerIdentity.name} /></div>
-        {filteredDesigns.length < 1 ? (<div className="flex flex-1 items-center justify-center px-6 py-10 text-sm text-slate-500">No tasks are available for {designerIdentity.name}.</div>) : viewMode === "list" ? (<Table data={filteredDesigns} />) : (<Board data={filteredDesigns} />)}
+        {listLoading ? (
+          <ListSkeleton />
+        ) : filteredDesigns.length < 1 ? (
+          <div className="flex flex-1 items-center justify-center px-6 py-10 text-sm text-slate-500">No tasks are available for {designerIdentity.name}.</div>
+        ) : viewMode === "list" ? (
+          <Table data={filteredDesigns} />
+        ) : (
+          <Board data={filteredDesigns} />
+        )}
       </div>
     </div>
     </ActiveRunningTaskProvider>
   );
 }
+
 

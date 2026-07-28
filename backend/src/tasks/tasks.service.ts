@@ -24,7 +24,7 @@ import {
 } from './scheduler-task-summary.util';
 import {
   effectiveWorkSessionSeconds,
-  roundWorkSecondsUpTo5Min,
+  normalizeWorkSeconds,
   workedHoursFromSeconds,
 } from '../common/utils/task-work-session-time.util';
 import { utcDateOnlyString } from '../common/utils/date-window.util';
@@ -1404,8 +1404,7 @@ export class TasksService {
         totalSeconds += session.durationSeconds;
       }
     }
-    const rounded = roundWorkSecondsUpTo5Min(totalSeconds);
-    return { totalSeconds: rounded, hadRunningTimer };
+    return { totalSeconds: normalizeWorkSeconds(totalSeconds), hadRunningTimer };
   }
 
   async update(id: string, dto: UpdateTaskDto) {
@@ -2224,30 +2223,44 @@ export class TasksService {
     const task = await this.prisma.task.findUnique({ where: { id: taskId }, select: TASK_SELECT });
     if (!task) throw new NotFoundException('Task not found');
 
-    // Upload files to S3
-    const uploadedFiles: { fileKey: string; fileName: string; mimeType: string; sizeBytes: number }[] = [];
-    for (const file of files ?? []) {
-      const result = await this.taskFilesService.uploadTaskFile(file, userId);
-      uploadedFiles.push({
-        fileKey: result.key,
-        fileName: result.fileName,
-        mimeType: result.mimeType,
-        sizeBytes: result.size,
-      });
-    }
+    // Upload files in parallel (sequential uploads were the main submit delay).
+    const fileList = files ?? [];
+    const uploadedFiles = await Promise.all(
+      fileList.map(async (file) => {
+        const result = await this.taskFilesService.uploadTaskFile(file, userId);
+        return {
+          fileKey: result.key,
+          fileName: result.fileName,
+          mimeType: result.mimeType,
+          sizeBytes: result.size,
+        };
+      }),
+    );
 
     // Create/promote work session + files in a transaction, then update task status
     const session = await this.prisma.$transaction(async (tx) => {
       const draft = await tx.taskWorkSession.findFirst({
         where: { taskId, designerId: userId, status: { in: ['Draft', 'HandedOff'] } },
+        orderBy: { createdAt: 'desc' },
       });
+
+      const clientSeconds = normalizeWorkSeconds(dto.durationSeconds);
+      let serverSeconds = 0;
+      if (draft) {
+        serverSeconds =
+          draft.status === 'Draft'
+            ? effectiveWorkSessionSeconds(draft.durationSeconds, draft.runStartedAt)
+            : normalizeWorkSeconds(draft.durationSeconds);
+      }
+      // Never let a stale tab under-write server-known elapsed time.
+      const durationSeconds = Math.max(clientSeconds, serverSeconds);
 
       let session;
       if (draft) {
         session = await tx.taskWorkSession.update({
           where: { id: draft.id },
           data: {
-            durationSeconds: dto.durationSeconds,
+            durationSeconds,
             submissionLink: dto.submissionLink?.trim() || null,
             pauseLog: dto.pauseLog || draft.pauseLog || null,
             runStartedAt: null,
@@ -2260,7 +2273,7 @@ export class TasksService {
           data: {
             taskId,
             designerId: userId,
-            durationSeconds: dto.durationSeconds,
+            durationSeconds,
             submissionLink: dto.submissionLink?.trim() || null,
             pauseLog: dto.pauseLog || null,
             status: 'Submitted',
@@ -2292,6 +2305,47 @@ export class TasksService {
       return session;
     });
 
+    // Realtime first so other tabs update as soon as the DB commit succeeds.
+    this.dashboardRealtime?.notifyTimerUpdated(userId, {
+      taskId,
+      accumulatedSeconds: 0,
+      runStartedAt: null,
+      taskStatus: 'DESIGN_COMPLETED',
+      handedOff: false,
+      locked: false,
+      sessionClosed: true,
+    });
+    this.dashboardRealtime?.notifyOverviewRefresh('task_completed', {
+      taskId,
+      status: 'DESIGN_COMPLETED',
+      changedTaskIds: [taskId],
+      updatedBy: userId,
+    });
+
+    // Activity + HOD inbox are important but must not block the HTTP response.
+    void this.runSubmitWorkSideEffects({
+      task,
+      taskId,
+      userId,
+      sessionId: session.id,
+      durationSeconds: session.durationSeconds,
+      fileCount: uploadedFiles.length,
+      hasLink: !!dto.submissionLink,
+    }).catch((err) => this.logger.error('submitWork side effects failed', err));
+
+    return { sessionId: session.id, fileCount: uploadedFiles.length };
+  }
+
+  private async runSubmitWorkSideEffects(params: {
+    task: any;
+    taskId: string;
+    userId: string;
+    sessionId: string;
+    durationSeconds: number;
+    fileCount: number;
+    hasLink: boolean;
+  }) {
+    const { task, taskId, userId, sessionId, durationSeconds, fileCount, hasLink } = params;
     const previousStatusApi = toApiTaskStatus(task.status);
     const submittedTaskSnapshot = {
       id: task.id,
@@ -2306,44 +2360,44 @@ export class TasksService {
       name: task.project?.name,
     };
 
-    await this.activityLogger.log({
-      action: ActivityAction.TASK_WORK_SUBMITTED,
-      userId,
-      taskId,
-      details: {
-        event: ActivityAction.TASK_WORK_SUBMITTED,
-        messageKey: 'task_work_submitted',
-        taskSnapshot: submittedTaskSnapshot,
-        projectSnapshot: submittedProjectSnapshot,
-        changes: {
-          durationSeconds: dto.durationSeconds,
-          fileCount: uploadedFiles.length,
-          hasLink: !!dto.submissionLink,
-        },
-        context: { sessionId: session.id, source: 'tasks.submitWork' },
-      },
-    });
-
-    if (!COMPLETED_STATUS_FILTER.includes(previousStatusApi)) {
-      await this.activityLogger.log({
-        action: ActivityAction.TASK_COMPLETED,
+    await Promise.all([
+      this.activityLogger.log({
+        action: ActivityAction.TASK_WORK_SUBMITTED,
         userId,
         taskId,
         details: {
-          event: ActivityAction.TASK_COMPLETED,
-          messageKey: 'task_completed',
+          event: ActivityAction.TASK_WORK_SUBMITTED,
+          messageKey: 'task_work_submitted',
           taskSnapshot: submittedTaskSnapshot,
           projectSnapshot: submittedProjectSnapshot,
           changes: {
-            oldStatus: previousStatusApi,
-            newStatus: 'DESIGN_COMPLETED',
+            durationSeconds,
+            fileCount,
+            hasLink,
           },
-          context: { sessionId: session.id, source: 'tasks.submitWork' },
+          context: { sessionId, source: 'tasks.submitWork' },
         },
-      });
-    }
+      }),
+      !COMPLETED_STATUS_FILTER.includes(previousStatusApi)
+        ? this.activityLogger.log({
+            action: ActivityAction.TASK_COMPLETED,
+            userId,
+            taskId,
+            details: {
+              event: ActivityAction.TASK_COMPLETED,
+              messageKey: 'task_completed',
+              taskSnapshot: submittedTaskSnapshot,
+              projectSnapshot: submittedProjectSnapshot,
+              changes: {
+                oldStatus: previousStatusApi,
+                newStatus: 'DESIGN_COMPLETED',
+              },
+              context: { sessionId, source: 'tasks.submitWork' },
+            },
+          })
+        : Promise.resolve(),
+    ]);
 
-    // Notify all HODs that work has been submitted and is ready for review
     try {
       const submittedTask = await this.prisma.task.findUnique({
         where: { id: taskId },
@@ -2355,32 +2409,35 @@ export class TasksService {
           taskDesigners: { select: { designer: { select: { fullName: true } } } },
         },
       });
-      if (submittedTask) {
-        const taskLink =
-          taskViewPath(taskId, submittedTask.designType);
-        const submitterName =
-          submittedTask.assignee?.fullName ??
-          ((submittedTask as any).taskDesigners?.length > 0
-            ? (submittedTask as any).taskDesigners.map((d: any) => d.designer.fullName).join(', ')
-            : 'Designer');
-        const submitMsg = `${submittedTask.taskNo} — ${submittedTask.project?.name ?? 'Unknown Project'} work submitted by ${submitterName}. Ready for review.`;
-        // Sales wait for SALES_REVIEW — avoid early "Work Submitted" noise
-        const hodUsers = await this.prisma.user.findMany({
-          where: { role: { name: { in: ['HOD', 'ADMIN'] } } },
-          select: { id: true },
-        });
-        for (const hod of hodUsers) {
+      if (!submittedTask) return;
+
+      const taskLink = taskViewPath(taskId, submittedTask.designType);
+      const submitterName =
+        submittedTask.assignee?.fullName ??
+        ((submittedTask as any).taskDesigners?.length > 0
+          ? (submittedTask as any).taskDesigners.map((d: any) => d.designer.fullName).join(', ')
+          : 'Designer');
+      const submitMsg = `${submittedTask.taskNo} — ${submittedTask.project?.name ?? 'Unknown Project'} work submitted by ${submitterName}. Ready for review.`;
+      const hodUsers = await this.prisma.user.findMany({
+        where: { role: { name: { in: ['HOD', 'ADMIN'] } } },
+        select: { id: true },
+      });
+      await Promise.all(
+        hodUsers.map((hod) =>
           this.notificationsService
-            .create({ userId: hod.id, title: `Work Submitted — ${submittedTask.taskNo}`, message: submitMsg, linkUrl: taskLink })
-            .catch((err) => this.logger.error('Failed to send work-submitted notification', err));
-          this.dashboardRealtime?.notifyUserNotificationRefresh(hod.id);
-        }
-      }
+            .create({
+              userId: hod.id,
+              title: `Work Submitted — ${submittedTask.taskNo}`,
+              message: submitMsg,
+              linkUrl: taskLink,
+            })
+            .then(() => this.dashboardRealtime?.notifyUserNotificationRefresh(hod.id))
+            .catch((err) => this.logger.error('Failed to send work-submitted notification', err)),
+        ),
+      );
     } catch (err) {
       this.logger.error('Failed to send work-submitted notifications to HOD', err);
     }
-
-    return { sessionId: session.id, fileCount: uploadedFiles.length };
   }
 
   async getSubmittedSession(taskId: string) {
@@ -2474,12 +2531,35 @@ export class TasksService {
 
   private resolveRunStartedAtFromDto(dto: SaveTimerStateDto): Date | null | undefined {
     if (!('runStartedAt' in dto)) return undefined;
-    if (dto.runStartedAt == null || dto.runStartedAt === '') return null;
-    const parsed = new Date(dto.runStartedAt);
-    if (Number.isNaN(parsed.getTime())) {
-      throw new BadRequestException('Invalid runStartedAt');
+    // Start intent: stamp server time so all devices share one clock (ignore client skew).
+    if (dto.runStartedAt != null && dto.runStartedAt !== '') {
+      return new Date();
     }
-    return parsed;
+    return null;
+  }
+
+  private buildTimerStatePayload(
+    taskId: string,
+    row: {
+      id: string;
+      durationSeconds: number;
+      pauseLog: string | null;
+      runStartedAt: Date | null;
+      status?: string;
+    } | null,
+    extras: { handedOff?: boolean; locked?: boolean; sessionClosed?: boolean } = {},
+  ) {
+    const handedOff = extras.handedOff ?? row?.status === 'HandedOff';
+    const locked = extras.locked ?? handedOff;
+    return {
+      sessionId: row?.id ?? null,
+      accumulatedSeconds: row?.durationSeconds ?? 0,
+      pauseLog: row?.pauseLog ?? null,
+      runStartedAt: handedOff || locked ? null : (row?.runStartedAt?.toISOString() ?? null),
+      locked,
+      handedOff,
+      ...(extras.sessionClosed !== undefined ? { sessionClosed: extras.sessionClosed } : {}),
+    };
   }
 
   async saveTimerState(taskId: string, userId: string, dto: SaveTimerStateDto) {
@@ -2489,7 +2569,7 @@ export class TasksService {
 
     const runStartedAt = this.resolveRunStartedAtFromDto(dto);
 
-    return this.prisma.$transaction(async (tx) => {
+    const saved = await this.prisma.$transaction(async (tx) => {
       const handedOff = await tx.taskWorkSession.findFirst({
         where: { taskId, designerId: userId, status: 'HandedOff' },
       });
@@ -2517,53 +2597,82 @@ export class TasksService {
         }
       }
 
-      // Pause: clear runStartedAt on every draft row for this task (handles duplicate drafts).
+      const existing = await tx.taskWorkSession.findFirst({
+        where: { taskId, designerId: userId, status: 'Draft' },
+        orderBy: { createdAt: 'desc' },
+      });
+
+      // Pause: fold live elapsed on the server, then clear runStartedAt on all drafts.
       if (runStartedAt === null && 'runStartedAt' in dto) {
+        let durationSeconds = dto.accumulatedSeconds;
+        if (existing?.runStartedAt) {
+          durationSeconds = effectiveWorkSessionSeconds(
+            existing.durationSeconds,
+            existing.runStartedAt,
+          );
+        } else if (existing) {
+          durationSeconds = Math.max(existing.durationSeconds, dto.accumulatedSeconds);
+        }
+
         await tx.taskWorkSession.updateMany({
           where: { taskId, designerId: userId, status: 'Draft' },
           data: {
             runStartedAt: null,
-            durationSeconds: dto.accumulatedSeconds,
+            durationSeconds,
             ...(dto.pauseLog !== undefined ? { pauseLog: dto.pauseLog } : {}),
           },
         });
         const latest = await tx.taskWorkSession.findFirst({
           where: { taskId, designerId: userId, status: 'Draft' },
           orderBy: { createdAt: 'desc' },
-          select: { id: true },
         });
-        return { sessionId: latest?.id ?? null };
+        return latest;
       }
 
-      const existing = await tx.taskWorkSession.findFirst({
-        where: { taskId, designerId: userId, status: 'Draft' },
-        orderBy: { createdAt: 'desc' },
-      });
-
       if (existing) {
+        // Start/resume (and any non-pause sync): never let a stale tab regress banked time.
+        // If a run is already live, fold it into the bank first so that elapsed is not dropped
+        // when we stamp a fresh server runStartedAt.
+        const serverBanked = existing.runStartedAt
+          ? effectiveWorkSessionSeconds(existing.durationSeconds, existing.runStartedAt)
+          : normalizeWorkSeconds(existing.durationSeconds);
+        const durationSeconds = Math.max(
+          normalizeWorkSeconds(dto.accumulatedSeconds),
+          serverBanked,
+        );
+
         await tx.taskWorkSession.update({
           where: { id: existing.id },
           data: {
-            durationSeconds: dto.accumulatedSeconds,
+            durationSeconds,
             pauseLog: dto.pauseLog ?? existing.pauseLog,
             ...(runStartedAt !== undefined ? { runStartedAt } : {}),
           },
         });
-        return { sessionId: existing.id };
+        return tx.taskWorkSession.findUnique({ where: { id: existing.id } });
       }
 
-      const created = await tx.taskWorkSession.create({
+      return tx.taskWorkSession.create({
         data: {
           taskId,
           designerId: userId,
-          durationSeconds: dto.accumulatedSeconds,
+          durationSeconds: normalizeWorkSeconds(dto.accumulatedSeconds),
           pauseLog: dto.pauseLog ?? null,
           runStartedAt: runStartedAt ?? null,
           status: 'Draft',
         },
       });
-      return { sessionId: created.id };
     });
+
+    const state = this.buildTimerStatePayload(taskId, saved);
+    this.dashboardRealtime?.notifyTimerUpdated(userId, {
+      taskId,
+      accumulatedSeconds: state.accumulatedSeconds,
+      runStartedAt: state.runStartedAt,
+      handedOff: state.handedOff,
+      locked: state.locked,
+    });
+    return state;
   }
 
   async freezeDraftWorkSession(taskId: string, designerId: string, closeSession = true) {
@@ -2588,7 +2697,7 @@ export class TasksService {
     const handedOffSeconds = handedOff.reduce((sum, row) => sum + row.durationSeconds, 0);
 
     if (!draft) {
-      const totalSeconds = roundWorkSecondsUpTo5Min(handedOffSeconds);
+      const totalSeconds = normalizeWorkSeconds(handedOffSeconds);
       return {
         workedSeconds: totalSeconds,
         workedHours: workedHoursFromSeconds(totalSeconds),
@@ -2600,8 +2709,8 @@ export class TasksService {
 
     const effectiveSeconds = effectiveWorkSessionSeconds(draft.durationSeconds, draft.runStartedAt);
     const totalEffective = handedOffSeconds + effectiveSeconds;
-    const frozenSeconds = roundWorkSecondsUpTo5Min(totalEffective);
-    const draftFrozenOnly = roundWorkSecondsUpTo5Min(effectiveSeconds);
+    const frozenSeconds = normalizeWorkSeconds(totalEffective);
+    const draftFrozenOnly = normalizeWorkSeconds(effectiveSeconds);
     const hadRunningTimer = draft.runStartedAt != null;
 
     if (closeSession) {
@@ -2627,6 +2736,14 @@ export class TasksService {
     // Inbox notice stays on the "other slices remain" path (designer can press Start again).
     if (hadRunningTimer) {
       this.dashboardRealtime?.notifyTimerPaused(designerId, taskId, closeSession);
+      this.dashboardRealtime?.notifyTimerUpdated(designerId, {
+        taskId,
+        accumulatedSeconds: draftFrozenOnly,
+        runStartedAt: null,
+        handedOff: closeSession,
+        locked: closeSession,
+        sessionClosed: closeSession,
+      });
       if (!closeSession) {
         const linkUrl =
           taskViewPath(taskId, task.designType);

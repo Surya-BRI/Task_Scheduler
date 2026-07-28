@@ -7,7 +7,7 @@ Three layers keep planning, execution, and payroll auditable without mixing them
 | Term | Source | Meaning |
 |------|--------|---------|
 | **Assigned time** | `SchedulerAssignment.assignedHours` | HOD-planned hours on a **slice** (designer + day + optional split part) |
-| **Logged time** | `TaskWorkSession` (Draft / HandedOff / Submitted) | Designer timer — actual work, 5-minute buckets |
+| **Logged time** | `TaskWorkSession` (Draft / HandedOff / Submitted) | Designer timer — actual work, exact seconds |
 | **Approved overtime** | `OvertimeRequest` + scheduler OT row | HR/manager-approved hours **beyond** normal day capacity |
 
 ## Slice (assignment row)
@@ -27,8 +27,8 @@ When HOD moves a slice from designer A → B:
 1. **Peek** A's draft session (no DB change).
 2. **FIFO-allocate** logged hours across A's slices for that task.
 3. **Only the dragged slice's allocation** is used — not whole-task total.
-4. If allocation on this slice is **0** → full slice moves to B. A's draft session is frozen (`freezeDraftWorkSession(closeSession=false)` clears `runStartedAt`) rather than left running; if A still has other active slices, A gets a "Timer Paused" notification and must press Start again to resume tracking.
-5. If allocation **> 0** → A keeps a locked "· logged" card; B gets remainder.
+4. If allocation on this slice is **0** → full slice moves to B. If A's timer was running, freeze with `closeSession=false` when other active slices remain (or `closeSession=true` when this was the last active slice); A is notified to press Start again when the session stays open.
+5. If allocation **> 0** → A keeps a locked "· logged" card; B gets remainder. Handoff FIFO uses **exact `workedSeconds`** (not 2dp `workedHours`) so sub-minute work is not treated as zero; assignment cards still persist hours at 2dp (`@Min(0.01)`).
 6. **HandedOff** (timer closed) only when A has **no other active slices** on that task; otherwise the session stays `Draft` but paused (step 4).
 
 Example: Mon 2h + Tue 1h, Alex logged 1h 20m on Mon, drag **Tue 1h** to Allen → Tue allocation = **0** → Allen gets **full 1h**, Alex keeps Mon; if Alex's timer was running, it's now paused and Alex is notified to press Start again.

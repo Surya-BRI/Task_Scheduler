@@ -9,6 +9,7 @@ describe('DashboardRealtimeService', () => {
       emitNotificationRefresh: () => {},
       emitChatterRefresh: () => {},
       emitTimerPaused: () => {},
+      emitTimerUpdated: () => {},
     });
 
     service.notifyOverviewRefresh('scheduler_week_saved', {
@@ -26,5 +27,30 @@ describe('DashboardRealtimeService', () => {
       changedTaskIds: ['task-1'],
     });
     expect((emitted[0] as { at: string }).at).toEqual(expect.any(String));
+  });
+
+  it('emits timer:updated payloads for the designer room', () => {
+    const updated: unknown[] = [];
+    const service = new DashboardRealtimeService();
+    service.registerEmitter({
+      emitDashboardRefresh: () => {},
+      emitNotificationRefresh: () => {},
+      emitChatterRefresh: () => {},
+      emitTimerPaused: () => {},
+      emitTimerUpdated: (_userId, payload) => updated.push(payload),
+    });
+
+    service.notifyTimerUpdated('user-1', {
+      taskId: 'task-1',
+      accumulatedSeconds: 120,
+      runStartedAt: '2026-07-24T10:00:00.000Z',
+    });
+
+    expect(updated[0]).toMatchObject({
+      taskId: 'task-1',
+      accumulatedSeconds: 120,
+      runStartedAt: '2026-07-24T10:00:00.000Z',
+    });
+    expect((updated[0] as { at: string }).at).toEqual(expect.any(String));
   });
 });

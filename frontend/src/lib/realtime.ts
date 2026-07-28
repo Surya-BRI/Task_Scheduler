@@ -45,6 +45,22 @@ export type TimerPausedPayload = {
   taskId: string;
   sessionClosed?: boolean;
   at?: string;
+  accumulatedSeconds?: number;
+  runStartedAt?: string | null;
+  handedOff?: boolean;
+  locked?: boolean;
+};
+
+export type TimerUpdatedPayload = {
+  taskId: string;
+  accumulatedSeconds: number;
+  runStartedAt: string | null;
+  /** Present on submit/close so open task pages can refresh status without extra channels. */
+  taskStatus?: string | null;
+  handedOff?: boolean;
+  locked?: boolean;
+  sessionClosed?: boolean;
+  at: string;
 };
 
 export type DashboardRefreshPayload = {
@@ -64,6 +80,7 @@ export type DashboardRealtimeHandlers = {
   onNotificationsRefresh?: () => void;
   onChatterRefresh?: (payload: ChatterRefreshPayload) => void;
   onTimerPaused?: (payload: TimerPausedPayload) => void;
+  onTimerUpdated?: (payload: TimerUpdatedPayload) => void;
 };
 
 export function connectDashboardRealtime(handlers: DashboardRealtimeHandlers): () => void {
@@ -106,6 +123,9 @@ export function connectDashboardRealtime(handlers: DashboardRealtimeHandlers): (
     });
     socket.on('timer:paused', (payload: TimerPausedPayload) => {
       if (payload?.taskId) handlers.onTimerPaused?.(payload);
+    });
+    socket.on('timer:updated', (payload: TimerUpdatedPayload) => {
+      if (payload?.taskId) handlers.onTimerUpdated?.(payload);
     });
 
     // socket.io gives up permanently after reconnectionAttempts is exhausted (e.g. a
