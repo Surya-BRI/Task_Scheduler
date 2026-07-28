@@ -10,7 +10,7 @@ import { ActivityAction } from '../activities/activity-events';
 import { UserRole } from '../common/constants/roles.enum';
 import { NotificationsService } from '../notifications/notifications.service';
 import { DashboardRealtimeService } from '../dashboard/dashboard-realtime.service';
-import { SaveSignRowsDto } from '../tasks/dto/save-sign-rows.dto';
+import { SaveSignRowsDto, SIGN_ROW_COMMENT_MAX_LENGTH } from '../tasks/dto/save-sign-rows.dto';
 import { QsStatusValue, UpdateQsStatusDto } from '../tasks/dto/update-qs-status.dto';
 import { shouldRunRuntimeSchemaBootstrap } from '../common/utils/runtime-schema-bootstrap.util';
 
@@ -707,22 +707,30 @@ END;
 
   private normalizeSignRowsDto(dto: SaveSignRowsDto) {
     if (!Array.isArray(dto.rows)) throw new BadRequestException('Sign rows payload is required');
-    return dto.rows.map((row) => ({
-      id: row.id?.trim() || undefined,
-      tNo: row.tNo?.trim() || '',
-      no: row.no?.trim() || '',
-      signType: row.signType?.trim() || '',
-      planCode: row.planCode?.trim() || '',
-      estQty: row.estQty,
-      qsQty: row.qsQty,
-      areaZone: row.areaZone?.trim() || '',
-      levelParcel: row.levelParcel?.trim() || '',
-      sequence: row.sequence?.trim() || '',
-      status: row.status?.trim() || '',
-      comment: row.comment?.trim() || null,
-      contRef: row.contRef?.trim() || '',
-      signFamily: row.signFamily?.trim() || null,
-    }));
+    return dto.rows.map((row) => {
+      const comment = row.comment?.trim() || null;
+      if (comment && comment.length > SIGN_ROW_COMMENT_MAX_LENGTH) {
+        throw new BadRequestException(
+          `Comment must be at most ${SIGN_ROW_COMMENT_MAX_LENGTH} characters.`,
+        );
+      }
+      return {
+        id: row.id?.trim() || undefined,
+        tNo: row.tNo?.trim() || '',
+        no: row.no?.trim() || '',
+        signType: row.signType?.trim() || '',
+        planCode: row.planCode?.trim() || '',
+        estQty: row.estQty,
+        qsQty: row.qsQty,
+        areaZone: row.areaZone?.trim() || '',
+        levelParcel: row.levelParcel?.trim() || '',
+        sequence: row.sequence?.trim() || '',
+        status: row.status?.trim() || '',
+        comment,
+        contRef: row.contRef?.trim() || '',
+        signFamily: row.signFamily?.trim() || null,
+      };
+    });
   }
 
   private hasSignRowChanges(before: any, after: Record<string, unknown>) {
