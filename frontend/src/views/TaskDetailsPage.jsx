@@ -1215,6 +1215,8 @@ export function TaskDetailsPage() {
   const from = searchParams.get('from')
   const recordId = routeId
   const [record, setRecord] = useState(null)
+  const [recordLoading, setRecordLoading] = useState(true)
+  const [recordLoadError, setRecordLoadError] = useState(false)
   const [holdImpact, setHoldImpact] = useState(null) // { partCount, designers } | null — set once fetched, opens the confirm modal
   const [holdImpactChecking, setHoldImpactChecking] = useState(false)
   const [reworkDialogOpen, setReworkDialogOpen] = useState(false)
@@ -1297,8 +1299,12 @@ export function TaskDetailsPage() {
     async function loadTask() {
       if (!recordId && !queryOpNo) {
         setRecord(null)
+        setRecordLoading(false)
+        setRecordLoadError(false)
         return
       }
+      setRecordLoading(true)
+      setRecordLoadError(false)
       try {
         const rawId = String(recordId ?? '').trim()
         const rawOpNo = String(queryOpNo ?? '').trim()
@@ -1327,6 +1333,7 @@ export function TaskDetailsPage() {
                 projectName: project.name,
                 category: project.category,
               }))
+              setRecordLoading(false)
               return
             }
           }
@@ -1364,6 +1371,7 @@ export function TaskDetailsPage() {
               const mapped = mapProjectListRowToRecord(projectRow)
               if (queryDesignType) mapped.designType = queryDesignType
               setRecord(mapped)
+              setRecordLoading(false)
               return
             }
             if (isProjectsListFlow && queryDesignType) {
@@ -1389,26 +1397,34 @@ export function TaskDetailsPage() {
                 projectName: lookupProjectCode || null,
                 client: null,
               })
+              setRecordLoading(false)
               return
             }
           }
         }
         if (!alive) return
         if (task) {
-          let mapped = mapTaskToRecord(task)
-          // Project-wide display fields always stay on live ERP.
-          const liveRow = await fetchLiveProjectRow({
+          const mapped = mapTaskToRecord(task)
+          // Paint immediately — don't block first render on slow ERP projects-list.
+          setRecord(mapped)
+          setRecordLoading(false)
+          void fetchLiveProjectRow({
             opNo: lookupOpNo || mapped.opNo,
             projectCode: lookupProjectCode || mapped.projectNo,
+          }).then((liveRow) => {
+            if (!alive || !liveRow) return
+            setRecord((prev) => (prev ? applyLiveProjectWideFields(prev, liveRow) : prev))
           })
-          mapped = applyLiveProjectWideFields(mapped, liveRow)
-          setRecord(mapped)
         } else {
           setRecord(null)
+          setRecordLoading(false)
+          setRecordLoadError(true)
         }
       } catch {
         if (!alive) return
         setRecord(null)
+        setRecordLoading(false)
+        setRecordLoadError(true)
       }
     }
     loadTask()
@@ -1623,20 +1639,32 @@ export function TaskDetailsPage() {
     let alive = true
     async function resolveProjectId() {
       setResolvingProjectId(true)
-      const projectNo = record?.projectNo ?? record?.projectId
+      // Prefer the UUID already returned on the task — avoid by-project-no round-trip.
+      if (isUuid(record?.projectId)) {
+        setProjectId(record.projectId)
+        if (alive) setResolvingProjectId(false)
+        if (!(isCreationRoute && !isRetail)) return
+      }
+      const projectNo = record?.projectNo
       if (!projectNo) {
+        if (!isUuid(record?.projectId) && alive) {
+          setResolvingProjectId(false)
+        }
+        return
+      }
+      if (isUuid(projectNo)) {
+        setProjectId(projectNo)
         if (alive) setResolvingProjectId(false)
         return
       }
-      if (/^[0-9a-f]{8}-[0-9a-f]{4}-[1-5][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i.test(projectNo)) {
-        setProjectId(projectNo)
-        if (alive) setResolvingProjectId(false)
+      // Skip lookup when we already have a UUID project id (unless creation needs team fields).
+      if (isUuid(record?.projectId) && !(isCreationRoute && !isRetail)) {
         return
       }
       try {
         const project = await apiClient.get(`/projects/by-project-no/${encodeURIComponent(projectNo)}`)
         if (!alive) return
-        setProjectId(project?.id ?? '')
+        if (project?.id) setProjectId(project.id)
         if (isCreationRoute && !isRetail) {
           const loadedTechnicalHead = project?.technicalHead ?? ''
           const loadedTeamLead = project?.teamLead ?? ''
@@ -1658,7 +1686,7 @@ export function TaskDetailsPage() {
         }
       } catch {
         if (!alive) return
-        setProjectId('')
+        if (!isUuid(record?.projectId)) setProjectId('')
       } finally {
         if (alive) setResolvingProjectId(false)
       }
@@ -1667,7 +1695,7 @@ export function TaskDetailsPage() {
     return () => {
       alive = false
     }
-  }, [record?.projectNo, record?.projectId])
+  }, [record?.projectNo, record?.projectId, isCreationRoute, isRetail])
 
   useEffect(() => {
     if (!isCreationRoute || isQs) return
@@ -1853,7 +1881,7 @@ export function TaskDetailsPage() {
   useEffect(() => {
     if (activeTab !== 'activity') return
     fetchActivities({ append: false, cursor: null })
-    const interval = setInterval(() => fetchActivities({ append: false, cursor: null }), 20000)
+    const interval = setInterval(() => fetchActivities({ append: false, cursor: null }), 60000)
     return () => clearInterval(interval)
   }, [activeTab, activityMode, taskId, projectId, fetchActivities])
 
@@ -1866,7 +1894,8 @@ export function TaskDetailsPage() {
         return
       }
       try {
-        const response = await fetchTaskActivities(taskId, { limit: 50 })
+        // Smaller page — only need TASK_CREATED actor for the details row.
+        const response = await fetchTaskActivities(taskId, { limit: 10 })
         const items = Array.isArray(response?.data) ? response.data : []
         const createdEvent = items.find((item) => item.action === 'TASK_CREATED')
         if (!alive) return
@@ -1878,9 +1907,13 @@ export function TaskDetailsPage() {
         setTaskAuditInfo({ createdByHod: '-' })
       }
     }
-    fetchTaskAuditInfo()
+    // Defer so first paint / critical task GET isn't competing with audit history.
+    const timer = setTimeout(() => {
+      void fetchTaskAuditInfo()
+    }, 400)
     return () => {
       alive = false
+      clearTimeout(timer)
     }
   }, [taskId])
 
@@ -1929,10 +1962,14 @@ export function TaskDetailsPage() {
         setSidebarHasMore(false)
       }
     }
-    fetchSidebarHistory()
-    const interval = setInterval(fetchSidebarHistory, 20000)
+    // Defer first fetch; refresh infrequently (realtime covers most updates).
+    const initial = setTimeout(() => {
+      void fetchSidebarHistory()
+    }, 500)
+    const interval = setInterval(fetchSidebarHistory, 60000)
     return () => {
       alive = false
+      clearTimeout(initial)
       clearInterval(interval)
     }
   }, [projectId])
@@ -2042,8 +2079,12 @@ export function TaskDetailsPage() {
   }, [projectId])
 
   useEffect(() => {
-    fetchProjectTasks()
-  }, [fetchProjectTasks])
+    if (!projectId) return
+    const timer = setTimeout(() => {
+      void fetchProjectTasks()
+    }, 350)
+    return () => clearTimeout(timer)
+  }, [fetchProjectTasks, projectId])
 
   const focusPostId = searchParams.get('postId')
   const focusCommentId = searchParams.get('commentId')
@@ -2373,8 +2414,97 @@ export function TaskDetailsPage() {
     }
   }
 
+  if (recordLoading && !record) {
+    return (
+      <div className="min-h-screen bg-slate-50 px-4 py-4 sm:px-6" aria-busy="true" aria-label="Loading task">
+        <div className="w-full space-y-2.5">
+          <div className="h-8 w-20 animate-pulse rounded-md bg-slate-200" />
+          <div className="h-7 w-72 max-w-[70%] animate-pulse rounded-md bg-slate-200" />
+          <div className="flex w-full gap-2 overflow-hidden">
+            {Array.from({ length: 7 }).map((_, i) => (
+              <div key={`stage-skel-${i}`} className="h-9 min-w-[148px] flex-1 animate-pulse rounded-lg bg-slate-200" />
+            ))}
+          </div>
+
+          <div className="grid min-h-[70vh] gap-2.5 lg:grid-cols-[1fr_265px]">
+            <section className="rounded-lg border border-slate-200 bg-white p-2.5 shadow-sm">
+              <div className="flex items-center justify-between border-b border-slate-200 pb-2">
+                <div className="flex gap-4">
+                  {Array.from({ length: 4 }).map((_, i) => (
+                    <div key={`tab-skel-${i}`} className="h-4 w-16 animate-pulse rounded bg-slate-200" />
+                  ))}
+                </div>
+                <div className="h-3 w-24 animate-pulse rounded bg-slate-100" />
+              </div>
+              <div className="mt-3 grid gap-3 lg:grid-cols-2">
+                {Array.from({ length: 2 }).map((_, col) => (
+                  <div key={`col-skel-${col}`} className="space-y-2">
+                    {Array.from({ length: 6 }).map((_, i) => (
+                      <div key={`row-skel-${col}-${i}`} className="grid grid-cols-[125px_1fr] gap-2">
+                        <div className="h-3 animate-pulse rounded bg-slate-100" />
+                        <div className="h-3 animate-pulse rounded bg-slate-200" />
+                      </div>
+                    ))}
+                  </div>
+                ))}
+              </div>
+              <div className="mt-4 space-y-2 border-t border-slate-100 pt-3">
+                <div className="h-3 w-28 animate-pulse rounded bg-slate-200" />
+                <div className="h-24 w-full animate-pulse rounded-md bg-slate-100" />
+                <div className="h-10 w-full animate-pulse rounded-md bg-slate-100" />
+              </div>
+            </section>
+
+            <aside className="flex flex-col gap-2.5">
+              <div className="rounded-lg border border-slate-200 bg-white p-3 shadow-sm">
+                <div className="mb-2 h-3 w-20 animate-pulse rounded bg-slate-200" />
+                <div className="h-10 w-full animate-pulse rounded-md bg-slate-100" />
+                <div className="mt-2 flex gap-2">
+                  <div className="h-8 flex-1 animate-pulse rounded-md bg-slate-100" />
+                  <div className="h-8 flex-1 animate-pulse rounded-md bg-slate-100" />
+                </div>
+              </div>
+              <div className="rounded-lg border border-slate-200 bg-white p-3 shadow-sm">
+                <div className="mb-2 h-3 w-24 animate-pulse rounded bg-slate-200" />
+                <div className="space-y-2">
+                  {Array.from({ length: 4 }).map((_, i) => (
+                    <div key={`hist-skel-${i}`} className="h-8 w-full animate-pulse rounded-md bg-slate-100" />
+                  ))}
+                </div>
+              </div>
+              <div className="flex-1 rounded-lg border border-slate-200 bg-white p-3 shadow-sm">
+                <div className="mb-2 h-3 w-28 animate-pulse rounded bg-slate-200" />
+                <div className="space-y-2">
+                  {Array.from({ length: 5 }).map((_, i) => (
+                    <div key={`field-skel-${i}`} className="h-8 w-full animate-pulse rounded-md bg-slate-100" />
+                  ))}
+                </div>
+              </div>
+            </aside>
+          </div>
+        </div>
+      </div>
+    )
+  }
+
   if (!record) {
-    return null
+    return (
+      <div className="flex min-h-screen items-center justify-center bg-slate-50 px-4">
+        <div className="rounded-lg border border-slate-200 bg-white px-5 py-4 text-center shadow-sm">
+          <p className="text-sm font-semibold text-slate-800">
+            {recordLoadError ? 'Could not load this task' : 'Task not found'}
+          </p>
+          <button
+            type="button"
+            onClick={() => router.back()}
+            className="mt-3 inline-flex items-center gap-1 rounded-md border border-slate-300 bg-white px-3 py-1.5 text-xs font-semibold text-slate-700 hover:bg-slate-50"
+          >
+            <ChevronLeft className="h-3.5 w-3.5" />
+            Go back
+          </button>
+        </div>
+      </div>
+    )
   }
 
   return (
