@@ -38,7 +38,9 @@ export default function RootLayout({ children }) {
           position="top-right"
           richColors
           closeButton
+          style={{ zIndex: 9999 }}
           toastOptions={{
+            duration: 4000,
             style: {
               boxShadow: "0 4px 12px rgba(0,0,0,0.08)",
               fontSize: "13px",

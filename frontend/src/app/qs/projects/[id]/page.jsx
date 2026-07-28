@@ -9,6 +9,7 @@ import { Button } from '@/components/ui/button'
 import { Modal } from '@/components/ui/Modal'
 import { apiClient } from '@/lib/api-client'
 import { useRoleGuard } from '@/lib/use-role-guard'
+import { useDesignListStore } from '@/state/DesignListContext'
 
 // ─── Sign row helpers (self-contained, no coupling to TaskDetailsPage) ───────
 
@@ -116,6 +117,7 @@ function QsProjectDetailContent() {
   const params = useParams()
   const searchParams = useSearchParams()
   const router = useRouter()
+  const { setRecords } = useDesignListStore()
 
   const projectCode = decodeURIComponent(String(params.id ?? ''))
   const queryOp = searchParams.get('op') ?? ''
@@ -287,12 +289,13 @@ function QsProjectDetailContent() {
   }
 
   async function handleSubmitQsUpdate() {
+    if (qsSubmitting) return
     if (!projectId || isQsReadOnly) {
-      toast.error('This QS update has already been submitted.')
+      toast.error('This QS update has already been submitted.', { id: 'qs-submit' })
       return
     }
     if (!hasChangesSinceSubmit) {
-      toast.error('Make at least one change before submitting a QS update.')
+      toast.error('Make at least one change before submitting a QS update.', { id: 'qs-submit' })
       return
     }
     setQsSubmitting(true)
@@ -303,13 +306,30 @@ function QsProjectDetailContent() {
         ? response.rows
         : await apiClient.get(`/projects/${projectId}/sign-rows`)
       const submittedRows = Array.isArray(nextRows) ? nextRows : []
+      const nextStatus =
+        response?.qsStatus ??
+        (await apiClient.get(`/projects/${projectId}/qs-status`).catch(() => null)) ??
+        { status: response?.status ?? 'Completed' }
       setSignRows(submittedRows)
       setSavedRowsSnapshot(serializeSignRows(submittedRows))
       setSubmittedRowsSnapshot(serializeSignRows(submittedRows))
-      setQsStatus(response?.qsStatus ?? { status: response?.status ?? 'Completed' })
-      toast.success('QS update submitted. Project is now read-only.')
+      setQsStatus(nextStatus)
+      const completedStatus = String(nextStatus?.status ?? 'Completed')
+      setRecords((prev) =>
+        prev.map((row) => {
+          const matchesProject =
+            row.id === projectId ||
+            row.projectCode === project?.projectNo ||
+            row.projectNo === project?.projectNo ||
+            row.projectCode === projectCode ||
+            row.projectNo === projectCode
+          return matchesProject ? { ...row, status: completedStatus } : row
+        }),
+      )
+      // Only confirm success after the backend accepted the submission.
+      toast.success('QS Update submitted successfully.', { id: 'qs-submit', duration: 5000 })
     } catch (error) {
-      toast.error(friendlyError(error, 'Failed to submit QS update'))
+      toast.error(friendlyError(error, 'Failed to submit QS update'), { id: 'qs-submit' })
     } finally {
       setQsSubmitting(false)
     }
@@ -383,28 +403,55 @@ function QsProjectDetailContent() {
                   </span>
                 ) : null}
               </div>
-              {!isQsReadOnly && (
-                <div className="ml-auto flex shrink-0 gap-2" role="group" aria-label="Primary sign row actions">
-                  <button
-                    type="button"
-                    onClick={handleSaveSignRows}
-                    disabled={signRowsSaving || qsSubmitting || !hasUnsavedChanges}
-                    title={!hasUnsavedChanges ? 'No unsaved changes' : undefined}
-                    className="rounded-md bg-[#10a6e3] px-3 py-1 text-[11px] font-semibold text-white transition hover:bg-[#0f96cd] disabled:cursor-not-allowed disabled:opacity-60"
-                  >
-                    {signRowsSaving ? 'Saving…' : 'Save Rows'}
-                  </button>
-                  <button
-                    type="button"
-                    onClick={handleSubmitQsUpdate}
-                    disabled={signRowsSaving || qsSubmitting || !hasChangesSinceSubmit}
-                    title={!hasChangesSinceSubmit ? 'Make a change before submitting' : undefined}
-                    className="rounded-md bg-emerald-600 px-3 py-1 text-[11px] font-semibold text-white transition hover:bg-emerald-700 disabled:cursor-not-allowed disabled:opacity-60"
-                  >
-                    {qsSubmitting ? 'Submitting…' : 'Submit QS Update'}
-                  </button>
-                </div>
-              )}
+              <div className="ml-auto flex shrink-0 gap-2" role="group" aria-label="Primary sign row actions">
+                <button
+                  type="button"
+                  onClick={handleSaveSignRows}
+                  disabled={isQsReadOnly || signRowsSaving || qsSubmitting || !hasUnsavedChanges}
+                  title={
+                    isQsReadOnly
+                      ? 'QS update already submitted'
+                      : !hasUnsavedChanges
+                        ? 'No unsaved changes'
+                        : undefined
+                  }
+                  className="inline-flex items-center gap-1.5 rounded-md bg-[#10a6e3] px-3 py-1 text-[11px] font-semibold text-white transition hover:bg-[#0f96cd] disabled:cursor-not-allowed disabled:opacity-60"
+                >
+                  {signRowsSaving ? (
+                    <>
+                      <span className="inline-block h-3 w-3 animate-spin rounded-full border-2 border-white/40 border-t-white" aria-hidden />
+                      Saving…
+                    </>
+                  ) : (
+                    'Save Rows'
+                  )}
+                </button>
+                <button
+                  type="button"
+                  onClick={handleSubmitQsUpdate}
+                  disabled={isQsReadOnly || signRowsSaving || qsSubmitting || !hasChangesSinceSubmit}
+                  title={
+                    isQsReadOnly
+                      ? 'QS update already submitted'
+                      : !hasChangesSinceSubmit
+                        ? 'Make a change before submitting'
+                        : undefined
+                  }
+                  aria-busy={qsSubmitting}
+                  className="inline-flex items-center gap-1.5 rounded-md bg-emerald-600 px-3 py-1 text-[11px] font-semibold text-white transition hover:bg-emerald-700 disabled:cursor-not-allowed disabled:opacity-60"
+                >
+                  {qsSubmitting ? (
+                    <>
+                      <span className="inline-block h-3 w-3 animate-spin rounded-full border-2 border-white/40 border-t-white" aria-hidden />
+                      Submitting…
+                    </>
+                  ) : isQsReadOnly ? (
+                    'Submitted'
+                  ) : (
+                    'Submit QS Update'
+                  )}
+                </button>
+              </div>
             </div>
 
             <div className="overflow-auto rounded-md border border-slate-200">
