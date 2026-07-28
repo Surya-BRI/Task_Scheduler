@@ -2,6 +2,7 @@ import React, { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import { toast } from 'sonner'
 import { Ban, Calendar, CheckCircle2, ChevronDown, ChevronLeft, CircleCheck, Clock3, ExternalLink, FileText, Flag, Hourglass, Info, Link, Pause, Pencil, RotateCcw, Shield, Trash2, Upload } from 'lucide-react'
 import { QsStatusIndicator } from '@/components/ui/QsStatusIndicator'
+import { TaskReallocationPanel } from '@/components/TaskReallocationPanel'
 import { useParams, usePathname, useRouter, useSearchParams } from 'next/navigation'
 import DatePicker from 'react-datepicker'
 import { CreateTaskModal } from '../components/CreateTaskModal'
@@ -844,6 +845,7 @@ function mapTaskToRecord(task) {
     '-'
   const reviewerHod = prettifyHodName(reviewerHodRaw)
   const createdByName = String(task.createdByName ?? '').trim() || '-'
+  const pendingReallocation = task.pendingReallocation ?? null
   const retailDesignTypes = [
     ...new Set(
       (task.retailDetails ?? [])
@@ -871,6 +873,9 @@ function mapTaskToRecord(task) {
     priority: task.priority ?? '-',
     createdByName,
     reviewerHod,
+    pendingReallocation,
+    viewerCanRequestReallocation: Boolean(task.viewerCanRequestReallocation),
+    viewerRemainingScheduledHours: Number(task.viewerRemainingScheduledHours ?? 0) || 0,
     providedAssets,
     hoursRequired,
     designType: project.category ?? 'Project',
@@ -2551,20 +2556,23 @@ export function TaskDetailsPage() {
 
   if (!record) {
     return (
-      <div className="flex min-h-screen items-center justify-center bg-slate-50 px-4">
-        <div className="rounded-lg border border-slate-200 bg-white px-5 py-4 text-center shadow-sm">
-          <p className="text-sm font-semibold text-slate-800">
-            {recordLoadError ? 'Could not load this task' : 'Task not found'}
-          </p>
+      <div className="min-h-screen bg-slate-50">
+        <Navbar />
+        <main className="px-4 py-6 sm:px-6">
           <button
             type="button"
-            onClick={() => router.back()}
-            className="mt-3 inline-flex items-center gap-1 rounded-md border border-slate-300 bg-white px-3 py-1.5 text-xs font-semibold text-slate-700 hover:bg-slate-50"
+            onClick={() => router.push(backPath)}
+            className="mb-4 inline-flex items-center gap-2 rounded-md border border-slate-300 bg-white px-3 py-1.5 text-sm font-medium text-slate-700 hover:bg-slate-100"
           >
-            <ChevronLeft className="h-3.5 w-3.5" />
-            Go back
+            <ChevronLeft className="h-4 w-4" />
+            Back
           </button>
-        </div>
+          <p className="text-sm text-slate-600">
+            {recordLoadError
+              ? 'This task could not be loaded. It may have been removed or you may not have access.'
+              : 'Task not found.'}
+          </p>
+        </main>
       </div>
     )
   }
@@ -2900,6 +2908,21 @@ export function TaskDetailsPage() {
                           </div>
                         </div>
                       )}
+                      <TaskReallocationPanel
+                        taskId={record?.taskId || record?.id}
+                        pendingReallocation={record?.pendingReallocation}
+                        viewerCanRequestReallocation={Boolean(record?.viewerCanRequestReallocation)}
+                        sessionUserId={_session?.id ?? null}
+                        isHod={isHod}
+                        onChanged={() => {
+                          const id = record?.taskId || record?.id
+                          if (!id) return
+                          apiClient.get(`/tasks/${id}`).then((task) => {
+                            const mapped = mapTaskToRecord(task)
+                            setRecord(mapped)
+                          }).catch(() => {})
+                        }}
+                      />
                       {(record?.projectDetails?.length ?? 0) > 0 && (
                         <div className="mt-4 border-t border-slate-200 pt-3">
                           <p className="mb-2 text-xs font-semibold text-slate-700">Work Scope</p>

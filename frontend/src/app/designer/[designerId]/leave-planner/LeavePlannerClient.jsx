@@ -1018,6 +1018,13 @@ export default function LeavePlannerClient() {
             </div>
             <div className="flex gap-3">
               <button
+                type="button"
+                onClick={() => router.push("/designer/requests?tab=reallocation")}
+                className="px-4 py-2 text-sm font-semibold rounded-lg bg-white text-slate-700 border border-slate-200 hover:bg-slate-50 transition-colors shadow-sm"
+              >
+                Overtime / Reallocation
+              </button>
+              <button
                 onClick={() => router.back()}
                 className="px-4 py-2 text-sm font-semibold rounded-lg bg-white text-slate-700 border border-slate-200 hover:bg-slate-50 transition-colors shadow-sm"
               >

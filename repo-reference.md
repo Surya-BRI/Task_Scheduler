@@ -685,6 +685,20 @@ Base URL: `http://localhost:4000/api/v1` (dev) | `https://task-scheduler.app-bri
 
 **Sign rows are project-scoped** (keyed by `projectId`). Task-level sign row endpoints were removed in the QS refactor (2026-06-28).
 
+### Reallocation Requests (`/reallocation-requests`)
+| Method | Route | Auth | Roles | Description |
+|--------|-------|------|-------|-------------|
+| GET | `/reallocation-requests/task-options` | JWT | DESIGNER, HOD | Tasks with remaining schedulable hours for designer |
+| GET | `/reallocation-requests/eligible-designers` | JWT | DESIGNER, HOD | Project-team eligible designers for a task |
+| GET | `/reallocation-requests/pending-approvals` | JWT | HOD | Pending reallocation inbox |
+| GET | `/reallocation-requests/team-requests` | JWT | HOD | Team history |
+| GET | `/reallocation-requests` | JWT | DESIGNER, HOD | List by designerId |
+| POST | `/reallocation-requests` | JWT | DESIGNER, HOD | Create (`taskId`, `suggestedDesignerId`, `reason`) |
+| POST | `/reallocation-requests/:id/cancel` | JWT | DESIGNER | Cancel while Pending |
+| POST | `/reallocation-requests/:id/review` | JWT | HOD | Approve (optional `targetDesignerId`) or Reject (`remarks`) |
+
+On approve: moves **all remaining** unlocked scheduler parts from requester → target (logged remainder stays locked on requester). HOD UI: Design List **All \| Reallocation** toggle.
+
 ### Tasks (`/tasks`)
 | Method | Route | Auth | Roles | Description |
 |--------|-------|------|-------|-------------|

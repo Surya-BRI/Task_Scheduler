@@ -61,3 +61,11 @@ This isn't broken, just architecturally split from where the docs (and a new rea
 **Recommended fix:** no functional change needed. Either move `freezeDraftWorkSession` into `scheduler-assignments.service.ts` for locality with the rest of the scheduler-reaction logic, or update `SCHEDULER_TIME_MODEL.md` to explicitly point at `tasks.service.ts` as the real home of this logic so the split is documented rather than surprising.
 
 **Files:** `backend/src/tasks/tasks.service.ts` — `freezeDraftWorkSession`; `backend/src/scheduler-assignments/scheduler-assignments.service.ts` — `workedHours` peek only
+
+---
+
+### 6. Designer reallocation request — gaps tracked separately
+
+Reallocation (Rule 13) has its own audit: non-atomic timer freeze vs handoff, partial unplaced hours on approve, pending double-submit race, stale pendings, list N+1, etc.
+
+**See:** [REALLOCATION_GAPS.md](REALLOCATION_GAPS.md)
