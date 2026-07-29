@@ -2,7 +2,6 @@ import React, { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import { toast } from 'sonner'
 import { Ban, Calendar, CheckCircle2, ChevronDown, ChevronLeft, CircleCheck, Clock3, ExternalLink, FileText, Flag, Hourglass, Info, Link, Pause, Pencil, RotateCcw, Shield, Trash2, Upload } from 'lucide-react'
 import { QsStatusIndicator } from '@/components/ui/QsStatusIndicator'
-import { TaskReallocationPanel } from '@/components/TaskReallocationPanel'
 import { useParams, usePathname, useRouter, useSearchParams } from 'next/navigation'
 import DatePicker from 'react-datepicker'
 import { CreateTaskModal } from '../components/CreateTaskModal'
@@ -845,7 +844,6 @@ function mapTaskToRecord(task) {
     '-'
   const reviewerHod = prettifyHodName(reviewerHodRaw)
   const createdByName = String(task.createdByName ?? '').trim() || '-'
-  const pendingReallocation = task.pendingReallocation ?? null
   const retailDesignTypes = [
     ...new Set(
       (task.retailDetails ?? [])
@@ -873,8 +871,6 @@ function mapTaskToRecord(task) {
     priority: task.priority ?? '-',
     createdByName,
     reviewerHod,
-    pendingReallocation,
-    viewerCanRequestReallocation: Boolean(task.viewerCanRequestReallocation),
     viewerRemainingScheduledHours: Number(task.viewerRemainingScheduledHours ?? 0) || 0,
     providedAssets,
     hoursRequired,
@@ -2908,21 +2904,6 @@ export function TaskDetailsPage() {
                           </div>
                         </div>
                       )}
-                      <TaskReallocationPanel
-                        taskId={record?.taskId || record?.id}
-                        pendingReallocation={record?.pendingReallocation}
-                        viewerCanRequestReallocation={Boolean(record?.viewerCanRequestReallocation)}
-                        sessionUserId={_session?.id ?? null}
-                        isHod={isHod}
-                        onChanged={() => {
-                          const id = record?.taskId || record?.id
-                          if (!id) return
-                          apiClient.get(`/tasks/${id}`).then((task) => {
-                            const mapped = mapTaskToRecord(task)
-                            setRecord(mapped)
-                          }).catch(() => {})
-                        }}
-                      />
                       {(record?.projectDetails?.length ?? 0) > 0 && (
                         <div className="mt-4 border-t border-slate-200 pt-3">
                           <p className="mb-2 text-xs font-semibold text-slate-700">Work Scope</p>
