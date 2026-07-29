@@ -31,6 +31,54 @@ import { utcDateOnlyString } from '../common/utils/date-window.util';
 import { summarizeViewerOvertimeHours } from './scheduler-overtime-hours.util';
 import { taskViewPath } from '../common/utils/design-type.util';
 
+const TASK_ATTACHMENT_SELECT = {
+  id: true,
+  fileKey: true,
+  fileName: true,
+  mimeType: true,
+  sizeBytes: true,
+  createdAt: true,
+} as const;
+
+const TASK_RETAIL_DETAIL_CORE_SELECT = {
+  id: true,
+  taskId: true,
+  providedFile: true,
+  hodName: true,
+  designTypes: true,
+  hoursRequired: true,
+  comment: true,
+  signFamily: true,
+  signType: true,
+  planCode: true,
+  contractRef: true,
+  quantity: true,
+  deadline: true,
+  createdAt: true,
+} as const;
+
+const TASK_PROJECT_DETAIL_CORE_SELECT = {
+  id: true,
+  taskId: true,
+  signType: true,
+  planCode: true,
+  area: true,
+  level: true,
+  artwork: true,
+  artworkHours: true,
+  technical: true,
+  technicalHours: true,
+  location: true,
+  locationHours: true,
+  asBuilt: true,
+  asBuiltHours: true,
+  bim: true,
+  deadline: true,
+  comment: true,
+  createdAt: true,
+} as const;
+
+/** Full task graph (detail lines + attachment metadata). Signed URLs added separately. */
 const TASK_SELECT = {
   id: true,
   taskNo: true,
@@ -74,67 +122,94 @@ const TASK_SELECT = {
   taskDesigners: { select: { designer: { select: { id: true, fullName: true, email: true } } } },
   retailDetails: {
     select: {
-      id: true,
-      taskId: true,
-      providedFile: true,
-      hodName: true,
-      designTypes: true,
-      hoursRequired: true,
-      comment: true,
-      signFamily: true,
-      signType: true,
-      planCode: true,
-      contractRef: true,
-      quantity: true,
-      deadline: true,
-      createdAt: true,
-      attachments: {
-        select: {
-          id: true,
-          fileKey: true,
-          fileName: true,
-          mimeType: true,
-          sizeBytes: true,
-          createdAt: true,
-        },
-      },
+      ...TASK_RETAIL_DETAIL_CORE_SELECT,
+      attachments: { select: TASK_ATTACHMENT_SELECT },
     },
   },
   projectDetails: {
     select: {
-      id: true,
-      taskId: true,
-      signType: true,
-      planCode: true,
-      area: true,
-      level: true,
-      artwork: true,
-      artworkHours: true,
-      technical: true,
-      technicalHours: true,
-      location: true,
-      locationHours: true,
-      asBuilt: true,
-      asBuiltHours: true,
-      bim: true,
-      deadline: true,
-      comment: true,
-      createdAt: true,
-      attachments: {
-        select: {
-          id: true,
-          fileKey: true,
-          fileName: true,
-          mimeType: true,
-          sizeBytes: true,
-          createdAt: true,
-        },
-      },
+      ...TASK_PROJECT_DETAIL_CORE_SELECT,
+      attachments: { select: TASK_ATTACHMENT_SELECT },
     },
   },
   createdAt: true,
   updatedAt: true,
 };
+
+/**
+ * Fast first-paint payload: scalars + people + detail lines, no attachment rows.
+ * Attachments / signed URLs / scheduler / reallocation load via findOneExtras.
+ */
+const TASK_CORE_SELECT = {
+  id: true,
+  taskNo: true,
+  opNo: true,
+  title: true,
+  revisionCode: true,
+  designType: true,
+  signType: true,
+  signFamily: true,
+  disciplineType: true,
+  phase: true,
+  description: true,
+  status: true,
+  priority: true,
+  dueDate: true,
+  startedAt: true,
+  completedAt: true,
+  holdPreviousStatus: true,
+  reworkNote: true,
+  reworkAttachmentUrl: true,
+  reworkAttachmentName: true,
+  reworkLinkUrl: true,
+  reworkLinkName: true,
+  previousRevisionTaskId: true,
+  technicalHead: true,
+  teamLead: true,
+  subTeamLead: true,
+  designers: true,
+  projectId: true,
+  project: {
+    select: {
+      id: true,
+      name: true,
+      projectNo: true,
+      category: true,
+      salesPerson: true,
+    },
+  },
+  assigneeId: true,
+  assignee: { select: { id: true, fullName: true, email: true } },
+  taskDesigners: { select: { designer: { select: { id: true, fullName: true, email: true } } } },
+  retailDetails: { select: TASK_RETAIL_DETAIL_CORE_SELECT },
+  projectDetails: { select: TASK_PROJECT_DETAIL_CORE_SELECT },
+  createdAt: true,
+  updatedAt: true,
+};
+
+/** Slim row for PATCH /status — enough for notifications + UI status patch; no detail joins. */
+const TASK_STATUS_SELECT = {
+  id: true,
+  taskNo: true,
+  opNo: true,
+  title: true,
+  status: true,
+  holdPreviousStatus: true,
+  designType: true,
+  assigneeId: true,
+  reworkNote: true,
+  reworkAttachmentUrl: true,
+  reworkAttachmentName: true,
+  reworkLinkUrl: true,
+  reworkLinkName: true,
+  project: {
+    select: {
+      id: true,
+      name: true,
+      projectNo: true,
+    },
+  },
+} as const;
 
 const PROJECT_LOOKUP_SELECT = {
   id: true,
@@ -251,10 +326,15 @@ export class TasksService {
     @Optional() private readonly dashboardRealtime?: DashboardRealtimeService,
   ) {}
 
-  private normalizeTaskForApi<T extends { status?: string | null }>(task: T): T {
+  private normalizeTaskForApi<T extends { status?: string | null; holdPreviousStatus?: string | null }>(
+    task: T,
+  ): T {
     return {
       ...task,
       status: toApiTaskStatus(task.status),
+      ...(task.holdPreviousStatus != null
+        ? { holdPreviousStatus: toApiTaskStatus(task.holdPreviousStatus) }
+        : {}),
     };
   }
 
@@ -1173,10 +1253,17 @@ export class TasksService {
     } = filters;
     const skip = (page - 1) * limit;
 
-    // Role-based base filters — preserve sales review queue / history when requested
+    // Role-based base filters — preserve sales review queue / history when requested.
+    // Queue keeps active Sales Review work plus temporary holds parked from Sales Review
+    // so Sales can resume without hunting History.
     let baseWhere: Record<string, unknown> = {};
     if (role === UserRole.SALESPERSON && salesQueue) {
-      baseWhere = { status: 'SALES_REVIEW' };
+      baseWhere = {
+        OR: [
+          { status: 'SALES_REVIEW' },
+          { status: 'ON_HOLD', holdPreviousStatus: 'SALES_REVIEW' },
+        ],
+      };
     } else if (role === UserRole.SALESPERSON && salesHistory) {
       const historyTaskIds = await this.findSalesHistoryTaskIds(userId, Math.max(limit * page, 500));
       if (historyTaskIds.length === 0) {
@@ -1185,6 +1272,10 @@ export class TasksService {
       baseWhere = {
         id: { in: historyTaskIds },
         status: { not: 'SALES_REVIEW' },
+        // Active sales holds stay in Queue, not History.
+        NOT: {
+          AND: [{ status: 'ON_HOLD' }, { holdPreviousStatus: 'SALES_REVIEW' }],
+        },
       };
     }
     const addAndFilter = (condition: Record<string, unknown>) => {
@@ -1264,7 +1355,9 @@ export class TasksService {
 
   /**
    * Task ids the salesperson already decided on after Sales Review
-   * (accepted / rejected / rework / hold / other status leave from SALES_REVIEW).
+   * (accepted / rejected / rework / other leave from SALES_REVIEW).
+   * Active ON_HOLD parked from Sales Review is excluded by findAll's salesHistory filter
+   * so those remain in the Queue for Resume.
    */
   private async findSalesHistoryTaskIds(salesUserId: string, take = 500): Promise<string[]> {
     const rows = await this.prisma.activityLog.findMany({
@@ -1306,13 +1399,37 @@ export class TasksService {
     return { data: rows.map((task) => mapSchedulerTaskSummary(task)) };
   }
 
-  async findOne(id: string, userId?: string, role?: UserRole) {
+  async findOne(
+    id: string,
+    userId?: string,
+    role?: UserRole,
+    options: { view?: 'core' | 'full' } = {},
+  ) {
     if (!this.isUuid(id)) {
       throw new BadRequestException('Invalid task id');
     }
-    const task = await this.prisma.task.findUnique({ where: { id }, select: TASK_SELECT });
+    const view = options.view === 'core' ? 'core' : 'full';
+    const task = await this.prisma.task.findUnique({
+      where: { id },
+      select: view === 'core' ? TASK_CORE_SELECT : TASK_SELECT,
+    });
     if (!task) throw new NotFoundException('Task not found');
     await this.assertQsTaskAccess(id, userId, role);
+
+    if (view === 'core') {
+      const people = await this.getTaskPeopleLabels(id, task);
+      return {
+        ...this.normalizeTaskForApi(task as any),
+        createdByName: people.createdByName,
+        reviewerHodName: people.reviewerHodName,
+        // Extras load separately — keep keys present so UI can show placeholders.
+        schedulerHours: null,
+        pendingReallocation: null,
+        viewerCanRequestReallocation: false,
+        viewerRemainingScheduledHours: 0,
+      };
+    }
+
     // Signed URLs, scheduler hours, and people labels are independent — run together.
     const [withUrls, schedulerHours, people, pendingReallocation, viewerRemainingHours] =
       await Promise.all([
@@ -1379,6 +1496,106 @@ export class TasksService {
         : null,
       viewerCanRequestReallocation,
       viewerRemainingScheduledHours: viewerRemainingHours,
+    };
+  }
+
+  /**
+   * Lazy extras for task detail: signed attachment URLs, scheduler hours, reallocation CTA.
+   * Pair with GET /tasks/:id?view=core for first paint.
+   */
+  async findOneExtras(id: string, userId?: string, role?: UserRole) {
+    if (!this.isUuid(id)) {
+      throw new BadRequestException('Invalid task id');
+    }
+    const task = await this.prisma.task.findUnique({
+      where: { id },
+      select: {
+        id: true,
+        status: true,
+        assigneeId: true,
+        reworkAttachmentUrl: true,
+        taskDesigners: { select: { designer: { select: { id: true } } } },
+        retailDetails: {
+          select: {
+            id: true,
+            providedFile: true,
+            attachments: { select: TASK_ATTACHMENT_SELECT },
+          },
+        },
+        projectDetails: {
+          select: {
+            id: true,
+            attachments: { select: TASK_ATTACHMENT_SELECT },
+          },
+        },
+      },
+    });
+    if (!task) throw new NotFoundException('Task not found');
+    await this.assertQsTaskAccess(id, userId, role);
+
+    const [withUrls, schedulerHours, pendingReallocation, viewerRemainingHours] =
+      await Promise.all([
+        this.withSignedAttachmentUrls(task as any),
+        this.getSchedulerHoursForTask(id, userId),
+        this.prisma.reallocationRequest.findFirst({
+          where: { taskId: id, status: 'Pending' },
+          orderBy: { createdAt: 'desc' },
+          select: {
+            id: true,
+            requesterId: true,
+            suggestedDesignerId: true,
+            reason: true,
+            requester: { select: { fullName: true } },
+            suggestedDesigner: { select: { fullName: true } },
+          },
+        }),
+        userId
+          ? this.prisma.schedulerAssignment
+              .findMany({
+                where: { taskId: id, designerId: userId, isLocked: { not: true } },
+                select: { assignedHours: true },
+              })
+              .then(
+                (rows) =>
+                  Math.round(
+                    rows.reduce((sum, r) => sum + Number(r.assignedHours ?? 0), 0) * 100,
+                  ) / 100,
+              )
+          : Promise.resolve(0),
+      ]);
+
+    const statusOk = ['DESIGN_PLANNED', 'IN_PROGRESS', 'REWORK'].includes(
+      String(task.status ?? '').toUpperCase(),
+    );
+    const junctionDesignerIds = (task.taskDesigners ?? [])
+      .map((entry: { designer?: { id?: string } | null }) => entry.designer?.id ?? null)
+      .filter((designerId): designerId is string => Boolean(designerId));
+    const ownsTask = Boolean(
+      userId &&
+        (task.assigneeId === userId || junctionDesignerIds.includes(userId)),
+    );
+    const myPending = Boolean(userId && pendingReallocation?.requesterId === userId);
+    const viewerCanRequestReallocation = Boolean(
+      userId && statusOk && ownsTask && viewerRemainingHours >= 0.01 && !myPending,
+    );
+
+    return {
+      schedulerHours,
+      pendingReallocation: pendingReallocation
+        ? {
+            id: pendingReallocation.id,
+            requesterId: pendingReallocation.requesterId,
+            requesterName: pendingReallocation.requester.fullName,
+            suggestedDesignerId: pendingReallocation.suggestedDesignerId,
+            suggestedDesignerName: pendingReallocation.suggestedDesigner.fullName,
+            reason: pendingReallocation.reason,
+          }
+        : null,
+      viewerCanRequestReallocation,
+      viewerRemainingScheduledHours: viewerRemainingHours,
+      reworkAttachmentUrl: withUrls.reworkAttachmentUrl ?? null,
+      retailDetails: withUrls.retailDetails ?? [],
+      projectDetails: withUrls.projectDetails ?? [],
     };
   }
 
@@ -1842,39 +2059,48 @@ export class TasksService {
     // run in one transaction. Without that, a sibling row created between the expected-ids
     // check and deleteMany would still be wiped even though the guard "passed" — matching
     // clearTaskSchedule's atomic check+delete.
+    //
+    // Keep the interactive transaction write-only (no TASK_SELECT joins). Remote SQL Server
+    // already needs ~5–7s for a full task read, which blows Prisma's default 5s tx timeout
+    // (P2028) if the heavy select runs inside the transaction.
     if (newStatusApi === 'ON_HOLD') {
       const todayMidnight = new Date(new Date().toISOString().split('T')[0] + 'T00:00:00.000Z');
-      updatedTask = await this.prisma.$transaction(async (tx) => {
-        if (dto.expectedAssignmentIds) {
-          const liveRows = await tx.schedulerAssignment.findMany({
-            where: { taskId: id, weekStartDate: { gte: todayMidnight } },
-            select: { id: true },
-          });
-          const expected = new Set(dto.expectedAssignmentIds);
-          if (liveRows.some((row) => !expected.has(row.id))) {
-            throw new ConflictException(
-              'Another scheduled part of this task changed since this page last loaded. Refresh and try again.',
-            );
+      await this.prisma.$transaction(
+        async (tx) => {
+          if (dto.expectedAssignmentIds) {
+            const liveRows = await tx.schedulerAssignment.findMany({
+              where: { taskId: id, weekStartDate: { gte: todayMidnight } },
+              select: { id: true },
+            });
+            const expected = new Set(dto.expectedAssignmentIds);
+            if (liveRows.some((row) => !expected.has(row.id))) {
+              throw new ConflictException(
+                'Another scheduled part of this task changed since this page last loaded. Refresh and try again.',
+              );
+            }
           }
-        }
 
-        const held = await (tx.task.update as any)({
-          where: { id },
-          data: { status: newStatusDb, ...extraData },
-          select: TASK_SELECT,
-        });
+          await tx.task.update({
+            where: { id },
+            data: { status: newStatusDb, ...extraData },
+          });
 
-        await tx.schedulerAssignment.deleteMany({
-          where: { taskId: id, weekStartDate: { gte: todayMidnight } },
-        });
+          await tx.schedulerAssignment.deleteMany({
+            where: { taskId: id, weekStartDate: { gte: todayMidnight } },
+          });
+        },
+        { timeout: 15_000 },
+      );
 
-        return held;
+      updatedTask = await (this.prisma.task.findUniqueOrThrow as any)({
+        where: { id },
+        select: TASK_STATUS_SELECT,
       });
     } else {
       updatedTask = await (this.prisma.task.update as any)({
         where: { id },
         data: { status: newStatusDb, ...extraData },
-        select: TASK_SELECT,
+        select: TASK_STATUS_SELECT,
       });
     }
 
@@ -2144,10 +2370,15 @@ export class TasksService {
       }
     }
 
-    const withUrls = await this.withSignedAttachmentUrls(updatedTask as any);
-    const normalized = this.normalizeTaskForApi(withUrls);
+    // Slim status payload — callers already hold the full task page and refresh extras as needed.
+    // Avoid TASK_SELECT + S3 signing here (that path was ~5–7s and caused Hold P2028).
+    const normalized = this.normalizeTaskForApi(updatedTask as any);
     return {
-      ...normalized,
+      id: normalized.id,
+      taskNo: (normalized as any).taskNo,
+      status: normalized.status,
+      holdPreviousStatus: (normalized as any).holdPreviousStatus ?? null,
+      designType: (normalized as any).designType ?? null,
       ...(revisionResult ? { newRevisionTaskId: revisionResult.id, newRevisionTaskNo: revisionResult.taskNo } : {}),
     };
   }

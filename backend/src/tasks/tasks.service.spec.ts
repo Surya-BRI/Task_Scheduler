@@ -94,6 +94,14 @@ describe('TasksService', () => {
   });
 
   describe('updateStatus — ON_HOLD scheduler-consolidation guard', () => {
+    beforeEach(() => {
+      // Initial load + post-tx full TASK_SELECT fetch (heavy joins stay outside the tx).
+      prisma.task.findUnique
+        .mockResolvedValueOnce(existingTask)
+        .mockResolvedValueOnce(updatedTask);
+      prisma.task.findUniqueOrThrow = jest.fn().mockResolvedValue(updatedTask);
+    });
+
     it('deletes unconditionally when no expectedAssignmentIds given (back-compat)', async () => {
       await service.updateStatus(TASK_ID, 'hod-1', UserRole.HOD, { status: 'ON_HOLD' } as any);
 
@@ -103,6 +111,7 @@ describe('TasksService', () => {
       expect(prisma.schedulerAssignment.deleteMany).toHaveBeenCalledWith({
         where: { taskId: TASK_ID, weekStartDate: { gte: expect.any(Date) } },
       });
+      expect(prisma.task.findUniqueOrThrow).toHaveBeenCalled();
     });
 
     it('proceeds when every live row is in expectedAssignmentIds', async () => {
@@ -133,6 +142,7 @@ describe('TasksService', () => {
 
       expect(prisma.task.update).not.toHaveBeenCalled();
       expect(prisma.schedulerAssignment.deleteMany).not.toHaveBeenCalled();
+      expect(prisma.task.findUniqueOrThrow).not.toHaveBeenCalled();
     });
   });
 
