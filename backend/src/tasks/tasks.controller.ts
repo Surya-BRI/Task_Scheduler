@@ -143,11 +143,24 @@ export class TasksController {
     return this.tasksService.getRunningTimerForDesigner(user.sub);
   }
 
-  /** GET /tasks/:id */
+  /** GET /tasks/:id/extras — signed attachments, scheduler hours, reallocation CTA. */
+  @Get(':id/extras')
+  @Roles(UserRole.HOD, UserRole.DESIGNER, UserRole.SALESPERSON, UserRole.QS)
+  findOneExtras(@Param('id') id: string, @CurrentUser() user: JwtPayload) {
+    return this.tasksService.findOneExtras(id, user.sub, user.role);
+  }
+
+  /** GET /tasks/:id — use ?view=core for fast first paint (pair with /extras). */
   @Get(':id')
   @Roles(UserRole.HOD, UserRole.DESIGNER, UserRole.SALESPERSON, UserRole.QS)
-  findOne(@Param('id') id: string, @CurrentUser() user: JwtPayload) {
-    return this.tasksService.findOne(id, user.sub, user.role);
+  findOne(
+    @Param('id') id: string,
+    @CurrentUser() user: JwtPayload,
+    @Query('view') view?: string,
+  ) {
+    return this.tasksService.findOne(id, user.sub, user.role, {
+      view: view === 'core' ? 'core' : 'full',
+    });
   }
 
   /** PATCH /tasks/:id — HOD/Sales department managers */

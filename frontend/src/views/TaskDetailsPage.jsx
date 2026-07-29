@@ -905,7 +905,88 @@ function mapTaskToRecord(task) {
     reworkLinkName: task.reworkLinkName ?? null,
     previousRevisionTaskId: task.previousRevisionTaskId ?? null,
     schedulerHours: task.schedulerHours ?? null,
+    holdPreviousStatus: task.holdPreviousStatus
+      ? normalizeStatusCode(task.holdPreviousStatus)
+      : null,
+    pendingReallocation: task.pendingReallocation ?? null,
+    viewerCanRequestReallocation: Boolean(task.viewerCanRequestReallocation),
+    viewerRemainingScheduledHours: Number(task.viewerRemainingScheduledHours ?? 0) || 0,
   }
+}
+
+function buildProvidedAssetsFromDetails(retailDetails, projectDetails) {
+  const assetsMap = new Map()
+  for (const line of retailDetails ?? []) {
+    const providedNames = String(line?.providedFile ?? '')
+      .split(',')
+      .map((x) => x.trim())
+      .filter(Boolean)
+    for (const name of providedNames) {
+      if (!assetsMap.has(name)) assetsMap.set(name, { name, url: null })
+    }
+    for (const attachment of line?.attachments ?? []) {
+      const name = String(attachment?.fileName ?? '').trim()
+      if (!name) continue
+      assetsMap.set(name, {
+        name,
+        url: attachment?.signedUrl ?? null,
+      })
+    }
+  }
+  for (const line of projectDetails ?? []) {
+    for (const attachment of line?.attachments ?? []) {
+      const name = String(attachment?.fileName ?? '').trim()
+      if (!name) continue
+      assetsMap.set(name, {
+        name,
+        url: attachment?.signedUrl ?? null,
+      })
+    }
+  }
+  return Array.from(assetsMap.values())
+}
+
+/** Merge lazy GET /tasks/:id/extras into an existing mapped record. */
+function applyTaskExtrasToRecord(prev, extras) {
+  if (!prev || !extras) return prev
+  const projectDetails = Array.isArray(extras.projectDetails)
+    ? mergeDetailsById(prev.projectDetails ?? [], extras.projectDetails)
+    : prev.projectDetails
+  const providedAssets = buildProvidedAssetsFromDetails(
+    extras.retailDetails,
+    extras.projectDetails,
+  )
+  return {
+    ...prev,
+    schedulerHours: extras.schedulerHours ?? prev.schedulerHours ?? null,
+    pendingReallocation: extras.pendingReallocation ?? null,
+    viewerCanRequestReallocation: Boolean(extras.viewerCanRequestReallocation),
+    viewerRemainingScheduledHours: Number(extras.viewerRemainingScheduledHours ?? 0) || 0,
+    reworkAttachmentUrl: extras.reworkAttachmentUrl ?? prev.reworkAttachmentUrl,
+    projectDetails,
+    providedAssets: providedAssets.length > 0 ? providedAssets : prev.providedAssets,
+  }
+}
+
+function mergeDetailsById(coreRows, extrasRows) {
+  const byId = new Map((extrasRows ?? []).map((row) => [String(row.id), row]))
+  if (!coreRows?.length) return extrasRows ?? []
+  return coreRows.map((row) => {
+    const extra = byId.get(String(row.id))
+    if (!extra) return row
+    return {
+      ...row,
+      attachments: extra.attachments ?? row.attachments,
+    }
+  })
+}
+
+async function fetchTaskCore(taskId) {
+  return apiClient.get(`/tasks/${encodeURIComponent(taskId)}?view=core`)
+}
+
+async function fetchTaskExtras(taskId) {
+  return apiClient.get(`/tasks/${encodeURIComponent(taskId)}/extras`)
 }
 
 function normalizeProjectKey(value) {
@@ -1340,13 +1421,13 @@ export function TaskDetailsPage() {
         let task = null
         if (!isProjectsListFlow && rawId && isUuid(rawId)) {
           try {
-            task = await apiClient.get(`/tasks/${encodeURIComponent(rawId)}`)
+            task = await fetchTaskCore(rawId)
           } catch {
             const project = await apiClient.get(`/projects/${encodeURIComponent(rawId)}`)
             const projectTasks = Array.isArray(project?.tasks) ? project.tasks : []
             const reviewTask = projectTasks[0] ?? null
             if (reviewTask?.id) {
-              task = await apiClient.get(`/tasks/${encodeURIComponent(reviewTask.id)}`)
+              task = await fetchTaskCore(reviewTask.id)
             } else if (project?.id) {
               if (!alive) return
               setRecord(mapProjectListRowToRecord({
@@ -1375,7 +1456,7 @@ export function TaskDetailsPage() {
         }
         if (task?.id && !task?.retailDetails && !task?.projectDetails) {
           try {
-            task = await apiClient.get(`/tasks/${encodeURIComponent(task.id)}`)
+            task = await fetchTaskCore(task.id)
           } catch {
             // Keep best-effort list payload if detail fetch fails.
           }
@@ -1427,9 +1508,18 @@ export function TaskDetailsPage() {
         if (!alive) return
         if (task) {
           const mapped = mapTaskToRecord(task)
-          // Paint immediately — don't block first render on slow ERP projects-list.
+          // Paint immediately from core — extras (signed URLs / hours / realloc) merge after.
           setRecord(mapped)
           setRecordLoading(false)
+          const extrasTaskId = task.id
+          void fetchTaskExtras(extrasTaskId)
+            .then((extras) => {
+              if (!alive || !extras) return
+              setRecord((prev) => (prev?.id === extrasTaskId ? applyTaskExtrasToRecord(prev, extras) : prev))
+            })
+            .catch(() => {
+              // Core UI stays usable if extras fail.
+            })
           void fetchLiveProjectRow({
             opNo: lookupOpNo || mapped.opNo,
             projectCode: lookupProjectCode || mapped.projectNo,
@@ -1477,11 +1567,25 @@ export function TaskDetailsPage() {
         ...(reworkFileArg?.url ? { reworkAttachmentUrl: reworkFileArg.url, reworkAttachmentName: reworkFileArg.name } : {}),
         ...(reworkLinkArg?.url ? { reworkLinkUrl: reworkLinkArg.url, reworkLinkName: reworkLinkArg.name } : {}),
       })
+      // Slim status response — patch locally; do not full-refetch the heavy task graph.
+      const apiStatus = normalizeStatusCode(res?.status ?? newStatus)
+      const apiHoldPrev = res?.holdPreviousStatus
+        ? normalizeStatusCode(res.holdPreviousStatus)
+        : (apiStatus === 'ON_HOLD' ? normalizeStatusCode(recordStatusRef.current) : null)
+      setRecord((prev) =>
+        prev
+          ? {
+              ...prev,
+              status: apiStatus,
+              holdPreviousStatus: apiStatus === 'ON_HOLD' ? apiHoldPrev : null,
+            }
+          : prev,
+      )
       // Freeze any running local timer and notify other tabs (hold / complete / etc.).
       await applyRemoteTimerPause(taskId, {
         fetchTimerState: () => apiClient.get(`/tasks/${taskId}/timer-state`).catch(() => null),
       })
-      writeTaskLifecycleSync(taskId, { status: newStatus, action: 'status_change' })
+      writeTaskLifecycleSync(taskId, { status: apiStatus, action: 'status_change' })
       if (newStatus === 'REWORK') {
         toast.success('Rework issued — same task returned to the designer.')
       } else if (newStatus === 'CLIENT_REJECTED' && res?.newRevisionTaskNo) {
@@ -1489,7 +1593,15 @@ export function TaskDetailsPage() {
       } else if (newStatus === 'CLIENT_REJECTED') {
         toast.error('Client rejected but revision task creation failed — check backend logs.')
       }
-      setTaskRefreshCounter((c) => c + 1)
+      // Hold clears scheduler rows — refresh extras only (hours / realloc), not full core.
+      void fetchTaskExtras(taskId)
+        .then((extras) => {
+          if (!extras) return
+          setRecord((prev) => (prev?.id === taskId || prev?.taskId === taskId
+            ? applyTaskExtrasToRecord(prev, extras)
+            : prev))
+        })
+        .catch(() => {})
     } catch (err) {
       const msg = err?.response?.data?.message || err?.message || 'Status update failed'
       toast.error(msg)
@@ -1771,9 +1883,9 @@ export function TaskDetailsPage() {
         setTaskId(foundId ?? routeTaskId ?? '')
         if (foundId) {
           try {
-            const fullTask = await apiClient.get(`/tasks/${encodeURIComponent(foundId)}`)
+            const coreTask = await fetchTaskCore(foundId)
             if (!alive) return
-            let mapped = mapTaskToRecord(fullTask)
+            let mapped = mapTaskToRecord(coreTask)
             const liveRow = await fetchLiveProjectRow({
               opNo: queryOpNo || mapped.opNo || record?.opNo,
               projectCode: queryProjectCode || mapped.projectNo || record?.projectNo,
@@ -1781,6 +1893,12 @@ export function TaskDetailsPage() {
             mapped = applyLiveProjectWideFields(mapped, liveRow)
             if (!alive) return
             setRecord(mapped)
+            void fetchTaskExtras(foundId)
+              .then((extras) => {
+                if (!alive || !extras) return
+                setRecord((prev) => (prev?.id === foundId ? applyTaskExtrasToRecord(prev, extras) : prev))
+              })
+              .catch(() => {})
           } catch {
             // keep existing record if detail fetch fails
           }
