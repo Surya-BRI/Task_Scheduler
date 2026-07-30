@@ -25,10 +25,18 @@ export default function QsProjectsPage() {
   const [authorized, setAuthorized] = useState(false)
   const { setRecords } = useDesignListStore()
   const [searchQuery, setSearchQuery] = useState('')
+  const [debouncedQuery, setDebouncedQuery] = useState('')
   const [page, setPage] = useState(1)
   const [projects, setProjects] = useState([])
   const [total, setTotal] = useState(0)
   const [totalPages, setTotalPages] = useState(1)
+
+  useEffect(() => {
+    const timer = setTimeout(() => {
+      setDebouncedQuery(searchQuery)
+    }, 300)
+    return () => clearTimeout(timer)
+  }, [searchQuery])
 
   useEffect(() => {
     const session = getSession()
@@ -40,7 +48,7 @@ export default function QsProjectsPage() {
   useEffect(() => {
     if (!authorized) return
     let mounted = true
-    const q = searchQuery.trim()
+    const q = debouncedQuery.trim()
     apiClient
       .get(`/design-list/projects-list?page=${page}&limit=${PAGE_SIZE}&q=${encodeURIComponent(q)}`)
       .then((res) => {
@@ -71,7 +79,7 @@ export default function QsProjectsPage() {
         setTotalPages(1)
       })
     return () => { mounted = false }
-  }, [authorized, page, searchQuery])
+  }, [authorized, debouncedQuery, page])
 
   useEffect(() => { setPage(1) }, [searchQuery])
 

@@ -2420,8 +2420,10 @@ export function TaskDetailsPage() {
       const saved = await apiClient.put(`/projects/${projectId}/sign-rows`, {
         rows,
       })
-      const verified = await apiClient.get(`/projects/${projectId}/sign-rows`)
-      const status = await apiClient.get(`/projects/${projectId}/qs-status`).catch(() => null)
+      const [verified, status] = await Promise.all([
+        apiClient.get(`/projects/${projectId}/sign-rows`),
+        apiClient.get(`/projects/${projectId}/qs-status`).catch(() => null),
+      ])
       const nextRows = Array.isArray(verified) ? verified : (Array.isArray(saved) ? saved : [])
       setSignRows(nextRows)
       setSavedRowsSnapshot(serializeSignRows(nextRows))

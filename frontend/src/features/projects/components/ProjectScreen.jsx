@@ -96,14 +96,22 @@ export function ProjectScreen({ workflowFrom = FROM_PROJECTS_LIST }) {
   const PAGE_SIZE = 100;
   const { setRecords } = useDesignListStore();
   const [searchQuery, setSearchQuery] = useState("");
+  const [debouncedQuery, setDebouncedQuery] = useState("");
   const [page, setPage] = useState(1);
   const [projects, setProjects] = useState([]);
   const [total, setTotal] = useState(0);
   const [totalPages, setTotalPages] = useState(1);
 
   useEffect(() => {
+    const timer = setTimeout(() => {
+      setDebouncedQuery(searchQuery);
+    }, 300);
+    return () => clearTimeout(timer);
+  }, [searchQuery]);
+
+  useEffect(() => {
     let mounted = true;
-    const q = searchQuery.trim();
+    const q = debouncedQuery.trim();
     apiClient
       .get(
         `/design-list/projects-list?page=${page}&limit=${PAGE_SIZE}&q=${encodeURIComponent(q)}`,
@@ -138,7 +146,7 @@ export function ProjectScreen({ workflowFrom = FROM_PROJECTS_LIST }) {
     return () => {
       mounted = false;
     };
-  }, [page, searchQuery]);
+  }, [debouncedQuery, page]);
 
   useEffect(() => {
     setPage(1);

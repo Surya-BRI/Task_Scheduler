@@ -80,9 +80,18 @@ async function request<T>(path: string, init?: RequestInit): Promise<T> {
   }
 }
 
+const inflightGetRequests = new Map<string, Promise<unknown>>();
+
 export const apiClient = {
   get<T>(path: string): Promise<T> {
-    return request(path);
+    if (inflightGetRequests.has(path)) {
+      return inflightGetRequests.get(path) as Promise<T>;
+    }
+    const promise = request<T>(path).finally(() => {
+      inflightGetRequests.delete(path);
+    });
+    inflightGetRequests.set(path, promise);
+    return promise;
   },
   post<T>(path: string, body: unknown): Promise<T> {
     const isFormData = body instanceof FormData;
