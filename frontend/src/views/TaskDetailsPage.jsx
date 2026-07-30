@@ -6,6 +6,7 @@ import { useParams, usePathname, useRouter, useSearchParams } from 'next/navigat
 import DatePicker from 'react-datepicker'
 import { CreateTaskModal } from '../components/CreateTaskModal'
 import { ProjectCreateTaskModal } from '../components/ProjectCreateTaskModal'
+import { ProjectHistoryDialog, ProjectHistoryPanel, HISTORY_FIELD_ACTIONS } from '../components/project-history'
 import { Navbar } from '../components/Navbar'
 import { ProjectTaskTimer } from '../components/ProjectTaskTimer'
 import { Button } from '@/components/ui/button'
@@ -236,97 +237,6 @@ const TABS = [
 ]
 const PROJECT_TAB = { id: 'team', label: 'Team' }
 const REWORK_TAB = { id: 'rework', label: 'Rework Instructions' }
-
-
-const HISTORY_FIELD_ACTIONS = new Set(['TASK_CREATED', 'ASSIGNED_TASK', 'STATUS_CHANGED'])
-
-function HistoryDialog({ title, projectId, type, onClose }) {
-  const [items, setItems] = useState([])
-  const [loading, setLoading] = useState(false)
-  const [pageIndex, setPageIndex] = useState(0)
-  const [cursorStack, setCursorStack] = useState([null])
-  const [nextCursor, setNextCursor] = useState(null)
-  const [hasMore, setHasMore] = useState(false)
-
-  useEffect(() => {
-    if (!projectId) return
-    let alive = true
-    setLoading(true)
-    const cursor = cursorStack[pageIndex]
-    fetchProjectActivities(projectId, { limit: 20, cursor: cursor ?? undefined })
-      .then((response) => {
-        if (!alive) return
-        let data = response?.data ?? []
-        if (type === 'field') data = data.filter((i) => HISTORY_FIELD_ACTIONS.has(i.action))
-        setItems(data)
-        setNextCursor(response?.pageInfo?.nextCursor ?? null)
-        setHasMore(Boolean(response?.pageInfo?.hasMore))
-      })
-      .catch(() => { if (alive) setItems([]) })
-      .finally(() => { if (alive) setLoading(false) })
-    return () => { alive = false }
-  }, [projectId, type, cursorStack, pageIndex])
-
-  const handlePrevious = () => {
-    if (!hasMore || !nextCursor) return
-    setCursorStack((prev) => {
-      const updated = [...prev]
-      if (updated.length <= pageIndex + 1) updated.push(nextCursor)
-      return updated
-    })
-    setPageIndex((i) => i + 1)
-  }
-
-  const handleLatest = () => {
-    setCursorStack([null])
-    setPageIndex(0)
-  }
-
-  return (
-    <div className="fixed inset-0 z-50 flex items-center justify-center p-4">
-      <button type="button" className="absolute inset-0 bg-slate-900/40" onClick={onClose} aria-label="Close" />
-      <div className="relative z-10 w-full max-w-3xl rounded-lg border border-slate-200 bg-white shadow-xl">
-        <div className="flex items-center justify-between border-b border-slate-200 px-6 py-3">
-          <h3 className="text-sm font-semibold text-slate-900">{title}</h3>
-          <button type="button" onClick={onClose} className="rounded p-1 text-slate-400 hover:bg-slate-100 hover:text-slate-700">✕</button>
-        </div>
-        {loading ? (
-          <p className="px-6 py-10 text-center text-xs text-slate-400">Loading…</p>
-        ) : (
-          <ul className="px-6 py-4 text-xs text-slate-700">
-            {items.length === 0 ? (
-              <li className="py-4 text-center text-slate-500">No history on this page.</li>
-            ) : items.map((entry) => (
-              <li key={entry.id} className="border-b border-slate-100 py-2.5">
-                <p className="text-[10px] text-slate-500">{new Date(entry.occurredAt).toLocaleDateString('en-CA')}</p>
-                <p className="mt-0.5">{entry.summary}</p>
-              </li>
-            ))}
-          </ul>
-        )}
-        <div className="flex items-center justify-between border-t border-slate-100 px-6 py-3">
-          <button
-            type="button"
-            onClick={handleLatest}
-            disabled={pageIndex === 0 || loading}
-            className="text-[11px] font-semibold text-blue-600 hover:underline disabled:opacity-40 disabled:cursor-not-allowed"
-          >
-            Latest
-          </button>
-          <span className="text-[10px] text-slate-400">Page {pageIndex + 1}</span>
-          <button
-            type="button"
-            onClick={handlePrevious}
-            disabled={!hasMore || loading}
-            className="text-[11px] font-semibold text-blue-600 hover:underline disabled:opacity-40 disabled:cursor-not-allowed"
-          >
-            Previous
-          </button>
-        </div>
-      </div>
-    </div>
-  )
-}
 
 function StagePill({ item, active }) {
   const Icon = item.icon
@@ -2094,8 +2004,7 @@ export function TaskDetailsPage() {
         const items = response?.data ?? []
         if (!alive) return
         setProjectHistoryItems(items)
-        const fieldActions = new Set(['TASK_CREATED', 'ASSIGNED_TASK', 'STATUS_CHANGED'])
-        setFieldHistoryItems(items.filter((item) => fieldActions.has(item.action)))
+        setFieldHistoryItems(items.filter((item) => HISTORY_FIELD_ACTIONS.has(item.action)))
         setSidebarHasMore(Boolean(response?.pageInfo?.hasMore))
       } catch {
         if (!alive) return
@@ -3754,43 +3663,21 @@ export function TaskDetailsPage() {
 
             <aside className="space-y-2.5">
               {activeTab !== 'chatter' ? (
-                <section className="rounded-lg border border-slate-200 bg-white p-2.5 shadow-sm">
-                  <h2 className="text-xs font-semibold text-slate-900">Project History</h2>
-                  <ul className="mt-2 space-y-1.5 text-xs text-slate-700">
-                    {projectHistoryItems.length === 0 ? (
-                      <li className="text-slate-500">No history yet.</li>
-                    ) : projectHistoryItems.slice(0, 4).map((entry) => (
-                      <li key={entry.id} className="border-b border-slate-100 pb-1.5 last:border-b-0">
-                        <p className="text-[10px] text-slate-500">{new Date(entry.occurredAt).toLocaleDateString('en-CA')}</p>
-                        <p>{entry.summary}</p>
-                      </li>
-                    ))}
-                  </ul>
-                  {projectHistoryItems.length > 4 && (
-                    <button type="button" onClick={() => setHistoryDialog({ title: 'Project History', type: 'project' })} className="mt-2 text-[11px] font-semibold text-blue-600 hover:underline">
-                      Show all ({projectHistoryItems.length}{sidebarHasMore ? '+' : ''})
-                    </button>
-                  )}
-                </section>
+                <ProjectHistoryPanel
+                  title="Project History"
+                  items={projectHistoryItems}
+                  hasMore={sidebarHasMore}
+                  emptyTitle="No project history available."
+                  onShowAll={() => setHistoryDialog({ title: 'Project History', type: 'project' })}
+                />
               ) : (
-                <section className="rounded-lg border border-slate-200 bg-white p-2.5 shadow-sm">
-                  <h2 className="text-xs font-semibold text-slate-900">Field History</h2>
-                  <ul className="mt-2 space-y-2 text-xs text-slate-700">
-                    {fieldHistoryItems.length === 0 ? (
-                      <li className="text-slate-500">No field changes yet.</li>
-                    ) : fieldHistoryItems.slice(0, 4).map((entry) => (
-                      <li key={entry.id}>
-                        <p className="text-xs text-slate-500">{new Date(entry.occurredAt).toLocaleDateString('en-CA')}</p>
-                        <p>{entry.summary}</p>
-                      </li>
-                    ))}
-                  </ul>
-                  {fieldHistoryItems.length > 4 && (
-                    <button type="button" onClick={() => setHistoryDialog({ title: 'Field History', type: 'field' })} className="mt-2 text-[11px] font-semibold text-blue-600 hover:underline">
-                      Show all ({fieldHistoryItems.length}{sidebarHasMore ? '+' : ''})
-                    </button>
-                  )}
-                </section>
+                <ProjectHistoryPanel
+                  title="Field History"
+                  items={fieldHistoryItems}
+                  hasMore={sidebarHasMore}
+                  emptyTitle="No field history available."
+                  onShowAll={() => setHistoryDialog({ title: 'Field History', type: 'field' })}
+                />
               )}
 
       <FilesPanel
@@ -3839,7 +3726,7 @@ export function TaskDetailsPage() {
         isQsSignRegisterComplete={isQsCompleted}
       />
       {historyDialog && (
-        <HistoryDialog
+        <ProjectHistoryDialog
           title={historyDialog.title}
           projectId={projectId}
           type={historyDialog.type}

@@ -300,3 +300,26 @@ body {
 .task-date-picker-calendar .react-datepicker__month {
   margin: 0.25rem 0.4rem 0.45rem 0.4rem;
 }
+
+/* Visible scrollbar for Project / Field History modal list */
+.history-dialog-body {
+  scrollbar-width: thin;
+  scrollbar-color: rgb(148 163 184) transparent;
+}
+
+.history-dialog-body::-webkit-scrollbar {
+  width: 8px;
+}
+
+.history-dialog-body::-webkit-scrollbar-track {
+  background: transparent;
+}
+
+.history-dialog-body::-webkit-scrollbar-thumb {
+  background-color: rgb(148 163 184);
+  border-radius: 9999px;
+}
+
+.history-dialog-body::-webkit-scrollbar-thumb:hover {
+  background-color: rgb(100 116 139);
+}
