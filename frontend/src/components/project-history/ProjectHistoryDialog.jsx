@@ -64,6 +64,11 @@ export function ProjectHistoryDialog({ title, projectId, type = 'project', onClo
   }, [projectId, type, cursorStack, pageIndex])
 
   const handlePrevious = () => {
+    if (pageIndex <= 0) return
+    setPageIndex((i) => i - 1)
+  }
+
+  const handleNext = () => {
     if (!hasMore || !nextCursor) return
     setCursorStack((prev) => {
       const updated = [...prev]
@@ -134,22 +139,32 @@ export function ProjectHistoryDialog({ title, projectId, type = 'project', onClo
         </div>
 
         <div className="flex shrink-0 items-center justify-between border-t border-slate-100 px-6 py-3.5">
-          <button
-            type="button"
-            onClick={handleLatest}
-            disabled={pageIndex === 0 || loading}
-            className="rounded text-[11px] font-semibold text-blue-600 hover:underline focus:outline-none focus-visible:ring-2 focus-visible:ring-blue-400 disabled:cursor-not-allowed disabled:opacity-40"
-          >
-            Latest
-          </button>
+          <div className="flex items-center gap-3">
+            <button
+              type="button"
+              onClick={handleLatest}
+              disabled={pageIndex === 0 || loading}
+              className="rounded text-[11px] font-semibold text-blue-600 hover:underline focus:outline-none focus-visible:ring-2 focus-visible:ring-blue-400 disabled:cursor-not-allowed disabled:opacity-40"
+            >
+              Latest
+            </button>
+            <button
+              type="button"
+              onClick={handlePrevious}
+              disabled={pageIndex === 0 || loading}
+              className="rounded text-[11px] font-semibold text-blue-600 hover:underline focus:outline-none focus-visible:ring-2 focus-visible:ring-blue-400 disabled:cursor-not-allowed disabled:opacity-40"
+            >
+              Previous
+            </button>
+          </div>
           <span className="text-[10px] text-slate-400">Page {pageIndex + 1}</span>
           <button
             type="button"
-            onClick={handlePrevious}
+            onClick={handleNext}
             disabled={!hasMore || loading}
             className="rounded text-[11px] font-semibold text-blue-600 hover:underline focus:outline-none focus-visible:ring-2 focus-visible:ring-blue-400 disabled:cursor-not-allowed disabled:opacity-40"
           >
-            Previous
+            Next
           </button>
         </div>
       </div>
