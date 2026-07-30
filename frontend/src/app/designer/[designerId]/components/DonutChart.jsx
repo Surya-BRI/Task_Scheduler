@@ -1,9 +1,8 @@
 "use client";
 import { useEffect, useRef } from "react";
 
-export default function DonutChart({ donut, onSelectSegment, activeSegment }) {
+export default function DonutChart({ donut, onSelectSegment, activeSegment, size = 180, showLegend = true }) {
   const canvasRef = useRef(null);
-  const size = 180;
 
   const active = donut?.active ?? { value: 0, pct: 0, color: "#4f8ef7" };
   const inReview = donut?.inReview ?? { value: 0, pct: 0, color: "#8b5cf6" };
@@ -99,8 +98,10 @@ export default function DonutChart({ donut, onSelectSegment, activeSegment }) {
     </button>
   );
 
+  const compact = size < 160;
+
   return (
-    <div className="flex flex-col items-center gap-4 w-full px-3 py-1">
+    <div className={`flex w-full flex-col items-center ${showLegend ? 'gap-4 px-3 py-1' : 'gap-0 px-0 py-0'}`}>
       <div className="relative flex items-center justify-center" style={{ width: size, height: size }}>
         <canvas
           ref={canvasRef}
@@ -109,19 +110,21 @@ export default function DonutChart({ donut, onSelectSegment, activeSegment }) {
           className="block"
           style={{ width: size, height: size }}
         />
-        <div className="absolute inset-0 flex flex-col items-center justify-center pointer-events-none">
-          <span className="text-xl font-extrabold text-slate-900 leading-none">{centerPct}%</span>
-          <span className="text-[10px] font-semibold uppercase tracking-wide text-slate-500 mt-0.5">Closed</span>
-          <span className="text-sm font-bold text-slate-700 leading-none mt-0.5">{centerTotal}</span>
+        <div className="pointer-events-none absolute inset-0 flex flex-col items-center justify-center">
+          <span className={`${compact ? 'text-base' : 'text-xl'} font-extrabold leading-none text-slate-900`}>{centerPct}%</span>
+          <span className="mt-0.5 text-[10px] font-semibold uppercase tracking-wide text-slate-500">Closed</span>
+          <span className={`${compact ? 'text-xs' : 'text-sm'} mt-0.5 font-bold leading-none text-slate-700`}>{centerTotal}</span>
         </div>
       </div>
 
-      <div className="flex flex-col gap-1.5 text-sm text-slate-700 w-full px-1">
-        {legendBtn("active", active.color, "Active", active.value)}
-        {legendBtn("inReview", inReview.color, "In Review", inReview.value)}
-        {legendBtn("onHold", onHold.color, "On Hold", onHold.value)}
-        {legendBtn("closed", closed.color, "Closed", closed.value)}
-      </div>
+      {showLegend ? (
+        <div className="flex w-full flex-col gap-1.5 px-1 text-sm text-slate-700">
+          {legendBtn("active", active.color, "Active", active.value)}
+          {legendBtn("inReview", inReview.color, "In Review", inReview.value)}
+          {legendBtn("onHold", onHold.color, "On Hold", onHold.value)}
+          {legendBtn("closed", closed.color, "Closed", closed.value)}
+        </div>
+      ) : null}
     </div>
   );
 }
