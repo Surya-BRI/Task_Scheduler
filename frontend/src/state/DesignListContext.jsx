@@ -1,5 +1,4 @@
-import { createContext, useContext, useMemo, useState } from 'react'
-import { useEffect } from 'react'
+import { createContext, useContext, useEffect, useMemo, useRef, useState } from 'react'
 import { usePathname } from 'next/navigation'
 import { parseDesignListDate } from '@/lib/design-list-date'
 import { apiClient } from '@/lib/api-client'
@@ -62,8 +61,11 @@ export function DesignListProvider({ children }) {
     endDate: '',
   })
 
+  const loadedRef = useRef(false)
+
   useEffect(() => {
     if (!shouldLoadDesignList(pathname)) return
+    if (loadedRef.current) return
     let mounted = true
     setLoading(true)
     setError(null)
@@ -73,6 +75,7 @@ export function DesignListProvider({ children }) {
         if (!mounted) return
         const rows = normalizeDesignListResponse(data)
         setRecords(dedupeDesignRecords(rows))
+        loadedRef.current = true
         setLoading(false)
       })
       .catch((err) => {
