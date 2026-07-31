@@ -32,8 +32,15 @@ export class RequestsController {
     @CurrentUser() user: JwtPayload,
     @Query('status') status?: string,
     @Query('designerId') designerId?: string,
+    @Query('from') from?: string,
+    @Query('to') to?: string,
   ) {
-    return this.requestsService.findTeamRequests(user.sub, user.role, { status, designerId });
+    return this.requestsService.findTeamRequests(user.sub, user.role, {
+      status,
+      designerId,
+      from,
+      to,
+    });
   }
 
   @Get()

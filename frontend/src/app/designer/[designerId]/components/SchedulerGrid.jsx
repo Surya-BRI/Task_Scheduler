@@ -7,6 +7,8 @@ import {
   getSystemBlockHatchStyle,
 } from "@/features/scheduler/utils/scheduler-system-block.ui";
 import { formatRetailDesignTypeLabel } from "@/lib/ui/design-type-colors";
+import { getSession } from "@/lib/mock-auth";
+import { requestsPath } from "@/lib/role-routes";
 
 const HOUR_COLS = [
   "0-1 HR", "1-2 HR", "2-3 HR", "3-4 HR",
@@ -135,7 +137,10 @@ function SchedulerRow({ day, daySlot, dayDate, onOtClick, onOpenTask }) {
     }))
     .filter((task) => task.endHr > task.startHr);
   const hasOvertimeTasks = timelineTasks.some((t) => t.isOvertime);
-  const hasOverflow = !isWeekend && overflowTasks.length > 0;
+  // Show weekend work when tasks exist (HOD unlocked Sat/Sun for this designer).
+  const showWeekendTasks = isWeekend && timelineTasks.length > 0;
+  const treatAsInactiveWeekend = isWeekend && !showWeekendTasks;
+  const hasOverflow = !treatAsInactiveWeekend && overflowTasks.length > 0;
   const rowMinHeight = hasOverflow ? 84 : 56;
 
   return (
@@ -145,14 +150,17 @@ function SchedulerRow({ day, daySlot, dayDate, onOtClick, onOpenTask }) {
     >
       {/* Day label */}
       <div
-        className={`w-[100px] shrink-0 py-1.5 px-2 flex items-center border-r border-slate-200 z-10 transition-colors group-hover:bg-slate-50 ${isWeekend ? 'bg-slate-50' : 'bg-white'}`}
+        className={`w-[100px] shrink-0 py-1.5 px-2 flex items-center border-r border-slate-200 z-10 transition-colors group-hover:bg-slate-50 ${treatAsInactiveWeekend ? 'bg-slate-50' : 'bg-white'}`}
       >
         <div className="min-w-0">
-          <span className={`text-[11px] font-semibold truncate tracking-tight block ${isWeekend ? 'text-slate-400' : 'text-slate-900'}`}>{dayLabel}</span>
+          <span className={`text-[11px] font-semibold truncate tracking-tight block ${treatAsInactiveWeekend ? 'text-slate-400' : 'text-slate-900'}`}>{dayLabel}</span>
           {hasOverflow ? (
             <span className="mt-0.5 block text-[9px] font-medium text-violet-600">
               +{overflowTasks.length} reg overflow
             </span>
+          ) : null}
+          {showWeekendTasks ? (
+            <span className="mt-0.5 block text-[9px] font-medium text-amber-600">Weekend</span>
           ) : null}
         </div>
       </div>
@@ -161,7 +169,7 @@ function SchedulerRow({ day, daySlot, dayDate, onOtClick, onOpenTask }) {
       <div className="flex-1 relative">
         <div
           className={`h-full grid relative ${
-            isWeekend ? "bg-slate-100" : "bg-white group-hover:bg-blue-50/20"
+            treatAsInactiveWeekend ? "bg-slate-100" : "bg-white group-hover:bg-blue-50/20"
           }`}
           style={{ gridTemplateColumns: `repeat(${TOTAL_COLS}, minmax(0, 1fr))` }}
         >
@@ -172,7 +180,7 @@ function SchedulerRow({ day, daySlot, dayDate, onOtClick, onOpenTask }) {
               <div
                 key={`${day}-cell-${index}`}
                 className={`border-r border-slate-100 ${
-                  isWeekend
+                  treatAsInactiveWeekend
                     ? "bg-slate-100 border-slate-200"
                     : isOutsideAssigned
                       ? isOvertime
@@ -186,7 +194,7 @@ function SchedulerRow({ day, daySlot, dayDate, onOtClick, onOpenTask }) {
             );
           })}
 
-          {!isWeekend && hasOvertimeTasks && (
+          {!treatAsInactiveWeekend && hasOvertimeTasks && (
             <div
               className="absolute top-0 bottom-0 z-20 pointer-events-none flex flex-col items-center"
               style={{ left: `${(NORMAL_COL_COUNT / TOTAL_COLS) * 100}%` }}
@@ -195,7 +203,7 @@ function SchedulerRow({ day, daySlot, dayDate, onOtClick, onOpenTask }) {
               <span className="absolute top-1 text-[7px] font-bold text-red-500 bg-white/90 px-0.5 rounded leading-none whitespace-nowrap -translate-x-1/2">OVERTIME</span>
             </div>
           )}
-          {!isWeekend && (
+          {!treatAsInactiveWeekend && (
             <div
               className={`absolute inset-x-0 pointer-events-none ${hasOverflow ? "top-1 h-[28px]" : "inset-y-1"}`}
             >
@@ -330,7 +338,11 @@ export default function SchedulerGrid({ schedule, weekDates = [], designerId, is
         const hrs = task.estimatedHours || (task.endHr - task.startHr) || "";
         const taskId = task.parentId || task.id || "";
         router.push(
-          `/designer/requests?tab=overtime&taskId=${taskId}&estimated=${hrs}#overtime`
+          requestsPath(
+            getSession()?.role,
+            `tab=overtime&taskId=${taskId}&estimated=${hrs}`,
+            "overtime",
+          ),
         );
       }
     : null;

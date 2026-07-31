@@ -25,6 +25,7 @@ import { listSchedulerAssignmentsForWeek, getSchedulerWeekMeta } from "@/feature
 import { apiClient } from "@/lib/api-client";
 import { FROM_DESIGN_LIST, FROM_DESIGNER_QUEUE, taskViewPathForRecord } from "@/lib/design-list-routes";
 import { getSession } from "@/lib/mock-auth";
+import { leavePlannerPath, requestsPath } from "@/lib/role-routes";
 import { connectDashboardRealtime } from "@/lib/realtime";
 
 const UUID_RE = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
@@ -293,7 +294,11 @@ export default function DesignerDashboard({ designer: designerProp } = {}) {
       }
 
       const assignments = await listSchedulerAssignmentsForWeek(weekStartStr, erpId);
-      const rows = Array.isArray(assignments) ? assignments : [];
+      const rows = Array.isArray(assignments?.assignments)
+        ? assignments.assignments
+        : Array.isArray(assignments)
+          ? assignments
+          : [];
 
       // HOD removed all assignments for this designer — clear the grid
       if (rows.length === 0) {
@@ -635,14 +640,22 @@ export default function DesignerDashboard({ designer: designerProp } = {}) {
               <div className="ml-auto flex gap-3">
                 <button
                   type="button"
-                  onClick={() => router.push(`/designer/leave-planner`)}
+                  onClick={() => {
+                    router.push(leavePlannerPath(getSession()?.role));
+                  }}
                   className="ui-chip-button bg-[#fce8e6] text-[#af5b5b] border border-[#f8d2d2] hover:bg-[#fbd8d8] font-semibold"
                 >
                   Leave Request
                 </button>
                 <button
                   type="button"
-                  onClick={() => router.push(`/designer/requests`)}
+                  onClick={() => {
+                    const role = getSession()?.role;
+                    const qs = isHOD && isViewingOther && designer.erpDesignerId
+                      ? `forDesignerId=${encodeURIComponent(designer.erpDesignerId)}`
+                      : "";
+                    router.push(requestsPath(role, qs));
+                  }}
                   className="ui-chip-button bg-[#e6e8fc] text-[#5d5baf] border border-[#d2d5f8] hover:bg-[#d8dcfb] font-semibold"
                 >
                   Overtime / Reallocation

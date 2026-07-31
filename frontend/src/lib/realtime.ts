@@ -73,6 +73,8 @@ export type DashboardRefreshPayload = {
   affectedWeekStarts?: string[];
   taskId?: string;
   status?: string;
+  designerId?: string;
+  date?: string;
 };
 
 export type DashboardRealtimeHandlers = {
@@ -83,17 +85,39 @@ export type DashboardRealtimeHandlers = {
   onTimerUpdated?: (payload: TimerUpdatedPayload) => void;
 };
 
-export function connectDashboardRealtime(handlers: DashboardRealtimeHandlers): () => void {
-  if (typeof window === 'undefined') {
-    return () => {};
-  }
+type Subscriber = {
+  handlers: DashboardRealtimeHandlers;
+};
 
-  let socket: Socket | null = null;
-  let retryTimer: ReturnType<typeof setTimeout> | null = null;
-  let disposed = false;
+/** One shared /dashboard socket for the whole tab — avoids Navbar + page each fetching ws-token. */
+let sharedSocket: Socket | null = null;
+let sharedRetryTimer: ReturnType<typeof setTimeout> | null = null;
+const subscribers = new Set<Subscriber>();
+
+function broadcastDashboardRefresh(payload: DashboardRefreshPayload) {
+  for (const sub of subscribers) sub.handlers.onDashboardRefresh?.(payload);
+}
+function broadcastNotificationsRefresh() {
+  for (const sub of subscribers) sub.handlers.onNotificationsRefresh?.();
+}
+function broadcastChatterRefresh(payload: ChatterRefreshPayload) {
+  for (const sub of subscribers) sub.handlers.onChatterRefresh?.(payload);
+}
+function broadcastTimerPaused(payload: TimerPausedPayload) {
+  if (!payload?.taskId) return;
+  for (const sub of subscribers) sub.handlers.onTimerPaused?.(payload);
+}
+function broadcastTimerUpdated(payload: TimerUpdatedPayload) {
+  if (!payload?.taskId) return;
+  for (const sub of subscribers) sub.handlers.onTimerUpdated?.(payload);
+}
+
+function ensureSharedSocket(): Socket | null {
+  if (typeof window === 'undefined') return null;
+  if (sharedSocket) return sharedSocket;
 
   try {
-    socket = io(`${getSocketOrigin()}/dashboard`, {
+    sharedSocket = io(`${getSocketOrigin()}/dashboard`, {
       path: '/socket.io',
       // true (the library default) so requests hit `/socket.io/` — the backend's
       // nginx reverse proxy 301-redirects the bare `/socket.io` path to add the
@@ -112,40 +136,62 @@ export function connectDashboardRealtime(handlers: DashboardRealtimeHandlers): (
       },
     });
 
-    socket.on('dashboard:refresh', (payload: DashboardRefreshPayload) => {
-      handlers.onDashboardRefresh?.(payload);
+    sharedSocket.on('dashboard:refresh', (payload: DashboardRefreshPayload) => {
+      broadcastDashboardRefresh(payload);
     });
-    socket.on('notifications:refresh', () => {
-      handlers.onNotificationsRefresh?.();
+    sharedSocket.on('notifications:refresh', () => {
+      broadcastNotificationsRefresh();
     });
-    socket.on('chatter:refresh', (payload: ChatterRefreshPayload) => {
-      handlers.onChatterRefresh?.(payload);
+    sharedSocket.on('chatter:refresh', (payload: ChatterRefreshPayload) => {
+      broadcastChatterRefresh(payload);
     });
-    socket.on('timer:paused', (payload: TimerPausedPayload) => {
-      if (payload?.taskId) handlers.onTimerPaused?.(payload);
+    sharedSocket.on('timer:paused', (payload: TimerPausedPayload) => {
+      broadcastTimerPaused(payload);
     });
-    socket.on('timer:updated', (payload: TimerUpdatedPayload) => {
-      if (payload?.taskId) handlers.onTimerUpdated?.(payload);
+    sharedSocket.on('timer:updated', (payload: TimerUpdatedPayload) => {
+      broadcastTimerUpdated(payload);
     });
 
     // socket.io gives up permanently after reconnectionAttempts is exhausted (e.g. a
     // prolonged backend outage) — without this, the tab silently falls back to whatever
     // polling the caller has and never becomes "realtime" again for the rest of the session.
     // Retry the whole connection cycle periodically instead of giving up forever.
-    socket.io.on('reconnect_failed', () => {
-      if (disposed) return;
-      retryTimer = setTimeout(() => {
-        if (!disposed) socket?.connect();
+    sharedSocket.io.on('reconnect_failed', () => {
+      if (subscribers.size === 0) return;
+      if (sharedRetryTimer) clearTimeout(sharedRetryTimer);
+      sharedRetryTimer = setTimeout(() => {
+        if (subscribers.size > 0) sharedSocket?.connect();
       }, 30_000);
     });
   } catch {
+    sharedSocket = null;
+    return null;
+  }
+
+  return sharedSocket;
+}
+
+function teardownSharedSocketIfIdle() {
+  if (subscribers.size > 0) return;
+  if (sharedRetryTimer) {
+    clearTimeout(sharedRetryTimer);
+    sharedRetryTimer = null;
+  }
+  sharedSocket?.disconnect();
+  sharedSocket = null;
+}
+
+export function connectDashboardRealtime(handlers: DashboardRealtimeHandlers): () => void {
+  if (typeof window === 'undefined') {
     return () => {};
   }
 
+  const subscriber: Subscriber = { handlers };
+  subscribers.add(subscriber);
+  ensureSharedSocket();
+
   return () => {
-    disposed = true;
-    if (retryTimer) clearTimeout(retryTimer);
-    socket?.disconnect();
-    socket = null;
+    subscribers.delete(subscriber);
+    teardownSharedSocketIfIdle();
   };
 }

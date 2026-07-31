@@ -1,4 +1,5 @@
 import { apiClient } from '@/lib/api-client';
+import { singleflight } from '@/lib/singleflight';
 
 export type SchedulerTaskSummary = {
   id: string;
@@ -29,5 +30,7 @@ export type SchedulerTaskSummary = {
 };
 
 export function fetchSchedulerQueue() {
-  return apiClient.get<{ data: SchedulerTaskSummary[] }>('/tasks/scheduler-queue');
+  return singleflight('tasks/scheduler-queue', () =>
+    apiClient.get<{ data: SchedulerTaskSummary[] }>('/tasks/scheduler-queue'),
+  );
 }

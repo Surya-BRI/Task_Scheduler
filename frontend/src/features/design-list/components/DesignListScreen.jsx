@@ -20,7 +20,7 @@ import { Navbar } from "@/components/Navbar";
 import { apiClient } from "@/lib/api-client";
 import { useTaskLifecycleRefresh } from "@/hooks/use-task-lifecycle-refresh";
 import { FROM_DESIGN_LIST, taskSummaryPath, taskViewPathForRecord } from "@/lib/design-list-routes";
-import { getStatusLabel, mapTaskToDesignRow, matchDateRange } from "../task-view-model";
+import { getStatusLabel, mapTaskToDesignRow } from "../task-view-model";
 import { TypeOfDesignChip } from "@/lib/ui/TypeOfDesignChip";
 import { ReallocationQueuePanel } from "./ReallocationQueuePanel";
 
@@ -358,9 +358,11 @@ export function DesignListScreen({ workflowFrom = FROM_DESIGN_LIST }) {
   );
   const isReallocation = listMode === "reallocation";
   const [allDesigns, setAllDesigns] = useState([]);
+  const [serverTotal, setServerTotal] = useState(0);
   const [viewMode, setViewMode] = useState("list");
   const [page, setPage] = useState(1);
   const [filters, setFilters] = useState({ type: "", status: "", salesPerson: "", startDate: "", endDate: "", searchQuery: "" });
+  const [debouncedSearchQuery, setDebouncedSearchQuery] = useState("");
   const [listRefreshTick, setListRefreshTick] = useState(0);
   const [listLoading, setListLoading] = useState(true);
 
@@ -368,7 +370,14 @@ export function DesignListScreen({ workflowFrom = FROM_DESIGN_LIST }) {
     if (viewParam === "reallocation") setListMode("reallocation");
   }, [viewParam]);
 
-  useEffect(() => { setPage(1); }, [filters, viewMode, listMode]);
+  useEffect(() => {
+    const timer = setTimeout(() => setDebouncedSearchQuery(filters.searchQuery), 350);
+    return () => clearTimeout(timer);
+  }, [filters.searchQuery]);
+
+  useEffect(() => {
+    setPage(1);
+  }, [debouncedSearchQuery, filters.status, filters.type, filters.salesPerson, filters.startDate, filters.endDate, viewMode, listMode]);
 
   const reloadList = useCallback(() => {
     setListRefreshTick((n) => n + 1);
@@ -381,19 +390,28 @@ export function DesignListScreen({ workflowFrom = FROM_DESIGN_LIST }) {
     let mounted = true;
     setListLoading(true);
     const params = new URLSearchParams();
-    params.set("page", "1");
-    params.set("limit", "500");
-    if (filters.searchQuery.trim()) params.set("search", filters.searchQuery.trim());
+    params.set("page", String(Math.max(1, page)));
+    params.set("limit", String(PAGE_SIZE));
+    if (debouncedSearchQuery.trim()) params.set("search", debouncedSearchQuery.trim());
     if (filters.status) params.set("status", filters.status);
+    if (filters.type) params.set("type", filters.type);
+    if (filters.salesPerson) params.set("salesPerson", filters.salesPerson);
+    if (filters.startDate) params.set("startDate", filters.startDate);
+    if (filters.endDate) params.set("endDate", filters.endDate);
     apiClient.get(`/tasks?${params.toString()}`).then((res) => {
       if (!mounted) return;
       const rows = Array.isArray(res?.data) ? res.data.map(mapTaskToDesignRow) : [];
       setAllDesigns(rows);
-    }).catch(() => { if (mounted) setAllDesigns([]); }).finally(() => {
+      setServerTotal(Number(res?.total ?? rows.length) || 0);
+    }).catch(() => {
+      if (!mounted) return;
+      setAllDesigns([]);
+      setServerTotal(0);
+    }).finally(() => {
       if (mounted) setListLoading(false);
     });
     return () => { mounted = false; };
-  }, [filters.searchQuery, filters.status, listRefreshTick, isReallocation]);
+  }, [debouncedSearchQuery, filters.status, filters.type, filters.salesPerson, filters.startDate, filters.endDate, listRefreshTick, isReallocation, page]);
 
   const filteredDesigns = useMemo(() => allDesigns.filter((d) => {
     if (
@@ -402,17 +420,17 @@ export function DesignListScreen({ workflowFrom = FROM_DESIGN_LIST }) {
       d.projectNo?.startsWith("BRI-QS-SMOKE-") ||
       d.projectNo?.startsWith("BRI-QS-AUDIT-")
     ) return false;
-    if (filters.type && d.designType !== filters.type) return false;
-    if (filters.salesPerson && d.salesPerson !== filters.salesPerson) return false;
-    return matchDateRange(d.submissionDate, filters.startDate, filters.endDate);
-  }), [allDesigns, filters.type, filters.salesPerson, filters.startDate, filters.endDate]);
+    return true;
+  }), [allDesigns]);
 
-  const total = filteredDesigns.length;
-  const totalPages = Math.max(1, Math.ceil(total / PAGE_SIZE));
+  // Server paginates + filters type/sales/date; client only drops QS smoke rows.
+  const designs = filteredDesigns;
+  const total = serverTotal;
+  const totalPages = Math.max(1, Math.ceil(Math.max(serverTotal, 1) / PAGE_SIZE));
   const currentPage = Math.min(page, totalPages);
   const start = (currentPage - 1) * PAGE_SIZE;
-  const designs = filteredDesigns.slice(start, start + PAGE_SIZE);
-  const uniqueSalesPersons = Array.from(new Set(filteredDesigns.map((d) => d.salesPerson).filter(Boolean))).sort();
+  const endShown = total === 0 ? 0 : start + designs.length;
+  const uniqueSalesPersons = Array.from(new Set(allDesigns.map((d) => d.salesPerson).filter(Boolean))).sort();
 
   return (
     <div className="app-shell h-screen flex flex-col overflow-hidden font-sans">
@@ -470,7 +488,7 @@ export function DesignListScreen({ workflowFrom = FROM_DESIGN_LIST }) {
             ) : (
               <Board data={designs} workflowFrom={workflowFrom} />
             )}
-            <div className="shrink-0 flex items-center justify-between border-t border-slate-200 bg-white px-4 py-2.5 sm:px-6 text-xs text-slate-600"><span className="font-medium">{listLoading ? "Loading…" : <>Showing {total === 0 ? 0 : start + 1}–{Math.min(start + PAGE_SIZE, total)} of {total}</>}</span><div className="flex items-center gap-2"><button type="button" onClick={() => setPage((p) => Math.max(1, p - 1))} disabled={listLoading || currentPage === 1} className="rounded-md border border-slate-300 px-2.5 py-1 text-xs font-medium disabled:cursor-not-allowed disabled:opacity-50 hover:bg-slate-50">Prev</button><span className="min-w-[7rem] text-center text-xs font-medium text-slate-700">Page {currentPage} / {totalPages}</span><button type="button" onClick={() => setPage((p) => Math.min(totalPages, p + 1))} disabled={listLoading || currentPage === totalPages} className="rounded-md border border-slate-300 px-2.5 py-1 text-xs font-medium disabled:cursor-not-allowed disabled:opacity-50 hover:bg-slate-50">Next</button></div></div>
+            <div className="shrink-0 flex items-center justify-between border-t border-slate-200 bg-white px-4 py-2.5 sm:px-6 text-xs text-slate-600"><span className="font-medium">{listLoading ? "Loading…" : <>Showing {total === 0 ? 0 : start + 1}–{endShown} of {total}</>}</span><div className="flex items-center gap-2"><button type="button" onClick={() => setPage((p) => Math.max(1, p - 1))} disabled={listLoading || currentPage === 1} className="rounded-md border border-slate-300 px-2.5 py-1 text-xs font-medium disabled:cursor-not-allowed disabled:opacity-50 hover:bg-slate-50">Prev</button><span className="min-w-[7rem] text-center text-xs font-medium text-slate-700">Page {currentPage} / {totalPages}</span><button type="button" onClick={() => setPage((p) => Math.min(totalPages, p + 1))} disabled={listLoading || currentPage === totalPages} className="rounded-md border border-slate-300 px-2.5 py-1 text-xs font-medium disabled:cursor-not-allowed disabled:opacity-50 hover:bg-slate-50">Next</button></div></div>
           </>
         )}
       </div>

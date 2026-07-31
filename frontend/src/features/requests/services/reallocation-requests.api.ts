@@ -51,9 +51,9 @@ export function getReallocationRequest(id: string) {
 }
 
 export function listReallocationTaskOptions(designerId: string) {
-  return apiClient.get<Array<{ id: string; name: string; status?: string }>>(
-    `/reallocation-requests/task-options?designerId=${encodeURIComponent(designerId)}`,
-  );
+  return apiClient.get<
+    Array<{ id: string; name: string; opNo?: string | null; title?: string | null; status?: string }>
+  >(`/reallocation-requests/task-options?designerId=${encodeURIComponent(designerId)}`);
 }
 
 export function listReallocationEligibleDesigners(taskId: string) {

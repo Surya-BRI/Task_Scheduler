@@ -33,12 +33,12 @@ function nextStatus(current) {
 }
 
 function shouldLoadDesignList(pathname) {
-  return (
-    pathname?.startsWith('/design-list') ||
-    pathname?.startsWith('/project-design') ||
-    pathname?.startsWith('/sales/design-list') ||
-    pathname?.startsWith('/sales/project-design')
-  )
+  if (!pathname) return false
+  // Project Design hub + design-list record pages consume the store.
+  // HOD/Sales Design List screens load via GET /tasks — skip unused /design-list there.
+  if (pathname.startsWith('/project-design') || pathname.startsWith('/sales/project-design')) return true
+  if (pathname.includes('/design-list/record')) return true
+  return false
 }
 
 function normalizeDesignListResponse(data) {

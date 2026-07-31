@@ -8,6 +8,14 @@ const APPLOCK_GRANTED_AFTER_WAIT = 1;
 /** Returned by `withLock` when the lock is already held (in-process or by another instance). */
 export const LOCK_NOT_ACQUIRED = Symbol('LOCK_NOT_ACQUIRED');
 
+function isPrismaTxStartTimeout(err: unknown): boolean {
+  if (!err || typeof err !== 'object') return false;
+  const code = (err as { code?: string }).code;
+  if (code === 'P2028') return true;
+  const message = err instanceof Error ? err.message : String(err);
+  return /Unable to start a transaction in the given time/i.test(message);
+}
+
 /**
  * Prevents overlapping cron runs across processes using SQL Server app locks,
  * with an in-process guard for same-instance overlap.
@@ -29,11 +37,15 @@ export class CronLockService {
    * as separate pooled calls (the previous `tryAcquire()` + detached release
    * closure design) let Prisma's connection pool hand them different physical
    * connections, causing "lock not currently held" release failures.
+   *
+   * Note: this holds one pool connection for the duration of `fn`. Callers should
+   * keep `fn` reasonably short. If the pool is exhausted, Prisma raises P2028 —
+   * we treat that as a soft skip (`LOCK_NOT_ACQUIRED`) so cron noise does not crash the process.
    */
   async withLock<T>(
     resource: string,
     fn: () => Promise<T>,
-    options: { waitMs?: number; timeoutMs?: number } = {},
+    options: { waitMs?: number; timeoutMs?: number; maxWaitMs?: number } = {},
   ): Promise<T | typeof LOCK_NOT_ACQUIRED> {
     if (this.inProcessLocks.has(resource)) {
       return LOCK_NOT_ACQUIRED;
@@ -53,8 +65,20 @@ export class CronLockService {
             await this.releaseSqlAppLock(tx, resource);
           }
         },
-        { timeout: options.timeoutMs ?? 5 * 60_000 },
+        {
+          // Remote SQL Server + busy pool: default maxWait (~2s) often surfaces as P2028.
+          maxWait: options.maxWaitMs ?? 20_000,
+          timeout: options.timeoutMs ?? 5 * 60_000,
+        },
       );
+    } catch (err) {
+      if (isPrismaTxStartTimeout(err)) {
+        this.logger.warn(
+          `Cron lock "${resource}" skipped: pool could not start a transaction in time (P2028)`,
+        );
+        return LOCK_NOT_ACQUIRED;
+      }
+      throw err;
     } finally {
       this.inProcessLocks.delete(resource);
     }

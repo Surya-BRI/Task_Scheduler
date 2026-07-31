@@ -9,11 +9,8 @@ describe('scheduler-task-summary.util', () => {
     id: 'task-1',
     opNo: 'OP-1',
     title: 'Sign design',
-    signType: 'Pylon',
-    revisionCode: 'R1',
     designType: 'Project',
     disciplineType: 'Artwork',
-    phase: 1,
     status: 'DESIGN_NEW',
     priority: 'HIGH',
     assigneeId: null,
@@ -25,10 +22,6 @@ describe('scheduler-task-summary.util', () => {
       name: 'Retail rollout',
       projectNo: 'P-100',
       category: 'Retail',
-      technicalHead: 'TH',
-      teamLead: 'TL',
-      subTeamLead: null,
-      designers: '[]',
     },
     taskDesigners: [],
     retailDetails: [{ hoursRequired: 6 }],
@@ -43,7 +36,14 @@ describe('scheduler-task-summary.util', () => {
       status: 'DESIGN_NEW',
       estimatedHours: 6,
       hasTaskDesigners: false,
-      project: expect.objectContaining({ projectNo: 'P-100' }),
+      signType: null,
+      revisionCode: null,
+      phase: null,
+      project: expect.objectContaining({
+        projectNo: 'P-100',
+        technicalHead: null,
+        teamLead: null,
+      }),
     });
   });
 

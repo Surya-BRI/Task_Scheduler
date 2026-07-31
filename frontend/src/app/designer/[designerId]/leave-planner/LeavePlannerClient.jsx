@@ -9,7 +9,6 @@ import { formatDate } from "@/lib/utils";
 import {
   cancelLeaveRequest,
   createLeaveRequest,
-  fetchLeavePendingApprovals,
   fetchLeaveRequests,
   fetchLeaveTeamRequests,
   reviewLeaveRequest,
@@ -19,6 +18,8 @@ import {
 import { LEAVE_REASON_OPTIONS } from "@/lib/date-window";
 import { apiClient } from "@/lib/api-client";
 import { StatusBadge } from "@/components/ui/StatusBadge";
+import { getSession } from "@/lib/mock-auth";
+import { requestsPath } from "@/lib/role-routes";
 
 const UUID_RE = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
 function isUuidString(value) {
@@ -410,6 +411,8 @@ export default function LeavePlannerClient() {
   const [historyStatusFilter, setHistoryStatusFilter] = useState("ALL");
   const [historySearch, setHistorySearch] = useState("");
   const [historyDesignerFilter, setHistoryDesignerFilter] = useState(ALL_HISTORY_DESIGNERS);
+  const [teamHistoryLeaves, setTeamHistoryLeaves] = useState([]);
+  const [teamHistoryLoaded, setTeamHistoryLoaded] = useState(false);
 
   const canReview = isHOD;
 
@@ -486,6 +489,11 @@ export default function LeavePlannerClient() {
     [teamLeaves, designer.id],
   );
 
+  const designerTeamHistoryLeaves = useMemo(() => {
+    const source = teamHistoryLoaded ? teamHistoryLeaves : teamLeaves;
+    return source.filter((req) => (req.designerId ?? req.userId) !== designer.id);
+  }, [teamHistoryLoaded, teamHistoryLeaves, teamLeaves, designer.id]);
+
   const calendarScope = canReview ? "team" : "mine";
 
   const historyDesignerOptions = useMemo(() => {
@@ -497,7 +505,7 @@ export default function LeavePlannerClient() {
       byId.set(id, user.name || "Unnamed designer");
     }
 
-    for (const leave of designerTeamLeaves) {
+    for (const leave of designerTeamHistoryLeaves) {
       const id = getLeaveRequesterId(leave);
       if (!id || id === designer.id) continue;
       if (!byId.has(id)) {
@@ -507,7 +515,7 @@ export default function LeavePlannerClient() {
 
     return Array.from(byId, ([id, name]) => ({ id, name }))
       .sort((a, b) => a.name.localeCompare(b.name));
-  }, [designerList, designerTeamLeaves, designer.id]);
+  }, [designerList, designerTeamHistoryLeaves, designer.id]);
 
   useEffect(() => {
     if (historyDesignerFilter === ALL_HISTORY_DESIGNERS) return;
@@ -522,13 +530,18 @@ export default function LeavePlannerClient() {
   );
 
   const filteredTeamHistory = useMemo(
-    () => filterHistoryRows(designerTeamLeaves, {
+    () => filterHistoryRows(designerTeamHistoryLeaves, {
       statusFilter: historyStatusFilter,
       searchQuery: historySearch,
       designerId: historyDesignerFilter,
     }),
-    [designerTeamLeaves, historyStatusFilter, historySearch, historyDesignerFilter],
+    [designerTeamHistoryLeaves, historyStatusFilter, historySearch, historyDesignerFilter],
   );
+
+  const currentYearRange = useCallback(() => {
+    const y = new Date().getFullYear();
+    return { from: `${y}-01-01`, to: `${y}-12-31` };
+  }, []);
 
   const reloadLeaves = useCallback(async () => {
     if (!designer.id) return;
@@ -547,17 +560,31 @@ export default function LeavePlannerClient() {
       return;
     }
     try {
-      const [team, pending] = await Promise.all([
-        fetchLeaveTeamRequests(),
-        fetchLeavePendingApprovals(),
-      ]);
-      setTeamLeaves(Array.isArray(team) ? team : []);
-      setPendingApprovals(Array.isArray(pending) ? pending : []);
+      const range = currentYearRange();
+      const team = await fetchLeaveTeamRequests(range);
+      const rows = Array.isArray(team) ? team : [];
+      setTeamLeaves(rows);
+      setPendingApprovals(
+        rows.filter((row) => normalizeLeaveStatus(row.status) === "PENDING"),
+      );
     } catch {
       setTeamLeaves([]);
       setPendingApprovals([]);
     }
-  }, [canReview]);
+  }, [canReview, currentYearRange]);
+
+  const loadFullTeamHistory = useCallback(async () => {
+    if (!canReview || teamHistoryLoaded) return;
+    try {
+      const team = await fetchLeaveTeamRequests();
+      const rows = Array.isArray(team) ? team : [];
+      setTeamHistoryLeaves(rows.filter((req) => (req.designerId ?? req.userId) !== designer.id));
+      setTeamHistoryLoaded(true);
+    } catch {
+      setTeamHistoryLeaves([]);
+      setTeamHistoryLoaded(true);
+    }
+  }, [canReview, teamHistoryLoaded, designer.id]);
 
   useEffect(() => {
     void reloadLeaves();
@@ -565,14 +592,28 @@ export default function LeavePlannerClient() {
   }, [reloadLeaves, reloadTeamData]);
 
   useEffect(() => {
-    const pollMs = 45000;
+    if (historyTab === "team" && canReview) {
+      void loadFullTeamHistory();
+    }
+  }, [historyTab, canReview, loadFullTeamHistory]);
+
+  useEffect(() => {
+    const pollMs = 90000;
     const tick = () => {
       if (typeof document !== "undefined" && document.hidden) return;
       void reloadLeaves();
       void reloadTeamData();
     };
     const id = window.setInterval(tick, pollMs);
-    return () => window.clearInterval(id);
+    const onVisibility = () => {
+      if (typeof document !== "undefined" && document.hidden) return;
+      tick();
+    };
+    document.addEventListener("visibilitychange", onVisibility);
+    return () => {
+      window.clearInterval(id);
+      document.removeEventListener("visibilitychange", onVisibility);
+    };
   }, [reloadLeaves, reloadTeamData]);
 
   const openReviewModal = useCallback((leave) => {
@@ -597,19 +638,20 @@ export default function LeavePlannerClient() {
     setSelectedLeave,
   ]);
 
-  // Deep-link from a notification: ?leaveId=...&forUserId=... . The pool lookup below only
-  // works today because reloadTeamData() loads every department leave request unscoped — if
-  // that ever narrows (e.g. a per-designer filter), forUserId lets us resolve the specific
-  // request directly instead of silently failing to find it.
+  // Deep-link from a notification: ?leaveId=...&forUserId=... .
+  // Calendar team feed is year-scoped; older leaveIds fall back to full history / designer fetch.
   useEffect(() => {
     const leaveId = searchParams.get("leaveId");
     if (!leaveId) return;
     const forUserId = searchParams.get("forUserId")?.trim() ?? "";
-    const pool = [...pendingApprovals, ...leaves, ...teamLeaves];
+    const pool = [...pendingApprovals, ...leaves, ...teamLeaves, ...teamHistoryLeaves];
     const match = pool.find((l) => l.id === leaveId);
     if (match) {
       openReviewModal(match);
       return;
+    }
+    if (canReview && !teamHistoryLoaded) {
+      void loadFullTeamHistory();
     }
     if (canReview && isUuidString(forUserId)) {
       fetchLeaveTeamRequests({ designerId: forUserId })
@@ -619,16 +661,16 @@ export default function LeavePlannerClient() {
         })
         .catch(() => {});
     }
-  }, [searchParams, pendingApprovals, leaves, teamLeaves, canReview, openReviewModal]);
+  }, [searchParams, pendingApprovals, leaves, teamLeaves, teamHistoryLeaves, teamHistoryLoaded, canReview, openReviewModal, loadFullTeamHistory]);
 
   useEffect(() => {
     if (!isHODModalOpen || !selectedLeave?.id) return;
-    const pool = [...pendingApprovals, ...leaves, ...teamLeaves];
+    const pool = [...pendingApprovals, ...leaves, ...teamLeaves, ...teamHistoryLeaves];
     const fresh = pool.find((l) => l.id === selectedLeave.id);
     if (fresh) {
       setSelectedLeave((prev) => (prev?.id === fresh.id ? { ...prev, ...fresh } : prev));
     }
-  }, [isHODModalOpen, selectedLeave?.id, leaves, teamLeaves, pendingApprovals]);
+  }, [isHODModalOpen, selectedLeave?.id, leaves, teamLeaves, teamHistoryLeaves, pendingApprovals]);
 
   const handleDayClick = (monthIndex, day) => {
     if (day > DAYS_IN_MONTH[monthIndex]) return;
@@ -667,6 +709,7 @@ export default function LeavePlannerClient() {
     const patch = (list) => list.map((l) => (l.id === updated.id ? { ...l, ...updated, status: updated.status } : l));
     setLeaves(patch);
     setTeamLeaves(patch);
+    setTeamHistoryLeaves(patch);
     setPendingApprovals((prev) => prev.filter((l) => l.id !== updated.id));
   };
 
@@ -1019,7 +1062,7 @@ export default function LeavePlannerClient() {
             <div className="flex gap-3">
               <button
                 type="button"
-                onClick={() => router.push("/designer/requests?tab=reallocation")}
+                onClick={() => router.push(requestsPath(getSession()?.role, "tab=reallocation"))}
                 className="px-4 py-2 text-sm font-semibold rounded-lg bg-white text-slate-700 border border-slate-200 hover:bg-slate-50 transition-colors shadow-sm"
               >
                 Overtime / Reallocation

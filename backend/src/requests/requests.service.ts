@@ -361,10 +361,11 @@ export class RequestsService implements OnModuleInit {
     } as const;
   }
 
-  private leaveLink(id: string, userId?: string): string {
+  private leaveLink(id: string, userId?: string, forManager = false): string {
     const params = new URLSearchParams({ leaveId: id });
     if (userId?.trim()) params.set('forUserId', userId.trim());
-    return `/designer/leave-planner?${params.toString()}`;
+    const base = forManager ? '/hod/leave-planner' : '/designer/leave-planner';
+    return `${base}?${params.toString()}`;
   }
 
   private async findDepartmentManagers(departmentId: string | null | undefined) {
@@ -431,7 +432,7 @@ export class RequestsService implements OnModuleInit {
             userId: approver.id,
             title: 'New Leave Request',
             message: `${view.requesterName} submitted a leave request. ${messageBase}`,
-            linkUrl: this.leaveLink(view.id, view.designerId),
+            linkUrl: this.leaveLink(view.id, view.designerId, true),
           },
         });
         this.dashboardRealtime?.notifyUserNotificationRefresh(approver.id);
@@ -469,7 +470,7 @@ export class RequestsService implements OnModuleInit {
             userId: approver.id,
             title,
             message: `${view.requesterName} ${actionVerb} a leave request (${dates}, ${leaveDetails}). Reason: ${view.reason ?? '—'}.`,
-            linkUrl: this.leaveLink(view.id, view.designerId),
+            linkUrl: this.leaveLink(view.id, view.designerId, true),
           },
         });
         this.dashboardRealtime?.notifyUserNotificationRefresh(approver.id);
@@ -654,7 +655,7 @@ export class RequestsService implements OnModuleInit {
   async findTeamRequests(
     managerId: string,
     role: UserRole,
-    filters?: { status?: string; designerId?: string },
+    filters?: { status?: string; designerId?: string; from?: string; to?: string },
   ): Promise<LeaveRequestView[]> {
     if (!hasDepartmentManagerAccess(role)) {
       throw new ForbiddenException('Only HOD can view team leave requests');
@@ -680,6 +681,22 @@ export class RequestsService implements OnModuleInit {
     } else {
       // Include HOD self-leave alongside designers in the department.
       where.OR = [{ userId: managerId }, { user: designerScope }];
+    }
+
+    const from = String(filters?.from ?? '').trim();
+    const to = String(filters?.to ?? '').trim();
+    const fromDate = /^\d{4}-\d{2}-\d{2}$/.test(from) ? new Date(`${from}T00:00:00.000Z`) : null;
+    const toDate = /^\d{4}-\d{2}-\d{2}$/.test(to) ? new Date(`${to}T23:59:59.999Z`) : null;
+    if (fromDate || toDate) {
+      // Overlap: leave starts on/before range end AND ends on/after range start (or open-ended).
+      const rangeAnd: Prisma.LeaveRequestWhereInput[] = [];
+      if (toDate) rangeAnd.push({ startDate: { lte: toDate } });
+      if (fromDate) {
+        rangeAnd.push({
+          OR: [{ endDate: null }, { endDate: { gte: fromDate } }],
+        });
+      }
+      where.AND = [...((where.AND as Prisma.LeaveRequestWhereInput[] | undefined) ?? []), ...rangeAnd];
     }
 
     const requests = await this.prisma.leaveRequest.findMany({

@@ -51,9 +51,11 @@ export class DesignListController {
     @Query('page') pageParam?: string,
     @Query('limit') limitParam?: string,
     @Query('q') q?: string,
+    @Query('includeTotal') includeTotalParam?: string,
   ) {
     const page = Math.max(1, Number.parseInt(pageParam ?? '1', 10) || 1);
     const limit = Math.min(200, Math.max(1, Number.parseInt(limitParam ?? '100', 10) || 100));
-    return this.designListService.findProjectsListPage(page, limit, q ?? '');
+    const includeTotal = includeTotalParam !== '0' && includeTotalParam !== 'false';
+    return this.designListService.findProjectsListPage(page, limit, q ?? '', includeTotal);
   }
 }

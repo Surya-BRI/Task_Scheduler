@@ -110,6 +110,9 @@ const EMPTY_DONUT_SLICE = { value: 0, pct: 0, color: "#94a3b8" };
 /**
  * Task-list stats for the designer dashboard.
  *
+ * Monthly / weekly closed + score formulas for StatsBar must stay aligned with
+ * backend `dashboard/designer-stats.util.ts` (GET /scheduler-assignments/designer-stats).
+ *
  * Buckets:
  * - Active — drafting / planned / in progress / rework
  * - In Review — DESIGN_COMPLETED + HOD/Sales review

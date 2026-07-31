@@ -6,7 +6,6 @@ import { Bell, Calendar, ClipboardList, Clock, Home, LogOut, MessageSquareText, 
 import { SalesReviewIcon } from '@/features/sales/components/SalesReviewIcon'
 import { getSession, mockLogout } from '@/lib/mock-auth'
 import {
-  getUnreadNotificationCount,
   listNotifications,
   markAllNotificationsRead,
   markNotificationRead,
@@ -204,10 +203,7 @@ function NotificationDropdown({ session }) {
     loadingRef.current = true
     setLoading(true)
     try {
-      const [rows, count] = await Promise.all([
-        listNotifications(30),
-        getUnreadNotificationCount().catch(() => itemsRef.current.filter((n) => !n.isRead).length),
-      ])
+      const { data: rows, unreadCount: count } = await listNotifications(30)
       const nextItems = Array.isArray(rows) ? rows : []
       const previousIds = new Set(itemsRef.current.map((item) => item.id))
       const newDeadlineItems = nextItems.filter(
@@ -222,7 +218,7 @@ function NotificationDropdown({ session }) {
       initialLoadRef.current = false
       itemsRef.current = nextItems
       setItems(nextItems)
-      setUnreadCount(typeof count === 'number' ? count : 0)
+      setUnreadCount(typeof count === 'number' ? count : nextItems.filter((n) => !n.isRead).length)
     } catch {
       // Keep existing items on transient errors (e.g. DB pool timeout).
     } finally {
@@ -237,8 +233,19 @@ function NotificationDropdown({ session }) {
 
   useEffect(() => {
     if (!session) return
-    void loadNotifications()
-    const interval = setInterval(() => void loadNotifications(), 45000)
+    let cancelled = false
+    let intervalId = null
+    // Defer first notifications fetch past critical page paint.
+    const startPolling = () => {
+      if (cancelled) return
+      void loadNotifications()
+      intervalId = setInterval(() => void loadNotifications(), 45000)
+    }
+    const deferId =
+      typeof window !== 'undefined' && typeof window.requestIdleCallback === 'function'
+        ? window.requestIdleCallback(startPolling, { timeout: 2500 })
+        : setTimeout(startPolling, 1200)
+
     const onVisible = () => {
       if (document.visibilityState === 'visible') void loadNotifications()
     }
@@ -268,7 +275,13 @@ function NotificationDropdown({ session }) {
       },
     })
     return () => {
-      clearInterval(interval)
+      cancelled = true
+      if (typeof window !== 'undefined' && typeof window.cancelIdleCallback === 'function' && typeof deferId === 'number') {
+        window.cancelIdleCallback(deferId)
+      } else {
+        clearTimeout(deferId)
+      }
+      if (intervalId) clearInterval(intervalId)
       document.removeEventListener('visibilitychange', onVisible)
       disconnectRealtime()
     }
@@ -463,7 +476,7 @@ export function Navbar({ currentDate, onCalendarChange, dateRangeText }) {
   const bottomNavItems = isQs ? [] : NAV_ITEMS
 
   const utilityIconClass = 'ui-icon-button'
-  const onDesignerDashboard = pathname.startsWith('/designer')
+  const onDesignerDashboard = pathname.startsWith('/designer') || pathname.startsWith('/hod')
   const onTeamActivity =
     pathname === '/team-activity' ||
     pathname.startsWith('/team-activity/') ||
@@ -473,7 +486,7 @@ export function Navbar({ currentDate, onCalendarChange, dateRangeText }) {
   const onProjects = pathname === '/projects-overview' || pathname.startsWith('/projects-overview') || pathname === '/sales/projects-overview' || pathname.startsWith('/sales/projects-overview')
   const onSalesReview = pathname === '/sales/tasks' || pathname.startsWith('/sales/tasks/')
   const onSalesProjectsList = pathname === '/sales/projects-list' || pathname.startsWith('/sales/projects-list/')
-  const onScheduler = pathname === '/design-scheduler' || pathname.startsWith('/designer')
+  const onScheduler = pathname === '/design-scheduler' || pathname.startsWith('/designer') || pathname.startsWith('/hod')
 
   // Logo click: role-based home route (Design List for HOD/Sales design modules)
   const handleLogoClick = () => {

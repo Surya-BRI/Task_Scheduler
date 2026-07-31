@@ -1,19 +1,12 @@
 "use client";
 
 import { Suspense } from "react";
+import { SessionBootstrapSkeleton } from "@/components/SessionBootstrapSkeleton";
 import { ChatterScreen } from "@/features/chatter/components/ChatterScreen";
-
-function Fallback() {
-  return (
-    <div className="flex min-h-[50vh] items-center justify-center text-sm text-slate-600">
-      Loading chatter…
-    </div>
-  );
-}
 
 export default function ChatterPage() {
   return (
-    <Suspense fallback={<Fallback />}>
+    <Suspense fallback={<SessionBootstrapSkeleton label="Loading chatter" />}>
       <ChatterScreen />
     </Suspense>
   );

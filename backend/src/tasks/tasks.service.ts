@@ -291,6 +291,11 @@ export type TaskFilters = {
   priority?: string;
   assigneeId?: string;
   search?: string;
+  /** Project category filter (Retail / Project) — matches design-list type filter. */
+  type?: string;
+  salesPerson?: string;
+  startDate?: string;
+  endDate?: string;
   page?: number;
   limit?: number;
   /** When true, SALESPERSON list is limited to SALES_REVIEW (sales review queue). */
@@ -1246,6 +1251,10 @@ export class TasksService {
       priority,
       assigneeId,
       search,
+      type,
+      salesPerson,
+      startDate,
+      endDate,
       page = 1,
       limit = 20,
       salesQueue = false,
@@ -1331,6 +1340,33 @@ export class TasksService {
         { description: { contains: search } },
       ];
       addAndFilter({ OR: searchOr });
+    }
+
+    const projectFilter: Record<string, unknown> = {};
+    const typeNorm = String(type ?? '').trim().toLowerCase();
+    if (typeNorm === 'retail' || typeNorm === 'project') {
+      // FE maps designType from project.category (Retail / Project).
+      projectFilter.category = typeNorm === 'retail' ? 'Retail' : 'Project';
+    }
+    const salesNorm = String(salesPerson ?? '').trim();
+    if (salesNorm) {
+      projectFilter.salesPerson = salesNorm;
+    }
+    if (Object.keys(projectFilter).length > 0) {
+      addAndFilter({ project: projectFilter });
+    }
+
+    const dueRange: Record<string, Date> = {};
+    const start = String(startDate ?? '').trim();
+    const end = String(endDate ?? '').trim();
+    if (/^\d{4}-\d{2}-\d{2}$/.test(start)) {
+      dueRange.gte = new Date(`${start}T00:00:00.000Z`);
+    }
+    if (/^\d{4}-\d{2}-\d{2}$/.test(end)) {
+      dueRange.lte = new Date(`${end}T23:59:59.999Z`);
+    }
+    if (Object.keys(dueRange).length > 0) {
+      addAndFilter({ dueDate: dueRange });
     }
 
     const [data, total] = await Promise.all([

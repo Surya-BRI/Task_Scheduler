@@ -68,7 +68,7 @@ export class TasksController {
 
   /**
    * GET /tasks
-   *   ?projectId=&status=&priority=&assigneeId=&search=&page=1&limit=20
+   *   ?projectId=&status=&priority=&assigneeId=&search=&type=&salesPerson=&startDate=&endDate=&page=1&limit=20
    */
   @Get()
   @Roles(UserRole.HOD, UserRole.DESIGNER, UserRole.SALESPERSON, UserRole.QS)
@@ -80,6 +80,10 @@ export class TasksController {
     @Query('priority') priority?: string,
     @Query('assigneeId') assigneeId?: string,
     @Query('search') search?: string,
+    @Query('type') type?: string,
+    @Query('salesPerson') salesPerson?: string,
+    @Query('startDate') startDate?: string,
+    @Query('endDate') endDate?: string,
     @Query('page', new DefaultValuePipe(1), ParseIntPipe) page = 1,
     @Query('limit', new DefaultValuePipe(20), ParseIntPipe) limit = 20,
     @Query('salesQueue') salesQueue?: string,
@@ -92,6 +96,10 @@ export class TasksController {
       priority,
       assigneeId,
       search,
+      type,
+      salesPerson,
+      startDate,
+      endDate,
       page,
       limit,
       salesQueue: salesQueue === 'true' || salesQueue === '1',

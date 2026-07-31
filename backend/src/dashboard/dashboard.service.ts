@@ -71,7 +71,8 @@ export class DashboardService {
       : {};
     const hasMetricsFilter = Object.keys(metricsWhere).length > 0;
     const taskScope = hasMetricsFilter ? { task: metricsWhere } : {};
-    const LIST_TAKE = 200;
+    const LIST_TAKE = 40;
+    const SCHEDULED_TAKE = 40;
 
     const [
       assignmentRows,
@@ -99,6 +100,8 @@ export class DashboardService {
           designer: { select: { fullName: true } },
         },
         orderBy: [{ taskId: 'asc' }, { dayIndex: 'asc' }],
+        // Cap raw rows so a busy week cannot materialize thousands of day-slices.
+        take: SCHEDULED_TAKE * 8,
       }),
       this.prisma.task.findMany({
         where: {
@@ -176,7 +179,7 @@ export class DashboardService {
     const [
       activityRows,
       statusGroups,
-      completedWithDue,
+      onTimeAgg,
     ] = await Promise.all([
       this.prisma.activityLog.findMany({
         orderBy: { createdAt: 'desc' },
@@ -196,14 +199,16 @@ export class DashboardService {
         where: metricsWhere,
         _count: { status: true },
       }),
+      // Week-scoped on-time KPI — avoids scanning every completed+due task in the department.
       this.prisma.task.findMany({
         where: {
           status: { in: COMPLETED_STATUS_FILTER },
-          completedAt: { not: null },
+          completedAt: { gte: ws, lte: we },
           dueDate: { not: null },
           ...metricsWhere,
         },
         select: { completedAt: true, dueDate: true },
+        take: 500,
       }),
     ]);
 
@@ -212,6 +217,7 @@ export class DashboardService {
     for (const row of assignmentRows) {
       if (!row.taskId || seenScheduled.has(row.taskId)) continue;
       seenScheduled.add(row.taskId);
+      if (scheduledTasks.length >= SCHEDULED_TAKE) break;
       const taskId = row.task?.id ?? row.taskId;
       const name = row.task?.assignee?.fullName ?? row.designer?.fullName ?? '';
       scheduledTasks.push({
@@ -352,11 +358,11 @@ export class DashboardService {
     const onHoldDisplay = statusOnHold + fragmentOnlyCount;
     const donutTotal = Math.max(1, activeDisplay + onHoldDisplay + completed);
 
-    const onTimeCount = completedWithDue.filter(
+    const onTimeCount = onTimeAgg.filter(
       (t) => t.completedAt! <= t.dueDate!,
     ).length;
-    const onTimePct = completedWithDue.length > 0
-      ? Math.round((onTimeCount / completedWithDue.length) * 100)
+    const onTimePct = onTimeAgg.length > 0
+      ? Math.round((onTimeCount / onTimeAgg.length) * 100)
       : 0;
 
     const mkSegment = (value: number, color: string): DonutSegment => ({
@@ -527,7 +533,7 @@ export class DashboardService {
         occurredAt: (row.createdAt ?? row.date ?? new Date()).toISOString(),
         taskNo: row.task?.taskNo ?? null,
         requestType: 'regularization',
-        linkUrl: `/designer/requests?regularizationId=${encodeURIComponent(row.id)}#regularization`,
+        linkUrl: `/hod/requests?regularizationId=${encodeURIComponent(row.id)}#regularization`,
         requiresAction: true,
         requesterName: requester,
         status: 'Pending',
@@ -555,7 +561,7 @@ export class DashboardService {
         occurredAt: (row.createdAt ?? row.date ?? new Date()).toISOString(),
         taskNo: row.task?.taskNo ?? null,
         requestType: 'overtime',
-        linkUrl: `/designer/requests?overtimeId=${encodeURIComponent(row.id)}#overtime`,
+        linkUrl: `/hod/requests?overtimeId=${encodeURIComponent(row.id)}#overtime`,
         requiresAction: true,
         requesterName: requester,
         status: 'Pending Approval',
@@ -593,7 +599,7 @@ export class DashboardService {
         occurredAt: row.createdAt.toISOString(),
         taskNo: null,
         requestType: 'leave',
-        linkUrl: `/designer/leave-planner?leaveId=${encodeURIComponent(row.id)}&forUserId=${encodeURIComponent(designerId)}`,
+        linkUrl: `/hod/leave-planner?leaveId=${encodeURIComponent(row.id)}&forUserId=${encodeURIComponent(designerId)}`,
         requiresAction: true,
         requesterName: requester,
         status: 'Pending',

@@ -2,29 +2,29 @@
 
 import { Suspense, useEffect } from 'react';
 import { useRouter } from 'next/navigation';
-import RequestsClient from '../[designerId]/requests/RequestsClient';
+import RequestsClient from '@/app/designer/[designerId]/requests/RequestsClient';
 import { getSession } from '@/lib/mock-auth';
 import { requestsPath, isHodRole } from '@/lib/role-routes';
 import { SessionBootstrapSkeleton } from '@/components/SessionBootstrapSkeleton';
 
-function DesignerRequestsGate({ children }) {
+function HodGate({ children }) {
   const router = useRouter();
   useEffect(() => {
     const session = getSession();
     if (!session) return;
-    if (isHodRole(session.role)) {
+    if (!isHodRole(session.role)) {
       router.replace(requestsPath(session.role, window.location.search, window.location.hash));
     }
   }, [router]);
   return children;
 }
 
-export default function RequestsPage() {
+export default function HodRequestsPage() {
   return (
     <Suspense fallback={<SessionBootstrapSkeleton label="Loading requests…" />}>
-      <DesignerRequestsGate>
+      <HodGate>
         <RequestsClient />
-      </DesignerRequestsGate>
+      </HodGate>
     </Suspense>
   );
 }
