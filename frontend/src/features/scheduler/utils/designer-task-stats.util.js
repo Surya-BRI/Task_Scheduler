@@ -122,7 +122,8 @@ const EMPTY_DONUT_SLICE = { value: 0, pct: 0, color: "#94a3b8" };
  * @param {Array<object>} tasks
  * @param {{ now?: Date, viewWeekStart?: Date | null, viewWeekEnd?: Date | null }} [options]
  */
-export function computeDesignerTaskStats(tasks, { now = new Date(), viewWeekStart = null, viewWeekEnd = null } = {}) {
+export function computeDesignerTaskStats(tasks, options = {}) {
+  const { now = new Date(), viewWeekStart = null, viewWeekEnd = null } = options;
   if (!Array.isArray(tasks) || tasks.length === 0) {
     return {
       onHoldTasks: [],
