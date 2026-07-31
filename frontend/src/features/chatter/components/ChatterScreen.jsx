@@ -5,6 +5,8 @@ import { useRouter, useSearchParams } from "next/navigation";
 import { toast } from "sonner";
 import { CalendarDays, Link2, MessageCircle, MoreHorizontal, PlusSquare, Search, ThumbsUp, X } from "lucide-react";
 import { Navbar } from "@/components/Navbar";
+import { VirtualScrollList } from "@/components/VirtualScrollList";
+import { VirtualWindowList } from "@/components/VirtualWindowList";
 import {
   createChatterComment,
   createChatterPost,
@@ -1159,7 +1161,12 @@ export function ChatterScreen() {
   const [hasMorePosts, setHasMorePosts] = useState(false);
   const [openComposerPostId, setOpenComposerPostId] = useState(null);
   const [draftByPostId, setDraftByPostId] = useState({});
-  const [activeTab, setActiveTab] = useState("posts");
+  const urlPostId = searchParams.get("postId");
+  const urlCommentId = searchParams.get("commentId");
+  const urlTab = searchParams.get("tab");
+  const [activeTab, setActiveTab] = useState(() =>
+    urlTab === "private" ? "private" : urlTab === "task-updates" ? "task-updates" : "posts",
+  );
   const [openTaskId, setOpenTaskId] = useState(null);
   const [focusedPostId, setFocusedPostId] = useState(null);
   const [currentDate, setCurrentDate] = useState(() => new Date());
@@ -1186,9 +1193,6 @@ export function ChatterScreen() {
   const seenRecordedRef = useRef(new Set());
   const seenFlushTimerRef = useRef(null);
   const focusedPostFetchRef = useRef(new Set());
-  const urlPostId = searchParams.get("postId");
-  const urlCommentId = searchParams.get("commentId");
-  const urlTab = searchParams.get("tab");
 
   const currentUserId = useMemo(() => normalizeUserId(getSession()?.id ?? null), []);
   const [viewedPrivateEntryIds, setViewedPrivateEntryIds] = useState(
@@ -1236,7 +1240,7 @@ export function ChatterScreen() {
     const byId = new Map(
       updates.map((update) => [normalizeUserId(update.postId) ?? update.postId, update]),
     );
-    setPosts((prev) =>
+    const patchFeed = (prev) =>
       prev.map((post) => {
         const update = byId.get(normalizeUserId(post.id) ?? post.id);
         if (!update) return post;
@@ -1245,8 +1249,10 @@ export function ChatterScreen() {
           seenBy: update.seenByCount,
           seenByUsers: update.seenByUsers ?? post.seenByUsers,
         };
-      }),
-    );
+      });
+    setPosts(patchFeed);
+    setMentionFeedPosts(patchFeed);
+    setCommentedFeedPosts(patchFeed);
   }, []);
 
   const flushSeenPosts = useCallback(async () => {
@@ -1326,12 +1332,12 @@ export function ChatterScreen() {
       const [mentionedRes, commentedRes] = await Promise.all([
         listChatterPosts({
           mentionUserId: currentUserId,
-          limit: 200,
+          limit: 50,
           ...(weekStart ? { weekStart } : {}),
         }),
         listChatterPosts({
           commentedByUserId: currentUserId,
-          limit: 200,
+          limit: 50,
           ...(weekStart ? { weekStart } : {}),
         }),
       ]);
@@ -1431,15 +1437,19 @@ export function ChatterScreen() {
           void loadMorePosts();
         }
       },
-      { root: null, rootMargin: "240px", threshold: 0 },
+      { root: null, rootMargin: "480px", threshold: 0 },
     );
     observer.observe(sentinel);
     return () => observer.disconnect();
   }, [activeTab, postsLoading, hasMorePosts, loadMorePosts, posts.length]);
 
+  const onPostsVirtualRangeChange = useCallback(({ endIndex, count }) => {
+    if (activeTab !== "posts" || postsLoading || !hasMorePostsRef.current) return;
+    if (endIndex >= count - 4) {
+      void loadMorePosts();
+    }
+  }, [activeTab, postsLoading, loadMorePosts]);
   useEffect(() => {
-    void reloadPosts();
-    void reloadPrivateFeeds();
     listChatterMentionUsers()
       .then((users) => {
         const rows = Array.isArray(users) ? users : [];
@@ -1450,13 +1460,16 @@ export function ChatterScreen() {
         mentionUsersRef.current = [];
         setMentionUsersDirectoryBase([]);
       });
-  }, [currentUserId, reloadPosts, reloadPrivateFeeds]);
+  }, [currentUserId]);
 
   useEffect(() => {
+    // Tab-scoped feed load — Private skips the main Posts list.
     if (activeTab === "private") {
       void reloadPrivateFeeds();
+      return;
     }
-  }, [activeTab, reloadPrivateFeeds]);
+    void reloadPosts();
+  }, [currentUserId, activeTab, reloadPosts, reloadPrivateFeeds]);
 
   const mergePostIntoFeed = useCallback((feedPost) => {
     if (!feedPost?.id) return;
@@ -1501,27 +1514,38 @@ export function ChatterScreen() {
     setActiveTab("posts");
     setOpenComposerPostId(urlCommentId ? urlPostId : null);
     queueMarkPostSeen(urlPostId);
-    requestAnimationFrame(() => {
+    // Virtualized cards may not be mounted yet — retry after scroll-to-index.
+    const tryScroll = () => {
       const targetId = urlCommentId ? `chatter-comment-${urlCommentId}` : `chatter-post-${urlPostId}`;
       document.getElementById(targetId)?.scrollIntoView({ behavior: "smooth", block: "center" });
+    };
+    requestAnimationFrame(() => {
+      tryScroll();
+      window.setTimeout(tryScroll, 350);
     });
   }, [urlPostId, urlCommentId, postsLoading, posts.length, queueMarkPostSeen, ensureFocusedPostAvailable]);
 
   useEffect(() => {
     return onChatterRefresh(() => {
+      if (activeTab === "private") {
+        void reloadPrivateFeeds();
+        return;
+      }
       void reloadPosts();
-      void reloadPrivateFeeds();
     });
-  }, [reloadPosts, reloadPrivateFeeds]);
+  }, [activeTab, reloadPosts, reloadPrivateFeeds]);
 
   useEffect(() => {
     return connectDashboardRealtime({
       onChatterRefresh: () => {
+        if (activeTab === "private") {
+          void reloadPrivateFeeds();
+          return;
+        }
         void reloadPosts();
-        void reloadPrivateFeeds();
       },
     });
-  }, [reloadPosts, reloadPrivateFeeds]);
+  }, [activeTab, reloadPosts, reloadPrivateFeeds]);
 
   const openChatterTab = useCallback(
     (tab) => {
@@ -1918,12 +1942,15 @@ export function ChatterScreen() {
             <button
               type="button"
               className="ui-icon-button h-8 w-8 border border-slate-300 bg-white"
-              title="Apply week filter to Posts and Private"
+              title="Apply week filter"
               onClick={() => {
                 const weekStart = getMondayOfWeek(currentDate);
                 setActiveWeekStart(weekStart);
-                void reloadPosts(weekStart);
-                void reloadPrivateFeeds(weekStart);
+                if (activeTab === "private") {
+                  void reloadPrivateFeeds(weekStart);
+                } else {
+                  void reloadPosts(weekStart);
+                }
               }}
             >
               <Search className="h-4 w-4 text-slate-500" />
@@ -1956,7 +1983,6 @@ export function ChatterScreen() {
                   onClick={() => {
                     setActiveWeekStart(null);
                     void reloadPosts(null);
-                    void reloadPrivateFeeds(null);
                   }}
                 >
                   Clear filter
@@ -1984,33 +2010,43 @@ export function ChatterScreen() {
                 </div>
               )
             ) : null}
-            {sortedPosts.map((post, postIndex) => (
-              <div
-                key={`${post.id}-${postIndex}`}
-                className={focusedPostId === post.id ? "rounded-xl ring-2 ring-blue-400 ring-offset-2" : ""}
-              >
-              <ChatterCard
-                post={post}
-                mentionUsers={mentionUsersDirectory}
-                focusCommentId={focusedPostId === post.id ? urlCommentId : null}
-                isComposerOpen={openComposerPostId === post.id}
-                draftComment={draftByPostId[post.id] ?? ""}
-                isSubmittingComment={submittingCommentPostId === post.id}
-                onOpenComposer={() => openComposer(post.id)}
-                onDraftChange={(value) => changeDraft(post.id, value)}
-                onMentionIdsChange={(ids) => {
-                  commentMentionIdsRef.current[post.id] = ids;
-                }}
-                onSubmitComment={() => submitComment(post.id)}
-                currentUserId={currentUserId}
-                onLike={handleLikePost}
-                onEditPost={handleEditPost}
-                onDeletePost={handleDeletePost}
-                onDeleteComment={handleDeleteComment}
-                onBecomeVisible={queueMarkPostSeen}
+            {!postsLoading && sortedPosts.length > 0 ? (
+              <VirtualWindowList
+                items={sortedPosts}
+                estimateSize={320}
+                overscan={4}
+                gap={10}
+                scrollToKey={focusedPostId}
+                onRangeChange={onPostsVirtualRangeChange}
+                getItemKey={(post) => post.id}
+                renderItem={(post) => (
+                  <div
+                    className={focusedPostId === post.id ? "rounded-xl ring-2 ring-blue-400 ring-offset-2" : ""}
+                  >
+                    <ChatterCard
+                      post={post}
+                      mentionUsers={mentionUsersDirectory}
+                      focusCommentId={focusedPostId === post.id ? urlCommentId : null}
+                      isComposerOpen={openComposerPostId === post.id}
+                      draftComment={draftByPostId[post.id] ?? ""}
+                      isSubmittingComment={submittingCommentPostId === post.id}
+                      onOpenComposer={() => openComposer(post.id)}
+                      onDraftChange={(value) => changeDraft(post.id, value)}
+                      onMentionIdsChange={(ids) => {
+                        commentMentionIdsRef.current[post.id] = ids;
+                      }}
+                      onSubmitComment={() => submitComment(post.id)}
+                      currentUserId={currentUserId}
+                      onLike={handleLikePost}
+                      onEditPost={handleEditPost}
+                      onDeletePost={handleDeletePost}
+                      onDeleteComment={handleDeleteComment}
+                      onBecomeVisible={queueMarkPostSeen}
+                    />
+                  </div>
+                )}
               />
-              </div>
-            ))}
+            ) : null}
             {hasMorePosts ? (
               <div
                 ref={loadMoreSentinelRef}
@@ -2037,7 +2073,6 @@ export function ChatterScreen() {
                   className="font-semibold underline"
                   onClick={() => {
                     setActiveWeekStart(null);
-                    void reloadPosts(null);
                     void reloadPrivateFeeds(null);
                   }}
                 >
@@ -2046,48 +2081,58 @@ export function ChatterScreen() {
               </div>
             ) : null}
             <div className="grid min-w-0 gap-3 md:grid-cols-2">
-            <div className="ui-surface min-w-0 p-3">
+            <div className="ui-surface min-w-0 p-3 flex flex-col max-h-[min(70vh,640px)]">
               <h2 className="mb-2 text-sm font-semibold text-slate-900">Mentioned You</h2>
-              <div className="space-y-2">
-                {privateMentions.length === 0 ? (
+              {privateMentions.length === 0 ? (
                   <p className="text-sm text-slate-500">
                     {activeWeekStart
                       ? "No mentions for you in this week."
                       : "No mentions for you yet."}
                   </p>
-                ) : (
-                  privateMentions.map((item) => (
+              ) : (
+                <VirtualScrollList
+                  items={privateMentions}
+                  estimateSize={88}
+                  overscan={6}
+                  gap={8}
+                  className="min-h-0 flex-1 overflow-y-auto"
+                  getItemKey={(item) => item.id}
+                  renderItem={(item) => (
                     <PrivateChatterEntry
-                      key={`mention-${item.id}`}
                       item={item}
                       mentionUsersDirectory={mentionUsersDirectory}
                       onOpen={openDiscussion}
                     />
-                  ))
-                )}
-              </div>
+                  )}
+                />
+              )}
             </div>
 
-            <div className="ui-surface min-w-0 p-3">
+            <div className="ui-surface min-w-0 p-3 flex flex-col max-h-[min(70vh,640px)]">
               <h2 className="mb-2 text-sm font-semibold text-slate-900">Your Posted Comments</h2>
-              <div className="space-y-2">
-                {privateComments.length === 0 ? (
+              {privateComments.length === 0 ? (
                   <p className="text-sm text-slate-500">
                     {activeWeekStart
                       ? "No comments posted by you in this week."
                       : "No comments posted yet."}
                   </p>
-                ) : (
-                  privateComments.map((item) => (
+              ) : (
+                <VirtualScrollList
+                  items={privateComments}
+                  estimateSize={88}
+                  overscan={6}
+                  gap={8}
+                  className="min-h-0 flex-1 overflow-y-auto"
+                  getItemKey={(item) => item.id}
+                  renderItem={(item) => (
                     <PrivateChatterEntry
-                      key={`my-comment-${item.id}`}
                       item={item}
                       mentionUsersDirectory={mentionUsersDirectory}
                       onOpen={openDiscussion}
                     />
-                  ))
-                )}
-              </div>
+                  )}
+                />
+              )}
             </div>
             </div>
           </section>

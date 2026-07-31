@@ -5,6 +5,7 @@ import { toast } from "sonner";
 import { Search, Plus, PauseCircle, AlertTriangle, LayoutDashboard, Lock, Unlock, Calendar, ClipboardList } from "lucide-react";
 import { useRouter, useSearchParams } from "next/navigation";
 import { Navbar } from "@/components/Navbar";
+import { VirtualScrollList } from "@/components/VirtualScrollList";
 import {
     SCHEDULER_DASHBOARD_SYNC_EVENT,
     SCHEDULER_DASHBOARD_SYNC_KEY,
@@ -20,6 +21,8 @@ import {
     detachAssignmentPart,
     updateFragmentStatus,
     updateOvertimeRequestSchedulerAction,
+    createSchedulerDayUnlock,
+    deleteSchedulerDayUnlock,
 } from "../services/scheduler-assignments.api";
 import { freezeDraftWorkSession, peekDraftWorkSession } from "../services/task-timer.api";
 import {
@@ -41,6 +44,8 @@ import { FROM_DESIGN_SCHEDULER, taskViewPathForRecord } from "@/lib/design-list-
 import { apiClient } from "@/lib/api-client";
 import { connectDashboardRealtime } from "@/lib/realtime";
 import { getSession } from "@/lib/mock-auth";
+import { leavePlannerPath, requestsPath } from "@/lib/role-routes";
+import { singleflight } from "@/lib/singleflight";
 import { mapTaskToDesignRow } from "@/features/design-list/task-view-model";
 import {
     resolveSchedulerNavState,
@@ -150,7 +155,11 @@ function buildPreparedDropAssignment({
     }
     const parentId = droppedTask.parentId ?? droppedTask.id;
     const baseName = droppedTask.baseName ?? droppedTask.name;
-    const visibleWeekdays = [...WEEKDAY_INDICES];
+    // Manual weekend drops must pack onto that Sat/Sun. Do not auto-chain onto other
+    // unlocked weekends — leftover hours go to overflow (server weekday packing).
+    const packingDays = targetDayIndex >= 5
+        ? [targetDayIndex]
+        : [...WEEKDAY_INDICES];
     let remainingHours = droppedTask.estimatedHours > 0 ? droppedTask.estimatedHours : 1;
     const plannedParts = [];
     let currentDayIndex = targetDayIndex;
@@ -158,14 +167,14 @@ function buildPreparedDropAssignment({
     while (
         remainingHours > 0 &&
         currentDayIndex !== undefined &&
-        visibleWeekdays.includes(currentDayIndex)
+        packingDays.includes(currentDayIndex)
     ) {
         const dayKey = currentDayIndex.toString();
         if (!updatedSchedules[targetDesignerId][dayKey]) {
             updatedSchedules[targetDesignerId][dayKey] = [];
         }
         if (hasFullDayLeaveBlock(updatedTasks, updatedSchedules[targetDesignerId][dayKey] || [])) {
-            currentDayIndex = nextVisibleWeekdayAfter(currentDayIndex, visibleWeekdays) ?? 7;
+            currentDayIndex = nextVisibleWeekdayAfter(currentDayIndex, packingDays) ?? 7;
             continue;
         }
         const usedHours = sumTaskHours(updatedTasks, updatedSchedules[targetDesignerId][dayKey] || []);
@@ -175,7 +184,7 @@ function buildPreparedDropAssignment({
         let partHours = 0;
         if (allowOvertime) {
             if (availableHours < MIN_SPLIT_HOURS) {
-                currentDayIndex = nextVisibleWeekdayAfter(currentDayIndex, visibleWeekdays) ?? 7;
+                currentDayIndex = nextVisibleWeekdayAfter(currentDayIndex, packingDays) ?? 7;
                 continue;
             }
             partHours = Math.min(remainingHours, availableHours);
@@ -183,7 +192,7 @@ function buildPreparedDropAssignment({
                 hasOvertimeFlag = true;
             }
         } else if (regularHoursLeft < MIN_SPLIT_HOURS) {
-            currentDayIndex = nextVisibleWeekdayAfter(currentDayIndex, visibleWeekdays) ?? 7;
+            currentDayIndex = nextVisibleWeekdayAfter(currentDayIndex, packingDays) ?? 7;
             continue;
         } else {
             partHours = Math.min(remainingHours, regularHoursLeft);
@@ -195,7 +204,7 @@ function buildPreparedDropAssignment({
             hours: partHours,
         });
         remainingHours -= partHours;
-        currentDayIndex = nextVisibleWeekdayAfter(currentDayIndex, visibleWeekdays) ?? 7;
+        currentDayIndex = nextVisibleWeekdayAfter(currentDayIndex, packingDays) ?? 7;
     }
 
     if (plannedParts.length === 0) {
@@ -984,6 +993,10 @@ export function DesignSchedulerScreen() {
     const [selectedDays, setSelectedDays] = useState(WEEKDAY_INDICES);
     const [currentDay, setCurrentDay] = useState(getCurrentDayIndex(new Date()));
     const [dropIndicator, setDropIndicator] = useState(null);
+    /** Keys: `${designerId}|YYYY-MM-DD` for unlocked weekend days. */
+    const [dayUnlockKeys, setDayUnlockKeys] = useState(() => new Set());
+    const dayUnlockKeysRef = useRef(dayUnlockKeys);
+    dayUnlockKeysRef.current = dayUnlockKeys;
     
     // Custom Date selection state
     const [currentDate, setCurrentDate] = useState(() => new Date());
@@ -1024,7 +1037,7 @@ export function DesignSchedulerScreen() {
         let cancelled = false;
         const session = getSession();
         currentUserIdRef.current = session?.id ? String(session.id).trim() : null;
-        apiClient.get("/users?role=DESIGNER")
+        singleflight("users?role=DESIGNER", () => apiClient.get("/users?role=DESIGNER"))
             .then((res) => {
                 if (cancelled) return;
                 const designerRows = Array.isArray(res)
@@ -1197,12 +1210,14 @@ export function DesignSchedulerScreen() {
         const generationAtStart = saveGenerationRef.current;
         const mySequence = ++reloadSequenceRef.current;
         try {
-            const [rows, meta] = await Promise.all([
-                listSchedulerAssignmentsForWeek(weekStartStr),
-                getSchedulerWeekMeta(weekStartStr),
-            ]);
+            const weekPayload = await listSchedulerAssignmentsForWeek(weekStartStr);
+            const rows = weekPayload?.assignments ?? [];
+            const unlockKeys = Array.isArray(weekPayload?.dayUnlockKeys) && weekPayload.dayUnlockKeys.length > 0
+                ? weekPayload.dayUnlockKeys
+                : (weekPayload?.dayUnlocks ?? []).map((u) => `${u.designerId}|${u.date}`);
+            setDayUnlockKeys(new Set(unlockKeys.filter((k) => String(k).includes("|"))));
             const freshQueueRecords = queueRecordsRef.current;
-            const fetchedVersion = Number(meta?.version ?? 0);
+            const fetchedVersion = Number(weekPayload?.version ?? 0);
             // Version numbers are scoped per week — comparing Jul 13's version 5 against Jul 6's
             // cached version 161 would falsely mark the fetch stale and leave the previous week's
             // grid on screen when navigating with ‹ ›.
@@ -1224,7 +1239,7 @@ export function DesignSchedulerScreen() {
             }
             weekVersionWeekStartRef.current = weekStartStr;
             setWeekVersion(fetchedVersion);
-            const locked = Boolean(meta?.isLocked);
+            const locked = Boolean(weekPayload?.isLocked);
             setIsWeekLocked(locked);
             isWeekLockedRef.current = locked;
             if (Array.isArray(rows) && rows.length > 0) {
@@ -1500,6 +1515,20 @@ export function DesignSchedulerScreen() {
         priority: '',
         estimatedHours: 0,
     });
+    const [weekendUnlockPrompt, setWeekendUnlockPrompt] = useState({
+        open: false,
+        designerId: null,
+        dayIndex: null,
+        dayLabel: '',
+        designerName: '',
+    });
+    const closeWeekendUnlockPrompt = () => setWeekendUnlockPrompt({
+        open: false,
+        designerId: null,
+        dayIndex: null,
+        dayLabel: '',
+        designerName: '',
+    });
     const closeRedirectPrompt = () => setRedirectPrompt({
         open: false,
         gapDayLabel: '',
@@ -1525,7 +1554,7 @@ export function DesignSchedulerScreen() {
         designType: '',
         priority: '',
     });
-    // Poll every 30s — version check only, full reload only when something changed
+    // Poll every 30s — version mismatch → full reload; unlock-key mismatch → patch unlocks only
     useEffect(() => {
         const poll = async () => {
             if (document.hidden) return;
@@ -1546,6 +1575,19 @@ export function DesignSchedulerScreen() {
                         await refreshSidebarQueueRef.current();
                         await reloadWeekRef.current();
                     })();
+                    return;
+                }
+                // Same assignment version — still sync weekend unlocks if meta carries keys
+                // (covers missed realtime after socket blip / background tab).
+                if (Array.isArray(meta?.dayUnlockKeys)) {
+                    const serverKeys = meta.dayUnlockKeys;
+                    const local = dayUnlockKeysRef.current;
+                    const same =
+                        serverKeys.length === local.size &&
+                        serverKeys.every((key) => local.has(key));
+                    if (!same) {
+                        setDayUnlockKeys(new Set(serverKeys));
+                    }
                 }
             } catch {}
         };
@@ -1598,6 +1640,25 @@ export function DesignSchedulerScreen() {
                     if (!payload.weekStart || payload.weekStart === currentWeekStr) {
                         setIsWeekLocked(false);
                         isWeekLockedRef.current = false;
+                    }
+                    return;
+                }
+                if (payload.event === 'scheduler_day_unlocked' || payload.event === 'scheduler_day_relocked') {
+                    if (!payload.weekStart || payload.weekStart === currentWeekStr) {
+                        const designerId = payload.designerId;
+                        const dateStr = payload.date ? String(payload.date).slice(0, 10) : '';
+                        if (designerId && dateStr) {
+                            const key = `${designerId}|${dateStr}`;
+                            setDayUnlockKeys((prev) => {
+                                const already = prev.has(key);
+                                if (payload.event === 'scheduler_day_unlocked' && already) return prev;
+                                if (payload.event === 'scheduler_day_relocked' && !already) return prev;
+                                const next = new Set(prev);
+                                if (payload.event === 'scheduler_day_unlocked') next.add(key);
+                                else next.delete(key);
+                                return next;
+                            });
+                        }
                     }
                     return;
                 }
@@ -1788,9 +1849,15 @@ export function DesignSchedulerScreen() {
         setDropIndicator(null);
         if (!visibleDays.includes(targetDayIndex))
             return;
-        // Block drops on weekends (Sat=5, Sun=6)
-        if (targetDayIndex >= 5)
-            return;
+        // Block drops on weekends unless HOD unlocked that designer+date.
+        if (targetDayIndex >= 5) {
+            const weekDays = getWeekDays(currentDate);
+            const dateStr = formatLocalYyyyMmDd(weekDays[targetDayIndex]);
+            if (!dayUnlockKeysRef.current.has(`${targetDesignerId}|${dateStr}`)) {
+                toast.error("Unlock this weekend day for the designer before scheduling.");
+                return;
+            }
+        }
         // Block drops on days that have already elapsed — only today and future days are schedulable
         if (isPastDayIndex(targetDayIndex, currentDate)) {
             toast.error("Cannot schedule tasks on a past day.");
@@ -2019,9 +2086,12 @@ export function DesignSchedulerScreen() {
         };
         // Always start from the first unfilled weekday so no day is left idle — applies to all drag sources.
         // Never redirect backward into a day that has already elapsed.
-        const firstUnfilled = WEEKDAY_INDICES.find(
-            (d) => !isPastDayIndex(d, currentDate) && getDayHours(targetDesignerId, d) < DAILY_CAPACITY
-        );
+        // Weekend unlocks are manual placement only — skip Rule 1 redirect onto Sat/Sun.
+        const firstUnfilled = targetDayIndex >= 5
+            ? undefined
+            : WEEKDAY_INDICES.find(
+                (d) => !isPastDayIndex(d, currentDate) && getDayHours(targetDesignerId, d) < DAILY_CAPACITY
+            );
         const wasRedirected = firstUnfilled !== undefined && firstUnfilled < targetDayIndex;
         if (wasRedirected) {
             const dayNames = ['Mon', 'Tue', 'Wed', 'Thu', 'Fri'];
@@ -2043,6 +2113,75 @@ export function DesignSchedulerScreen() {
         }
         proceedWithPlacement(targetDayIndex, { isPinned: false });
     };
+    const isDesignerDayUnlocked = useCallback((designerId, dayIndex) => {
+        if (dayIndex < 5) return true;
+        const dateStr = formatLocalYyyyMmDd(weekDates[dayIndex]);
+        return dayUnlockKeys.has(`${designerId}|${dateStr}`);
+    }, [weekDates, dayUnlockKeys]);
+
+    const applyWeekendUnlockChange = useCallback(async (designerId, dayIndex, unlock) => {
+        if (dayIndex < 5) return;
+        if (isWeekLocked) {
+            toast.error("This week is locked. Unlock it first to make changes.");
+            return;
+        }
+        if (isPastDayIndex(dayIndex, currentDate)) {
+            toast.error("Cannot unlock a past weekend day.");
+            return;
+        }
+        const dateStr = formatLocalYyyyMmDd(weekDates[dayIndex]);
+        const key = `${designerId}|${dateStr}`;
+        try {
+            if (unlock) {
+                await createSchedulerDayUnlock({ designerId, date: dateStr });
+                setDayUnlockKeys((prev) => new Set(prev).add(key));
+                toast.success("Weekend day unlocked — you can schedule tasks here.");
+            } else {
+                await deleteSchedulerDayUnlock({ designerId, date: dateStr });
+                setDayUnlockKeys((prev) => {
+                    const next = new Set(prev);
+                    next.delete(key);
+                    return next;
+                });
+                toast.success("Weekend day locked again.");
+            }
+        } catch (err) {
+            const msg = err?.response?.data?.message || err?.message || "Could not update weekend unlock.";
+            toast.error(msg);
+        }
+    }, [isWeekLocked, currentDate, weekDates]);
+
+    const toggleWeekendUnlock = useCallback(async (designerId, dayIndex) => {
+        if (dayIndex < 5) return;
+        if (isWeekLocked) {
+            toast.error("This week is locked. Unlock it first to make changes.");
+            return;
+        }
+        if (isPastDayIndex(dayIndex, currentDate)) {
+            toast.error("Cannot unlock a past weekend day.");
+            return;
+        }
+        const dateStr = formatLocalYyyyMmDd(weekDates[dayIndex]);
+        const key = `${designerId}|${dateStr}`;
+        const unlocked = dayUnlockKeys.has(key);
+        if (unlocked) {
+            await applyWeekendUnlockChange(designerId, dayIndex, false);
+            return;
+        }
+        const date = weekDates[dayIndex];
+        const dayLabel = date
+            ? `${date.toLocaleDateString("en-US", { weekday: "long" })} ${date.getDate()}`
+            : "this weekend day";
+        const designerName = designers.find((d) => d.id === designerId)?.name ?? "this designer";
+        setWeekendUnlockPrompt({
+            open: true,
+            designerId,
+            dayIndex,
+            dayLabel,
+            designerName,
+        });
+    }, [isWeekLocked, currentDate, weekDates, dayUnlockKeys, designers, applyWeekendUnlockChange]);
+
     const clearOnHoldStatus = (taskId, holdPreviousStatus) => {
         if (!taskId || !isUuid(taskId)) return;
         const backendStatus = holdPreviousStatus ?? "DESIGN_NEW";
@@ -2353,6 +2492,11 @@ export function DesignSchedulerScreen() {
     const lowerSearchQuery = searchQuery.toLowerCase();
     const unassignedTasks = useMemo(() => Object.values(tasks).filter((t) => t.status === "unassigned" && t.name.toLowerCase().includes(lowerSearchQuery)), [tasks, lowerSearchQuery]);
     const onHoldTasks = useMemo(() => Object.values(tasks).filter((t) => t.status === "ON_HOLD" && t.name.toLowerCase().includes(lowerSearchQuery)), [tasks, lowerSearchQuery]);
+    const sidebarQueueItems = useMemo(() => {
+        const hold = onHoldTasks.map((task) => ({ task, kind: "ON_HOLD" }));
+        if (showOnlyOnHold) return hold;
+        return [...hold, ...unassignedTasks.map((task) => ({ task, kind: "unassigned" }))];
+    }, [onHoldTasks, unassignedTasks, showOnlyOnHold]);
     // Resolves the typed project number / op number to a project team, so the
     // designer grid can dim out anyone not eligible for that project.
     const teamFilterProject = useMemo(() => {
@@ -2563,14 +2707,20 @@ export function DesignSchedulerScreen() {
             </button>
             <button
               type="button"
-              onClick={() => router.push("/designer/leave-planner")}
+              onClick={() => {
+                const role = getSession()?.role;
+                router.push(leavePlannerPath(role));
+              }}
               className="ui-chip-button border border-[#f8d2d2] bg-[#fce8e6] font-semibold text-[#af5b5b] hover:bg-[#fbd8d8] whitespace-nowrap"
             >
               Leave Request
             </button>
             <button
               type="button"
-              onClick={() => router.push("/designer/requests")}
+              onClick={() => {
+                const role = getSession()?.role;
+                router.push(requestsPath(role));
+              }}
               className="ui-chip-button border border-[#d2d5f8] bg-[#e6e8fc] font-semibold text-[#5d5baf] hover:bg-[#d8dcfb] whitespace-nowrap"
             >
               Overtime Request
@@ -2625,8 +2775,18 @@ export function DesignSchedulerScreen() {
                 <input type="text" value={searchQuery} onChange={(e) => setSearchQuery(e.target.value)} placeholder="Search tasks..." className="w-full rounded-md border border-slate-300 bg-white py-1.5 pl-9 pr-3 text-sm text-slate-900 outline-none transition focus:border-blue-500 focus:ring-2 focus:ring-blue-500/25"/>
              </div>
 
-             <div className="flex-1 overflow-y-auto space-y-1.5 pr-1 pb-4 custom-scrollbar">
-                {onHoldTasks.map(task => (<div key={task.id} draggable onDragStart={(e) => handleDragStart(e, task.id, "ON_HOLD")} onDragEnd={() => setDropIndicator(null)} onClick={() => router.push(taskViewPathForRecord({ id: getDesignListRoutingTaskId(task), designType: task.designType }, { from: FROM_DESIGN_SCHEDULER }))} className={`p-3.5 rounded-lg cursor-grab active:cursor-grabbing flex flex-col relative bg-white shadow-sm hover:shadow-md transition-shadow ${task.colorClass.replace(/bg-\S+/g, "").replace(/text-\S+/g, "")}`}>
+             <VirtualScrollList
+               items={sidebarQueueItems}
+               estimateSize={92}
+               overscan={12}
+               gap={6}
+               className="flex-1 overflow-y-auto pr-1 pb-4 custom-scrollbar"
+               getItemKey={(item) => item.task.id}
+               renderItem={(item) => {
+                 const task = item.task;
+                 if (item.kind === "ON_HOLD") {
+                   return (
+                  <div draggable onDragStart={(e) => handleDragStart(e, task.id, "ON_HOLD")} onDragEnd={() => setDropIndicator(null)} onClick={() => router.push(taskViewPathForRecord({ id: getDesignListRoutingTaskId(task), designType: task.designType }, { from: FROM_DESIGN_SCHEDULER }))} className={`p-3.5 rounded-lg cursor-grab active:cursor-grabbing flex flex-col relative bg-white shadow-sm hover:shadow-md transition-shadow ${task.colorClass.replace(/bg-\S+/g, "").replace(/text-\S+/g, "")}`}>
                     <div className="flex justify-between items-start">
                       <span className="font-semibold text-[12px] leading-tight pr-5">{getTaskLabel(task)}</span>
                       <button
@@ -2659,9 +2819,11 @@ export function DesignSchedulerScreen() {
                       </div>
                     </div>
                     <div className="text-[9px] font-bold mt-1.5 bg-red-100 text-red-600 inline-block px-1.5 py-0.5 rounded uppercase self-start">Hold: {formatHoldDuration(task.holdStartedAt)}</div>
-                  </div>))}
-
-                {!showOnlyOnHold && unassignedTasks.map(task => (<div key={task.id} draggable onDragStart={(e) => handleDragStart(e, task.id, "unassigned")} onDragEnd={() => setDropIndicator(null)} onClick={() => router.push(taskViewPathForRecord({ id: getDesignListRoutingTaskId(task), designType: task.designType }, { from: FROM_DESIGN_SCHEDULER }))} className={`p-3 rounded cursor-grab active:cursor-grabbing flex flex-col relative group bg-white shadow-sm hover:shadow-md transition-shadow ${task.colorClass.replace(/bg-\S+/g, "").replace(/text-\S+/g, "")}`}>
+                  </div>
+                   );
+                 }
+                 return (
+                  <div draggable onDragStart={(e) => handleDragStart(e, task.id, "unassigned")} onDragEnd={() => setDropIndicator(null)} onClick={() => router.push(taskViewPathForRecord({ id: getDesignListRoutingTaskId(task), designType: task.designType }, { from: FROM_DESIGN_SCHEDULER }))} className={`p-3 rounded cursor-grab active:cursor-grabbing flex flex-col relative group bg-white shadow-sm hover:shadow-md transition-shadow ${task.colorClass.replace(/bg-\S+/g, "").replace(/text-\S+/g, "")}`}>
                     <div className="flex justify-between items-start">
                       <span className="font-semibold text-[12px] leading-tight pr-5">{getTaskLabel(task)}</span>
                       <button
@@ -2693,8 +2855,10 @@ export function DesignSchedulerScreen() {
                         <span className="text-[9px] font-bold bg-slate-200 text-slate-700 px-1.5 py-0.5 rounded">{formatHoursAsHm(task.estimatedHours)}</span>
                       </div>
                     </div>
-                  </div>))}
-             </div>
+                  </div>
+                 );
+               }}
+             />
           </div>
         </div>
 
@@ -2736,7 +2900,7 @@ export function DesignSchedulerScreen() {
             const isWeekend = dayIndex >= 5;
             return (<button key={`header-day-${dayIndex}`} type="button" onClick={() => viewMode === "custom" && handleDayToggle(dayIndex)} className={`px-2 py-2 text-center border-r ${isWeekend ? 'border-orange-100 bg-slate-100 text-slate-400' : 'border-slate-200'} ${viewMode === "custom" ? "cursor-pointer hover:bg-blue-50/70 transition-colors" : "cursor-default"}`} title={viewMode === "custom" ? "Toggle day visibility" : undefined}>
                         {date.toLocaleDateString("en-US", { weekday: "short" })} <span className={`font-normal ml-1 ${isWeekend ? 'text-slate-400' : 'text-slate-400'}`}>{date.getDate()}</span>
-                        {isWeekend && <span className="block text-[8px] text-slate-400 font-normal normal-case tracking-wide">Holiday</span>}
+                        {isWeekend && <span className="block text-[8px] text-slate-400 font-normal normal-case tracking-wide">Weekend</span>}
                       </button>);
         })}
                 </div>
@@ -2810,28 +2974,78 @@ export function DesignSchedulerScreen() {
                     const rawTasksInDay = designerDays[dayIndex.toString()] || [];
                     const { systemBlockIds, visualRegularTaskIds, overtimeTaskIds } = partitionDayTaskIds(rawTasksInDay, tasks);
                     const isWeekend = dayIndex >= 5;
-                    const isPastDay = !isWeekend && isPastDayIndex(dayIndex, currentDate);
+                    const weekendUnlocked = isWeekend && isDesignerDayUnlocked(designer.id, dayIndex);
+                    const weekendLocked = isWeekend && !weekendUnlocked;
+                    const isPastDay = isPastDayIndex(dayIndex, currentDate);
                     const dayHours = getDayHours(designer.id, dayIndex);
                     const overtimeHours = getDayOvertimeHours(designer.id, dayIndex);
                     const dayTotalHours = dayHours + overtimeHours;
                     const isDayOverloaded = dayTotalHours > DAILY_CAPACITY;
                     const gravityPct = Math.min((dayTotalHours / DAILY_CAPACITY) * 100, 100);
+                    const dropEnabled = !weekendLocked && !isPastDay;
                     return (<div key={dayIndex} className={`border-r relative flex flex-col transition-colors overflow-hidden
-                                ${isWeekend
-                            ? 'bg-slate-100 border-slate-200 cursor-not-allowed'
+                                ${weekendLocked
+                            ? 'bg-slate-100 border-slate-200'
                             : isPastDay
                                 ? 'bg-slate-100/70 border-slate-200 cursor-not-allowed grayscale-[35%]'
                                 : isDayOverloaded
                                 ? 'border-slate-100 bg-red-50/40'
+                                : weekendUnlocked
+                                ? 'border-amber-100 bg-amber-50/30 hover:bg-amber-50/50'
                                 : 'border-slate-100 hover:bg-blue-50/30'}
-                              `} onDragOver={isWeekend ? undefined : handleDragOver} onDrop={isWeekend ? undefined : (e) => { void handleDropToDay(e, designer.id, dayIndex); }}>
-                              {/* Gravity fill bar (background) — weekdays only; fill vs total booked */}
-                              {!isWeekend && dayTotalHours > 0 && (<div className={`absolute bottom-0 left-0 right-0 transition-all opacity-20 ${isDayOverloaded ? 'bg-red-400' : 'bg-blue-400'}`} style={{ height: `${gravityPct}%` }}/>)}
+                              `}
+                              onDragOver={dropEnabled ? handleDragOver : undefined}
+                              onDrop={dropEnabled ? (e) => { void handleDropToDay(e, designer.id, dayIndex); } : undefined}
+                              onClick={isWeekend && !isWeekLocked && !isPastDay ? (e) => {
+                                // Relock only when empty. Unlock uses the chrome button (and this bubble).
+                                if (rawTasksInDay.length > 0 && weekendUnlocked) return;
+                                // Unlocked empty: any click in the cell (inner pad / hours footer) relocks.
+                                if (weekendUnlocked && rawTasksInDay.length === 0) {
+                                  void toggleWeekendUnlock(designer.id, dayIndex);
+                                  return;
+                                }
+                                // Locked: only chrome / cell itself (not accidental nested UI).
+                                if (e.target !== e.currentTarget && !e.target?.closest?.('[data-weekend-chrome]')) return;
+                                void toggleWeekendUnlock(designer.id, dayIndex);
+                              } : undefined}
+                              title={weekendLocked ? 'Click to unlock this weekend day for scheduling' : weekendUnlocked && rawTasksInDay.length === 0 ? 'Click to lock this weekend day again' : undefined}
+                            >
+                              {/* Gravity fill bar (background) — unlocked weekends + weekdays */}
+                              {!weekendLocked && dayTotalHours > 0 && (<div className={`absolute bottom-0 left-0 right-0 transition-all opacity-20 ${isDayOverloaded ? 'bg-red-400' : weekendUnlocked ? 'bg-amber-400' : 'bg-blue-400'}`} style={{ height: `${gravityPct}%` }}/>)}
                               {/* Tasks list: leave/reg, work, and OT stay on separate strips. */}
                               <div className="flex-1 min-h-0 p-1 relative z-10">
-                                {isWeekend ? (<div className="w-full h-full flex items-center justify-center">
-                                    <span className="text-[8px] text-slate-400 font-medium select-none">—</span>
-                                  </div>) : (<div className="h-full min-h-[42px] overflow-hidden flex flex-col justify-center gap-1">
+                                {weekendLocked ? (
+                                  <button
+                                    type="button"
+                                    data-weekend-chrome="1"
+                                    aria-label="Unlock weekend day"
+                                    className="w-full h-full min-h-[42px] cursor-pointer hover:bg-slate-200/50 transition-colors"
+                                    onClick={(e) => {
+                                      e.stopPropagation();
+                                      void toggleWeekendUnlock(designer.id, dayIndex);
+                                    }}
+                                  />
+                                ) : weekendUnlocked && rawTasksInDay.length === 0 ? (
+                                  <div
+                                    data-weekend-chrome="1"
+                                    role="button"
+                                    tabIndex={0}
+                                    aria-label="Lock weekend day"
+                                    className="w-full h-full min-h-[42px] cursor-pointer hover:bg-amber-100/50 transition-colors"
+                                    onClick={(e) => {
+                                      e.stopPropagation();
+                                      void toggleWeekendUnlock(designer.id, dayIndex);
+                                    }}
+                                    onKeyDown={(e) => {
+                                      if (e.key !== "Enter" && e.key !== " ") return;
+                                      e.preventDefault();
+                                      e.stopPropagation();
+                                      void toggleWeekendUnlock(designer.id, dayIndex);
+                                    }}
+                                    onDragOver={handleDragOver}
+                                    onDrop={(e) => { void handleDropToDay(e, designer.id, dayIndex); }}
+                                  />
+                                ) : (<div className="h-full min-h-[42px] overflow-hidden flex flex-col justify-center gap-1">
                                     {systemBlockIds.length > 0 && (
                                       <div className="min-h-[20px] w-full rounded border border-dashed border-slate-300/80 bg-slate-50/70 px-1 py-0.5">
                                         <div className="flex flex-nowrap items-center gap-1 overflow-hidden">
@@ -2941,8 +3155,8 @@ export function DesignSchedulerScreen() {
                               {/* Day hours indicator — weekdays only; total matches name-line week sum.
                                   Always shown (even at 0h) so free capacity reads as "0h/8h available"
                                   rather than blank space that's ambiguous with "not loaded yet". */}
-                              {!isWeekend && (<div
-                                className={`text-[8px] font-bold text-center pb-0.5 relative z-10 ${isDayOverloaded ? 'text-red-600' : dayHours > 0 || overtimeHours > 0 ? 'text-blue-500/70' : 'text-slate-400'}`}
+                              {!weekendLocked && (<div
+                                className={`text-[8px] font-bold text-center pb-0.5 relative z-10 ${isDayOverloaded ? 'text-red-600' : dayHours > 0 || overtimeHours > 0 ? (weekendUnlocked ? 'text-amber-600/80' : 'text-blue-500/70') : 'text-slate-400'}`}
                                 title={overtimeHours > 0
                                   ? `${formatHoursAsHm(dayHours + overtimeHours)} total = ${formatHoursAsHm(dayHours)} regular + ${formatHoursAsHm(overtimeHours)} OT`
                                   : dayHours > 0
@@ -2961,6 +3175,43 @@ export function DesignSchedulerScreen() {
           </div>
         </div>
       </div>
+      {weekendUnlockPrompt.open ? (
+        <div className="fixed inset-0 z-[120] flex items-center justify-center bg-slate-900/40 p-4" aria-modal="true" role="alertdialog">
+          <div className="ui-surface w-full max-w-md p-6">
+            <h2 className="text-lg font-semibold text-slate-900">Unlock weekend day?</h2>
+            <p className="mt-3 text-sm leading-6 text-slate-600">
+              <span className="font-semibold text-slate-900">{weekendUnlockPrompt.dayLabel}</span> is a weekend day.
+              Do you want to unlock it so you can schedule tasks for{" "}
+              <span className="font-semibold text-slate-900">{weekendUnlockPrompt.designerName}</span>?
+            </p>
+            <p className="mt-2 text-xs leading-5 text-slate-500">
+              Weekend days stay locked by default. Unlock only when you need to place work manually.
+            </p>
+            <div className="mt-6 flex flex-wrap items-center justify-end gap-2">
+              <button
+                type="button"
+                onClick={closeWeekendUnlockPrompt}
+                className="ui-chip-button"
+              >
+                Cancel
+              </button>
+              <button
+                type="button"
+                onClick={() => {
+                  const { designerId, dayIndex } = weekendUnlockPrompt;
+                  closeWeekendUnlockPrompt();
+                  if (designerId != null && dayIndex != null) {
+                    void applyWeekendUnlockChange(designerId, dayIndex, true);
+                  }
+                }}
+                className="ui-chip-button ui-chip-button-active"
+              >
+                Unlock
+              </button>
+            </div>
+          </div>
+        </div>
+      ) : null}
       {overtimePrompt.open ? (<div className="fixed inset-0 z-[120] flex items-center justify-center bg-slate-900/40 p-4" aria-modal="true" role="alertdialog">
           <div className="ui-surface w-full max-w-lg p-6">
             <h2 className="text-lg font-semibold text-slate-900">Handle Overtime or Split Task</h2>

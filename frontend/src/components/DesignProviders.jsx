@@ -3,6 +3,7 @@
 import { useEffect, useState } from 'react'
 import { usePathname } from 'next/navigation'
 import { DesignListProvider } from '@/state/DesignListContext'
+import { SessionBootstrapSkeleton } from '@/components/SessionBootstrapSkeleton'
 import { clearLegacyAuthStorage, getSession } from '@/lib/session'
 import { ensureSession } from '@/lib/session-api'
 
@@ -48,9 +49,7 @@ export default function DesignProviders({ children }) {
   if (isProtected && !bootstrapped) {
     return (
       <DesignListProvider>
-        <div className="flex min-h-screen items-center justify-center bg-slate-50">
-          <p className="text-sm text-slate-500">Loading session…</p>
-        </div>
+        <SessionBootstrapSkeleton />
       </DesignListProvider>
     )
   }

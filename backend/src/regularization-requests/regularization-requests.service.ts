@@ -283,10 +283,11 @@ export class RegularizationRequestsService implements RegularizationRequestsCont
     });
   }
 
-  private regularizationLink(id: string, designerId?: string): string {
+  private regularizationLink(id: string, designerId?: string, forManager = false): string {
     const params = new URLSearchParams({ regularizationId: id });
     if (designerId?.trim()) params.set('forDesignerId', designerId.trim());
-    return `/designer/requests?${params.toString()}#regularization`;
+    const base = forManager ? '/hod/requests' : '/designer/requests';
+    return `${base}?${params.toString()}#regularization`;
   }
 
   private async notifyHods(request: RegularizationRequestView, designerName: string) {
@@ -319,7 +320,7 @@ export class RegularizationRequestsService implements RegularizationRequestsCont
             userId: hod.id,
             title: 'New Regularization Request',
             message: `New regularization request submitted by ${designerName} for ${request.date}. Reason: ${request.reason}.`,
-            linkUrl: this.regularizationLink(request.id, request.designerId),
+            linkUrl: this.regularizationLink(request.id, request.designerId, true),
           },
         });
         this.dashboardRealtime?.notifyUserNotificationRefresh(hod.id);

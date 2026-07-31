@@ -9,11 +9,17 @@ export class NotificationsService {
   async findForUser(userId: string, limitParam?: string) {
     const parsed = Number.parseInt(limitParam ?? '30', 10);
     const limit = Math.min(100, Math.max(1, Number.isNaN(parsed) ? 30 : parsed));
-    return this.prisma.notification.findMany({
-      where: { userId },
-      orderBy: { createdAt: 'desc' },
-      take: limit,
-    });
+    const [data, unreadCount] = await Promise.all([
+      this.prisma.notification.findMany({
+        where: { userId },
+        orderBy: { createdAt: 'desc' },
+        take: limit,
+      }),
+      this.prisma.notification.count({
+        where: { userId, isRead: false },
+      }),
+    ]);
+    return { data, unreadCount };
   }
 
   async markRead(id: string, userId: string) {

@@ -38,6 +38,12 @@ import {
   type SchedulerTaskSummaryDto,
 } from '../tasks/scheduler-task-summary.util';
 import { taskViewPath } from '../common/utils/design-type.util';
+import {
+  computeDesignerTaskBarStats,
+  computeDesignerWeekWorkloadStats,
+  isoWeekRangeFromWeekStart,
+  parseWeekStartLocal,
+} from '../dashboard/designer-stats.util';
 
 type RawAssignmentRow = {
   id: string;
@@ -132,6 +138,30 @@ type SchedulerWeekMetaDto = {
   isLocked: boolean;
   updatedAt: string;
   updatedBy: string | null;
+  /** Sorted `designerId|YYYY-MM-DD` keys — used by clients to sync weekend unlocks without a full week reload. */
+  dayUnlockKeys: string[];
+};
+
+type SchedulerDayUnlockDto = {
+  id: string;
+  designerId: string;
+  date: string;
+  unlockedById: string;
+  reason: string | null;
+  createdAt: string;
+};
+
+type SchedulerWeekPayloadDto = {
+  assignments: SchedulerAssignmentDto[];
+  dayUnlocks: SchedulerDayUnlockDto[];
+  /** Included so week bootstrap needs only one GET (meta poll still uses /meta). */
+  weekStart: string;
+  version: number;
+  isLocked: boolean;
+  updatedAt: string;
+  updatedBy: string | null;
+  /** Sorted `designerId|YYYY-MM-DD` keys — prefer over full dayUnlocks for sync. */
+  dayUnlockKeys: string[];
 };
 
 const DAILY_CAPACITY = 8;
@@ -210,6 +240,31 @@ export class SchedulerAssignmentsService implements OnModuleInit {
       this.logger.error(
         `Leave reschedule snapshot table unavailable — leave approval/revocation will fail. Cause: ${detail}`,
       );
+    }
+
+    try {
+      // security-sql:allow-static-ddl
+      await this.prisma.$executeRawUnsafe(`
+        IF OBJECT_ID('dbo.ErpTSSchedulerDayUnlock', 'U') IS NULL
+        BEGIN
+          CREATE TABLE dbo.ErpTSSchedulerDayUnlock (
+            id UNIQUEIDENTIFIER NOT NULL CONSTRAINT PK_ErpTSSchedulerDayUnlock PRIMARY KEY DEFAULT (newid()),
+            designerId UNIQUEIDENTIFIER NOT NULL,
+            [date] DATE NOT NULL,
+            unlockedById UNIQUEIDENTIFIER NOT NULL,
+            reason NVARCHAR(500) NULL,
+            createdAt DATETIME2 NOT NULL CONSTRAINT DF_ErpTSSchedulerDayUnlock_createdAt DEFAULT (sysutcdatetime()),
+            CONSTRAINT FK_ErpTSSchedulerDayUnlock_Designer FOREIGN KEY (designerId) REFERENCES dbo.ErpTSUser(id),
+            CONSTRAINT FK_ErpTSSchedulerDayUnlock_UnlockedBy FOREIGN KEY (unlockedById) REFERENCES dbo.ErpTSUser(id),
+            CONSTRAINT UQ_ErpTSSchedulerDayUnlock_designer_date UNIQUE (designerId, [date])
+          );
+          CREATE INDEX IX_ErpTSSchedulerDayUnlock_date ON dbo.ErpTSSchedulerDayUnlock ([date]);
+          CREATE INDEX IX_ErpTSSchedulerDayUnlock_designerId_date ON dbo.ErpTSSchedulerDayUnlock (designerId, [date]);
+        END
+      `);
+    } catch (err) {
+      const detail = err instanceof Error ? err.message : String(err);
+      this.logger.warn(`Could not ensure scheduler day-unlock table: ${detail}`);
     }
   }
 
@@ -355,6 +410,198 @@ export class SchedulerAssignmentsService implements OnModuleInit {
       WHERE [date] >= ${start} AND [date] <= ${end}
     `;
     return new Set(rows.map((row) => this.dateKey(new Date(row.date))));
+  }
+
+  private async loadDayUnlocksForRange(
+    start: Date,
+    end: Date,
+    designerId?: string,
+  ): Promise<SchedulerDayUnlockDto[]> {
+    try {
+      const rows = designerId
+        ? await this.prisma.$queryRaw<
+            Array<{
+              id: string;
+              designerId: string;
+              date: Date | string;
+              unlockedById: string;
+              reason: string | null;
+              createdAt: Date | string;
+            }>
+          >`
+            SELECT id, designerId, [date] AS [date], unlockedById, reason, createdAt
+            FROM dbo.ErpTSSchedulerDayUnlock
+            WHERE [date] >= ${start} AND [date] <= ${end} AND designerId = ${designerId}
+            ORDER BY [date] ASC
+          `
+        : await this.prisma.$queryRaw<
+            Array<{
+              id: string;
+              designerId: string;
+              date: Date | string;
+              unlockedById: string;
+              reason: string | null;
+              createdAt: Date | string;
+            }>
+          >`
+            SELECT id, designerId, [date] AS [date], unlockedById, reason, createdAt
+            FROM dbo.ErpTSSchedulerDayUnlock
+            WHERE [date] >= ${start} AND [date] <= ${end}
+            ORDER BY [date] ASC
+          `;
+      return rows
+        .filter((row) => row?.designerId && row?.date != null)
+        .map((row) => {
+          const date = new Date(row.date);
+          const createdAt = new Date(row.createdAt ?? Date.now());
+          return {
+            id: String(row.id ?? ''),
+            designerId: String(row.designerId),
+            date: Number.isNaN(date.getTime()) ? '' : this.dateKey(date),
+            unlockedById: String(row.unlockedById ?? ''),
+            reason: row.reason ?? null,
+            createdAt: Number.isNaN(createdAt.getTime()) ? new Date(0).toISOString() : this.toIso(createdAt),
+          };
+        })
+        .filter((row) => row.date.length > 0);
+    } catch (err) {
+      const detail = err instanceof Error ? err.message : String(err);
+      this.logger.warn(`Could not load scheduler day unlocks: ${detail}`);
+      return [];
+    }
+  }
+
+  private dayUnlockKey(designerId: string, date: Date | string): string {
+    const key = typeof date === 'string' ? date : this.dateKey(date);
+    return `${designerId}|${key}`;
+  }
+
+  private assertWeekendDate(date: Date): void {
+    if (!this.isWeekend(date)) {
+      throw new BadRequestException('Day unlocks are only allowed for Saturday or Sunday.');
+    }
+  }
+
+  private validateWeekendUnlocks(
+    assignments: SaveSchedulerWeekDto['assignments'],
+    weekStartDate: Date,
+    unlockedKeys: Set<string>,
+  ) {
+    for (const row of assignments) {
+      if (row.dayIndex < 5) continue;
+      const date = this.dateForDayIndex(weekStartDate, row.dayIndex);
+      const key = this.dayUnlockKey(row.designerId, date);
+      if (!unlockedKeys.has(key)) {
+        throw new BadRequestException(
+          `Weekend ${this.dateKey(date)} is locked for this designer. Unlock the day before scheduling.`,
+        );
+      }
+    }
+  }
+
+  async createDayUnlock(
+    userId: string,
+    input: { designerId: string; date: string; reason?: string },
+  ): Promise<SchedulerDayUnlockDto> {
+    if (!this.isUuid(input.designerId)) {
+      throw new BadRequestException('Invalid designerId.');
+    }
+    const date = this.startOfUtcDay(new Date(`${input.date.trim()}T00:00:00.000Z`));
+    if (Number.isNaN(date.getTime())) {
+      throw new BadRequestException('date must be YYYY-MM-DD.');
+    }
+    this.assertWeekendDate(date);
+
+    const weekStartDate = this.weekStartForDate(date);
+    const week = await this.prisma.schedulerWeek.findUnique({ where: { weekStartDate } });
+    if (week?.isLocked) {
+      throw new ForbiddenException('This scheduler week is locked.');
+    }
+
+    const designer = await this.prisma.user.findFirst({
+      where: { id: input.designerId, role: { name: { in: [UserRole.DESIGNER, UserRole.HOD] } } },
+      select: { id: true },
+    });
+    if (!designer) {
+      throw new NotFoundException('Designer not found.');
+    }
+
+    const reason = input.reason?.trim() || null;
+    try {
+      await this.prisma.$executeRaw`
+        IF NOT EXISTS (
+          SELECT 1 FROM dbo.ErpTSSchedulerDayUnlock
+          WHERE designerId = ${input.designerId} AND [date] = ${date}
+        )
+        INSERT INTO dbo.ErpTSSchedulerDayUnlock (designerId, [date], unlockedById, reason)
+        VALUES (${input.designerId}, ${date}, ${userId}, ${reason})
+      `;
+    } catch (err) {
+      const detail = err instanceof Error ? err.message : String(err);
+      throw new BadRequestException(`Could not unlock weekend day: ${detail}`);
+    }
+
+    const rows = await this.loadDayUnlocksForRange(date, date, input.designerId);
+    const created = rows[0];
+    if (!created) {
+      throw new BadRequestException('Weekend day unlock failed.');
+    }
+
+    const weekStart = this.dateKey(weekStartDate);
+    this.dashboardRealtime?.notifyOverviewRefresh('scheduler_day_unlocked', {
+      weekStart,
+      designerId: input.designerId,
+      date: created.date,
+      changedTaskIds: [],
+    });
+    return created;
+  }
+
+  async deleteDayUnlock(
+    userId: string,
+    input: { designerId: string; date: string },
+  ): Promise<{ ok: true }> {
+    if (!this.isUuid(input.designerId)) {
+      throw new BadRequestException('Invalid designerId.');
+    }
+    const date = this.startOfUtcDay(new Date(`${input.date.trim()}T00:00:00.000Z`));
+    if (Number.isNaN(date.getTime())) {
+      throw new BadRequestException('date must be YYYY-MM-DD.');
+    }
+    this.assertWeekendDate(date);
+
+    const weekStartDate = this.weekStartForDate(date);
+    const week = await this.prisma.schedulerWeek.findUnique({ where: { weekStartDate } });
+    if (week?.isLocked) {
+      throw new ForbiddenException('This scheduler week is locked.');
+    }
+
+    const existingAssignments = await this.prisma.schedulerAssignment.count({
+      where: {
+        designerId: input.designerId,
+        weekStartDate,
+        dayIndex: this.dayIndexForDate(date, weekStartDate),
+      },
+    });
+    if (existingAssignments > 0) {
+      throw new BadRequestException(
+        'Cannot relock this weekend day while assignments exist. Move or remove those tasks first.',
+      );
+    }
+
+    await this.prisma.$executeRaw`
+      DELETE FROM dbo.ErpTSSchedulerDayUnlock
+      WHERE designerId = ${input.designerId} AND [date] = ${date}
+    `;
+
+    this.dashboardRealtime?.notifyOverviewRefresh('scheduler_day_relocked', {
+      weekStart: this.dateKey(weekStartDate),
+      designerId: input.designerId,
+      date: this.dateKey(date),
+      changedTaskIds: [],
+    });
+    void userId;
+    return { ok: true };
   }
 
   private async touchSchedulerWeek(weekStartDate: Date, userId: string): Promise<void> {
@@ -1880,7 +2127,7 @@ export class SchedulerAssignmentsService implements OnModuleInit {
     }
   }
 
-  async findForWeekStart(weekStart: string, designerId?: string): Promise<SchedulerAssignmentDto[]> {
+  async findForWeekStart(weekStart: string, designerId?: string): Promise<SchedulerWeekPayloadDto> {
     const { weekStartDate } = this.parseWeekStart(weekStart);
 
     try {
@@ -1896,7 +2143,7 @@ export class SchedulerAssignmentsService implements OnModuleInit {
 
       const weekEndDate = new Date(weekStartDate);
       weekEndDate.setUTCDate(weekEndDate.getUTCDate() + 6);
-      const [approvedRequests, approvedLeaves, approvedRegularizations] = await Promise.all([
+      const [approvedRequests, approvedLeaves, approvedRegularizations, dayUnlocks, weekRow] = await Promise.all([
         this.prisma.overtimeRequest.findMany({
           where: {
             status: 'APPROVED',
@@ -1950,6 +2197,8 @@ export class SchedulerAssignmentsService implements OnModuleInit {
           },
           orderBy: { reviewedAt: 'asc' },
         }),
+        this.loadDayUnlocksForRange(weekStartDate, weekEndDate, designerId),
+        this.prisma.schedulerWeek.findUnique({ where: { weekStartDate } }),
       ]);
 
       const approvedByAssignmentKey = new Map<string, { hours: number; requestIds: string[] }>();
@@ -2060,7 +2309,21 @@ export class SchedulerAssignmentsService implements OnModuleInit {
         ...fragments.map((fragment) => this.mapFragmentRow(fragment)),
       ];
       const withCounts = await this.attachOtherScheduledAssignmentCounts(combined);
-      return this.attachTaskSummaries(withCounts);
+      const assignments = await this.attachTaskSummaries(withCounts);
+      const dayUnlockKeys = dayUnlocks
+        .map((u) => this.dayUnlockKey(u.designerId, u.date))
+        .filter((key) => key.includes('|'))
+        .sort();
+      return {
+        assignments,
+        dayUnlocks,
+        weekStart,
+        version: weekRow?.version ?? 0,
+        isLocked: Boolean(weekRow?.isLocked ?? false),
+        updatedAt: (weekRow?.updatedAt ?? new Date(0)).toISOString(),
+        updatedBy: weekRow?.updatedBy ?? null,
+        dayUnlockKeys,
+      };
     } catch (err) {
       this.fail('Scheduler assignments query failed', err);
     }
@@ -2068,13 +2331,21 @@ export class SchedulerAssignmentsService implements OnModuleInit {
 
   async getWeekMeta(weekStart: string): Promise<SchedulerWeekMetaDto> {
     const { weekStartDate } = this.parseWeekStart(weekStart);
-    const row = await this.prisma.schedulerWeek.findUnique({ where: { weekStartDate } });
+    const weekEndDate = this.dateForDayIndex(weekStartDate, 6);
+    const [row, unlocks] = await Promise.all([
+      this.prisma.schedulerWeek.findUnique({ where: { weekStartDate } }),
+      this.loadDayUnlocksForRange(weekStartDate, weekEndDate),
+    ]);
     return {
       weekStart,
       version: row?.version ?? 0,
       isLocked: Boolean(row?.isLocked ?? false),
       updatedAt: (row?.updatedAt ?? new Date(0)).toISOString(),
       updatedBy: row?.updatedBy ?? null,
+      dayUnlockKeys: unlocks
+        .map((u) => this.dayUnlockKey(u.designerId, u.date))
+        .filter((key) => key.includes('|'))
+        .sort(),
     };
   }
 
@@ -2215,12 +2486,18 @@ export class SchedulerAssignmentsService implements OnModuleInit {
       updatedBy: userId,
     });
 
+    const weekEndDate = this.dateForDayIndex(weekStartDate, 6);
+    const unlocks = await this.loadDayUnlocksForRange(weekStartDate, weekEndDate);
     return {
       weekStart,
       version: result.version,
       isLocked: Boolean(result.isLocked),
       updatedAt: result.updatedAt.toISOString(),
       updatedBy: result.updatedBy ?? null,
+      dayUnlockKeys: unlocks
+        .map((u) => this.dayUnlockKey(u.designerId, u.date))
+        .filter((key) => key.includes('|'))
+        .sort(),
     };
   }
 
@@ -2587,6 +2864,11 @@ export class SchedulerAssignmentsService implements OnModuleInit {
 
       const mergedAssignments = this.buildMergedAssignmentsForValidation(previousRows, dto);
       this.validateAssignments(mergedAssignments, approvedOvertimeHoursByDesignerDay);
+      const dayUnlocks = await this.loadDayUnlocksForRange(weekStartDate, weekEndDate);
+      const unlockedKeys = new Set(
+        dayUnlocks.map((u) => this.dayUnlockKey(u.designerId, u.date)),
+      );
+      this.validateWeekendUnlocks(mergedAssignments, weekStartDate, unlockedKeys);
       const payloadHash = this.stablePayloadHash(mergedAssignments);
 
       if (schedulableUsers.length !== designerIds.length) {
@@ -3619,5 +3901,61 @@ export class SchedulerAssignmentsService implements OnModuleInit {
     });
 
     return result;
+  }
+
+  /**
+   * Light StatsBar payload for Requests (and any chrome that needs the same numbers).
+   * Formulas live in designer-stats.util — keep in sync with frontend designer-task-stats.util.js
+   * + live-schedule-from-assignments / designerDashboardSync week slot math.
+   */
+  async getDesignerStats(designerId: string, weekStart: string) {
+    const trimmedId = designerId?.trim() ?? '';
+    if (!this.isUuid(trimmedId)) {
+      throw new BadRequestException('designerId must be a UUID.');
+    }
+    const ws = weekStart?.trim() ?? '';
+    if (!/^\d{4}-\d{2}-\d{2}$/.test(ws)) {
+      throw new BadRequestException('weekStart must be YYYY-MM-DD.');
+    }
+
+    const { weekDates } = parseWeekStartLocal(ws);
+    const { viewWeekStart, viewWeekEnd } = isoWeekRangeFromWeekStart(weekDates[0]);
+
+    try {
+      const [tasks, week] = await Promise.all([
+        this.prisma.task.findMany({
+          where: {
+            OR: [
+              { assigneeId: trimmedId },
+              { taskDesigners: { some: { designerId: trimmedId } } },
+            ],
+          },
+          select: {
+            status: true,
+            completedAt: true,
+            updatedAt: true,
+            createdAt: true,
+          },
+        }),
+        this.findForWeekStart(ws, trimmedId),
+      ]);
+
+      const taskStats = computeDesignerTaskBarStats(tasks, { viewWeekStart, viewWeekEnd });
+      const assignmentRows = (week.assignments ?? []).filter((row) => !row.isFragment);
+      const workload = computeDesignerWeekWorkloadStats(assignmentRows, weekDates);
+
+      return {
+        designerId: trimmedId,
+        weekStart: ws,
+        workLoad: workload.workLoad,
+        workTill: workload.workTill,
+        monthlyTaskCount: taskStats.monthlyTaskCount,
+        weeklyCompletedCount: taskStats.weeklyCompletedCount,
+        score: taskStats.score,
+      };
+    } catch (err) {
+      if (err instanceof HttpException) throw err;
+      this.fail('Designer stats query failed', err);
+    }
   }
 }

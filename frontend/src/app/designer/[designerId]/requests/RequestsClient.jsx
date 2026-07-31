@@ -1,6 +1,6 @@
 "use client";
 
-import { useState, useEffect, useRef, useMemo } from "react";
+import { useState, useEffect, useRef, useMemo, useCallback } from "react";
 import { toast } from "sonner";
 import { usePathname, useRouter, useSearchParams } from "next/navigation";
 import { Navbar } from "@/components/Navbar";
@@ -24,16 +24,7 @@ import {
   parseRequestedHoursLabel,
 } from "@/lib/overtime-constants";
 import { apiClient } from "@/lib/api-client";
-import {
-  COMPLETED_TASK_STATUSES,
-  computeDesignerTaskStats,
-  normalizeTaskStatus,
-} from "@/features/scheduler/utils/designer-task-stats.util";
-import { listSchedulerAssignmentsForWeek } from "@/features/scheduler/services/scheduler-assignments.api";
-import {
-  buildLiveScheduleFromAssignments,
-  formatWorkTillLabel,
-} from "@/features/scheduler/utils/live-schedule-from-assignments";
+import { getDesignerStatsBar } from "@/features/scheduler/services/scheduler-assignments.api";
 import { formatLocalYyyyMmDd } from "@/features/scheduler/utils/schedulerNavigationState";
 import { getWeekDays } from "@/features/scheduler/utils/schedulerWeek";
 import {
@@ -127,44 +118,6 @@ function toInitials(name) {
   if (parts.length === 0) return "??";
   if (parts.length === 1) return parts[0].slice(0, 2).toUpperCase();
   return (parts[0][0] + parts[parts.length - 1][0]).toUpperCase();
-}
-
-function computeStatsFromTasks(tasks) {
-  if (!Array.isArray(tasks) || tasks.length === 0) {
-    return {
-      monthlyTaskCount: 0,
-      weeklyCompletedCount: 0,
-      score: 0,
-    };
-  }
-
-  const now = new Date();
-  // Monthly Closed + Tasks Closed This Week must match DesignerDashboard.
-  const weekStart = startOfIsoWeekLocal(now);
-  const weekEnd = new Date(weekStart);
-  weekEnd.setDate(weekEnd.getDate() + 6);
-  const taskStats = computeDesignerTaskStats(tasks, {
-    now,
-    viewWeekStart: weekStart,
-    viewWeekEnd: weekEnd,
-  });
-  const completed = tasks.filter((t) => COMPLETED_TASK_STATUSES.has(normalizeTaskStatus(t.status)));
-  const total = tasks.length || 1;
-  const score = Math.round((completed.length / total) * 100);
-
-  return {
-    monthlyTaskCount: taskStats.monthlyCompletedCount,
-    weeklyCompletedCount: taskStats.weeklyCompletedCount,
-    score,
-  };
-}
-
-function startOfIsoWeekLocal(dateLike) {
-  const d = dateLike instanceof Date ? new Date(dateLike) : new Date(dateLike);
-  d.setHours(0, 0, 0, 0);
-  const day = (d.getDay() + 6) % 7;
-  d.setDate(d.getDate() - day);
-  return d;
 }
 
 function matchesActiveDesigner(record, activeDesignerId) {
@@ -337,7 +290,11 @@ export default function RequestsClient() {
   const [regularizationLoading, setRegularizationLoading] = useState(false);
   const [regTaskOptions, setRegTaskOptions] = useState([]);
   const [regTasksLoading, setRegTasksLoading] = useState(false);
-  const [regProjectOptions, setRegProjectOptions] = useState([]);
+  const [regProjectQuery, setRegProjectQuery] = useState("");
+  const [regProjectResults, setRegProjectResults] = useState([]);
+  const [regProjectsLoading, setRegProjectsLoading] = useState(false);
+  const [selectedRegProject, setSelectedRegProject] = useState(null);
+  const [regProjectMenuOpen, setRegProjectMenuOpen] = useState(false);
 
   const [previousOtRequests, setPreviousOtRequests] = useState([]);
   const [hodOvertimePending, setHodOvertimePending] = useState([]);
@@ -526,23 +483,34 @@ export default function RequestsClient() {
     }
   };
 
-  const loadRegProjectOptions = async () => {
+  const searchRegProjects = useCallback(async (rawQuery) => {
+    const q = String(rawQuery ?? "").trim();
+    if (q.length < 2) {
+      setRegProjectResults([]);
+      setRegProjectsLoading(false);
+      return;
+    }
+    setRegProjectsLoading(true);
     try {
-      const res = await apiClient.get("/projects?limit=500");
+      const res = await apiClient.get(
+        `/projects?limit=20&search=${encodeURIComponent(q)}`,
+      );
       const rows = Array.isArray(res?.data) ? res.data : (Array.isArray(res) ? res : []);
-      setRegProjectOptions(
+      setRegProjectResults(
         rows
           .map((p) => ({
             id: String(p.id ?? "").trim(),
             label: String(p.name ?? p.projectNo ?? p.id ?? "").trim(),
+            projectNo: String(p.projectNo ?? "").trim(),
           }))
-          .filter((p) => isUuidString(p.id) && p.label)
-          .sort((a, b) => a.label.localeCompare(b.label)),
+          .filter((p) => isUuidString(p.id) && p.label),
       );
     } catch {
-      setRegProjectOptions([]);
+      setRegProjectResults([]);
+    } finally {
+      setRegProjectsLoading(false);
     }
-  };
+  }, []);
 
   const loadRegTaskOptions = async (dateStr = regForm.date) => {
     if (activeDesignerId == null || !dateStr) {
@@ -580,37 +548,16 @@ export default function RequestsClient() {
       return;
     }
     try {
-      const weekDates = getWeekDays(new Date());
-      const weekStartStr = formatLocalYyyyMmDd(weekDates[0]);
-      const [tasksRes, assignments] = await Promise.all([
-        apiClient.get(`/tasks?limit=200&assigneeId=${encodeURIComponent(designerId)}`),
-        listSchedulerAssignmentsForWeek(weekStartStr, designerId).catch(() => []),
-      ]);
-      const taskRows = Array.isArray(tasksRes)
-        ? tasksRes
-        : Array.isArray(tasksRes?.data)
-          ? tasksRes.data
-          : [];
-      const taskStats = computeStatsFromTasks(taskRows);
-      const rows = Array.isArray(assignments) ? assignments : [];
-      const snapshot = buildLiveScheduleFromAssignments(rows, taskRows);
-      const workTillLabel =
-        snapshot.stats.lastWorkDayIndex != null
-          ? formatWorkTillLabel(weekDates[snapshot.stats.lastWorkDayIndex])
-          : null;
-
+      const weekStartStr = formatLocalYyyyMmDd(getWeekDays(new Date())[0]);
+      // Shared backend formulas (designer-stats.util) — same StatsBar math as DesignerDashboard.
+      const bar = await getDesignerStatsBar(designerId, weekStartStr);
       setStats((prev) => ({
         ...prev,
-        workLoad: {
-          tasks: snapshot.stats.tasks ?? 0,
-          hours: snapshot.stats.hours ?? 0,
-        },
-        workTill: workTillLabel
-          ? { label: workTillLabel, hours: snapshot.stats.lastWorkDayHours ?? 0 }
-          : DEFAULT_STATS.workTill,
-        monthlyTaskCount: taskStats.monthlyTaskCount,
-        weeklyCompletedCount: taskStats.weeklyCompletedCount,
-        score: taskStats.score,
+        workLoad: bar?.workLoad ?? DEFAULT_STATS.workLoad,
+        workTill: bar?.workTill ?? DEFAULT_STATS.workTill,
+        monthlyTaskCount: bar?.monthlyTaskCount ?? 0,
+        weeklyCompletedCount: bar?.weeklyCompletedCount ?? 0,
+        score: bar?.score ?? 0,
       }));
     } catch {
       setStats((prev) => ({
@@ -633,11 +580,37 @@ export default function RequestsClient() {
     setRegTaskOptions([]);
     setRegularizationRequests([]);
     setRegForm(EMPTY_REG_FORM);
+    setSelectedRegProject(null);
+    setRegProjectQuery("");
+    setRegProjectResults([]);
     setPreviousOtRequests([]);
     setStats(DEFAULT_STATS);
   }, [activeDesignerId]);
 
+  // Shared chrome (StatsBar) — keep on every tab.
   useEffect(() => {
+    if (activeDesignerId == null) return;
+    void loadDesignerStats(activeDesignerId);
+    // eslint-disable-next-line react-hooks/exhaustive-deps -- reload when active designer changes
+  }, [activeDesignerId]);
+
+  // Overtime tab only — do not pull Reg/projects or sibling inboxes.
+  useEffect(() => {
+    if (activeTab !== "overtime" || activeDesignerId == null) return;
+    void loadOvertime();
+    void loadAssignedTasks(activeDesignerId);
+    if (isHOD) void loadHodOvertimeInbox();
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [activeTab, activeDesignerId, isHOD]);
+
+  // Regularization tab only — projects catalog loads when Non-Task mode is selected.
+  useEffect(() => {
+    if (activeTab !== "regularization") {
+      if (activeDesignerId == null && isHOD) {
+        setRegularizationError("Select a designer profile to view or submit regularization requests.");
+      }
+      return;
+    }
     if (activeDesignerId == null) {
       if (isHOD) {
         setRegularizationError("Select a designer profile to view or submit regularization requests.");
@@ -645,34 +618,41 @@ export default function RequestsClient() {
       return;
     }
     void loadRegularization();
-    void loadOvertime();
-    void loadRegProjectOptions();
-    void loadAssignedTasks(activeDesignerId);
-    void loadDesignerStats(activeDesignerId);
-    if (isHOD) {
-      void loadHodInbox();
-      void loadHodOvertimeInbox();
-    }
-    // eslint-disable-next-line react-hooks/exhaustive-deps -- reload when active designer changes
-  }, [activeDesignerId, isHOD]);
+    if (isHOD) void loadHodInbox();
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [activeTab, activeDesignerId, isHOD]);
 
   useEffect(() => {
-    if (activeDesignerId == null) return;
+    if (activeTab !== "regularization") return;
+    if (regForm.regularizationType !== "non-task") {
+      setRegProjectQuery("");
+      setRegProjectResults([]);
+      setRegProjectMenuOpen(false);
+      return;
+    }
+    const timer = setTimeout(() => {
+      void searchRegProjects(regProjectQuery);
+    }, 300);
+    return () => clearTimeout(timer);
+  }, [activeTab, regForm.regularizationType, regProjectQuery, searchRegProjects]);
+
+  useEffect(() => {
+    if (activeTab !== "regularization" || activeDesignerId == null) return;
     void loadRegTaskOptions(regForm.date);
     // eslint-disable-next-line react-hooks/exhaustive-deps -- reload when selected request date changes
-  }, [activeDesignerId, regForm.date]);
+  }, [activeTab, activeDesignerId, regForm.date]);
 
+  // HOD inbox poll — only the active tab's inbox (avoids OT/Reg traffic on Reallocation).
   useEffect(() => {
     if (!isHOD) return;
-    void loadHodInbox();
-    void loadHodOvertimeInbox();
+    if (activeTab !== "overtime" && activeTab !== "regularization") return;
     const interval = setInterval(() => {
-      void loadHodInbox();
-      void loadHodOvertimeInbox();
+      if (activeTab === "overtime") void loadHodOvertimeInbox();
+      if (activeTab === "regularization") void loadHodInbox();
     }, 30000);
     return () => clearInterval(interval);
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [isHOD]);
+  }, [isHOD, activeTab]);
 
   useEffect(() => {
     if (!isHOD || isUuidString(forDesignerParam) || employeeSelectionList.length === 0) return;
@@ -1063,7 +1043,6 @@ export default function RequestsClient() {
   }, [hodPendingRequests, regularizationRequests, isHOD, activeDesignerId, activeDesignerName]);
 
   const selectedRegTask = regTaskOptions.find((t) => t.id === regForm.taskId);
-  const selectedRegProject = regProjectOptions.find((p) => p.id === regForm.projectId);
 
   const unifiedOvertimeRows = useMemo(() => {
     const map = new Map();
@@ -1268,6 +1247,11 @@ export default function RequestsClient() {
                           ? { ...f, regularizationType: value, taskId: "" }
                           : { ...f, regularizationType: value, projectId: "", workDetails: "" },
                       );
+                      if (value !== "non-task") {
+                        setSelectedRegProject(null);
+                        setRegProjectQuery("");
+                        setRegProjectResults([]);
+                      }
                     }}
                     className={inputClass}
                     disabled={activeDesignerId == null}
@@ -1280,20 +1264,63 @@ export default function RequestsClient() {
                   {regForm.regularizationType === "non-task" ? (
                     <>
                       <label className="mb-1.5 block text-sm font-medium text-slate-700">Project</label>
-                      <select
-                        value={regForm.projectId}
-                        onChange={(e) => setRegForm({ ...regForm, projectId: e.target.value })}
-                        className={inputClass}
-                        required
-                        disabled={activeDesignerId == null}
-                      >
-                        <option value="" disabled>
-                          {regProjectOptions.length === 0 ? "No projects available" : "Select a project"}
-                        </option>
-                        {regProjectOptions.map((p) => (
-                          <option key={p.id} value={p.id}>{p.label}</option>
-                        ))}
-                      </select>
+                      <div className="relative">
+                        <input
+                          type="text"
+                          value={
+                            selectedRegProject && !regProjectMenuOpen
+                              ? selectedRegProject.label
+                              : regProjectQuery
+                          }
+                          onChange={(e) => {
+                            setSelectedRegProject(null);
+                            setRegForm((f) => ({ ...f, projectId: "" }));
+                            setRegProjectQuery(e.target.value);
+                            setRegProjectMenuOpen(true);
+                          }}
+                          onFocus={() => setRegProjectMenuOpen(true)}
+                          onBlur={() => {
+                            // Allow click on result before closing.
+                            window.setTimeout(() => setRegProjectMenuOpen(false), 150);
+                          }}
+                          placeholder="Type project name or number…"
+                          className={inputClass}
+                          required={!selectedRegProject}
+                          disabled={activeDesignerId == null}
+                          autoComplete="off"
+                        />
+                        {regProjectMenuOpen ? (
+                          <div className="absolute z-30 mt-1 max-h-56 w-full overflow-y-auto rounded-md border border-slate-200 bg-white shadow-lg">
+                            {regProjectsLoading ? (
+                              <p className="px-3 py-2 text-sm text-slate-500">Searching…</p>
+                            ) : regProjectQuery.trim().length < 2 ? (
+                              <p className="px-3 py-2 text-sm text-slate-500">Type at least 2 characters</p>
+                            ) : regProjectResults.length === 0 ? (
+                              <p className="px-3 py-2 text-sm text-slate-500">No matching projects</p>
+                            ) : (
+                              regProjectResults.map((p) => (
+                                <button
+                                  key={p.id}
+                                  type="button"
+                                  className="block w-full px-3 py-2 text-left text-sm hover:bg-slate-50"
+                                  onMouseDown={(e) => e.preventDefault()}
+                                  onClick={() => {
+                                    setSelectedRegProject(p);
+                                    setRegForm((f) => ({ ...f, projectId: p.id }));
+                                    setRegProjectQuery(p.label);
+                                    setRegProjectMenuOpen(false);
+                                  }}
+                                >
+                                  <span className="font-medium text-slate-800">{p.label}</span>
+                                  {p.projectNo ? (
+                                    <span className="ml-2 text-xs text-slate-500">{p.projectNo}</span>
+                                  ) : null}
+                                </button>
+                              ))
+                            )}
+                          </div>
+                        ) : null}
+                      </div>
                     </>
                   ) : (
                     <>

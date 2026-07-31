@@ -1,4 +1,5 @@
 import { apiClient } from '@/lib/api-client';
+import { singleflight } from '@/lib/singleflight';
 import { isSameUserId, normalizeUserId } from '@/lib/user-id';
 import { parseMentionUserIdsFromMessage } from '../utils/mention-utils';
 
@@ -450,9 +451,12 @@ export function listChatterPosts(params?: {
   const cursor = normalizePaginationCursor(params?.cursor);
   if (cursor) qs.set('cursor', cursor);
   const suffix = qs.toString() ? `?${qs.toString()}` : '';
-  return apiClient
-    .get<ChatterPostsPagedResponse>(`/chatter-posts${suffix}`)
-    .then(normalizeChatterPostsPagedResponse);
+  const key = `chatter-posts${suffix}`;
+  return singleflight(key, () =>
+    apiClient
+      .get<ChatterPostsPagedResponse>(`/chatter-posts${suffix}`)
+      .then(normalizeChatterPostsPagedResponse),
+  );
 }
 
 export function getChatterPost(postId: string) {

@@ -3,6 +3,7 @@
 import { Suspense, useEffect, useState } from 'react'
 import { useRouter } from 'next/navigation'
 import { getSession } from '@/lib/mock-auth'
+import { SessionBootstrapSkeleton } from '@/components/SessionBootstrapSkeleton'
 import { DesignListScreen } from '@/features/design-list/components/DesignListScreen'
 
 function DesignListPageInner() {
@@ -30,14 +31,14 @@ function DesignListPageInner() {
     setRole('HOD')
   }, [router])
 
-  if (role !== 'HOD') return null
+  if (role !== 'HOD') return <SessionBootstrapSkeleton label="Loading design list" />
 
   return <DesignListScreen />
 }
 
 export default function DesignListPage() {
   return (
-    <Suspense fallback={null}>
+    <Suspense fallback={<SessionBootstrapSkeleton label="Loading design list" />}>
       <DesignListPageInner />
     </Suspense>
   )

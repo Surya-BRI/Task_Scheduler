@@ -3,6 +3,7 @@
 import { useEffect, useState } from 'react'
 import { useRouter } from 'next/navigation'
 import { getSession, getHomeRoute } from '@/lib/mock-auth'
+import { SessionBootstrapSkeleton } from '@/components/SessionBootstrapSkeleton'
 import { ProjectScreen } from '@/features/projects/components/ProjectScreen'
 
 export default function ProjectsListPage() {
@@ -26,6 +27,6 @@ export default function ProjectsListPage() {
     setAuthorized(true)
   }, [router])
 
-  if (!authorized) return null
+  if (!authorized) return <SessionBootstrapSkeleton label="Loading projects" />
   return <ProjectScreen />
 }

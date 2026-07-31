@@ -1,12 +1,57 @@
 "use client";
 
-import { useEffect, useState } from "react";
+import { useEffect, useMemo, useState } from "react";
 import { toast } from "sonner";
+import { ChevronDown } from "lucide-react";
 import {
   cancelReallocationRequest,
   createReallocationRequest,
   listReallocationEligibleDesigners,
 } from "@/features/requests/services/reallocation-requests.api";
+import { requestsPath } from "@/lib/role-routes";
+
+/** Soften leftover raw labels if an older API response still embeds TSK / duplicate OP. */
+function formatReallocationTaskOptionLabel(task) {
+  const raw = String(task?.name ?? "").trim();
+  if (!raw) return "Untitled task";
+  const withoutTaskNo = raw
+    .replace(/\s*[—\-–]\s*TSK-[A-Z0-9-]+$/i, "")
+    .trim();
+  const op = String(task?.opNo ?? "").trim();
+  if (!op) return withoutTaskNo || raw;
+  const escaped = op.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
+  const deduped = withoutTaskNo
+    .replace(new RegExp(`^${escaped}\\s*[—\\-–:]\\s*${escaped}\\b`, "i"), op)
+    .replace(new RegExp(`^(${escaped}\\s*[—\\-–:]\\s*)+`, "i"), `${op} — `)
+    .replace(new RegExp(`^${escaped}\\s*[—\\-–:]\\s*`, "i"), `${op} — `)
+    .trim();
+  return deduped || withoutTaskNo || raw;
+}
+
+function FormSelect({ label, value, onChange, disabled, children, emptyLabel }) {
+  return (
+    <label className="block text-xs font-semibold text-slate-600">
+      {label}
+      <div className="relative mt-1.5">
+        <select
+          className="ui-input w-full appearance-none pr-9 disabled:cursor-not-allowed disabled:bg-slate-50 disabled:text-slate-400"
+          value={value}
+          onChange={onChange}
+          disabled={disabled}
+        >
+          {children}
+        </select>
+        <ChevronDown
+          className="pointer-events-none absolute right-2.5 top-1/2 h-4 w-4 -translate-y-1/2 text-slate-400"
+          aria-hidden="true"
+        />
+      </div>
+      {emptyLabel ? (
+        <p className="mt-1 text-[11px] font-normal text-slate-400">{emptyLabel}</p>
+      ) : null}
+    </label>
+  );
+}
 
 /**
  * Compact task-detail panel. Create flow lives primarily under Requests → Reallocation.
@@ -41,7 +86,6 @@ export function TaskReallocationPanel({
   };
 
   if (!pendingReallocation && !viewerCanRequestReallocation && !isHod) return null;
-  // HOD with nothing pending: still show link to Requests inbox
   if (!pendingReallocation && !viewerCanRequestReallocation && isHod) {
     return (
       <div className="mt-4 border-t border-slate-200 pt-3">
@@ -49,7 +93,7 @@ export function TaskReallocationPanel({
           Reallocation
         </p>
         <a
-          href="/designer/requests?tab=reallocation"
+          href={requestsPath(isHod ? "HOD" : "DESIGNER", "tab=reallocation")}
           className="text-xs font-semibold text-slate-700 underline-offset-2 hover:underline"
         >
           Open reallocation requests
@@ -86,7 +130,7 @@ export function TaskReallocationPanel({
               </a>
             ) : null}
             <a
-              href={`/designer/requests?tab=reallocation&reallocationId=${pendingReallocation.id}`}
+              href={requestsPath(isHod ? "HOD" : "DESIGNER", `tab=reallocation&reallocationId=${pendingReallocation.id}`)}
               className="rounded border border-amber-300 bg-white px-2 py-1 text-[11px] font-semibold text-amber-900 hover:bg-amber-100"
             >
               Open in Requests
@@ -107,7 +151,7 @@ export function TaskReallocationPanel({
 
       {viewerCanRequestReallocation && !pendingReallocation ? (
         <a
-          href={`/designer/requests?tab=reallocation&taskId=${encodeURIComponent(taskId || "")}`}
+          href={requestsPath(isHod ? "HOD" : "DESIGNER", `tab=reallocation&taskId=${encodeURIComponent(taskId || "")}`)}
           className="inline-flex rounded-md border border-slate-300 bg-white px-3 py-1.5 text-xs font-semibold text-slate-700 hover:bg-slate-50"
         >
           Request reallocation
@@ -118,11 +162,7 @@ export function TaskReallocationPanel({
 }
 
 /** Full create form used on the Requests → Reallocation tab. */
-export function ReallocationCreateForm({
-  designerId,
-  prefillTaskId,
-  onCreated,
-}) {
+export function ReallocationCreateForm({ designerId, prefillTaskId, onCreated }) {
   const [taskOptions, setTaskOptions] = useState([]);
   const [eligible, setEligible] = useState([]);
   const [taskId, setTaskId] = useState(prefillTaskId || "");
@@ -168,6 +208,15 @@ export function ReallocationCreateForm({
       });
   }, [taskId]);
 
+  const labeledTasks = useMemo(
+    () =>
+      taskOptions.map((t) => ({
+        ...t,
+        label: formatReallocationTaskOptionLabel(t),
+      })),
+    [taskOptions],
+  );
+
   const submit = async (e) => {
     e?.preventDefault?.();
     if (!taskId || !suggestedDesignerId || !reason.trim()) {
@@ -197,48 +246,57 @@ export function ReallocationCreateForm({
         Request HOD to move all your remaining scheduled hours on a task to another designer.
       </p>
       <div className="grid gap-3 sm:grid-cols-2">
-        <label className="block text-xs font-semibold text-slate-600">
-          Task
-          <select
-            className="mt-1 w-full rounded border border-slate-300 px-2 py-1.5 text-sm"
-            value={taskId}
-            onChange={(e) => setTaskId(e.target.value)}
-            disabled={loadingTasks}
-          >
-            {taskOptions.length === 0 ? (
-              <option value="">No reallocatable tasks</option>
-            ) : (
-              taskOptions.map((t) => (
-                <option key={t.id} value={t.id}>
-                  {t.name}
-                </option>
-              ))
-            )}
-          </select>
-        </label>
-        <label className="block text-xs font-semibold text-slate-600">
-          Suggested designer
-          <select
-            className="mt-1 w-full rounded border border-slate-300 px-2 py-1.5 text-sm"
-            value={suggestedDesignerId}
-            onChange={(e) => setSuggestedDesignerId(e.target.value)}
-          >
-            {eligible.length === 0 ? (
-              <option value="">No eligible designers</option>
-            ) : (
-              eligible.map((d) => (
-                <option key={d.id} value={d.id}>
-                  {d.fullName}
-                </option>
-              ))
-            )}
-          </select>
-        </label>
+        <FormSelect
+          label="Task"
+          value={taskId}
+          onChange={(e) => setTaskId(e.target.value)}
+          disabled={loadingTasks}
+          emptyLabel={
+            loadingTasks
+              ? "Loading tasks…"
+              : labeledTasks.length === 0
+                ? "No reallocatable tasks for this designer."
+                : undefined
+          }
+        >
+          {labeledTasks.length === 0 ? (
+            <option value="">{loadingTasks ? "Loading…" : "No reallocatable tasks"}</option>
+          ) : (
+            labeledTasks.map((t) => (
+              <option key={t.id} value={t.id} title={t.label}>
+                {t.label}
+              </option>
+            ))
+          )}
+        </FormSelect>
+        <FormSelect
+          label="Suggested designer"
+          value={suggestedDesignerId}
+          onChange={(e) => setSuggestedDesignerId(e.target.value)}
+          disabled={!taskId || eligible.length === 0}
+          emptyLabel={
+            !taskId
+              ? "Select a task first."
+              : eligible.length === 0
+                ? "No eligible designers on this project team."
+                : undefined
+          }
+        >
+          {eligible.length === 0 ? (
+            <option value="">No eligible designers</option>
+          ) : (
+            eligible.map((d) => (
+              <option key={d.id} value={d.id}>
+                {d.fullName}
+              </option>
+            ))
+          )}
+        </FormSelect>
       </div>
       <label className="block text-xs font-semibold text-slate-600">
         Reason
         <textarea
-          className="mt-1 w-full rounded border border-slate-300 px-2 py-1.5 text-sm"
+          className="ui-input mt-1.5"
           rows={2}
           value={reason}
           onChange={(e) => setReason(e.target.value)}
@@ -248,7 +306,7 @@ export function ReallocationCreateForm({
       <button
         type="submit"
         disabled={busy || !taskId || !suggestedDesignerId || !reason.trim()}
-        className="rounded bg-slate-900 px-3 py-1.5 text-xs font-semibold text-white disabled:opacity-50"
+        className="ui-btn-primary"
       >
         {busy ? "Submitting…" : "Submit reallocation request"}
       </button>

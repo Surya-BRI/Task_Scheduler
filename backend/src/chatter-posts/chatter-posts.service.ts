@@ -1784,13 +1784,9 @@ export class ChatterPostsService implements OnModuleInit {
     });
 
     const firstRow = existingRows[0];
-    this.dashboardRealtime?.notifyChatterRefresh({
-      event: 'chatter_post_updated',
-      postId: firstRow?.id ?? null,
-      taskId: firstRow?.taskId ?? null,
-      projectId: firstRow?.projectId ?? null,
-      at: new Date().toISOString(),
-    });
+    // Do not broadcast chatter:refresh on seen — clients already patch seenBy from the POST body.
+    // Emitting here caused every open Chatter tab to full-refetch the feed after IntersectionObserver marks.
+    void firstRow;
 
     return { updates };
   }

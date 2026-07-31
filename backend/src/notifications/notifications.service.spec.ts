@@ -22,12 +22,15 @@ describe('NotificationsService', () => {
 
   it('findForUser clamps limit between 1 and 100', async () => {
     prisma.notification.findMany.mockResolvedValue([]);
+    prisma.notification.count.mockResolvedValue(0);
     await service.findForUser(userId, '500');
     expect(prisma.notification.findMany).toHaveBeenCalledWith(
       expect.objectContaining({ take: 100 }),
     );
 
     jest.clearAllMocks();
+    prisma.notification.findMany.mockResolvedValue([]);
+    prisma.notification.count.mockResolvedValue(0);
     await service.findForUser(userId, '-5');
     expect(prisma.notification.findMany).toHaveBeenCalledWith(
       expect.objectContaining({ take: 1 }),
@@ -36,10 +39,21 @@ describe('NotificationsService', () => {
 
   it('findForUser treats an explicit limit of 0 as 0, not the 30 default', async () => {
     prisma.notification.findMany.mockResolvedValue([]);
+    prisma.notification.count.mockResolvedValue(0);
     await service.findForUser(userId, '0');
     expect(prisma.notification.findMany).toHaveBeenCalledWith(
       expect.objectContaining({ take: 1 }),
     );
+  });
+
+  it('findForUser returns data with unreadCount in one round-trip', async () => {
+    const rows = [{ id: 'n1', isRead: false }];
+    prisma.notification.findMany.mockResolvedValue(rows);
+    prisma.notification.count.mockResolvedValue(4);
+    await expect(service.findForUser(userId, '30')).resolves.toEqual({
+      data: rows,
+      unreadCount: 4,
+    });
   });
 
   it('markRead updates only notifications owned by the user', async () => {

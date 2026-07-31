@@ -70,6 +70,8 @@ model User {
   schedulerAssignedBy      SchedulerAssignment[]      @relation("SchedulerAssignedBy")
   schedulerWeeksUpdated    SchedulerWeek[]            @relation("SchedulerWeekUpdatedBy")
   schedulerAssignmentHistory SchedulerAssignmentHistory[] @relation("SchedulerAssignmentHistoryChangedBy")
+  schedulerDayUnlocks      SchedulerDayUnlock[]       @relation("SchedulerDayUnlockDesigner")
+  schedulerDayUnlocksBy    SchedulerDayUnlock[]       @relation("SchedulerDayUnlockBy")
   designTasksAssigned      DesignTask[]               @relation("DesignTaskAssignee")
   designTasksUpdated       DesignTask[]               @relation("DesignTaskUpdatedBy")
   conversations            ConversationParticipant[]
@@ -738,6 +740,23 @@ model Holiday {
   updatedAt DateTime @default(dbgenerated("sysutcdatetime()")) @updatedAt
 
   @@map("ErpTSHoliday")
+}
+
+/// HOD unlock of a weekend day (Sat/Sun) for one designer so tasks can be scheduled there.
+model SchedulerDayUnlock {
+  id           String   @id @default(dbgenerated("newid()")) @db.UniqueIdentifier
+  designerId   String   @db.UniqueIdentifier
+  designer     User     @relation("SchedulerDayUnlockDesigner", fields: [designerId], references: [id], onDelete: NoAction, onUpdate: NoAction)
+  date         DateTime @db.Date
+  unlockedById String   @db.UniqueIdentifier
+  unlockedBy   User     @relation("SchedulerDayUnlockBy", fields: [unlockedById], references: [id], onDelete: NoAction, onUpdate: NoAction)
+  reason       String?  @db.NVarChar(500)
+  createdAt    DateTime @default(dbgenerated("sysutcdatetime()"))
+
+  @@unique([designerId, date], name: "UQ_ErpTSSchedulerDayUnlock_designer_date")
+  @@index([date], name: "IX_ErpTSSchedulerDayUnlock_date")
+  @@index([designerId, date], name: "IX_ErpTSSchedulerDayUnlock_designerId_date")
+  @@map("ErpTSSchedulerDayUnlock")
 }
 
 model LeaveRescheduleSnapshot {

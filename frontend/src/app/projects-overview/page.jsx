@@ -3,6 +3,7 @@
 import { useEffect, useState } from 'react';
 import { useRouter } from 'next/navigation';
 import { getSession, getHomeRoute } from '@/lib/mock-auth';
+import { SessionBootstrapSkeleton } from '@/components/SessionBootstrapSkeleton';
 import { ProjectsOverviewScreen } from '@/features/projects/components/ProjectsOverviewScreen';
 
 const OVERVIEW_ROLES = new Set(['HOD']);
@@ -28,7 +29,7 @@ export default function ProjectsOverviewPage() {
     setAuthorized(true);
   }, [router]);
 
-  if (!authorized) return null;
+  if (!authorized) return <SessionBootstrapSkeleton label="Loading projects overview" />;
 
   return <ProjectsOverviewScreen />;
 }

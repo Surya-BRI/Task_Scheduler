@@ -110,6 +110,9 @@ const EMPTY_DONUT_SLICE = { value: 0, pct: 0, color: "#94a3b8" };
 /**
  * Task-list stats for the designer dashboard.
  *
+ * Monthly / weekly closed + score formulas for StatsBar must stay aligned with
+ * backend `dashboard/designer-stats.util.ts` (GET /scheduler-assignments/designer-stats).
+ *
  * Buckets:
  * - Active — drafting / planned / in progress / rework
  * - In Review — DESIGN_COMPLETED + HOD/Sales review
@@ -117,10 +120,6 @@ const EMPTY_DONUT_SLICE = { value: 0, pct: 0, color: "#94a3b8" };
  * - Closed — CLIENT_ACCEPTED + CLIENT_REJECTED (client-final)
  *
  * Monthly / weekly closed counts use Closed only (via completedAt).
- */
-/**
- * @param {Array<object>} tasks
- * @param {{ now?: Date, viewWeekStart?: Date | null, viewWeekEnd?: Date | null }} [options]
  */
 export function computeDesignerTaskStats(tasks, { now = new Date(), viewWeekStart = null, viewWeekEnd = null } = {}) {
   if (!Array.isArray(tasks) || tasks.length === 0) {

@@ -105,7 +105,10 @@ export const apiClient = {
     const isFormData = body instanceof FormData;
     return request(path, { method: 'PUT', body: isFormData ? body : JSON.stringify(body) });
   },
-  delete<T>(path: string): Promise<T> {
-    return request(path, { method: 'DELETE' });
+  delete<T>(path: string, body?: unknown): Promise<T> {
+    return request(path, {
+      method: 'DELETE',
+      ...(body !== undefined ? { body: JSON.stringify(body) } : {}),
+    });
   },
 };

@@ -9,6 +9,10 @@ import type { JwtPayload } from '../common/types/jwt-payload.type';
 import { SaveSchedulerWeekDto } from './dto/save-scheduler-week.dto';
 import { UpdateOvertimeSchedulerActionDto } from './dto/update-overtime-scheduler-action.dto';
 import { DetachAssignmentPartDto } from './dto/detach-assignment-part.dto';
+import {
+  CreateSchedulerDayUnlockDto,
+  DeleteSchedulerDayUnlockDto,
+} from './dto/scheduler-day-unlock.dto';
 import { resolveDesignerScope } from '../common/utils/resolve-designer-scope.util';
 import { hasDepartmentManagerAccess } from '../common/utils/workflow-roles.util';
 
@@ -26,7 +30,7 @@ export class SchedulerAssignmentsController {
   ) {
     const ws = weekStart?.trim() ?? '';
     if (!ws) {
-      return [];
+      return { assignments: [], dayUnlocks: [] };
     }
     const trimmedDesignerId = designerId?.trim();
     // resolveDesignerScope defaults to the caller's own id whenever no designerId is passed —
@@ -43,6 +47,31 @@ export class SchedulerAssignmentsController {
           ? resolveDesignerScope(designerId, user.sub, user.role)
           : trimmedDesignerId || undefined;
     return this.schedulerAssignmentsService.findForWeekStart(ws, scopedDesignerId || undefined);
+  }
+
+  /** StatsBar chrome — shared formulas in designer-stats.util (not a fat /tasks list). */
+  @Get('designer-stats')
+  @Roles(UserRole.HOD, UserRole.DESIGNER, UserRole.SALESPERSON)
+  getDesignerStats(
+    @Query('designerId') designerId: string | undefined,
+    @Query('weekStart') weekStart: string | undefined,
+    @CurrentUser() user: JwtPayload,
+  ) {
+    const scopedDesignerId = resolveDesignerScope(designerId, user.sub, user.role);
+    const ws = weekStart?.trim() ?? '';
+    return this.schedulerAssignmentsService.getDesignerStats(scopedDesignerId, ws);
+  }
+
+  @Post('day-unlocks')
+  @Roles(UserRole.HOD)
+  createDayUnlock(@CurrentUser() user: JwtPayload, @Body() dto: CreateSchedulerDayUnlockDto) {
+    return this.schedulerAssignmentsService.createDayUnlock(user.sub, dto);
+  }
+
+  @Delete('day-unlocks')
+  @Roles(UserRole.HOD)
+  deleteDayUnlock(@CurrentUser() user: JwtPayload, @Body() dto: DeleteSchedulerDayUnlockDto) {
+    return this.schedulerAssignmentsService.deleteDayUnlock(user.sub, dto);
   }
 
   @Get('week/:weekStart/meta')

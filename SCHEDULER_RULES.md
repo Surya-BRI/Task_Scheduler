@@ -11,7 +11,7 @@ If code and these rules conflict, fix the code.
 |---|---|---|
 | `DAILY_CAPACITY` | 8h | Normal working hours per day |
 | `MAX_DAILY_HOURS` | 12h | Absolute ceiling — backend rejects any day above this |
-| `WEEKDAY_INDICES` | [0,1,2,3,4] | Mon–Fri only (Sat/Sun blocked) |
+| `WEEKDAY_INDICES` | [0,1,2,3,4] | Mon–Fri for optimizer / Rule 1 / overflow (Sat/Sun need Rule 14 unlock for manual place) |
 | `MIN_SPLIT_HOURS` | 5min (0.0833h) | Smallest allowed split part for optimizer/drag splits (was 1h) |
 
 ---
@@ -201,6 +201,20 @@ Runs as a React effect whenever `schedules` reference changes and `loadedFromErp
 
 ---
 
+## Rule 14 — Weekend Day Unlock (Per Designer)
+
+> Sat/Sun are blocked by default. HOD may unlock a specific weekend **date** for a specific **designer**, then manually place tasks there.
+
+- Storage: `ErpTSSchedulerDayUnlock` (`designerId` + `date` unique)
+- API: `POST/DELETE /scheduler-assignments/day-unlocks`; week GET returns `dayUnlocks[]`
+- Save rejects weekend `dayIndex` 5/6 unless an unlock exists for that designer+date
+- Relock is rejected while assignments still sit on that day
+- **Manual only:** Rule 1 redirect, optimizer, overflow, leave reschedule, and reallocation packing still skip weekends
+- Capacity on an unlocked weekend day uses the same 8h / 12h caps as weekdays
+- UI: click the grey Sat/Sun cell → Unlock; empty unlocked cell can Relock
+
+---
+
 ## What Is NOT Currently Handled
 
 | Case | Status |
@@ -210,3 +224,4 @@ Runs as a React effect whenever `schedules` reference changes and `loadedFromErp
 | Fractional hours (< 1h granularity) | No practical floor at the optimizer level (`MIN_SPLIT_HOURS = 5min/0.0833h`, see Constants); the backend DTO's `assignedHours`/`hours` fields separately enforce `@Min(0.01)` (2-decimal precision) — a lower-level "must be positive" guard, not the same threshold as `MIN_SPLIT_HOURS` |
 | Re-assigning overflow if next week is also full | Overflow lands on the last available day or Monday as fallback |
 | Partial work submission | `POST /tasks/:id/submit-work` always marks the task fully `DESIGN_COMPLETED` — there's no "submit partial, keep in progress" flow yet |
+| Auto-fill unlocked weekends | Not supported — HOD places manually (Rule 14) |

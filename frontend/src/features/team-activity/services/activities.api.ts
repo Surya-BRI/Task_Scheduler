@@ -1,4 +1,5 @@
 import { apiClient } from '@/lib/api-client';
+import { singleflight } from '@/lib/singleflight';
 
 export type ActivitySegment = 
   | { type: 'text'; value: string }
@@ -36,7 +37,8 @@ export function fetchTeamActivities(params?: { limit?: number }) {
   const qs = new URLSearchParams();
   if (params?.limit != null) qs.set('limit', String(params.limit));
   const suffix = qs.toString() ? `?${qs.toString()}` : '';
-  return apiClient.get<TeamActivity[]>(`/activities${suffix}`);
+  const key = `activities${suffix || '?limit=default'}`;
+  return singleflight(key, () => apiClient.get<TeamActivity[]>(`/activities${suffix}`));
 }
 
 export function fetchUserActivities(userId: string, params?: { limit?: number }) {

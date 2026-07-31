@@ -3,6 +3,7 @@
 import { useEffect, useState } from 'react'
 import { useRouter } from 'next/navigation'
 import { getSession, getHomeRoute } from '@/lib/mock-auth'
+import { SessionBootstrapSkeleton } from '@/components/SessionBootstrapSkeleton'
 import { ProjectDesignHub } from '@/features/projects/components/ProjectDesignHub'
 
 export default function ProjectDesignRoutePage() {
@@ -26,6 +27,6 @@ export default function ProjectDesignRoutePage() {
     setAuthorized(true)
   }, [router])
 
-  if (!authorized) return null
+  if (!authorized) return <SessionBootstrapSkeleton label="Loading project design" />
   return <ProjectDesignHub />
 }

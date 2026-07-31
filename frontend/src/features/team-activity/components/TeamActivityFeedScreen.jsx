@@ -3,6 +3,7 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { useSearchParams } from "next/navigation";
 import { Navbar } from "@/components/Navbar";
+import { connectDashboardRealtime } from "@/lib/realtime";
 import { fetchTeamActivities, fetchUserActivities } from "../services/activities.api";
 import { filterActivities } from "../lib/teamActivityFilters";
 import { TeamActivityFilters } from "./TeamActivityFilters";
@@ -52,35 +53,63 @@ export function TeamActivityFeedScreenInner() {
   const [loading, setLoading] = useState(true);
   const [activityError, setActivityError] = useState("");
   const lastActivityErrorRef = useRef("");
+  const loadGenerationRef = useRef(0);
+
+  const loadActivities = useCallback((silent = false) => {
+    const generation = ++loadGenerationRef.current;
+    if (!silent) setLoading(true);
+    return fetchTeamActivities({ limit: 100 })
+      .then((data) => {
+        if (generation !== loadGenerationRef.current) return;
+        setActivities(data);
+        setLikes(buildInitialLikes(data));
+        setActivityError("");
+        lastActivityErrorRef.current = "";
+        setLoading(false);
+      })
+      .catch((err) => {
+        if (generation !== loadGenerationRef.current) return;
+        const message = err instanceof Error ? err.message : "Failed to load activities.";
+        setActivityError(message);
+        setLoading(false);
+        if (lastActivityErrorRef.current !== message) {
+          lastActivityErrorRef.current = message;
+          console.warn("Team Activity feed temporarily unavailable:", message);
+        }
+      });
+  }, []);
 
   useEffect(() => {
-    let active = true;
-    function load() {
-      fetchTeamActivities({ limit: 100 })
-        .then(data => {
-          if (active) {
-            setActivities(data);
-            setLikes(buildInitialLikes(data));
-            setActivityError("");
-            lastActivityErrorRef.current = "";
-            setLoading(false);
-          }
-        })
-        .catch(err => {
-          if (!active) return;
-          const message = err instanceof Error ? err.message : "Failed to load activities.";
-          setActivityError(message);
-          setLoading(false);
-          if (lastActivityErrorRef.current !== message) {
-            lastActivityErrorRef.current = message;
-            console.warn("Team Activity feed temporarily unavailable:", message);
-          }
-        });
-    }
-    load();
-    const interval = setInterval(load, 20000);
-    return () => { active = false; clearInterval(interval); };
-  }, []);
+    void loadActivities(false);
+    const interval = setInterval(() => {
+      if (document.visibilityState === "visible") void loadActivities(true);
+    }, 60_000);
+    const onVisible = () => {
+      if (document.visibilityState === "visible") void loadActivities(true);
+    };
+    document.addEventListener("visibilitychange", onVisible);
+    return () => {
+      clearInterval(interval);
+      document.removeEventListener("visibilitychange", onVisible);
+      loadGenerationRef.current += 1;
+    };
+  }, [loadActivities]);
+
+  useEffect(() => {
+    let timer = null;
+    const unsub = connectDashboardRealtime({
+      onDashboardRefresh: () => {
+        if (timer) clearTimeout(timer);
+        timer = setTimeout(() => {
+          if (document.visibilityState === "visible") void loadActivities(true);
+        }, 400);
+      },
+    });
+    return () => {
+      if (timer) clearTimeout(timer);
+      unsub();
+    };
+  }, [loadActivities]);
 
   const handleTeammateMode = useCallback((mode) => {
     setTeammateMode(mode);

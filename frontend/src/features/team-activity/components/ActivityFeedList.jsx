@@ -2,6 +2,7 @@
 
 import { useState } from "react";
 import { ChevronLeft } from "lucide-react";
+import { VirtualScrollList } from "@/components/VirtualScrollList";
 import { ActivityFeedItem } from "./ActivityFeedItem";
 
 const SECTION = {
@@ -43,19 +44,24 @@ export function ActivityFeedList({
           No activity matches your filters.
         </p>
       ) : (
-        <div className="min-h-0 flex-1 overflow-y-auto pr-1">
-          <ul className="m-0 list-none divide-y divide-slate-100 p-0">
-            {items.map((item) => (
+        <VirtualScrollList
+          items={items}
+          estimateSize={96}
+          overscan={10}
+          gap={0}
+          className="min-h-0 flex-1 overflow-y-auto pr-1"
+          getItemKey={(item) => item.id}
+          renderItem={(item) => (
+            <div className="border-b border-slate-100">
               <ActivityFeedItem
-                key={item.id}
                 item={item}
                 liked={Boolean(likes[item.id])}
                 onToggleLike={onToggleLike}
                 nowMs={nowMs}
               />
-            ))}
-          </ul>
-        </div>
+            </div>
+          )}
+        />
       )}
     </section>
   );

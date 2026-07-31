@@ -1364,10 +1364,11 @@ export class OvertimeRequestsService {
 
   // --- Notification Helpers ---
 
-  private overtimeLink(requestId: string, designerId?: string): string {
+  private overtimeLink(requestId: string, designerId?: string, forManager = false): string {
     const params = new URLSearchParams({ overtimeId: requestId });
     if (designerId?.trim()) params.set('forDesignerId', designerId.trim());
-    return `/designer/requests?${params.toString()}#overtime`;
+    const base = forManager ? '/hod/requests' : '/designer/requests';
+    return `${base}?${params.toString()}#overtime`;
   }
 
   private async resolveOvertimeApproverName(departmentId: string | null | undefined): Promise<string> {
@@ -1421,7 +1422,7 @@ export class OvertimeRequestsService {
             userId: hod.id,
             title: 'New Overtime Request Submitted',
             message: `${request.designer.fullName} has submitted an overtime request for ${request.totalHours} hours on ${request.date.toISOString().split('T')[0]} (${taskLabel}).`,
-            linkUrl: this.overtimeLink(request.id, request.designerId),
+            linkUrl: this.overtimeLink(request.id, request.designerId, true),
           },
         });
         this.dashboardRealtime?.notifyUserNotificationRefresh(hod.id);
