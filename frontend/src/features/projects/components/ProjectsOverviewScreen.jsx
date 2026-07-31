@@ -97,31 +97,24 @@ function ResponsiveTable({ headers, rows, renderRow, emptyMessage, errorMessage 
   }
 
   return (
-    <div className="flex min-h-0 flex-1 flex-col">
-      <div className="min-h-0 flex-1 overflow-x-auto overflow-y-auto rounded-lg border border-slate-100">
-        <table className="w-full table-fixed border-collapse text-left text-xs text-slate-700">
-          <thead className="ui-table-header sticky top-0 z-10 border-b border-slate-200 shadow-sm">
-            <tr>
-              {headers.map((header) => (
-                <th
-                  key={header || 'col'}
-                  className="truncate bg-slate-100 !px-2 !py-1.5 text-[10px] font-semibold uppercase tracking-wide"
-                >
-                  {header}
-                </th>
-              ))}
-            </tr>
-          </thead>
-          <tbody className="divide-y divide-slate-100 bg-white">
-            {rows.map(renderRow)}
-          </tbody>
-        </table>
-      </div>
-      <div className="mt-2 flex h-5 shrink-0 items-center justify-end">
-        <span className="text-[11px] font-medium text-slate-500">
-          View All ({rows.length}) →
-        </span>
-      </div>
+    <div className="min-h-0 flex-1 overflow-x-auto overflow-y-auto rounded-lg border border-slate-100">
+      <table className="w-full table-fixed border-collapse text-left text-xs text-slate-700">
+        <thead className="ui-table-header sticky top-0 z-10 border-b border-slate-200 shadow-sm">
+          <tr>
+            {headers.map((header) => (
+              <th
+                key={header || 'col'}
+                className="truncate bg-slate-100 !px-2 !py-1.5 text-[10px] font-semibold uppercase tracking-wide"
+              >
+                {header}
+              </th>
+            ))}
+          </tr>
+        </thead>
+        <tbody className="divide-y divide-slate-100 bg-white">
+          {rows.map(renderRow)}
+        </tbody>
+      </table>
     </div>
   );
 }
