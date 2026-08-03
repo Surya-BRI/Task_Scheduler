@@ -2,6 +2,7 @@ import { describe, expect, it } from "vitest";
 import {
   computeDesignerTaskStats,
   getTaskCompletionDate,
+  isTaskReassignmentBlocked,
 } from "./designer-task-stats.util";
 
 describe("designer-task-stats.util", () => {
@@ -12,6 +13,15 @@ describe("designer-task-stats.util", () => {
       updatedAt: "2026-07-19T12:00:00.000Z",
     });
     expect(date?.toISOString()).toBe("2026-07-10T12:00:00.000Z");
+  });
+
+  it("blocks reassignment for Design Completed and review/closed statuses", () => {
+    expect(isTaskReassignmentBlocked("DESIGN_COMPLETED")).toBe(true);
+    expect(isTaskReassignmentBlocked("HOD_REVIEW")).toBe(true);
+    expect(isTaskReassignmentBlocked("CLIENT_ACCEPTED")).toBe(true);
+    expect(isTaskReassignmentBlocked("IN_PROGRESS")).toBe(false);
+    expect(isTaskReassignmentBlocked("REWORK")).toBe(false);
+    expect(isTaskReassignmentBlocked("ON_HOLD")).toBe(false);
   });
 
   it("buckets active / in-review / closed correctly", () => {

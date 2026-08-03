@@ -1261,4 +1261,146 @@ describe('SchedulerAssignmentsService', () => {
       ).rejects.toThrow(/assignments exist/);
     });
   });
+
+  it('rejects reassigning a DESIGN_COMPLETED task to another designer via week save', async () => {
+    const taskId = 'dddddddd-dddd-4ddd-8ddd-dddddddddddd';
+    const designerA = 'aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa';
+    const designerB = 'bbbbbbbb-bbbb-4bbb-8bbb-bbbbbbbbbbbb';
+    const existingRows = [
+      {
+        id: 'row-1',
+        designerId: designerA,
+        taskId,
+        dayIndex: 0,
+        assignedHours: '4',
+        parentId: null,
+        splitIndex: null,
+        totalParts: null,
+        weekStartDate: new Date('2026-06-08T00:00:00.000Z'),
+        weekEndDate: new Date('2026-06-14T00:00:00.000Z'),
+        notes: null,
+        position: 0,
+        isLocked: false,
+        isPinned: false,
+        assignedBy: 'hod-1',
+        createdAt: new Date('2026-06-01T00:00:00.000Z'),
+        updatedAt: new Date('2026-06-01T00:00:00.000Z'),
+      },
+    ];
+
+    prisma.user.findMany.mockImplementation(({ where }: { where: { id: { in: string[] } } }) =>
+      Promise.resolve(
+        where.id.in.map((id) => ({
+          id,
+          fullName: id === designerA ? 'Alex' : 'Ben',
+        })),
+      ),
+    );
+    prisma.task.findMany.mockResolvedValue([
+      { id: taskId, status: 'DESIGN_COMPLETED', assigneeId: designerA, projectId: null, project: null },
+    ]);
+    prisma.schedulerAssignment.findMany.mockResolvedValue(existingRows);
+    prisma.$queryRaw.mockResolvedValue([
+      {
+        id: 'week-1',
+        version: 1,
+        isLocked: false,
+        lastPayloadHash: null,
+        updatedAt: new Date('2026-06-08T00:00:00.000Z'),
+        updatedBy: 'hod-1',
+      },
+    ]);
+
+    await expect(
+      service.saveWeekSnapshot('2026-06-08', 'hod-1', {
+        version: 1,
+        affectedTaskIds: [taskId],
+        assignments: [
+          {
+            designerId: designerB,
+            taskId,
+            dayIndex: 0,
+            assignedHours: 4,
+          },
+        ],
+      }),
+    ).rejects.toThrow('Completed tasks cannot be reassigned. Reopen the task before reassigning.');
+
+    expect(prisma.schedulerAssignment.deleteMany).not.toHaveBeenCalled();
+    expect(prisma.taskDesigner.deleteMany).not.toHaveBeenCalled();
+  });
+
+  it('allows REWORK tasks to be reassigned via week save', async () => {
+    const taskId = 'eeeeeeee-eeee-4eee-8eee-eeeeeeeeeeee';
+    const designerA = 'aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa';
+    const designerB = 'bbbbbbbb-bbbb-4bbb-8bbb-bbbbbbbbbbbb';
+    const existingRows = [
+      {
+        id: 'row-1',
+        designerId: designerA,
+        taskId,
+        dayIndex: 0,
+        assignedHours: '4',
+        parentId: null,
+        splitIndex: null,
+        totalParts: null,
+        weekStartDate: new Date('2026-06-08T00:00:00.000Z'),
+        weekEndDate: new Date('2026-06-14T00:00:00.000Z'),
+        notes: null,
+        position: 0,
+        isLocked: false,
+        isPinned: false,
+        assignedBy: 'hod-1',
+        createdAt: new Date('2026-06-01T00:00:00.000Z'),
+        updatedAt: new Date('2026-06-01T00:00:00.000Z'),
+      },
+    ];
+
+    prisma.user.findMany.mockImplementation(({ where }: { where: { id: { in: string[] } } }) =>
+      Promise.resolve(
+        where.id.in.map((id) => ({
+          id,
+          fullName: id === designerA ? 'Alex' : 'Ben',
+        })),
+      ),
+    );
+    prisma.task.findMany.mockResolvedValue([
+      { id: taskId, status: 'REWORK', assigneeId: designerA, projectId: null, project: null },
+    ]);
+    prisma.schedulerAssignment.findMany
+      .mockResolvedValueOnce(existingRows)
+      .mockResolvedValue(existingRows);
+    prisma.$queryRaw.mockResolvedValue([
+      {
+        id: 'week-1',
+        version: 1,
+        isLocked: false,
+        lastPayloadHash: null,
+        updatedAt: new Date('2026-06-08T00:00:00.000Z'),
+        updatedBy: 'hod-1',
+      },
+    ]);
+    prisma.schedulerWeek.update.mockResolvedValue({
+      version: 2,
+      isLocked: false,
+      updatedAt: new Date('2026-06-08T01:00:00.000Z'),
+      updatedBy: 'hod-1',
+    });
+
+    const result = await service.saveWeekSnapshot('2026-06-08', 'hod-1', {
+      version: 1,
+      affectedTaskIds: [taskId],
+      assignments: [
+        {
+          designerId: designerB,
+          taskId,
+          dayIndex: 1,
+          assignedHours: 4,
+        },
+      ],
+    });
+
+    expect(result.version).toBe(2);
+    expect(prisma.taskDesigner.deleteMany).toHaveBeenCalled();
+  });
 });

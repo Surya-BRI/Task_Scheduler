@@ -44,6 +44,10 @@ import {
   isoWeekRangeFromWeekStart,
   parseWeekStartLocal,
 } from '../dashboard/designer-stats.util';
+import {
+  isTaskReassignmentBlocked,
+  TASK_REASSIGNMENT_BLOCKED_MESSAGE,
+} from '../dashboard/task-status-buckets.util';
 
 type RawAssignmentRow = {
   id: string;
@@ -1039,6 +1043,51 @@ export class SchedulerAssignmentsService implements OnModuleInit {
         throw new BadRequestException(
           `Cannot schedule task ${assignment.taskId} for ${designerLabel} on approved full-day leave.`,
         );
+      }
+    }
+  }
+
+  /**
+   * Design Completed / in-review / client-final tasks keep their designer set until REWORK.
+   * Same-designer day reshuffles are allowed; changing or clearing designers is not.
+   */
+  private assertNoBlockedTaskReassignment(
+    scopeTaskIds: string[],
+    tasks: Array<{ id: string; status?: string | null; assigneeId?: string | null }>,
+    previousRows: Array<{ taskId?: string | null; designerId?: string | null }>,
+    assigneesByTask: Map<string, Set<string>>,
+  ): void {
+    if (scopeTaskIds.length === 0) return;
+    const taskById = new Map(tasks.map((t) => [t.id, t]));
+
+    for (const taskId of scopeTaskIds) {
+      const task = taskById.get(taskId);
+      if (!task || !isTaskReassignmentBlocked(task.status)) continue;
+
+      const designerSet = assigneesByTask.get(task.id) ?? new Set<string>();
+      const assignedDesigner = designerSet.size === 1 ? [...designerSet][0] : null;
+      const previousDesignerSet = new Set(
+        previousRows
+          .filter((r): r is { taskId: string; designerId: string } =>
+            r.taskId === task.id && !!r.designerId,
+          )
+          .map((r) => r.designerId),
+      );
+      const designersChanged =
+        previousDesignerSet.size !== designerSet.size ||
+        [...previousDesignerSet].some((id) => !designerSet.has(id));
+      const onlyAddingForCurrentAssignee =
+        previousDesignerSet.size === 0 &&
+        assignedDesigner != null &&
+        task.assigneeId === assignedDesigner &&
+        designerSet.size === 1;
+      const assigneeFieldWouldChange =
+        (assignedDesigner != null && task.assigneeId !== assignedDesigner) ||
+        (designerSet.size === 0 && task.assigneeId != null) ||
+        (designerSet.size > 1 && task.assigneeId != null);
+
+      if ((designersChanged && !onlyAddingForCurrentAssignee) || assigneeFieldWouldChange) {
+        throw new BadRequestException(TASK_REASSIGNMENT_BLOCKED_MESSAGE);
       }
     }
   }
@@ -2807,7 +2856,18 @@ export class SchedulerAssignmentsService implements OnModuleInit {
                 project: { select: { technicalHead: true, teamLead: true, subTeamLead: true, designers: true } },
               },
             })
-          : Promise.resolve([]),
+          : Promise.resolve([] as Array<{
+              id: string;
+              status: string | null;
+              assigneeId: string | null;
+              projectId: string | null;
+              project: {
+                technicalHead: string | null;
+                teamLead: string | null;
+                subTeamLead: string | null;
+                designers: string | null;
+              } | null;
+            }>),
         tx.schedulerAssignment.findMany({ where: { weekStartDate } }),
         // UPDLOCK + ROWLOCK: prevents two concurrent transactions from both passing the
         // version check before either commits, which would cause a silent lost update.
@@ -2907,6 +2967,41 @@ export class SchedulerAssignmentsService implements OnModuleInit {
       }
 
       this.assertNoApprovedFullDayLeaveConflicts(dto.assignments, approvedLeaves, weekStartDate);
+
+      // Reject completed/in-review reassignment before any schedule rows are written.
+      {
+        const prevTaskIdsForGuard = Array.from(new Set(
+          previousRows
+            .map((r: { taskId?: string | null }) => r.taskId)
+            .filter((id): id is string => {
+              if (!id) return false;
+              return !incremental || incrementalTaskIds.includes(id);
+            }),
+        ));
+        const guardScopeTaskIds = incremental
+          ? incrementalTaskIds
+          : Array.from(new Set([...prevTaskIdsForGuard, ...taskIds]));
+        const missingGuardIds = guardScopeTaskIds.filter((id) => !tasks.some((t) => t.id === id));
+        const guardTasks = missingGuardIds.length > 0
+          ? [
+              ...tasks,
+              ...(await tx.task.findMany({
+                where: { id: { in: missingGuardIds } },
+                select: { id: true, status: true, assigneeId: true },
+              })),
+            ]
+          : tasks;
+        const guardAssigneesByTask = new Map<string, Set<string>>();
+        const guardAssigneeRows = incremental
+          ? this.buildMergedAssignmentsForValidation(previousRows, dto)
+          : dto.assignments;
+        for (const row of guardAssigneeRows) {
+          if (incremental && !incrementalTaskIds.includes(row.taskId)) continue;
+          if (!guardAssigneesByTask.has(row.taskId)) guardAssigneesByTask.set(row.taskId, new Set());
+          guardAssigneesByTask.get(row.taskId)?.add(row.designerId);
+        }
+        this.assertNoBlockedTaskReassignment(guardScopeTaskIds, guardTasks, previousRows, guardAssigneesByTask);
+      }
 
       if (!incremental && existing.lastPayloadHash && existing.lastPayloadHash === payloadHash && !dto.overflow?.length) {
         return {

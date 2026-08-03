@@ -1,6 +1,7 @@
 import {
   aggregateStatusCounts,
   categorizeTaskStatus,
+  isTaskReassignmentBlocked,
   ALL_KNOWN_TASK_STATUSES,
 } from './task-status-buckets.util';
 
@@ -17,6 +18,19 @@ describe('task-status-buckets.util', () => {
     expect(categorizeTaskStatus('CLIENT_REJECTED')).toBe('closed');
     expect(categorizeTaskStatus('CLIENT_ACCEPTED')).toBe('closed');
     expect(categorizeTaskStatus('REWORK')).toBe('active');
+  });
+
+  it('blocks reassignment for in-review and closed, allows active and on-hold', () => {
+    expect(isTaskReassignmentBlocked('DESIGN_COMPLETED')).toBe(true);
+    expect(isTaskReassignmentBlocked('HOD_REVIEW')).toBe(true);
+    expect(isTaskReassignmentBlocked('SALES_REVIEW')).toBe(true);
+    expect(isTaskReassignmentBlocked('CLIENT_ACCEPTED')).toBe(true);
+    expect(isTaskReassignmentBlocked('CLIENT_REJECTED')).toBe(true);
+    expect(isTaskReassignmentBlocked('DESIGN_PLANNED')).toBe(false);
+    expect(isTaskReassignmentBlocked('IN_PROGRESS')).toBe(false);
+    expect(isTaskReassignmentBlocked('REWORK')).toBe(false);
+    expect(isTaskReassignmentBlocked('ON_HOLD')).toBe(false);
+    expect(isTaskReassignmentBlocked('DESIGN_NEW')).toBe(false);
   });
 
   it('aggregates counts so total equals sum of buckets', () => {
