@@ -246,10 +246,13 @@ export class DesignListService {
     whereFragments: Prisma.Sql[],
     offset: number,
     limit: number,
+    options?: { includeTotal?: boolean; lightCount?: boolean },
   ): Promise<{ pageRows: DesignListRow[]; total: number }> {
     const whereClause = buildAndWhere(whereFragments);
+    const includeTotal = options?.includeTotal !== false;
+    const lightCount = Boolean(options?.lightCount);
 
-    const pageRows = await this.prisma.live.$queryRaw<DesignListRow[]>(Prisma.sql`
+    const pagePromise = this.prisma.live.$queryRaw<DesignListRow[]>(Prisma.sql`
       ${DESIGN_LIST_SELECT}
       ${DESIGN_LIST_FROM_JOINS}
       WHERE mp.isActive = 1
@@ -259,16 +262,31 @@ export class DesignListService {
       FETCH NEXT ${limit} ROWS ONLY
     `);
 
-    const totalRows = await this.prisma.live.$queryRaw<Array<{ total: number }>>(Prisma.sql`
-      SELECT COUNT(*) AS total
-      FROM (
-        ${DESIGN_LIST_SELECT}
-        ${DESIGN_LIST_FROM_JOINS}
-        WHERE mp.isActive = 1
-        ${whereClause}
-      ) AS q
-    `);
+    if (!includeTotal) {
+      const pageRows = await pagePromise;
+      return { pageRows, total: -1 };
+    }
 
+    const countPromise = lightCount
+      ? this.prisma.live.$queryRaw<Array<{ total: number }>>(Prisma.sql`
+          SELECT COUNT(DISTINCT mp.projectid) AS total
+          FROM ErpMasterProject mp
+          LEFT JOIN ErpMasterOpportunity mo ON mo.projectid = mp.projectid
+          LEFT JOIN ErpMasterEmployee me ON me.employeeId = mo.salesRepId
+          WHERE mp.isActive = 1
+          ${whereClause}
+        `)
+      : this.prisma.live.$queryRaw<Array<{ total: number }>>(Prisma.sql`
+          SELECT COUNT(*) AS total
+          FROM (
+            ${DESIGN_LIST_SELECT}
+            ${DESIGN_LIST_FROM_JOINS}
+            WHERE mp.isActive = 1
+            ${whereClause}
+          ) AS q
+        `);
+
+    const [pageRows, totalRows] = await Promise.all([pagePromise, countPromise]);
     return { pageRows, total: Number(totalRows[0]?.total ?? 0) };
   }
 
@@ -287,22 +305,31 @@ export class DesignListService {
     return this.dedupeMappedRows(rows.map((row: DesignListRow) => this.mapRow(row)));
   }
 
-  async findProjectsListPage(page: number, limit: number, q: string): Promise<ProjectListPageResult> {
+  async findProjectsListPage(
+    page: number,
+    limit: number,
+    q: string,
+    includeTotal = true,
+  ): Promise<ProjectListPageResult> {
     const safePage = Math.max(1, page);
     const safeLimit = Math.min(200, Math.max(1, limit));
     const offset = (safePage - 1) * safeLimit;
     const whereFragments = this.buildSearchWhereFragments(q);
 
     const rows = await this.queryLive('findProjectsListPage', () =>
-      this.queryDesignListPage(whereFragments, offset, safeLimit),
+      this.queryDesignListPage(whereFragments, offset, safeLimit, {
+        includeTotal,
+        lightCount: true,
+      }),
     );
 
+    const total = rows.total < 0 ? -1 : rows.total;
     return {
       data: this.dedupeMappedRows(rows.pageRows.map((row) => this.mapRow(row, true))),
       page: safePage,
       limit: safeLimit,
-      total: rows.total,
-      totalPages: Math.max(1, Math.ceil(rows.total / safeLimit)),
+      total,
+      totalPages: total < 0 ? -1 : Math.max(1, Math.ceil(total / safeLimit)),
     };
   }
 

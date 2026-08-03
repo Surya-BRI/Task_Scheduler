@@ -2,7 +2,7 @@
 
 import { useCallback, useEffect, useState } from "react";
 import { toast } from "sonner";
-import { ArrowLeftRight } from "lucide-react";
+import { ArrowLeftRight, ChevronDown } from "lucide-react";
 import {
   cancelReallocationRequest,
   listReallocationPendingApprovals,
@@ -298,17 +298,23 @@ export default function ReallocationRequestsSection({
             <label className="mt-3 block text-[11px] font-semibold uppercase text-slate-500">
               Target designer
             </label>
-            <select
-              className="mt-1 w-full rounded border border-slate-300 px-2 py-1.5 text-sm"
-              value={targetDesignerId}
-              onChange={(e) => setTargetDesignerId(e.target.value)}
-            >
-              {eligible.map((d) => (
-                <option key={d.id} value={d.id}>
-                  {d.fullName}
-                </option>
-              ))}
-            </select>
+            <div className="relative mt-1.5">
+              <select
+                className="ui-input w-full appearance-none pr-9"
+                value={targetDesignerId}
+                onChange={(e) => setTargetDesignerId(e.target.value)}
+              >
+                {eligible.map((d) => (
+                  <option key={d.id} value={d.id}>
+                    {d.fullName}
+                  </option>
+                ))}
+              </select>
+              <ChevronDown
+                className="pointer-events-none absolute right-2.5 top-1/2 h-4 w-4 -translate-y-1/2 text-slate-400"
+                aria-hidden="true"
+              />
+            </div>
             <div className="mt-4 flex justify-end gap-2">
               <button type="button" className="rounded border px-3 py-1.5 text-xs font-semibold" onClick={() => setApproveRow(null)} disabled={busy}>
                 Cancel

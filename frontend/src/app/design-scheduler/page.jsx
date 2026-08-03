@@ -3,6 +3,7 @@
 import { Suspense, useEffect, useState } from 'react'
 import { useRouter } from 'next/navigation'
 import { getSession } from '@/lib/mock-auth'
+import { SessionBootstrapSkeleton } from '@/components/SessionBootstrapSkeleton'
 import { DesignSchedulerScreen } from '@/features/scheduler/components/DesignSchedulerScreen'
 
 export default function DesignSchedulerPage() {
@@ -16,7 +17,6 @@ export default function DesignSchedulerPage() {
       return
     }
     if (session.role === 'DESIGNER') {
-      // Designers land on their own dashboard instead
       router.replace('/designer/dashboard')
       return
     }
@@ -31,10 +31,10 @@ export default function DesignSchedulerPage() {
     setAllowed(true)
   }, [router])
 
-  if (!allowed) return null
+  if (!allowed) return <SessionBootstrapSkeleton label="Loading scheduler" />
 
   return (
-    <Suspense fallback={null}>
+    <Suspense fallback={<SessionBootstrapSkeleton label="Loading scheduler" />}>
       <DesignSchedulerScreen />
     </Suspense>
   )

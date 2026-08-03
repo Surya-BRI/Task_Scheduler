@@ -28,6 +28,8 @@ import {
   isTimerLockedStatus,
 } from './design-list-task-timer-storage'
 import { useActiveRunningTaskContext } from './ActiveRunningTaskProvider'
+import { getSession } from '@/lib/mock-auth'
+import { requestsPath } from '@/lib/role-routes'
 import { ACTIVE_TIMER_BLOCKED_MESSAGE } from './use-active-running-task-id'
 
 async function saveTimerStateToDb(taskId, accumulatedSeconds, pauseLog, runStartedAt) {
@@ -772,7 +774,11 @@ export function ProjectTaskTimer({
       ? Math.round(Number(pendingOvertimeHours) * 3600)
       : 0
   const uncoveredExcessSeconds = Math.max(0, excessSeconds - approvedOtSeconds)
-  const overtimeRequestHref = `/designer/requests?taskId=${encodeURIComponent(taskId)}#overtime`
+  const overtimeRequestHref = requestsPath(
+    getSession()?.role,
+    `taskId=${encodeURIComponent(taskId)}`,
+    'overtime',
+  )
   const approvedOtCoversExcess = isOverAssigned && uncoveredExcessSeconds <= 0 && approvedOtSeconds > 0
 
   const controlBtn = inline

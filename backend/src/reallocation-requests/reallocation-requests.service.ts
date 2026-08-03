@@ -113,7 +113,7 @@ export class ReallocationRequestsService {
       approverRemarks: row.approverRemarks,
       reviewedAt: row.reviewedAt ? row.reviewedAt.toISOString() : null,
       createdAt: row.createdAt.toISOString(),
-      linkUrl: `/designer/requests?tab=reallocation&reallocationId=${row.id}`,
+      linkUrl: `/hod/requests?tab=reallocation&reallocationId=${row.id}`,
     };
   }
 
@@ -176,11 +176,29 @@ export class ReallocationRequestsService {
       orderBy: { updatedAt: 'desc' },
       take: 200,
     });
-    return tasks.map((t) => ({
-      id: t.id,
-      name: [t.opNo, t.title, t.taskNo].filter(Boolean).join(' — ') || t.taskNo,
-      status: t.status,
-    }));
+    return tasks.map((t) => {
+      const op = String(t.opNo ?? '').trim();
+      let title = String(t.title ?? '').trim();
+      // Titles often already start with "OP-12345 - …" — drop the duplicate prefix.
+      if (op && title) {
+        const escaped = op.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+        title = title
+          .replace(new RegExp(`^${escaped}\\s*[—\\-–:]\\s*`, 'i'), '')
+          .trim();
+      }
+      // Prefer human label; omit internal TSK taskNo from the dropdown.
+      const name =
+        [op, title].filter(Boolean).join(' — ') ||
+        String(t.taskNo ?? '').trim() ||
+        'Task';
+      return {
+        id: t.id,
+        name,
+        opNo: op || null,
+        title: title || null,
+        status: t.status,
+      };
+    });
   }
 
   async listEligibleDesigners(taskId: string, requesterId: string) {
@@ -500,8 +518,9 @@ export class ReallocationRequestsService {
     };
   }
 
-  private reallocationLink(requestId: string) {
-    return `/designer/requests?tab=reallocation&reallocationId=${requestId}`;
+  private reallocationLink(requestId: string, forManager = false) {
+    const base = forManager ? '/hod/requests' : '/designer/requests';
+    return `${base}?tab=reallocation&reallocationId=${requestId}`;
   }
 
   private async notifyHods(request: ReallocationFull) {
@@ -509,7 +528,7 @@ export class ReallocationRequestsService {
       where: { role: { name: UserRole.HOD } },
       select: { id: true },
     });
-    const linkUrl = this.reallocationLink(request.id);
+    const linkUrl = this.reallocationLink(request.id, true);
     const message = `${request.requester.fullName} requested reallocation of ${request.task.taskNo} to ${request.suggestedDesigner.fullName}.`;
     await Promise.all(
       hods.map(async (hod) => {

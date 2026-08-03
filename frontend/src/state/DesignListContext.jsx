@@ -1,5 +1,4 @@
-import { createContext, useContext, useMemo, useState } from 'react'
-import { useEffect } from 'react'
+import { createContext, useContext, useEffect, useMemo, useRef, useState } from 'react'
 import { usePathname } from 'next/navigation'
 import { parseDesignListDate } from '@/lib/design-list-date'
 import { apiClient } from '@/lib/api-client'
@@ -34,12 +33,12 @@ function nextStatus(current) {
 }
 
 function shouldLoadDesignList(pathname) {
-  return (
-    pathname?.startsWith('/design-list') ||
-    pathname?.startsWith('/project-design') ||
-    pathname?.startsWith('/sales/design-list') ||
-    pathname?.startsWith('/sales/project-design')
-  )
+  if (!pathname) return false
+  // Project Design hub + design-list record pages consume the store.
+  // HOD/Sales Design List screens load via GET /tasks — skip unused /design-list there.
+  if (pathname.startsWith('/project-design') || pathname.startsWith('/sales/project-design')) return true
+  if (pathname.includes('/design-list/record')) return true
+  return false
 }
 
 function normalizeDesignListResponse(data) {
@@ -62,8 +61,11 @@ export function DesignListProvider({ children }) {
     endDate: '',
   })
 
+  const loadedRef = useRef(false)
+
   useEffect(() => {
     if (!shouldLoadDesignList(pathname)) return
+    if (loadedRef.current) return
     let mounted = true
     setLoading(true)
     setError(null)
@@ -73,6 +75,7 @@ export function DesignListProvider({ children }) {
         if (!mounted) return
         const rows = normalizeDesignListResponse(data)
         setRecords(dedupeDesignRecords(rows))
+        loadedRef.current = true
         setLoading(false)
       })
       .catch((err) => {

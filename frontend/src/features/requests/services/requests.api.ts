@@ -35,10 +35,17 @@ export function fetchLeavePendingApprovals() {
   return apiClient.get<LeaveRequestDto[]>('/requests/pending-approvals');
 }
 
-export function fetchLeaveTeamRequests(params?: { status?: string; designerId?: string }) {
+export function fetchLeaveTeamRequests(params?: {
+  status?: string;
+  designerId?: string;
+  from?: string;
+  to?: string;
+}) {
   const qs = new URLSearchParams();
   if (params?.status?.trim()) qs.set('status', params.status.trim());
   if (params?.designerId?.trim()) qs.set('designerId', params.designerId.trim());
+  if (params?.from?.trim()) qs.set('from', params.from.trim());
+  if (params?.to?.trim()) qs.set('to', params.to.trim());
   const suffix = qs.toString() ? `?${qs.toString()}` : '';
   return apiClient.get<LeaveRequestDto[]>(`/requests/team-requests${suffix}`);
 }

@@ -10,10 +10,37 @@ export type NotificationDto = {
   createdAt: string;
 };
 
-export function listNotifications(limit = 30) {
-  return apiClient.get<NotificationDto[]>(`/notifications?limit=${limit}`);
+export type NotificationsListResponse = {
+  data: NotificationDto[];
+  unreadCount: number;
+};
+
+function normalizeNotificationsList(res: unknown): NotificationsListResponse {
+  if (Array.isArray(res)) {
+    const data = res as NotificationDto[];
+    return {
+      data,
+      unreadCount: data.filter((n) => !n.isRead).length,
+    };
+  }
+  const obj = (res ?? {}) as { data?: NotificationDto[]; unreadCount?: number };
+  const data = Array.isArray(obj.data) ? obj.data : [];
+  const unreadCount =
+    typeof obj.unreadCount === 'number'
+      ? obj.unreadCount
+      : data.filter((n) => !n.isRead).length;
+  return { data, unreadCount };
 }
 
+/** Single call: recent notifications + total unread badge count. */
+export async function listNotifications(limit = 30): Promise<NotificationsListResponse> {
+  const res = await apiClient.get<NotificationsListResponse | NotificationDto[]>(
+    `/notifications?limit=${limit}`,
+  );
+  return normalizeNotificationsList(res);
+}
+
+/** @deprecated Prefer listNotifications().unreadCount — kept for rare callers. */
 export function getUnreadNotificationCount() {
   return apiClient.get<number>('/notifications/unread-count');
 }

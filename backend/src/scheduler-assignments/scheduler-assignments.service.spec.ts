@@ -1,4 +1,4 @@
-import { SchedulerAssignmentsService } from './scheduler-assignments.service';
+﻿import { SchedulerAssignmentsService } from './scheduler-assignments.service';
 
 describe('SchedulerAssignmentsService', () => {
   const originalRuntimeBootstrap = process.env.RUNTIME_SCHEMA_BOOTSTRAP;
@@ -16,7 +16,7 @@ describe('SchedulerAssignmentsService', () => {
   });
 
   const prisma: any = {
-    schedulerAssignment: { findMany: jest.fn(), update: jest.fn(), deleteMany: jest.fn(), createMany: jest.fn(), groupBy: jest.fn(), create: jest.fn() },
+    schedulerAssignment: { findMany: jest.fn(), update: jest.fn(), deleteMany: jest.fn(), createMany: jest.fn(), groupBy: jest.fn(), create: jest.fn(), count: jest.fn() },
     taskDesigner: { deleteMany: jest.fn(), createMany: jest.fn() },
     overtimeRequest: { findMany: jest.fn(), updateMany: jest.fn() },
     leaveRequest: { findMany: jest.fn() },
@@ -119,9 +119,9 @@ describe('SchedulerAssignmentsService', () => {
       },
     ]);
 
-    const rows = await service.findForWeekStart('2026-06-08', 'designer-1');
+    const weekPayload = await service.findForWeekStart('2026-06-08', 'designer-1');
 
-    expect(rows).toEqual(
+    expect(weekPayload.assignments).toEqual(
       expect.arrayContaining([
         expect.objectContaining({
           id: 'leave-leave-1-1',
@@ -204,14 +204,14 @@ describe('SchedulerAssignmentsService', () => {
       },
     ]);
 
-    const rows = await service.findForWeekStart('2026-06-08', 'designer-1');
+    const weekPayload = await service.findForWeekStart('2026-06-08', 'designer-1');
 
     const summaryCall = prisma.task.findMany.mock.calls.find(
       (call: [{ where?: { id?: { in?: string[] } } }]) =>
         Array.isArray(call[0]?.where?.id?.in) && call[0].where.id.in.includes(taskUuid),
     );
     expect(summaryCall).toBeDefined();
-    expect(rows[0].task).toMatchObject({ id: taskUuid, opNo: 'OP-1', estimatedHours: 6 });
+    expect(weekPayload.assignments[0].task).toMatchObject({ id: taskUuid, opNo: 'OP-1', estimatedHours: 6 });
   });
 
   it('includes otherScheduledAssignmentCount for cross-week split awareness', async () => {
@@ -239,14 +239,14 @@ describe('SchedulerAssignmentsService', () => {
       { taskId: taskUuid, _count: { _all: 3 } },
     ]);
 
-    const rows = await service.findForWeekStart('2026-06-15');
+    const weekPayload = await service.findForWeekStart('2026-06-15');
 
     expect(prisma.schedulerAssignment.groupBy).toHaveBeenCalledWith({
       by: ['taskId'],
       where: { taskId: { in: [taskUuid] } },
       _count: { _all: true },
     });
-    expect(rows[0]).toMatchObject({
+    expect(weekPayload.assignments[0]).toMatchObject({
       id: 'assignment-week2',
       taskId: taskUuid,
       otherScheduledAssignmentCount: 2,
@@ -283,9 +283,9 @@ describe('SchedulerAssignmentsService', () => {
       },
     ]);
 
-    const rows = await service.findForWeekStart('2026-06-08', 'designer-1');
+    const weekPayload = await service.findForWeekStart('2026-06-08', 'designer-1');
 
-    expect(rows).toEqual([
+    expect(weekPayload.assignments).toEqual([
       expect.objectContaining({
         id: 'assignment-1',
         scheduledHours: 6,
@@ -903,7 +903,7 @@ describe('SchedulerAssignmentsService', () => {
     });
   });
 
-  describe('saveWeekSnapshot — cross-week overflow placement', () => {
+  describe('saveWeekSnapshot â€” cross-week overflow placement', () => {
     const DESIGNER_ID = 'cccccccc-cccc-4ccc-8ccc-cccccccccccc';
     const TASK_ID = '79bde5e5-d694-4728-88ab-33d71f238e11';
     const HOD_ID = 'hod-1';
@@ -914,6 +914,9 @@ describe('SchedulerAssignmentsService', () => {
         const sql = strings.join('?');
         if (sql.includes('ErpTSHoliday')) {
           return Promise.resolve(holidayDates.map((date) => ({ date })));
+        }
+        if (sql.includes('ErpTSSchedulerDayUnlock')) {
+          return Promise.resolve([]);
         }
         if (sql.includes('ErpTSSchedulerWeek')) {
           return Promise.resolve([
@@ -941,7 +944,7 @@ describe('SchedulerAssignmentsService', () => {
     });
 
     it('places overflow on the next available day when it does not fit this week', async () => {
-      // Live capacity check for the destination day — nothing else scheduled, full room.
+      // Live capacity check for the destination day â€” nothing else scheduled, full room.
       prisma.schedulerAssignment.findMany.mockImplementation(({ where, select }: any) => {
         if (where?.dayIndex !== undefined && select?.assignedHours) return Promise.resolve([]);
         return Promise.resolve([]);
@@ -977,7 +980,7 @@ describe('SchedulerAssignmentsService', () => {
     });
 
     it('splits overflow across multiple days when one day is not enough', async () => {
-      // First candidate day (Mon 07-13) already has 7h used — only 1h of room; the rest (1h) must roll to Tuesday.
+      // First candidate day (Mon 07-13) already has 7h used â€” only 1h of room; the rest (1h) must roll to Tuesday.
       prisma.schedulerAssignment.findMany.mockImplementation(({ where, select }: any) => {
         if (where?.dayIndex !== undefined && select?.assignedHours) {
           const isMonday = where.dayIndex === 0;
@@ -1105,7 +1108,7 @@ describe('SchedulerAssignmentsService', () => {
     });
   });
 
-  it('bounds cross-week split recompute to ±SCHEDULER_SPLIT_RECOMPUTE_WEEK_WINDOW', async () => {
+  it('bounds cross-week split recompute to Â±SCHEDULER_SPLIT_RECOMPUTE_WEEK_WINDOW', async () => {
     const originalWindow = process.env.SCHEDULER_SPLIT_RECOMPUTE_WEEK_WINDOW;
     process.env.SCHEDULER_SPLIT_RECOMPUTE_WEEK_WINDOW = '4';
     try {
@@ -1162,5 +1165,100 @@ describe('SchedulerAssignmentsService', () => {
       if (originalWindow === undefined) delete process.env.SCHEDULER_SPLIT_RECOMPUTE_WEEK_WINDOW;
       else process.env.SCHEDULER_SPLIT_RECOMPUTE_WEEK_WINDOW = originalWindow;
     }
+  });
+
+  describe('weekend day unlocks', () => {
+    const DESIGNER_ID = 'cccccccc-cccc-4ccc-8ccc-cccccccccccc';
+    const TASK_ID = '79bde5e5-d694-4728-88ab-33d71f238e11';
+    const HOD_ID = 'hod-1';
+    // 2026-07-06 is Monday; dayIndex 5 = Saturday 2026-07-11
+
+    it('rejects saving a Saturday assignment without an unlock', async () => {
+      prisma.user.findMany.mockResolvedValue([{ id: DESIGNER_ID, fullName: 'Alex' }]);
+      prisma.task.findMany.mockResolvedValue([
+        { id: TASK_ID, status: 'DESIGN_PLANNED', assigneeId: DESIGNER_ID, projectId: null, project: null },
+      ]);
+      prisma.schedulerAssignment.findMany.mockResolvedValue([]);
+      prisma.$queryRaw.mockImplementation((strings: TemplateStringsArray) => {
+        const sql = strings.join('?');
+        if (sql.includes('ErpTSSchedulerWeek')) {
+          return Promise.resolve([
+            { id: 'week-row', version: 0, isLocked: false, lastPayloadHash: null, updatedAt: new Date(), updatedBy: null },
+          ]);
+        }
+        // Day unlocks / holidays empty
+        return Promise.resolve([]);
+      });
+
+      await expect(
+        service.saveWeekSnapshot('2026-07-06', HOD_ID, {
+          version: 0,
+          assignments: [
+            { designerId: DESIGNER_ID, taskId: TASK_ID, dayIndex: 5, assignedHours: 4 },
+          ],
+        } as any),
+      ).rejects.toThrow(/Weekend 2026-07-11 is locked/);
+    });
+
+    it('allows Saturday assignment when unlock exists', async () => {
+      prisma.user.findMany.mockResolvedValue([{ id: DESIGNER_ID, fullName: 'Alex' }]);
+      prisma.task.findMany.mockResolvedValue([
+        { id: TASK_ID, status: 'DESIGN_PLANNED', assigneeId: DESIGNER_ID, projectId: null, project: null },
+      ]);
+      prisma.schedulerAssignment.findMany.mockResolvedValue([]);
+      prisma.schedulerWeek.update.mockResolvedValue({
+        version: 1,
+        isLocked: false,
+        updatedAt: new Date(),
+        updatedBy: HOD_ID,
+      });
+      prisma.schedulerAssignmentHistory.create.mockResolvedValue({});
+      prisma.$queryRaw.mockImplementation((strings: TemplateStringsArray) => {
+        const sql = strings.join('?');
+        if (sql.includes('ErpTSSchedulerWeek')) {
+          return Promise.resolve([
+            { id: 'week-row', version: 0, isLocked: false, lastPayloadHash: null, updatedAt: new Date(), updatedBy: null },
+          ]);
+        }
+        if (sql.includes('ErpTSSchedulerDayUnlock')) {
+          return Promise.resolve([
+            {
+              id: 'unlock-1',
+              designerId: DESIGNER_ID,
+              date: new Date('2026-07-11T00:00:00.000Z'),
+              unlockedById: HOD_ID,
+              reason: null,
+              createdAt: new Date(),
+            },
+          ]);
+        }
+        return Promise.resolve([]);
+      });
+
+      const result = await service.saveWeekSnapshot('2026-07-06', HOD_ID, {
+        version: 0,
+        assignments: [
+          { designerId: DESIGNER_ID, taskId: TASK_ID, dayIndex: 5, assignedHours: 4 },
+        ],
+      } as any);
+
+      expect(result.version).toBe(1);
+      expect(prisma.schedulerAssignment.createMany).toHaveBeenCalled();
+    });
+
+    it('createDayUnlock rejects weekdays', async () => {
+      await expect(
+        service.createDayUnlock(HOD_ID, { designerId: DESIGNER_ID, date: '2026-07-07' }),
+      ).rejects.toThrow(/Saturday or Sunday/);
+    });
+
+    it('deleteDayUnlock rejects when assignments remain', async () => {
+      prisma.schedulerWeek.findUnique.mockResolvedValue({ isLocked: false });
+      prisma.schedulerAssignment.count = jest.fn().mockResolvedValue(2);
+
+      await expect(
+        service.deleteDayUnlock(HOD_ID, { designerId: DESIGNER_ID, date: '2026-07-11' }),
+      ).rejects.toThrow(/assignments exist/);
+    });
   });
 });

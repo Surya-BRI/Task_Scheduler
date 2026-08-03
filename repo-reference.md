@@ -752,11 +752,13 @@ Chatter list responses include `authorName` and `authorRole`.
 ### Scheduler Assignments (`/scheduler-assignments`)
 | Method | Route | Auth | Roles | Description |
 |--------|-------|------|-------|-------------|
-| GET | `/scheduler-assignments` | JWT | HOD, DESIGNER | Get assignments (query: weekStart YYYY-MM-DD, designerId — HOD omitting designerId gets the whole week) |
+| GET | `/scheduler-assignments` | JWT | HOD, DESIGNER | Get assignments (query: weekStart YYYY-MM-DD, designerId — HOD omitting designerId gets the whole week). Returns `{ assignments, dayUnlocks }` |
 | GET | `/scheduler-assignments/week/:weekStart/meta` | JWT | HOD, DESIGNER | Week metadata (isLocked, version) |
-| PUT | `/scheduler-assignments/week/:weekStart` | JWT | HOD | Save week snapshot (optimistic concurrency via `version`; accepts optional `overflow[]` — see Scheduler Week Save below) |
+| PUT | `/scheduler-assignments/week/:weekStart` | JWT | HOD | Save week snapshot (optimistic concurrency via `version`; accepts optional `overflow[]` — see Scheduler Week Save below). Weekend dayIndex 5/6 requires an unlock row |
 | POST | `/scheduler-assignments/week/:weekStart/lock` | JWT | HOD | Lock week |
 | DELETE | `/scheduler-assignments/week/:weekStart/lock` | JWT | HOD | Unlock week |
+| POST | `/scheduler-assignments/day-unlocks` | JWT | HOD | Unlock Sat/Sun for one designer (`designerId`, `date`) |
+| DELETE | `/scheduler-assignments/day-unlocks` | JWT | HOD | Relock weekend day (fails if assignments remain) |
 | DELETE | `/scheduler-assignments/task/:taskId` | JWT | HOD, ADMIN, PROJECT_MANAGER | Clear all future assignment rows for a task (query: `expectedAssignmentIds` comma-separated — optional stale-consolidation guard, 409 if a live row outside the set exists) |
 | POST | `/scheduler-assignments/:id/detach` | JWT | HOD | Detach one split part into its own fragment with a given status |
 | POST | `/scheduler-assignments/fragments/:id/status` | JWT | HOD | Update a detached fragment's status |

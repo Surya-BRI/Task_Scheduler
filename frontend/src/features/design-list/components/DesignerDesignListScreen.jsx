@@ -10,7 +10,7 @@ import { getSession } from "@/lib/mock-auth";
 import { FROM_DESIGNER_QUEUE, taskViewPathForRecord } from "@/lib/design-list-routes";
 import { apiClient } from "@/lib/api-client";
 import { useTaskLifecycleRefresh } from "@/hooks/use-task-lifecycle-refresh";
-import { DESIGNER_BOARD_COLUMNS, DESIGNER_QUEUE_FILTER_STATUSES, getStatusLabel, mapTaskToDesignRow, matchDateRange } from "../task-view-model";
+import { DESIGNER_BOARD_COLUMNS, DESIGNER_QUEUE_FILTER_STATUSES, getStatusLabel, mapTaskToDesignRow } from "../task-view-model";
 import { TypeOfDesignChip } from "@/lib/ui/TypeOfDesignChip";
 
 const getStatusColor = (status) => {
@@ -288,6 +288,7 @@ export function DesignerDesignListScreen() {
   const [allDesigns, setAllDesigns] = useState([]);
   const [viewMode, setViewMode] = useState("list");
   const [filters, setFilters] = useState({ type: "", status: "", startDate: "", endDate: "", searchQuery: "" });
+  const [debouncedSearchQuery, setDebouncedSearchQuery] = useState("");
   const [listRefreshTick, setListRefreshTick] = useState(0);
   const [listLoading, setListLoading] = useState(true);
 
@@ -299,6 +300,11 @@ export function DesignerDesignListScreen() {
     }
     setDesignerIdentity({ id: "", name: "Designer" });
   }, []);
+
+  useEffect(() => {
+    const timer = setTimeout(() => setDebouncedSearchQuery(filters.searchQuery), 350);
+    return () => clearTimeout(timer);
+  }, [filters.searchQuery]);
 
   const reloadList = useCallback(() => {
     setListRefreshTick((n) => n + 1);
@@ -312,8 +318,11 @@ export function DesignerDesignListScreen() {
     const params = new URLSearchParams();
     params.set("page", "1");
     params.set("limit", "500");
-    if (filters.searchQuery.trim()) params.set("search", filters.searchQuery.trim());
+    if (debouncedSearchQuery.trim()) params.set("search", debouncedSearchQuery.trim());
     if (filters.status) params.set("status", filters.status);
+    if (filters.type) params.set("type", filters.type);
+    if (filters.startDate) params.set("startDate", filters.startDate);
+    if (filters.endDate) params.set("endDate", filters.endDate);
     apiClient.get(`/tasks?${params.toString()}`).then((res) => {
       if (!mounted) return;
       const rows = Array.isArray(res?.data) ? res.data.map(mapTaskToDesignRow) : [];
@@ -322,12 +331,9 @@ export function DesignerDesignListScreen() {
       if (mounted) setListLoading(false);
     });
     return () => { mounted = false; };
-  }, [filters.searchQuery, filters.status, listRefreshTick]);
+  }, [debouncedSearchQuery, filters.status, filters.type, filters.startDate, filters.endDate, listRefreshTick]);
 
-  const filteredDesigns = useMemo(() => allDesigns.filter((d) => {
-    if (filters.type && d.designType !== filters.type) return false;
-    return matchDateRange(d.submissionDate, filters.startDate, filters.endDate);
-  }), [allDesigns, filters.type, filters.startDate, filters.endDate]);
+  const filteredDesigns = useMemo(() => allDesigns, [allDesigns]);
 
   return (
     <ActiveRunningTaskProvider>

@@ -96,17 +96,30 @@ export function ProjectScreen({ workflowFrom = FROM_PROJECTS_LIST }) {
   const PAGE_SIZE = 100;
   const { setRecords } = useDesignListStore();
   const [searchQuery, setSearchQuery] = useState("");
+  const [debouncedQuery, setDebouncedQuery] = useState("");
   const [page, setPage] = useState(1);
   const [projects, setProjects] = useState([]);
   const [total, setTotal] = useState(0);
   const [totalPages, setTotalPages] = useState(1);
 
   useEffect(() => {
+    const timer = setTimeout(() => {
+      setDebouncedQuery(searchQuery);
+    }, 300);
+    return () => clearTimeout(timer);
+  }, [searchQuery]);
+
+  useEffect(() => {
+    setPage(1);
+  }, [debouncedQuery]);
+
+  useEffect(() => {
     let mounted = true;
-    const q = searchQuery.trim();
+    const q = debouncedQuery.trim();
+    const includeTotal = page <= 1;
     apiClient
       .get(
-        `/design-list/projects-list?page=${page}&limit=${PAGE_SIZE}&q=${encodeURIComponent(q)}`,
+        `/design-list/projects-list?page=${page}&limit=${PAGE_SIZE}&q=${encodeURIComponent(q)}&includeTotal=${includeTotal ? "1" : "0"}`,
       )
       .then((res) => {
         if (!mounted) return;
@@ -125,24 +138,26 @@ export function ProjectScreen({ workflowFrom = FROM_PROJECTS_LIST }) {
             deadline: r.deadline ?? null,
           })),
         );
-        setTotal(Number(res?.total || 0));
-        setTotalPages(Math.max(1, Number(res?.totalPages || 1)));
+        const nextTotal = Number(res?.total);
+        if (includeTotal || (Number.isFinite(nextTotal) && nextTotal >= 0)) {
+          setTotal(Math.max(0, nextTotal));
+          setTotalPages(Math.max(1, Number(res?.totalPages || Math.ceil(Math.max(0, nextTotal) / PAGE_SIZE) || 1)));
+        }
       })
       .catch(() => {
         if (!mounted) return;
         setProjects([]);
-        setTotal(0);
-        setTotalPages(1);
+        if (includeTotal) {
+          setTotal(0);
+          setTotalPages(1);
+        }
       });
 
     return () => {
       mounted = false;
     };
-  }, [page, searchQuery]);
+  }, [debouncedQuery, page]);
 
-  useEffect(() => {
-    setPage(1);
-  }, [searchQuery]);
   const currentPage = Math.min(page, totalPages);
 
   const primeRecordForDetails = (row) => {

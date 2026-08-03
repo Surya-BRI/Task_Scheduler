@@ -55,9 +55,13 @@ export class DeadlineAlertsService {
 
     this.cronRunning = true;
     try {
-      const result = await this.cronLockService.withLock(DEADLINE_CRON_LOCK, () => this.runDeadlineScan());
+      const result = await this.cronLockService.withLock(
+        DEADLINE_CRON_LOCK,
+        () => this.runDeadlineScan(),
+        { maxWaitMs: 20_000, timeoutMs: 4 * 60_000 },
+      );
       if (result === LOCK_NOT_ACQUIRED) {
-        this.logger.debug('Deadline alerts skipped: lock held by another instance');
+        this.logger.debug('Deadline alerts skipped: lock held by another instance (or pool busy)');
       }
     } finally {
       this.cronRunning = false;

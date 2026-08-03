@@ -17,6 +17,8 @@ export type DashboardRealtimeEvent =
   | 'scheduler_leave_rescheduled'
   | 'scheduler_week_locked'
   | 'scheduler_week_unlocked'
+  | 'scheduler_day_unlocked'
+  | 'scheduler_day_relocked'
   | 'regularization_approved'
   | 'regularization_rejected'
   | 'reallocation_requested'
@@ -45,6 +47,10 @@ export interface DashboardRefreshPayload {
   taskId?: string;
   /** New task status for task_* events (API form, e.g. ON_HOLD). */
   status?: string;
+  /** Designer scoped by weekend day unlock events. */
+  designerId?: string;
+  /** YYYY-MM-DD for weekend day unlock / relock. */
+  date?: string;
 }
 
 export type DashboardRefreshDetails = Partial<

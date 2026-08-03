@@ -45,6 +45,8 @@ export type SchedulerWeekMeta = {
   isLocked: boolean;
   updatedAt: Date;
   updatedBy: string | null;
+  /** Sorted `designerId|YYYY-MM-DD` keys for weekend unlock sync. */
+  dayUnlockKeys?: string[];
 };
 
 export type SaveSchedulerAssignmentInput = {
@@ -88,10 +90,68 @@ export type SchedulerUnplacedOverflow = {
   hours: number;
 };
 
-export function listSchedulerAssignmentsForWeek(weekStart: string, designerId?: string) {
+export type SchedulerDayUnlock = {
+  id: string;
+  designerId: string;
+  date: string;
+  unlockedById: string;
+  reason: string | null;
+  createdAt: string;
+};
+
+export type SchedulerWeekPayload = {
+  assignments: SchedulerAssignmentRow[];
+  dayUnlocks: SchedulerDayUnlock[];
+  /** Present on current API — week bootstrap no longer needs a parallel /meta GET. */
+  weekStart?: string;
+  version?: number;
+  isLocked?: boolean;
+  updatedAt?: Date | string;
+  updatedBy?: string | null;
+  dayUnlockKeys?: string[];
+};
+
+function normalizeWeekPayload(res: unknown): SchedulerWeekPayload {
+  if (Array.isArray(res)) {
+    return { assignments: res as SchedulerAssignmentRow[], dayUnlocks: [], version: 0, isLocked: false, dayUnlockKeys: [] };
+  }
+  const obj = (res ?? {}) as SchedulerWeekPayload & { data?: SchedulerAssignmentRow[] };
+  const assignments = Array.isArray(obj.assignments)
+    ? obj.assignments
+    : Array.isArray(obj.data)
+      ? obj.data
+      : [];
+  const dayUnlocks = Array.isArray(obj.dayUnlocks) ? obj.dayUnlocks : [];
+  const dayUnlockKeys = Array.isArray(obj.dayUnlockKeys)
+    ? obj.dayUnlockKeys
+    : dayUnlocks.map((u) => `${u.designerId}|${u.date}`).filter((k) => k.includes('|'));
+  return {
+    assignments,
+    dayUnlocks,
+    weekStart: obj.weekStart,
+    version: Number(obj.version ?? 0),
+    isLocked: Boolean(obj.isLocked),
+    updatedAt: obj.updatedAt,
+    updatedBy: obj.updatedBy ?? null,
+    dayUnlockKeys,
+  };
+}
+
+export async function listSchedulerAssignmentsForWeek(weekStart: string, designerId?: string) {
   const q = encodeURIComponent(weekStart);
   const dq = designerId ? `&designerId=${encodeURIComponent(designerId)}` : '';
-  return apiClient.get<SchedulerAssignmentRow[]>(`/scheduler-assignments?weekStart=${q}${dq}`);
+  const res = await apiClient.get<SchedulerWeekPayload | SchedulerAssignmentRow[]>(
+    `/scheduler-assignments?weekStart=${q}${dq}`,
+  );
+  return normalizeWeekPayload(res);
+}
+
+export function createSchedulerDayUnlock(input: { designerId: string; date: string; reason?: string }) {
+  return apiClient.post<SchedulerDayUnlock>('/scheduler-assignments/day-unlocks', input);
+}
+
+export function deleteSchedulerDayUnlock(input: { designerId: string; date: string }) {
+  return apiClient.delete<{ ok: true }>('/scheduler-assignments/day-unlocks', input);
 }
 
 export function getSchedulerWeekMeta(weekStart: string) {
@@ -177,5 +237,24 @@ export function updateOvertimeRequestSchedulerAction(
   return apiClient.post(
     `/scheduler-assignments/overtime-requests/${encodeURIComponent(requestId)}/action`,
     { action },
+  );
+}
+
+export type DesignerStatsBar = {
+  designerId: string;
+  weekStart: string;
+  workLoad: { tasks: number; hours: number };
+  workTill: { label: string; hours: number };
+  monthlyTaskCount: number;
+  weeklyCompletedCount: number;
+  score: number;
+};
+
+/** Shared StatsBar numbers — same formulas as DesignerDashboard task/week helpers. */
+export function getDesignerStatsBar(designerId: string, weekStart: string) {
+  const q = encodeURIComponent(weekStart);
+  const d = encodeURIComponent(designerId);
+  return apiClient.get<DesignerStatsBar>(
+    `/scheduler-assignments/designer-stats?designerId=${d}&weekStart=${q}`,
   );
 }

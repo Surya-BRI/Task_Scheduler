@@ -5,13 +5,17 @@ import { useRouter } from 'next/navigation';
 import {
   AlertCircle,
   CalendarDays,
+  Check,
   CheckCircle2,
   ChevronLeft,
   ChevronRight,
+  Eye,
   Inbox,
+  Loader2,
   RefreshCw,
   Search,
   UserRound,
+  X,
 } from 'lucide-react';
 import { Navbar } from '@/components/Navbar';
 import { getSession } from '@/lib/mock-auth';
@@ -33,24 +37,36 @@ import { Modal } from '@/components/ui/Modal';
 import { UI_INPUT_CLASS, UI_LABEL_CLASS } from '@/lib/ui/form-classes';
 
 const POLL_MS = 45_000;
+/** Uniform dashboard card height — all six cards share this shell. */
+const DASHBOARD_CARD_H = 'h-[320px]';
+const DASHBOARD_CARD_SHELL =
+  `ui-surface flex min-w-0 flex-col overflow-hidden p-4 ${DASHBOARD_CARD_H}`;
+
+const INBOX_BTN_BASE =
+  'inline-flex h-9 shrink-0 items-center justify-center gap-1.5 rounded-lg px-3 text-xs font-semibold transition-colors focus:outline-none focus-visible:ring-2 focus-visible:ring-offset-1 disabled:cursor-not-allowed disabled:opacity-50 active:scale-[0.98]';
 
 function fmt(isoString) {
   if (!isoString) return '—';
   return new Date(isoString).toLocaleDateString('en-GB', { day: '2-digit', month: 'short', year: 'numeric' });
 }
 
-function CompactCard({ title, subtitle, children, className = '', state = 'ready' }) {
+function CompactCard({ title, subtitle, children, className = '', state = 'ready', headerRight = null }) {
   return (
-    <section className={`ui-surface ui-card-pad flex min-w-0 flex-col ${className}`}>
-      <div className="mb-3 flex shrink-0 items-baseline justify-between gap-2">
-        <h2 className="text-sm font-semibold text-slate-900">{title}</h2>
-        {subtitle ? (
-          <span className="text-[10px] font-medium uppercase tracking-wide text-slate-400">{subtitle}</span>
-        ) : null}
+    <section className={`${DASHBOARD_CARD_SHELL} ${className}`}>
+      <div className="mb-2 flex h-6 shrink-0 items-center justify-between gap-2">
+        <div className="flex min-w-0 items-baseline gap-2">
+          <h2 className="truncate text-sm font-semibold text-slate-900">{title}</h2>
+          {subtitle ? (
+            <span className="hidden shrink-0 text-[10px] font-medium uppercase tracking-wide text-slate-400 sm:inline">
+              {subtitle}
+            </span>
+          ) : null}
+        </div>
+        {headerRight}
       </div>
-      <div className="min-w-0 flex-1">
+      <div className="flex min-h-0 min-w-0 flex-1 flex-col overflow-hidden">
         {state === 'loading' ? (
-          <div className="flex h-32 animate-pulse flex-col gap-2">
+          <div className="flex h-full animate-pulse flex-col gap-2 pt-2">
             <div className="h-3 rounded bg-slate-100" />
             <div className="h-3 rounded bg-slate-100" />
             <div className="h-3 w-2/3 rounded bg-slate-100" />
@@ -63,26 +79,41 @@ function CompactCard({ title, subtitle, children, className = '', state = 'ready
   );
 }
 
+function TruncCell({ children, title, className = '' }) {
+  const tip = title ?? (typeof children === 'string' ? children : undefined);
+  return (
+    <td className={`truncate px-2 py-1.5 align-middle ${className}`} title={tip && tip !== '—' ? tip : undefined}>
+      {children}
+    </td>
+  );
+}
+
 function ResponsiveTable({ headers, rows, renderRow, emptyMessage, errorMessage }) {
   if (errorMessage) {
-    return <p className="py-4 text-center text-xs text-red-600">{errorMessage}</p>;
+    return <p className="grid flex-1 place-items-center text-center text-xs text-red-600">{errorMessage}</p>;
   }
   if (!rows.length) {
-    return <p className="py-4 text-center text-xs text-slate-400">{emptyMessage}</p>;
+    return <p className="grid flex-1 place-items-center text-center text-xs text-slate-400">{emptyMessage}</p>;
   }
+
   return (
-    <div className="min-w-0 overflow-hidden rounded-lg">
-      <table className="w-full table-fixed text-left text-xs text-slate-700">
-        <thead className="ui-table-header border-b border-slate-200">
+    <div className="min-h-0 flex-1 overflow-x-auto overflow-y-auto rounded-lg border border-slate-100">
+      <table className="w-full table-fixed border-collapse text-left text-xs text-slate-700">
+        <thead className="ui-table-header sticky top-0 z-10 border-b border-slate-200 shadow-sm">
           <tr>
             {headers.map((header) => (
-              <th key={header} className="truncate px-2 py-2 font-semibold sm:px-3">
+              <th
+                key={header || 'col'}
+                className="truncate bg-slate-100 !px-2 !py-1.5 text-[10px] font-semibold uppercase tracking-wide"
+              >
                 {header}
               </th>
             ))}
           </tr>
         </thead>
-        <tbody className="divide-y divide-slate-100">{rows.map(renderRow)}</tbody>
+        <tbody className="divide-y divide-slate-100 bg-white">
+          {rows.map(renderRow)}
+        </tbody>
       </table>
     </div>
   );
@@ -106,10 +137,56 @@ function isRequestItem(item) {
   return item?.requestType === 'leave' || item?.requestType === 'overtime' || item?.requestType === 'regularization';
 }
 
+function InboxActionBar({ requestItem, actionable, busy, onView, onApprove, onReject }) {
+  if (!requestItem && !actionable) return null;
+
+  return (
+    <div className="flex shrink-0 flex-nowrap items-center gap-2" role="group" aria-label="Request actions">
+      {requestItem ? (
+        <button
+          type="button"
+          onClick={onView}
+          disabled={busy}
+          className={`${INBOX_BTN_BASE} border border-slate-300 bg-white text-slate-700 hover:bg-slate-50 focus-visible:ring-slate-400`}
+        >
+          <Eye className="h-3.5 w-3.5" aria-hidden />
+          View
+        </button>
+      ) : null}
+      {actionable ? (
+        <>
+          <button
+            type="button"
+            onClick={onApprove}
+            disabled={busy}
+            className={`${INBOX_BTN_BASE} bg-emerald-600 text-white shadow-sm hover:bg-emerald-700 focus-visible:ring-emerald-400`}
+          >
+            {busy ? (
+              <Loader2 className="h-3.5 w-3.5 animate-spin" aria-hidden />
+            ) : (
+              <Check className="h-3.5 w-3.5" aria-hidden />
+            )}
+            Approve
+          </button>
+          <button
+            type="button"
+            onClick={onReject}
+            disabled={busy}
+            className={`${INBOX_BTN_BASE} border border-red-300 bg-white text-red-600 hover:bg-red-50 focus-visible:ring-red-400`}
+          >
+            <X className="h-3.5 w-3.5" aria-hidden />
+            Reject
+          </button>
+        </>
+      ) : null}
+    </div>
+  );
+}
+
 function InboxCard({ inbox, fmt, onNavigate, onRefresh, cardState, errorMessage, isHOD }) {
   const containerRef = useRef(null);
   const [page, setPage] = useState(0);
-  const [pageSize, setPageSize] = useState(8);
+  const [pageSize, setPageSize] = useState(6);
   const [actingId, setActingId] = useState(null);
   const [detailTarget, setDetailTarget] = useState(null);
   const [rejectTarget, setRejectTarget] = useState(null);
@@ -117,8 +194,8 @@ function InboxCard({ inbox, fmt, onNavigate, onRefresh, cardState, errorMessage,
   const [actionError, setActionError] = useState('');
 
   const recalcPageSize = useCallback(() => {
-    const height = containerRef.current?.clientHeight ?? 320;
-    setPageSize(Math.max(6, Math.min(20, Math.floor(height / 52))));
+    const height = containerRef.current?.clientHeight ?? 280;
+    setPageSize(Math.max(4, Math.min(16, Math.floor(height / 68))));
   }, []);
 
   useEffect(() => {
@@ -182,7 +259,6 @@ function InboxCard({ inbox, fmt, onNavigate, onRefresh, cardState, errorMessage,
           comments: trimmedRemarks,
         });
       } else if (rejectTarget.requestType === 'regularization') {
-        // Backend ReviewRegularizationRequestDto requires `comments` when status is Rejected.
         await reviewRegularizationRequest(rejectTarget.id, {
           status: 'Rejected',
           comments: trimmedRemarks,
@@ -206,159 +282,147 @@ function InboxCard({ inbox, fmt, onNavigate, onRefresh, cardState, errorMessage,
         ? 'Reject regularization request'
         : 'Reject leave request';
   const detailRows = detailTarget?.details?.filter((row) => String(row?.value ?? '').trim()) ?? [];
+  const detailBusy = actingId === detailTarget?.id;
 
   return (
-    <CompactCard title="Inbox" className="h-full min-h-[280px]" state={cardState}>
-      <div className="mb-2 flex shrink-0 items-center justify-between border-b border-slate-100 pb-2 text-xs font-semibold text-slate-500">
-        <div className="flex flex-wrap items-center gap-2">
-          <Inbox className="h-4 w-4" />
-          <span>{inbox.length} items</span>
-          {actionCount > 0 ? (
-            <span className="rounded-full bg-orange-100 px-2 py-0.5 text-[10px] font-bold text-orange-700">
-              {actionCount} need action
-            </span>
-          ) : null}
+    <CompactCard title="Inbox" state={cardState}>
+      <div className="flex min-h-0 flex-1 flex-col overflow-hidden">
+        <div className="mb-2 flex h-6 shrink-0 items-center justify-between border-b border-slate-100 pb-2 text-xs font-semibold text-slate-500">
+          <div className="flex flex-wrap items-center gap-2">
+            <Inbox className="h-3.5 w-3.5" aria-hidden />
+            <span>{inbox.length} items</span>
+            {actionCount > 0 ? (
+              <span className="rounded-full bg-orange-100 px-2 py-0.5 text-[10px] font-bold text-orange-700">
+                {actionCount} need action
+              </span>
+            ) : null}
+          </div>
         </div>
-      </div>
 
-      {errorMessage ? (
-        <p className="py-4 text-center text-xs text-red-600">{errorMessage}</p>
-      ) : inbox.length === 0 ? (
-        <div className="grid min-h-[120px] flex-1 place-items-center text-sm font-medium text-slate-400">
-          No inbox items
-        </div>
-      ) : (
-        <>
-          <div ref={containerRef} className="min-h-[200px] flex-1 overflow-y-auto lg:min-h-[240px]">
-            <ul className="divide-y divide-slate-100">
-              {slice.map((item) => (
-                <li key={item.itemKey ?? `${item.requestType ?? 'activity'}-${item.id}`}>
-                  {(() => {
-                    const requestItem = isRequestItem(item);
-                    const actionable = isHodActionable(item);
-                    const statusLabel = formatStatusLabel(item.status);
-                    const statusClass = statusBadgeClasses(item.status);
-                    return (
-                  <div
-                    className={`flex w-full flex-col px-1 py-2.5 text-left ${
-                      actionable ? 'border-l-2 border-orange-400 pl-2' : ''
-                    }`}
-                  >
-                    <button
-                      type="button"
-                      onClick={() => {
-                        if (requestItem) {
-                          setDetailTarget(item);
-                          setActionError('');
-                        } else if (item.linkUrl) {
-                          onNavigate(item.linkUrl);
-                        }
-                      }}
-                      disabled={!requestItem && !item.linkUrl}
-                      className={`w-full text-left transition-colors ${
-                        requestItem || item.linkUrl ? 'cursor-pointer hover:bg-slate-50' : 'cursor-default'
-                      }`}
-                    >
-                      <div className="flex items-start justify-between gap-2">
-                        <p className="line-clamp-2 text-xs leading-snug text-slate-700">
-                          {item.summary}
-                        </p>
-                        {requestTypeBadge(item.requestType) ? (
-                          <span className="shrink-0 rounded bg-slate-100 px-1.5 py-0.5 text-[9px] font-bold uppercase text-slate-600">
-                            {requestTypeBadge(item.requestType)}
-                          </span>
-                        ) : null}
-                      </div>
-                      <div className="mt-1 flex flex-wrap items-center gap-2 text-[10px] text-slate-400">
-                        {item.requesterName ? <span>{item.requesterName}</span> : null}
-                        {item.taskNo ? <span className="font-mono">{item.taskNo}</span> : null}
-                        <span>{fmt(item.occurredAt)}</span>
-                        {item.status ? (
-                          <span className={`rounded-full px-1.5 py-0.5 font-semibold ${statusClass}`}>
-                            {statusLabel}
-                          </span>
-                        ) : null}
-                        {actionable ? (
-                          <span className="font-semibold text-orange-600">Action required</span>
-                        ) : null}
-                      </div>
-                    </button>
+        {errorMessage ? (
+          <p className="grid flex-1 place-items-center text-center text-xs text-red-600">{errorMessage}</p>
+        ) : inbox.length === 0 ? (
+          <div className="grid flex-1 place-items-center text-sm font-medium text-slate-400">
+            No inbox items
+          </div>
+        ) : (
+          <>
+            <div ref={containerRef} className="min-h-0 flex-1 overflow-y-auto">
+              <ul className="divide-y divide-slate-100">
+                {slice.map((item) => {
+                  const requestItem = isRequestItem(item);
+                  const actionable = isHodActionable(item);
+                  const statusLabel = formatStatusLabel(item.status);
+                  const statusClass = statusBadgeClasses(item.status);
+                  const busy = actingId === item.id;
+                  const canOpen = requestItem || Boolean(item.linkUrl);
 
-                    <div className="mt-2 flex flex-wrap gap-2">
-                      {requestItem ? (
-                        <Button
+                  return (
+                    <li key={item.itemKey ?? `${item.requestType ?? 'activity'}-${item.id}`}>
+                      <div
+                        className={`flex w-full flex-col gap-2 px-1 py-3 text-left sm:flex-row sm:items-start sm:gap-3 ${
+                          actionable ? 'border-l-2 border-orange-400 bg-orange-50/30 pl-2.5' : ''
+                        }`}
+                      >
+                        <button
                           type="button"
-                          variant="secondary"
                           onClick={() => {
-                            setDetailTarget(item);
-                            setActionError('');
+                            if (requestItem) {
+                              setDetailTarget(item);
+                              setActionError('');
+                            } else if (item.linkUrl) {
+                              onNavigate(item.linkUrl);
+                            }
                           }}
+                          disabled={!canOpen}
+                          className={`min-w-0 flex-1 text-left transition-colors ${
+                            canOpen ? 'cursor-pointer rounded-md hover:bg-slate-50/80' : 'cursor-default'
+                          }`}
                         >
-                          View details
-                        </Button>
-                      ) : null}
-                      {actionable ? (
-                        <>
-                          <Button
-                            type="button"
-                            variant="approve"
-                            disabled={actingId === item.id}
-                            onClick={() => handleApprove(item)}
-                          >
-                            {actingId === item.id ? 'Working…' : 'Approve'}
-                          </Button>
-                          <Button
-                            type="button"
-                            variant="reject-outline"
-                            disabled={actingId === item.id}
-                            onClick={() => {
+                          <div className="flex items-start gap-2">
+                            <p className="line-clamp-2 text-xs leading-snug text-slate-700" title={item.summary}>
+                              {item.summary}
+                            </p>
+                            {requestTypeBadge(item.requestType) ? (
+                              <span className="shrink-0 rounded bg-slate-100 px-1.5 py-0.5 text-[9px] font-bold uppercase text-slate-600">
+                                {requestTypeBadge(item.requestType)}
+                              </span>
+                            ) : null}
+                          </div>
+                          <div className="mt-1 flex flex-wrap items-center gap-x-2 gap-y-0.5 text-[10px] text-slate-400">
+                            {item.requesterName ? <span>{item.requesterName}</span> : null}
+                            {item.taskNo ? <span className="font-mono">{item.taskNo}</span> : null}
+                            <span>{fmt(item.occurredAt)}</span>
+                          </div>
+                        </button>
+
+                        <div className="flex shrink-0 flex-col items-stretch gap-2 sm:items-end">
+                          <div className="flex flex-wrap items-center gap-1.5 sm:justify-end">
+                            {item.status ? (
+                              <span className={`rounded-full px-1.5 py-0.5 text-[10px] font-semibold ${statusClass}`}>
+                                {statusLabel}
+                              </span>
+                            ) : null}
+                            {actionable ? (
+                              <span className="rounded-full bg-orange-100 px-1.5 py-0.5 text-[10px] font-semibold text-orange-700">
+                                Action required
+                              </span>
+                            ) : null}
+                          </div>
+                          <InboxActionBar
+                            requestItem={requestItem}
+                            actionable={actionable}
+                            busy={busy}
+                            onView={() => {
+                              setDetailTarget(item);
+                              setActionError('');
+                            }}
+                            onApprove={() => handleApprove(item)}
+                            onReject={() => {
                               setActionError('');
                               setRejectTarget(item);
                               setDetailTarget(null);
                               setRejectRemarks('');
                             }}
-                          >
-                            Reject
-                          </Button>
-                        </>
-                      ) : null}
-                    </div>
-                  </div>
-                    );
-                  })()}
-                </li>
-              ))}
-            </ul>
-          </div>
-          {totalPages > 1 ? (
-            <div className="mt-auto flex shrink-0 items-center justify-between border-t border-slate-100 pt-2">
-              <button
-                type="button"
-                onClick={() => setPage((p) => Math.max(0, p - 1))}
-                disabled={page === 0}
-                className="rounded p-1 text-slate-400 transition hover:text-slate-700 disabled:cursor-not-allowed disabled:opacity-30"
-              >
-                <ChevronLeft className="h-4 w-4" />
-              </button>
-              <span className="text-[10px] font-medium text-slate-400">
-                {page + 1} / {totalPages} · {pageSize} per page
-              </span>
-              <button
-                type="button"
-                onClick={() => setPage((p) => Math.min(totalPages - 1, p + 1))}
-                disabled={page === totalPages - 1}
-                className="rounded p-1 text-slate-400 transition hover:text-slate-700 disabled:cursor-not-allowed disabled:opacity-30"
-              >
-                <ChevronRight className="h-4 w-4" />
-              </button>
+                          />
+                        </div>
+                      </div>
+                    </li>
+                  );
+                })}
+              </ul>
             </div>
-          ) : null}
-          {actionError ? (
-            <p className="mt-2 text-[10px] font-medium text-red-600">{actionError}</p>
-          ) : null}
-        </>
-      )}
-
+            {totalPages > 1 ? (
+              <div className="mt-2 flex h-7 shrink-0 items-center justify-between border-t border-slate-100 pt-2">
+                <button
+                  type="button"
+                  onClick={() => setPage((p) => Math.max(0, p - 1))}
+                  disabled={page === 0}
+                  aria-label="Previous inbox page"
+                  className="rounded p-1 text-slate-400 transition hover:text-slate-700 focus:outline-none focus-visible:ring-2 focus-visible:ring-slate-300 disabled:cursor-not-allowed disabled:opacity-30"
+                >
+                  <ChevronLeft className="h-4 w-4" />
+                </button>
+                <span className="text-[10px] font-medium text-slate-400">
+                  {page + 1} / {totalPages} · {pageSize} per page
+                </span>
+                <button
+                  type="button"
+                  onClick={() => setPage((p) => Math.min(totalPages - 1, p + 1))}
+                  disabled={page === totalPages - 1}
+                  aria-label="Next inbox page"
+                  className="rounded p-1 text-slate-400 transition hover:text-slate-700 focus:outline-none focus-visible:ring-2 focus-visible:ring-slate-300 disabled:cursor-not-allowed disabled:opacity-30"
+                >
+                  <ChevronRight className="h-4 w-4" />
+                </button>
+              </div>
+            ) : null}
+            {actionError ? (
+              <p className="mt-1 shrink-0 text-[10px] font-medium text-red-600" role="alert">{actionError}</p>
+            ) : null}
+          </>
+        )}
+      </div>
       <Modal
         open={Boolean(detailTarget)}
         onClose={() => {
@@ -382,27 +446,33 @@ function InboxCard({ inbox, fmt, onNavigate, onRefresh, cardState, errorMessage,
             </Button>
             {isHodActionable(detailTarget) ? (
               <>
-                <Button
+                <button
                   type="button"
-                  variant="reject-outline"
-                  disabled={actingId === detailTarget?.id}
+                  disabled={detailBusy}
                   onClick={() => {
                     setActionError('');
                     setRejectTarget(detailTarget);
                     setDetailTarget(null);
                     setRejectRemarks('');
                   }}
+                  className={`${INBOX_BTN_BASE} border border-red-300 bg-white text-red-600 hover:bg-red-50 focus-visible:ring-red-400`}
                 >
+                  <X className="h-3.5 w-3.5" aria-hidden />
                   Reject
-                </Button>
-                <Button
+                </button>
+                <button
                   type="button"
-                  variant="approve"
-                  disabled={actingId === detailTarget?.id}
+                  disabled={detailBusy}
                   onClick={() => handleApprove(detailTarget)}
+                  className={`${INBOX_BTN_BASE} bg-emerald-600 text-white shadow-sm hover:bg-emerald-700 focus-visible:ring-emerald-400`}
                 >
-                  {actingId === detailTarget?.id ? 'Working…' : 'Approve'}
-                </Button>
+                  {detailBusy ? (
+                    <Loader2 className="h-3.5 w-3.5 animate-spin" aria-hidden />
+                  ) : (
+                    <Check className="h-3.5 w-3.5" aria-hidden />
+                  )}
+                  Approve
+                </button>
               </>
             ) : null}
           </>
@@ -426,7 +496,7 @@ function InboxCard({ inbox, fmt, onNavigate, onRefresh, cardState, errorMessage,
           <p className="text-sm text-slate-500">No additional request details are available.</p>
         )}
         {actionError ? (
-          <p className="mt-3 text-xs font-medium text-red-600">{actionError}</p>
+          <p className="mt-3 text-xs font-medium text-red-600" role="alert">{actionError}</p>
         ) : null}
       </Modal>
 
@@ -458,7 +528,11 @@ function InboxCard({ inbox, fmt, onNavigate, onRefresh, cardState, errorMessage,
               variant="danger"
               onClick={handleReject}
               disabled={actingId === rejectTarget?.id}
+              className="inline-flex items-center gap-1.5"
             >
+              {actingId === rejectTarget?.id ? (
+                <Loader2 className="h-3.5 w-3.5 animate-spin" aria-hidden />
+              ) : null}
               {actingId === rejectTarget?.id ? 'Rejecting…' : 'Confirm reject'}
             </Button>
           </>
@@ -568,11 +642,14 @@ export function ProjectsOverviewScreen() {
       }
     : { background: '#e2e8f0' };
 
+  const taskRowClass = (linkUrl) =>
+    `h-10 transition-colors ${linkUrl ? 'cursor-pointer hover:bg-slate-50' : 'hover:bg-slate-50/60'}`;
+
   return (
     <div className="app-shell overflow-x-hidden">
       <Navbar />
-      <main className="h-[calc(100vh-165px)] w-full overflow-x-hidden overflow-y-auto px-3 py-4 sm:px-5 lg:px-6">
-        <div className="mx-auto flex max-w-[1600px] flex-col gap-4">
+      <main className="h-[calc(100vh-165px)] w-full overflow-x-hidden overflow-y-auto px-3 py-3 sm:px-5 lg:px-6">
+        <div className="mx-auto flex max-w-[1600px] flex-col gap-3">
           <div className="flex flex-col gap-3 sm:flex-row sm:items-center sm:justify-between">
             <h1 className="text-xl font-semibold tracking-tight text-slate-900 sm:text-2xl">
               Projects Overview
@@ -632,8 +709,8 @@ export function ProjectsOverviewScreen() {
             </div>
           ) : null}
 
-          <div className="grid min-w-0 grid-cols-1 gap-3 md:grid-cols-2 xl:grid-cols-3 xl:grid-rows-2 xl:auto-rows-[minmax(280px,1fr)]">
-            <CompactCard title="Scheduled Tasks" subtitle="This week" className="h-full min-h-[280px]" state={cardState}>
+          <div className="grid min-w-0 grid-cols-1 gap-3 md:grid-cols-2 xl:grid-cols-3">
+            <CompactCard title="Scheduled Tasks" subtitle="This week" state={cardState}>
               <ResponsiveTable
                 headers={['Task No', 'Project', 'Rev', 'Assignee', 'Due']}
                 rows={data?.scheduledTasks ?? []}
@@ -642,20 +719,20 @@ export function ProjectsOverviewScreen() {
                 renderRow={(row) => (
                   <tr
                     key={row.id ?? row.taskNo}
-                    className={row.linkUrl ? 'cursor-pointer hover:bg-slate-50' : undefined}
+                    className={taskRowClass(row.linkUrl)}
                     onClick={() => { if (row.linkUrl) router.push(row.linkUrl); }}
                   >
-                    <td className="truncate px-2 py-2 font-mono sm:px-3">{row.taskNo}</td>
-                    <td className="truncate px-2 py-2 sm:px-3" title={row.projectName}>{row.projectName || '—'}</td>
-                    <td className="truncate px-2 py-2 font-mono text-slate-500 sm:px-3">{row.revisionCode || '—'}</td>
-                    <td className="truncate px-2 py-2 sm:px-3" title={row.assigneeName}>{row.assigneeName || '—'}</td>
-                    <td className="truncate px-2 py-2 sm:px-3">{fmt(row.dueDate)}</td>
+                    <TruncCell className="font-mono" title={row.taskNo}>{row.taskNo}</TruncCell>
+                    <TruncCell title={row.projectName}>{row.projectName || '—'}</TruncCell>
+                    <TruncCell className="font-mono text-slate-500" title={row.revisionCode}>{row.revisionCode || '—'}</TruncCell>
+                    <TruncCell title={row.assigneeName}>{row.assigneeName || '—'}</TruncCell>
+                    <TruncCell>{fmt(row.dueDate)}</TruncCell>
                   </tr>
                 )}
               />
             </CompactCard>
 
-            <CompactCard title="Completed Tasks" subtitle="This week" className="h-full min-h-[280px]" state={cardState}>
+            <CompactCard title="Completed Tasks" subtitle="This week" state={cardState}>
               <ResponsiveTable
                 headers={['Task No', 'Project', 'Rev', 'Completed', '']}
                 rows={data?.completedTasks ?? []}
@@ -664,15 +741,15 @@ export function ProjectsOverviewScreen() {
                 renderRow={(row) => (
                   <tr
                     key={row.id ?? row.taskNo}
-                    className={row.linkUrl ? 'cursor-pointer hover:bg-slate-50' : undefined}
+                    className={taskRowClass(row.linkUrl)}
                     onClick={() => { if (row.linkUrl) router.push(row.linkUrl); }}
                   >
-                    <td className="truncate px-2 py-2 font-mono sm:px-3">{row.taskNo}</td>
-                    <td className="truncate px-2 py-2 sm:px-3" title={row.projectName}>{row.projectName || '—'}</td>
-                    <td className="truncate px-2 py-2 font-mono text-slate-500 sm:px-3">{row.revisionCode || '—'}</td>
-                    <td className="truncate px-2 py-2 sm:px-3">{fmt(row.completedAt)}</td>
-                    <td className="px-2 py-2 text-right sm:px-3">
-                      <CheckCircle2 className="inline-block h-4 w-4 text-emerald-600" />
+                    <TruncCell className="font-mono" title={row.taskNo}>{row.taskNo}</TruncCell>
+                    <TruncCell title={row.projectName}>{row.projectName || '—'}</TruncCell>
+                    <TruncCell className="font-mono text-slate-500" title={row.revisionCode}>{row.revisionCode || '—'}</TruncCell>
+                    <TruncCell>{fmt(row.completedAt)}</TruncCell>
+                    <td className="px-2 py-1.5 text-right align-middle">
+                      <CheckCircle2 className="inline-block h-4 w-4 text-emerald-600" aria-label="Completed" />
                     </td>
                   </tr>
                 )}
@@ -689,7 +766,7 @@ export function ProjectsOverviewScreen() {
               isHOD={isHOD}
             />
 
-            <CompactCard title="On Hold Tasks" subtitle="Current" className="h-full min-h-[280px]" state={cardState}>
+            <CompactCard title="On Hold Tasks" subtitle="Current" state={cardState}>
               <ResponsiveTable
                 headers={['Task No', 'Project', 'Rev', 'Hold Date', 'Reason']}
                 rows={data?.onHoldTasks ?? []}
@@ -698,20 +775,20 @@ export function ProjectsOverviewScreen() {
                 renderRow={(row) => (
                   <tr
                     key={row.rowKey ?? `${row.id}-${row.reason ?? 'hold'}`}
-                    className={row.linkUrl ? 'cursor-pointer hover:bg-slate-50' : undefined}
+                    className={taskRowClass(row.linkUrl)}
                     onClick={() => { if (row.linkUrl) router.push(row.linkUrl); }}
                   >
-                    <td className="truncate px-2 py-2 font-mono sm:px-3">{row.taskNo}</td>
-                    <td className="truncate px-2 py-2 sm:px-3" title={row.projectName}>{row.projectName || '—'}</td>
-                    <td className="truncate px-2 py-2 font-mono text-slate-500 sm:px-3">{row.revisionCode || '—'}</td>
-                    <td className="truncate px-2 py-2 sm:px-3">{fmt(row.holdDate)}</td>
-                    <td className="truncate px-2 py-2 text-slate-500 sm:px-3">{row.reason ?? 'On hold'}</td>
+                    <TruncCell className="font-mono" title={row.taskNo}>{row.taskNo}</TruncCell>
+                    <TruncCell title={row.projectName}>{row.projectName || '—'}</TruncCell>
+                    <TruncCell className="font-mono text-slate-500" title={row.revisionCode}>{row.revisionCode || '—'}</TruncCell>
+                    <TruncCell>{fmt(row.holdDate)}</TruncCell>
+                    <TruncCell className="text-slate-500" title={row.reason ?? 'On hold'}>{row.reason ?? 'On hold'}</TruncCell>
                   </tr>
                 )}
               />
             </CompactCard>
 
-            <CompactCard title="Rework Tasks" subtitle="Current" className="h-full min-h-[280px]" state={cardState}>
+            <CompactCard title="Rework Tasks" subtitle="Current" state={cardState}>
               <ResponsiveTable
                 headers={['Task No', 'Project', 'Rev', 'Assignee', 'Updated']}
                 rows={data?.reworkTasks ?? []}
@@ -720,74 +797,71 @@ export function ProjectsOverviewScreen() {
                 renderRow={(row) => (
                   <tr
                     key={row.id ?? row.taskNo}
-                    className={row.linkUrl ? 'cursor-pointer hover:bg-slate-50' : undefined}
+                    className={taskRowClass(row.linkUrl)}
                     onClick={() => { if (row.linkUrl) router.push(row.linkUrl); }}
                   >
-                    <td className="truncate px-2 py-2 font-mono sm:px-3">{row.taskNo}</td>
-                    <td className="truncate px-2 py-2 sm:px-3" title={row.projectName}>{row.projectName || '—'}</td>
-                    <td className="truncate px-2 py-2 font-mono text-slate-500 sm:px-3">{row.revisionCode || '—'}</td>
-                    <td className="truncate px-2 py-2 sm:px-3" title={row.assigneeName ?? ''}>{row.assigneeName || '—'}</td>
-                    <td className="truncate px-2 py-2 sm:px-3">{fmt(row.updatedAt)}</td>
+                    <TruncCell className="font-mono" title={row.taskNo}>{row.taskNo}</TruncCell>
+                    <TruncCell title={row.projectName}>{row.projectName || '—'}</TruncCell>
+                    <TruncCell className="font-mono text-slate-500" title={row.revisionCode}>{row.revisionCode || '—'}</TruncCell>
+                    <TruncCell title={row.assigneeName ?? ''}>{row.assigneeName || '—'}</TruncCell>
+                    <TruncCell>{fmt(row.updatedAt)}</TruncCell>
                   </tr>
                 )}
               />
             </CompactCard>
 
-            <section className="ui-surface ui-card-pad flex h-full min-h-[280px] min-w-0 flex-col space-y-4">
-              <div className="flex items-center justify-between">
-                <div className="flex items-baseline gap-2">
-                  <h2 className="text-sm font-semibold text-slate-900">Task Summary</h2>
-                  <span className="text-[10px] font-medium uppercase tracking-wide text-slate-400">In scope · current</span>
-                </div>
-                {loading ? (
-                  <span className="text-[10px] text-slate-400">Refreshing…</span>
-                ) : null}
-              </div>
-
-              {cardState === 'loading' ? (
-                <div className="mx-auto flex h-24 w-24 animate-pulse items-center justify-center rounded-full bg-slate-100" />
-              ) : tableError ? (
-                <p className="py-4 text-center text-xs text-red-600">{tableError}</p>
-              ) : hasDonut ? (
-                <div className="flex justify-center">
-                  <DonutChart donut={summary.donut} />
-                </div>
+            <CompactCard
+              title="Task Summary"
+              subtitle="In scope · current"
+              state={cardState}
+              headerRight={loading ? <span className="text-[10px] text-slate-400">Refreshing…</span> : null}
+            >
+              {tableError ? (
+                <p className="grid flex-1 place-items-center text-center text-xs text-red-600">{tableError}</p>
               ) : (
-                <div className="mx-auto flex h-24 w-24 items-center justify-center rounded-full bg-slate-100">
-                  <span className="text-xs text-slate-400">No tasks in scope</span>
+                <div className="flex min-h-0 flex-1 flex-col overflow-y-auto">
+                  {hasDonut ? (
+                    <div className="flex shrink-0 justify-center py-1">
+                      <DonutChart donut={summary.donut} size={128} showLegend={false} />
+                    </div>
+                  ) : (
+                    <div className="mx-auto my-2 flex h-24 w-24 shrink-0 items-center justify-center rounded-full bg-slate-100">
+                      <span className="px-2 text-center text-[10px] text-slate-400">No tasks in scope</span>
+                    </div>
+                  )}
+
+                  <div className="mt-1 grid shrink-0 grid-cols-2 gap-2 text-xs">
+                    <div className="rounded-lg border border-slate-100 bg-slate-50 p-2 text-center">
+                      <p className="mb-0.5 font-medium text-slate-500">On-Time %</p>
+                      <p className="text-base font-bold text-emerald-600">{summary?.onTimePct ?? 0}%</p>
+                    </div>
+                    <div className="rounded-lg border border-slate-100 bg-slate-50 p-2 text-center">
+                      <p className="mb-0.5 font-medium text-slate-500">Rework</p>
+                      <p className="text-base font-bold text-slate-900">{summary?.reworkCount ?? 0}</p>
+                    </div>
+                  </div>
+
+                  <div className="mt-2 shrink-0">
+                    <p className="mb-1 text-[10px] font-semibold uppercase tracking-wider text-slate-500">Overall Task Status</p>
+                    <div className="h-2 overflow-hidden rounded-full bg-slate-100 shadow-inner">
+                      <div className="h-full w-full" style={progressStyle} />
+                    </div>
+                    {summary ? (
+                      <p className="mt-1 text-[10px] leading-snug text-slate-400">
+                        {summary.total} in scope · {summary.active} active · {summary.onHold} on hold · {summary.reworkCount ?? 0} rework · {summary.completed} completed
+                      </p>
+                    ) : null}
+                  </div>
+
+                  <div className="mt-auto flex shrink-0 items-center justify-end gap-1.5 pt-2 text-[10px] font-medium text-slate-400">
+                    <UserRound className="h-3.5 w-3.5" />
+                    {updatedAt
+                      ? `Updated ${updatedAt.toLocaleTimeString('en-GB', { hour: '2-digit', minute: '2-digit' })} UTC`
+                      : 'Updated just now'}
+                  </div>
                 </div>
               )}
-
-              <div className="grid grid-cols-2 gap-2 text-xs">
-                <div className="rounded-lg border border-slate-100 bg-slate-50 p-2 text-center shadow-sm">
-                  <p className="mb-0.5 font-medium text-slate-500">On-Time %</p>
-                  <p className="text-lg font-bold text-emerald-600">{summary?.onTimePct ?? 0}%</p>
-                </div>
-                <div className="rounded-lg border border-slate-100 bg-slate-50 p-2 text-center shadow-sm">
-                  <p className="mb-0.5 font-medium text-slate-500">Rework</p>
-                  <p className="text-lg font-bold text-slate-900">{summary?.reworkCount ?? 0}</p>
-                </div>
-              </div>
-
-              <div className="mt-2 flex-1">
-                <p className="mb-1.5 text-xs font-semibold uppercase tracking-wider text-slate-500">Overall Task Status</p>
-                <div className="h-2.5 overflow-hidden rounded-full bg-slate-100 shadow-inner">
-                  <div className="h-full w-full" style={progressStyle} />
-                </div>
-                {summary ? (
-                  <p className="mt-1 text-[10px] text-slate-400">
-                    {summary.total} in scope · {summary.active} active · {summary.onHold} on hold · {summary.reworkCount ?? 0} rework · {summary.completed} completed
-                  </p>
-                ) : null}
-              </div>
-
-              <div className="mt-auto flex items-center justify-end gap-1.5 text-xs font-medium text-slate-400">
-                <UserRound className="h-3.5 w-3.5" />
-                {updatedAt
-                  ? `Updated ${updatedAt.toLocaleTimeString('en-GB', { hour: '2-digit', minute: '2-digit' })} UTC`
-                  : 'Updated just now'}
-              </div>
-            </section>
+            </CompactCard>
           </div>
         </div>
       </main>
