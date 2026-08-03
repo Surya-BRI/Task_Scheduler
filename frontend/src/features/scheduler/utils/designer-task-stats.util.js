@@ -21,11 +21,25 @@ export const IN_REVIEW_TASK_STATUSES = new Set([
  */
 export const CLOSED_TASK_STATUSES = new Set(["CLIENT_ACCEPTED", "CLIENT_REJECTED"]);
 
+/** In-review + closed — not draggable / not reassignable until REWORK. */
+export const NON_REASSIGNABLE_TASK_STATUSES = new Set([
+  ...IN_REVIEW_TASK_STATUSES,
+  ...CLOSED_TASK_STATUSES,
+]);
+
+export const TASK_REASSIGNMENT_BLOCKED_MESSAGE =
+  "Completed tasks cannot be reassigned. Reopen the task before reassigning.";
+
 /** @deprecated Use CLOSED_TASK_STATUSES — kept for call sites that still say "completed". */
 export const COMPLETED_TASK_STATUSES = CLOSED_TASK_STATUSES;
 
 export function normalizeTaskStatus(status) {
   return String(status ?? "").trim().toUpperCase();
+}
+
+/** True when Scheduler must treat the task as read-only for reassignment. */
+export function isTaskReassignmentBlocked(status) {
+  return NON_REASSIGNABLE_TASK_STATUSES.has(normalizeTaskStatus(status));
 }
 
 /**

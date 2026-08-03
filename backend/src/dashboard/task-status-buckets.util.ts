@@ -20,6 +20,18 @@ export const CLOSED_TASK_STATUSES = [
   'CLIENT_REJECTED',
 ] as const;
 
+/**
+ * In-review + client-final — assignee / designer set must not change.
+ * Return-to-work is REWORK (active); only then may the task be reassigned.
+ */
+export const NON_REASSIGNABLE_TASK_STATUSES = [
+  ...IN_REVIEW_TASK_STATUSES,
+  ...CLOSED_TASK_STATUSES,
+] as const;
+
+export const TASK_REASSIGNMENT_BLOCKED_MESSAGE =
+  'Completed tasks cannot be reassigned. Reopen the task before reassigning.';
+
 /** @deprecated Prefer CLOSED_TASK_STATUSES */
 export const COMPLETED_TASK_STATUSES = CLOSED_TASK_STATUSES;
 
@@ -36,9 +48,15 @@ const ACTIVE_SET = new Set<string>(ACTIVE_TASK_STATUSES);
 const IN_REVIEW_SET = new Set<string>(IN_REVIEW_TASK_STATUSES);
 const ON_HOLD_SET = new Set<string>(ON_HOLD_TASK_STATUSES);
 const CLOSED_SET = new Set<string>(CLOSED_TASK_STATUSES);
+const NON_REASSIGNABLE_SET = new Set<string>(NON_REASSIGNABLE_TASK_STATUSES);
 
 export function normalizeTaskStatus(status: string | null | undefined): string {
   return (status ?? '').trim().toUpperCase();
+}
+
+/** True when drag/API reassignment must be rejected (Design Completed, review, or closed). */
+export function isTaskReassignmentBlocked(status: string | null | undefined): boolean {
+  return NON_REASSIGNABLE_SET.has(normalizeTaskStatus(status));
 }
 
 export function categorizeTaskStatus(status: string | null | undefined): TaskStatusBucket {

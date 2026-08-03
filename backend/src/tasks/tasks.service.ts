@@ -13,7 +13,7 @@ import { ActivityAction } from '../activities/activity-events';
 import { SubmitWorkDto } from './dto/submit-work.dto';
 import { SaveTimerStateDto } from './dto/save-timer-state.dto';
 import { DashboardRealtimeService } from '../dashboard/dashboard-realtime.service';
-import { COMPLETED_STATUS_FILTER } from '../dashboard/task-status-buckets.util';
+import { COMPLETED_STATUS_FILTER, isTaskReassignmentBlocked, TASK_REASSIGNMENT_BLOCKED_MESSAGE } from '../dashboard/task-status-buckets.util';
 import { toApiTaskStatus, toDbTaskStatus } from './task-status.util';
 import { NotificationsService } from '../notifications/notifications.service';
 import {
@@ -1878,6 +1878,10 @@ export class TasksService {
     }
     const existing = await this.prisma.task.findUnique({ where: { id } });
     if (!existing) throw new NotFoundException('Task not found');
+
+    if (isTaskReassignmentBlocked(existing.status)) {
+      throw new BadRequestException(TASK_REASSIGNMENT_BLOCKED_MESSAGE);
+    }
 
     const [assignee, oldAssignee, existingSplitDesigners] = await Promise.all([
       this.prisma.user.findUnique({ where: { id: dto.assigneeId } }),

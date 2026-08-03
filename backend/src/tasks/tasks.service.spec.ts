@@ -759,5 +759,33 @@ describe('TasksService', () => {
         expect.objectContaining({ title: 'Removed from Task' }),
       );
     });
+
+    it('rejects reassignment when task status is DESIGN_COMPLETED', async () => {
+      prisma.task.findUnique.mockResolvedValue({
+        id: TASK_ID,
+        assigneeId: 'designer-a',
+        status: 'DESIGN_COMPLETED',
+      });
+
+      await expect(
+        service.assign(TASK_ID, 'hod-1', { assigneeId: 'designer-b' } as any),
+      ).rejects.toThrow('Completed tasks cannot be reassigned. Reopen the task before reassigning.');
+
+      expect(prisma.task.update).not.toHaveBeenCalled();
+    });
+
+    it('rejects assign for HOD_REVIEW and CLIENT_ACCEPTED', async () => {
+      for (const status of ['HOD_REVIEW', 'SALES_REVIEW', 'CLIENT_ACCEPTED', 'CLIENT_REJECTED']) {
+        prisma.task.findUnique.mockResolvedValue({
+          id: TASK_ID,
+          assigneeId: 'designer-a',
+          status,
+        });
+        await expect(
+          service.assign(TASK_ID, 'hod-1', { assigneeId: 'designer-b' } as any),
+        ).rejects.toThrow(/cannot be reassigned/i);
+      }
+      expect(prisma.task.update).not.toHaveBeenCalled();
+    });
   });
 });

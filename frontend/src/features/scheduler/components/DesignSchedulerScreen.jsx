@@ -82,6 +82,10 @@ import {
     resolveRetailDesignTypePillClass,
     resolveTaskBlockColorClass,
 } from "@/lib/ui/design-type-colors";
+import {
+    isTaskReassignmentBlocked,
+    TASK_REASSIGNMENT_BLOCKED_MESSAGE,
+} from "../utils/designer-task-stats.util";
 // Only these backend events should trigger a scheduler reload for other HODs.
 // Capacity constants
 const DAILY_CAPACITY = 8; // 8hrs per day = normal capacity (green/blue)
@@ -488,6 +492,9 @@ function mapApiTaskToQueueRecord(task) {
         opNo: task.opNo || "",
         priority: task.priority || "",
         status: task.status,
+        // Lifecycle status from API (DESIGN_COMPLETED, etc.). Remains available after
+        // sidebar remaps `status` to assigned/unassigned/ON_HOLD for grid cards.
+        taskStatus: String(task.status ?? "").trim().toUpperCase() || null,
         updatedAt: task.updatedAt,
         holdStartedAt: task.updatedAt,
         holdPreviousStatus: task.holdPreviousStatus || null,
@@ -515,6 +522,7 @@ function buildSidebarTaskFromQueueRecord(record, idx) {
         opNo: record.opNo || "",
         estimatedHours: Number(record.estimatedHours) || 0,
         status,
+        taskStatus: record.taskStatus || sourceStatus || null,
         colorClass: colorClassForDesignType(record.designType, idx, record.disciplineType),
         baseName: record.name,
         holdStartedAt: sourceStatus === "ON_HOLD"
@@ -582,6 +590,7 @@ function buildMockSchedulerState(records, designers) {
             opNo: record.opNo || "",
             estimatedHours: Number(record.estimatedHours) || 0,
             status,
+            taskStatus: record.taskStatus || sourceStatus || null,
             colorClass: colorClassForDesignType(record.designType, idx, record.disciplineType),
             baseName: record.name,
             holdStartedAt: status === "ON_HOLD"
@@ -651,6 +660,7 @@ function buildSchedulerStateFromErpAssignments(records, rows, designers) {
                     disciplineType: fragBaseRecord.disciplineType || "",
                     priority: fragBaseRecord.priority || "",
                     baseName: fragBaseRecord.name,
+                    taskStatus: fragBaseRecord.taskStatus || String(fragBaseRecord.status ?? "").trim().toUpperCase() || null,
                     colorClass: colorClassForDesignType(fragBaseRecord.designType, fragColorIdx, fragBaseRecord.disciplineType),
                 }
                 : {
@@ -760,6 +770,7 @@ function buildSchedulerStateFromErpAssignments(records, rows, designers) {
                 disciplineType: baseRecord.disciplineType || "",
                 priority: baseRecord.priority || "",
                 baseName: baseRecord.name,
+                taskStatus: baseRecord.taskStatus || String(baseRecord.status ?? "").trim().toUpperCase() || null,
                 colorClass: resolveRetailDesignTypeBlockClass(baseRecord.designType)
                     ?? resolveDisciplineBlockClass(baseRecord.disciplineType)
                     ?? firstPartEntry?.colorClass
@@ -837,6 +848,7 @@ function buildSchedulerStateFromErpAssignments(records, rows, designers) {
             status: sourceStatus === "ON_HOLD"
                 ? "ON_HOLD"
                 : alreadyAssignedToDesigner ? "assigned" : "unassigned",
+            taskStatus: record?.taskStatus || sourceStatus || tasksObj[id]?.taskStatus || null,
         };
     }
     return { tasksObj, schedulesObj };
@@ -1436,6 +1448,9 @@ export function DesignSchedulerScreen() {
             } else if (msg.toLowerCase().includes('approved full-day leave')) {
                 toast.error(msg);
                 reloadWeek();
+            } else if (msg.toLowerCase().includes('cannot be reassigned')) {
+                toast.error(TASK_REASSIGNMENT_BLOCKED_MESSAGE);
+                reloadWeek();
             } else if (msg.toLowerCase().includes('project team')) {
                 // Backend's Rule 10 eligibility check rejected the save — the frontend's own
                 // pre-drop check should normally catch this first, but reload here as a
@@ -1881,6 +1896,10 @@ export function DesignSchedulerScreen() {
         const droppedTask = tasks[taskId];
         if (!droppedTask)
             return;
+        if (isTaskReassignmentBlocked(droppedTask.taskStatus)) {
+            toast.error(TASK_REASSIGNMENT_BLOCKED_MESSAGE);
+            return;
+        }
         // Dragging a task off the ON_HOLD sidebar onto a designer's day only ever touched the
         // schedule (assigneeId + SchedulerAssignment row) — the task's real ON_HOLD status on the
         // backend was never cleared, so it silently reappeared in the sidebar on the next reload.
@@ -2462,13 +2481,18 @@ export function DesignSchedulerScreen() {
         const sourceId = e.dataTransfer.getData("sourceId");
         const sourceDay = e.dataTransfer.getData("sourceDay");
         if (!taskId) return;
+        const panelTask = tasks[taskId];
+        if (isTaskReassignmentBlocked(panelTask?.taskStatus)) {
+            toast.error(TASK_REASSIGNMENT_BLOCKED_MESSAGE);
+            return;
+        }
         // Sidebar→sidebar rearrangements (already unassigned/on-hold) act immediately
         if (sourceId === 'unassigned' || sourceId === 'ON_HOLD') {
             commitPanelDrop(taskId, sourceId, sourceDay, 'unassigned');
             return;
         }
         // Assigned grid task dropped onto sidebar — show confirmation modal
-        const task = tasks[taskId];
+        const task = panelTask;
         const designer = designers.find((d) => d.id === sourceId);
         setUnassignPrompt({
             open: true,
@@ -3090,7 +3114,8 @@ export function DesignSchedulerScreen() {
                                 // Locked cards (e.g. the shrunk "logged hours" remainder left behind on a
                                 // busy designer's day after a partial handoff) can't be dragged, but unlike
                                 // system blocks they're still a real task — clicking should still navigate.
-                                const isDragLocked = Boolean(taskInfo?.isLocked);
+                                // Completed / in-review / closed tasks are also non-draggable (reopen via REWORK first).
+                                const isDragLocked = Boolean(taskInfo?.isLocked) || isTaskReassignmentBlocked(taskInfo?.taskStatus);
                                 const blockLabel = getTaskLabel(taskInfo);
                                 return (<div key={`${taskId}-${designer.id}-${dayIndex}-${idx}`} draggable={!isDragLocked} onDragStart={(e) => {
                                         if (isDragLocked) return;
@@ -3114,7 +3139,7 @@ export function DesignSchedulerScreen() {
                                         ? dropIndicator.position === "before"
                                             ? "ring-2 ring-blue-400 ring-offset-1"
                                             : "ring-2 ring-green-400 ring-offset-1"
-                                        : ""} ${taskInfo.colorClass}`} style={{ width: taskWidth, maxWidth: taskWidth }} title={`${blockLabel} (${formatHoursAsHm(taskInfo.estimatedHours)})${taskInfo.isPinned ? " — pinned: exempt from auto-fill" : ""}`}>
+                                        : ""} ${taskInfo.colorClass}`} style={{ width: taskWidth, maxWidth: taskWidth }} title={`${blockLabel} (${formatHoursAsHm(taskInfo.estimatedHours)})${taskInfo.isPinned ? " — pinned: exempt from auto-fill" : ""}${isTaskReassignmentBlocked(taskInfo?.taskStatus) ? " — completed: reopen before reassigning" : ""}`}>
                                           {taskInfo.isPinned && (<span className="text-[8px] leading-none mr-0.5 shrink-0 select-none" aria-hidden="true">📌</span>)}
                                           <div className="text-[9px] font-semibold truncate leading-none mr-1 select-none">{blockLabel}</div>
                                           <div className="text-[8px] font-bold opacity-60 bg-black/5 rounded px-1 shrink-0">{formatHoursAsHm(taskInfo.estimatedHours)}</div>
