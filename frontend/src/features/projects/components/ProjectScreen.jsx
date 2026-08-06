@@ -1,7 +1,7 @@
 "use client";
 
 import Link from "next/link";
-import { useEffect, useState } from "react";
+import { useEffect, useRef, useState } from "react";
 import { Search } from "lucide-react";
 import { apiClient } from "@/lib/api-client";
 import { Navbar } from "@/components/Navbar";
@@ -26,7 +26,10 @@ function projectListTaskHref(row, workflowFrom = FROM_PROJECTS_LIST) {
   );
 }
 
-const renderCell = (value) => (value == null || value === "" ? "null" : String(value));
+const renderCell = (value) => {
+  if (value == null || value === "" || value === "null" || value === "undefined") return "—";
+  return String(value);
+};
 
 const getCategoryColor = (category) =>
   category === "Retail" ? "text-blue-600" : "text-orange-500";
@@ -109,12 +112,22 @@ export function ProjectScreen({ workflowFrom = FROM_PROJECTS_LIST }) {
     return () => clearTimeout(timer);
   }, [searchQuery]);
 
-  useEffect(() => {
-    setPage(1);
-  }, [debouncedQuery]);
+  const filterKey = debouncedQuery;
+  const prevFilterKeyRef = useRef(filterKey);
+  const [listError, setListError] = useState("");
+  const [listLoading, setListLoading] = useState(true);
 
   useEffect(() => {
+    if (prevFilterKeyRef.current !== filterKey) {
+      prevFilterKeyRef.current = filterKey;
+      if (page !== 1) {
+        setPage(1);
+        return undefined;
+      }
+    }
     let mounted = true;
+    setListLoading(true);
+    setListError("");
     const q = debouncedQuery.trim();
     const includeTotal = page <= 1;
     apiClient
@@ -144,19 +157,23 @@ export function ProjectScreen({ workflowFrom = FROM_PROJECTS_LIST }) {
           setTotalPages(Math.max(1, Number(res?.totalPages || Math.ceil(Math.max(0, nextTotal) / PAGE_SIZE) || 1)));
         }
       })
-      .catch(() => {
+      .catch((err) => {
         if (!mounted) return;
         setProjects([]);
+        setListError(err instanceof Error ? err.message : "Could not load projects.");
         if (includeTotal) {
           setTotal(0);
           setTotalPages(1);
         }
+      })
+      .finally(() => {
+        if (mounted) setListLoading(false);
       });
 
     return () => {
       mounted = false;
     };
-  }, [debouncedQuery, page]);
+  }, [debouncedQuery, filterKey, page]);
 
   const currentPage = Math.min(page, totalPages);
 
@@ -210,7 +227,26 @@ export function ProjectScreen({ workflowFrom = FROM_PROJECTS_LIST }) {
           </div>
         </div>
 
-        <ProjectTable data={projects} onProjectOpen={primeRecordForDetails} workflowFrom={workflowFrom} />
+        {listLoading ? (
+          <div className="flex min-h-0 flex-1 flex-col px-4 pb-6 sm:px-6" aria-busy="true">
+            <div className="ui-surface h-full overflow-hidden p-3">
+              {Array.from({ length: 10 }).map((_, i) => (
+                <div key={i} className="mb-2 flex animate-pulse gap-3">
+                  <div className="h-4 w-28 rounded bg-slate-100" />
+                  <div className="h-4 flex-1 rounded bg-slate-100" />
+                  <div className="h-4 w-24 rounded bg-slate-100" />
+                  <div className="h-4 w-16 rounded bg-slate-100" />
+                </div>
+              ))}
+            </div>
+          </div>
+        ) : listError ? (
+          <div className="flex flex-1 flex-col items-center justify-center gap-3 px-6 text-sm text-slate-600">
+            <p className="text-red-600">{listError}</p>
+          </div>
+        ) : (
+          <ProjectTable data={projects} onProjectOpen={primeRecordForDetails} workflowFrom={workflowFrom} />
+        )}
         <div className="shrink-0 flex items-center justify-between px-4 pb-4 pt-2 sm:px-6 text-xs text-slate-600">
           <span>
             Showing {total === 0 ? 0 : (currentPage - 1) * PAGE_SIZE + 1}-
@@ -220,7 +256,7 @@ export function ProjectScreen({ workflowFrom = FROM_PROJECTS_LIST }) {
             <button
               type="button"
               onClick={() => setPage((p) => Math.max(1, p - 1))}
-              disabled={currentPage === 1}
+              disabled={currentPage === 1 || listLoading}
               className="px-2.5 py-1 border border-slate-300 rounded disabled:opacity-50 disabled:cursor-not-allowed hover:bg-slate-50"
             >
               Prev
@@ -231,7 +267,7 @@ export function ProjectScreen({ workflowFrom = FROM_PROJECTS_LIST }) {
             <button
               type="button"
               onClick={() => setPage((p) => Math.min(totalPages, p + 1))}
-              disabled={currentPage === totalPages}
+              disabled={currentPage === totalPages || listLoading}
               className="px-2.5 py-1 border border-slate-300 rounded disabled:opacity-50 disabled:cursor-not-allowed hover:bg-slate-50"
             >
               Next

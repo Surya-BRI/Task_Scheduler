@@ -62,10 +62,13 @@ export function DesignListProvider({ children }) {
   })
 
   const loadedRef = useRef(false)
+  const loadedAtRef = useRef(0)
+  const DESIGN_LIST_TTL_MS = 5 * 60_000
 
   useEffect(() => {
     if (!shouldLoadDesignList(pathname)) return
-    if (loadedRef.current) return
+    const stale = loadedRef.current && Date.now() - loadedAtRef.current > DESIGN_LIST_TTL_MS
+    if (loadedRef.current && !stale) return
     let mounted = true
     setLoading(true)
     setError(null)
@@ -76,6 +79,7 @@ export function DesignListProvider({ children }) {
         const rows = normalizeDesignListResponse(data)
         setRecords(dedupeDesignRecords(rows))
         loadedRef.current = true
+        loadedAtRef.current = Date.now()
         setLoading(false)
       })
       .catch((err) => {

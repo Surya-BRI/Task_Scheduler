@@ -375,9 +375,8 @@ export function DesignListScreen({ workflowFrom = FROM_DESIGN_LIST }) {
     return () => clearTimeout(timer);
   }, [filters.searchQuery]);
 
-  useEffect(() => {
-    setPage(1);
-  }, [debouncedSearchQuery, filters.status, filters.type, filters.salesPerson, filters.startDate, filters.endDate, viewMode, listMode]);
+  const filterKey = `${debouncedSearchQuery}|${filters.status}|${filters.type}|${filters.salesPerson}|${filters.startDate}|${filters.endDate}|${viewMode}|${listMode}`;
+  const prevFilterKeyRef = useRef(filterKey);
 
   const reloadList = useCallback(() => {
     setListRefreshTick((n) => n + 1);
@@ -387,6 +386,13 @@ export function DesignListScreen({ workflowFrom = FROM_DESIGN_LIST }) {
 
   useEffect(() => {
     if (isReallocation) return undefined;
+    if (prevFilterKeyRef.current !== filterKey) {
+      prevFilterKeyRef.current = filterKey;
+      if (page !== 1) {
+        setPage(1);
+        return undefined;
+      }
+    }
     let mounted = true;
     setListLoading(true);
     const params = new URLSearchParams();
@@ -411,7 +417,7 @@ export function DesignListScreen({ workflowFrom = FROM_DESIGN_LIST }) {
       if (mounted) setListLoading(false);
     });
     return () => { mounted = false; };
-  }, [debouncedSearchQuery, filters.status, filters.type, filters.salesPerson, filters.startDate, filters.endDate, listRefreshTick, isReallocation, page]);
+  }, [filterKey, debouncedSearchQuery, filters.status, filters.type, filters.salesPerson, filters.startDate, filters.endDate, listRefreshTick, isReallocation, page]);
 
   const filteredDesigns = useMemo(() => allDesigns.filter((d) => {
     if (

@@ -1450,6 +1450,10 @@ export function ChatterScreen() {
     }
   }, [activeTab, postsLoading, loadMorePosts]);
   useEffect(() => {
+    // Lazy-load mention directory when composer / create-post opens (not on every Chatter bootstrap).
+    if (!currentUserId) return;
+    if (mentionUsersDirectoryBase.length > 0) return;
+    if (!openComposerPostId && !isCreatePostOpen) return;
     listChatterMentionUsers()
       .then((users) => {
         const rows = Array.isArray(users) ? users : [];
@@ -1460,7 +1464,7 @@ export function ChatterScreen() {
         mentionUsersRef.current = [];
         setMentionUsersDirectoryBase([]);
       });
-  }, [currentUserId]);
+  }, [openComposerPostId, isCreatePostOpen, currentUserId, mentionUsersDirectoryBase.length]);
 
   useEffect(() => {
     // Tab-scoped feed load — Private skips the main Posts list.
@@ -1525,26 +1529,23 @@ export function ChatterScreen() {
     });
   }, [urlPostId, urlCommentId, postsLoading, posts.length, queueMarkPostSeen, ensureFocusedPostAvailable]);
 
+  // Single refresh owner: prefer live socket; keep local event bus as fallback only.
   useEffect(() => {
-    return onChatterRefresh(() => {
+    const refreshActiveTab = () => {
       if (activeTab === "private") {
         void reloadPrivateFeeds();
         return;
       }
       void reloadPosts();
+    };
+    const unsubLocal = onChatterRefresh(refreshActiveTab);
+    const unsubSocket = connectDashboardRealtime({
+      onChatterRefresh: refreshActiveTab,
     });
-  }, [activeTab, reloadPosts, reloadPrivateFeeds]);
-
-  useEffect(() => {
-    return connectDashboardRealtime({
-      onChatterRefresh: () => {
-        if (activeTab === "private") {
-          void reloadPrivateFeeds();
-          return;
-        }
-        void reloadPosts();
-      },
-    });
+    return () => {
+      unsubLocal();
+      unsubSocket();
+    };
   }, [activeTab, reloadPosts, reloadPrivateFeeds]);
 
   const openChatterTab = useCallback(

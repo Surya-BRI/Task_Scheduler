@@ -221,6 +221,10 @@ export default function RequestsClient() {
   }, []);
 
   useEffect(() => {
+    if (!isHOD) {
+      setDesignerList([]);
+      return;
+    }
     apiClient.get("/users?role=DESIGNER").then((res) => {
       const rows = Array.isArray(res) ? res : (Array.isArray(res?.data) ? res.data : []);
       setDesignerList(rows.map((u) => ({
@@ -230,7 +234,7 @@ export default function RequestsClient() {
         designation: u.department?.name ?? u.role?.name ?? "Designer",
       })));
     }).catch(() => {});
-  }, []);
+  }, [isHOD]);
 
   const erpDesignerIdRaw = sessionErpId ?? '';
   const erpDesignerId = isUuidString(erpDesignerIdRaw) ? erpDesignerIdRaw : null;

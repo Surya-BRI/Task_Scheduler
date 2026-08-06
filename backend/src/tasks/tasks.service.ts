@@ -1533,6 +1533,25 @@ export class TasksService {
       addAndFilter({ dueDate: dueRange });
     }
 
+    // Sales design-list (no queue/history flag): scope to this salesperson's projects
+    // so Sales cannot pull the org-wide task catalog.
+    if (
+      role === UserRole.SALESPERSON &&
+      !salesQueue &&
+      !salesHistory &&
+      !salesPerson
+    ) {
+      const me = await this.prisma.user.findUnique({
+        where: { id: userId },
+        select: { fullName: true },
+      });
+      const myName = String(me?.fullName ?? '').trim();
+      if (!myName) {
+        return { data: [], total: 0, page, limit, totalPages: 0 };
+      }
+      addAndFilter({ project: { salesPerson: { contains: myName } } });
+    }
+
     const [data, total] = await Promise.all([
       this.prisma.task.findMany({
         where: baseWhere,
@@ -1544,8 +1563,27 @@ export class TasksService {
       this.prisma.task.count({ where: baseWhere }),
     ]);
 
+    // Batch latest submitted-session durations for list rows (kills N+1 timer UI fetches).
+    const submittedDurationByTaskId = new Map<string, number>();
+    const taskIds = data.map((t) => t.id).filter(Boolean);
+    if (taskIds.length > 0) {
+      const sessions = await this.prisma.taskWorkSession.findMany({
+        where: { taskId: { in: taskIds }, status: 'Submitted' },
+        orderBy: { submittedAt: 'desc' },
+        select: { taskId: true, durationSeconds: true },
+      });
+      for (const session of sessions) {
+        if (!submittedDurationByTaskId.has(session.taskId)) {
+          submittedDurationByTaskId.set(session.taskId, session.durationSeconds);
+        }
+      }
+    }
+
     return {
-      data: data.map((task) => this.normalizeTaskForApi(task)),
+      data: data.map((task) => ({
+        ...this.normalizeTaskForApi(task),
+        submittedDurationSeconds: submittedDurationByTaskId.get(task.id) ?? null,
+      })),
       total,
       page,
       limit,

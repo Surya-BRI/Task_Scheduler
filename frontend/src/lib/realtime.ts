@@ -8,12 +8,26 @@ import { env } from './env';
  * frontend is deployed somewhere that can't proxy the WS upgrade same-origin
  * (e.g. Vercel) — the session cookie itself never reaches that origin.
  */
+let cachedWsToken: { token: string; expiresAt: number } | null = null;
+/** Reuse ws-token within its TTL window to avoid auth storms on reconnect. */
+const WS_TOKEN_CACHE_MS = 90_000;
+/** Keep socket briefly after last subscriber leaves (Strict Mode remount churn). */
+const IDLE_TEARDOWN_MS = 2_500;
+
 async function fetchWsToken(): Promise<string | null> {
+  const now = Date.now();
+  if (cachedWsToken && cachedWsToken.expiresAt > now) {
+    return cachedWsToken.token;
+  }
   try {
     const response = await fetch('/api/auth/ws-token', { credentials: 'include', cache: 'no-store' });
     if (!response.ok) return null;
     const data = await response.json();
-    return typeof data?.token === 'string' ? data.token : null;
+    const token = typeof data?.token === 'string' ? data.token : null;
+    if (token) {
+      cachedWsToken = { token, expiresAt: now + WS_TOKEN_CACHE_MS };
+    }
+    return token;
   } catch {
     return null;
   }
@@ -92,6 +106,7 @@ type Subscriber = {
 /** One shared /dashboard socket for the whole tab — avoids Navbar + page each fetching ws-token. */
 let sharedSocket: Socket | null = null;
 let sharedRetryTimer: ReturnType<typeof setTimeout> | null = null;
+let idleTeardownTimer: ReturnType<typeof setTimeout> | null = null;
 const subscribers = new Set<Subscriber>();
 
 function broadcastDashboardRefresh(payload: DashboardRefreshPayload) {
@@ -173,17 +188,27 @@ function ensureSharedSocket(): Socket | null {
 
 function teardownSharedSocketIfIdle() {
   if (subscribers.size > 0) return;
-  if (sharedRetryTimer) {
-    clearTimeout(sharedRetryTimer);
-    sharedRetryTimer = null;
-  }
-  sharedSocket?.disconnect();
-  sharedSocket = null;
+  if (idleTeardownTimer) clearTimeout(idleTeardownTimer);
+  idleTeardownTimer = setTimeout(() => {
+    idleTeardownTimer = null;
+    if (subscribers.size > 0) return;
+    if (sharedRetryTimer) {
+      clearTimeout(sharedRetryTimer);
+      sharedRetryTimer = null;
+    }
+    sharedSocket?.disconnect();
+    sharedSocket = null;
+  }, IDLE_TEARDOWN_MS);
 }
 
 export function connectDashboardRealtime(handlers: DashboardRealtimeHandlers): () => void {
   if (typeof window === 'undefined') {
     return () => {};
+  }
+
+  if (idleTeardownTimer) {
+    clearTimeout(idleTeardownTimer);
+    idleTeardownTimer = null;
   }
 
   const subscriber: Subscriber = { handlers };
