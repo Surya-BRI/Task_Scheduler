@@ -33,7 +33,7 @@ export function maxHoursForDeadline(deadlineDate, fromDate = new Date()) {
 
 /**
  * Hard-block check: estimated hours must not exceed workingDays × 12h.
- * @returns {{ ok: true } | { ok: false, message: string, workingDays: number, maxHours: number }}
+ * @returns {{ ok: true, workingDays: number, maxHours: number } | { ok: false, message: string, workingDays: number, maxHours: number }}
  */
 export function assertHoursWithinDeadline(hours, deadlineDate, fromDate = new Date()) {
   const estimated = Number(hours);

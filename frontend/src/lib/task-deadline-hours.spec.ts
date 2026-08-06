@@ -24,10 +24,10 @@ describe('task-deadline-hours', () => {
     const deadline = new Date(2026, 7, 4);
     expect(assertHoursWithinDeadline(24, deadline, from)).toMatchObject({ ok: true, maxHours: 24 });
     const blocked = assertHoursWithinDeadline(25, deadline, from);
-    expect(blocked.ok).toBe(false);
-    expect(blocked.message).toBe(
-      'Estimated hours (25) exceed the maximum of 24h for 2 working days (12h/day).',
-    );
+    expect(blocked).toMatchObject({
+      ok: false,
+      message: 'Estimated hours (25) exceed the maximum of 24h for 2 working days (12h/day).',
+    });
   });
 
   it('weekend-only span yields 0 working days and blocks any hours', () => {
@@ -37,10 +37,10 @@ describe('task-deadline-hours', () => {
     expect(countWorkingDaysUntil(deadline, from)).toBe(0);
     expect(maxHoursForDeadline(deadline, from)).toBe(0);
     const blocked = assertHoursWithinDeadline(1, deadline, from);
-    expect(blocked.ok).toBe(false);
-    expect(blocked.message).toBe(
-      'Estimated hours (1) exceed the maximum of 0h for 0 working days (12h/day).',
-    );
+    expect(blocked).toMatchObject({
+      ok: false,
+      message: 'Estimated hours (1) exceed the maximum of 0h for 0 working days (12h/day).',
+    });
   });
 
   it('skips Sat/Sun when spanning a weekend', () => {
