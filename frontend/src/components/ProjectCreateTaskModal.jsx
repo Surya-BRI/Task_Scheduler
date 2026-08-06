@@ -8,6 +8,7 @@ function deriveFileNameFromUrl(url) {
   try { const p = new URL(url).pathname; return decodeURIComponent(p.split('/').filter(Boolean).pop() || url) } catch { return url }
 }
 import { apiClient } from '@/lib/api-client'
+import { assertHoursWithinDeadline } from '@/lib/task-deadline-hours'
 import { toast } from 'sonner'
 
 const PRIORITY_OPTIONS = ['Low', 'Medium', 'High']
@@ -112,6 +113,7 @@ export function ProjectCreateTaskModal({ open, onClose, onCreated, submissionDat
   const [fieldErrors, setFieldErrors] = useState({})
   const [touched, setTouched] = useState({})
   const [submitAttempted, setSubmitAttempted] = useState(false)
+  const [revisionFetchError, setRevisionFetchError] = useState('')
   const [fileMode, setFileMode] = useState('link')
   const [selectedFiles, setSelectedFiles] = useState([])
   const [uploadedFiles, setUploadedFiles] = useState([])
@@ -144,10 +146,15 @@ export function ProjectCreateTaskModal({ open, onClose, onCreated, submissionDat
   }, [open, onClose])
 
   useEffect(() => {
-    if (!open) return
+    if (!open) {
+      setError('')
+      setRevisionFetchError('')
+      return
+    }
     revisionFetched.current = false
     phaseFetched.current = false
     setRevisionCode('')
+    setRevisionFetchError('')
     setPhaseContext({ maxPhase: 0, bySignType: {} })
     setPhaseContextFailed(false)
     setPhase(1)
@@ -178,7 +185,7 @@ export function ProjectCreateTaskModal({ open, onClose, onCreated, submissionDat
     setExpanded(new Set(built.filter((r) => (r.children?.length ?? 0) > 0).map((r) => r.id)))
   }, [open, signRows])
 
-  // Fetch next revision code
+  // Fetch next revision code (stays on open revision; bumps only via Client Rejected)
   useEffect(() => {
     if (!open || !record || revisionFetched.current) return
     const opNo = String(record.opNo ?? '').trim()
@@ -188,8 +195,21 @@ export function ProjectCreateTaskModal({ open, onClose, onCreated, submissionDat
     const qs = new URLSearchParams({ opNo, projectNo, designType: 'Project' }).toString()
     apiClient
       .get(`/tasks/next-revision?${qs}`)
-      .then((res) => setRevisionCode(res?.revisionCode ?? 'R0'))
-      .catch(() => {})
+      .then((res) => {
+        setRevisionFetchError('')
+        setRevisionCode(res?.revisionCode ?? 'R0')
+      })
+      .catch((err) => {
+        const msg = err instanceof Error ? err.message : 'Could not resolve revision'
+        setRevisionFetchError(msg)
+        setError(msg)
+        setFieldErrors((prev) => {
+          const next = { ...prev }
+          delete next.revisionCode
+          return next
+        })
+        toast.error(msg)
+      })
   }, [open, record])
 
   // Fetch project-wide phase history (for the smart phase suggestion)
@@ -332,6 +352,11 @@ export function ProjectCreateTaskModal({ open, onClose, onCreated, submissionDat
     setSubmitAttempted(true)
     const normalizedRevision = revisionCode.trim().toUpperCase()
     const nextFieldErrors = {}
+    if (revisionFetchError) {
+      setError(revisionFetchError)
+      toast.error(revisionFetchError)
+      return
+    }
     if (!REVISION_PATTERN.test(normalizedRevision)) {
       nextFieldErrors.revisionCode = 'Revision must be like R0, R1, R2'
     }
@@ -346,7 +371,7 @@ export function ProjectCreateTaskModal({ open, onClose, onCreated, submissionDat
     }
     if (Object.keys(nextFieldErrors).length > 0) {
       setFieldErrors(nextFieldErrors)
-      setError(nextFieldErrors.projectName || 'Please fill required fields')
+      setError(nextFieldErrors.projectName || (nextFieldErrors.revisionCode ? nextFieldErrors.revisionCode : 'Please fill required fields'))
       return
     }
     const disciplineMap = [
@@ -364,6 +389,17 @@ export function ProjectCreateTaskModal({ open, onClose, onCreated, submissionDat
             if (!child[hours] || Number.isNaN(h) || h < 1) {
               toast.error(`${label} hours must be a number (min 1) for all checked disciplines`)
               return
+            }
+            const rowDeadline = child.deadline
+              ? new Date(child.deadline)
+              : (localDeadline instanceof Date && !Number.isNaN(localDeadline.getTime()) ? localDeadline : null)
+            if (rowDeadline) {
+              const hoursCheck = assertHoursWithinDeadline(h, rowDeadline)
+              if (!hoursCheck.ok) {
+                setError(hoursCheck.message)
+                toast.error(hoursCheck.message)
+                return
+              }
             }
           }
         }
@@ -462,7 +498,14 @@ export function ProjectCreateTaskModal({ open, onClose, onCreated, submissionDat
       if (onCreated) onCreated(tasks)
       else onClose()
     } catch (err) {
-      setError(err instanceof Error ? err.message : 'Failed to create project task')
+      const msg = err instanceof Error ? err.message : 'Failed to create project task'
+      setError(msg)
+      setFieldErrors((prev) => {
+        const next = { ...prev }
+        delete next.revisionCode
+        return next
+      })
+      toast.error(msg)
     } finally {
       setSubmitting(false)
     }

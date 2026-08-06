@@ -140,6 +140,7 @@ A task is "split" when the HOD assigns it to multiple designers in the scheduler
 - **REWORK** (`PATCH /tasks/:id/status` with `status: REWORK`) keeps the **same** task and assignee(s). Instructions (`reworkNote` / attachment / link) are stored on that task. No revision bump and no new task row. Designer can continue (or HOD can reassign via existing flows).
 - **CLIENT_REJECTED** marks the old task rejected and **creates a new revision task** (next `R{n}`), cloned from the rejected task, unassigned (`DESIGN_NEW`), with `previousRevisionTaskId` pointing at the old task. Optional reject instructions are copied onto the new revision.
 - Only `SALESPERSON` or `ADMIN` may issue REWORK or CLIENT_REJECTED.
+- **Revision lock (Create Task):** `GET /tasks/next-revision` and create paths (`POST /tasks`, `POST /tasks/extended`) stay on the current **open** revision for the same `projectId` + `opNo` + `designType`. They never mint `R{n+1}` while any non-terminal task exists in that scope. Advancement to the next revision happens **only** via `CLIENT_REJECTED` (which creates a new `DESIGN_NEW` task at `R{n+1}`). If the highest revision is already `CLIENT_REJECTED` and no open successor exists yet, Create Task / next-revision may use `R{n+1}` (reject already authorized the bump). Pure `CLIENT_ACCEPTED` lines still cannot start a new revision from Create Task.
 
 ## Task Create Rules (Important)
 

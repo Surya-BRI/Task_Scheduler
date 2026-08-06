@@ -1500,8 +1500,11 @@ export function TaskDetailsPage() {
         toast.success('Rework issued — same task returned to the designer.')
       } else if (newStatus === 'CLIENT_REJECTED' && res?.newRevisionTaskNo) {
         toast.success(`Client rejected — revision ${res.newRevisionTaskNo} created and queued for assignment.`)
+        // Reload project task list so the new DESIGN_NEW / Rn row appears beside the rejected one.
+        setTaskRefreshCounter((c) => c + 1)
       } else if (newStatus === 'CLIENT_REJECTED') {
         toast.error('Client rejected but revision task creation failed — check backend logs.')
+        setTaskRefreshCounter((c) => c + 1)
       }
       // Hold clears scheduler rows — refresh extras only (hours / realloc), not full core.
       void fetchTaskExtras(taskId)
@@ -2135,7 +2138,7 @@ export function TaskDetailsPage() {
       void fetchProjectTasks()
     }, 350)
     return () => clearTimeout(timer)
-  }, [fetchProjectTasks, projectId])
+  }, [fetchProjectTasks, projectId, taskRefreshCounter])
 
   const focusPostId = searchParams.get('postId')
   const focusCommentId = searchParams.get('commentId')

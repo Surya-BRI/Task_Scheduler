@@ -52,10 +52,10 @@ describe('TasksService', () => {
       create: jest.fn(),
     },
     project: { findFirst: jest.fn(), findMany: jest.fn(), update: jest.fn(), create: jest.fn() },
-    projectTaskDetail: { create: jest.fn() },
     retailTaskDetail: { create: jest.fn() },
-    retailTaskDetailAttachment: { create: jest.fn() },
-    projectTaskDetailAttachment: { create: jest.fn() },
+    retailTaskDetailAttachment: { create: jest.fn(), createMany: jest.fn() },
+    projectTaskDetailAttachment: { create: jest.fn(), createMany: jest.fn() },
+    projectTaskDetail: { create: jest.fn() },
     chatterPost: { create: jest.fn() },
     $queryRaw: jest.fn(),
     $transaction: jest.fn((cb: (tx: any) => Promise<unknown>) => cb(prisma)),
@@ -558,6 +558,193 @@ describe('TasksService', () => {
       await service.createExtended('user-1', dto);
 
       expect(prisma.task.create.mock.calls[0][0].data.phase).toBe(1);
+    });
+  });
+
+  describe('revision lock — Create Task / next-revision', () => {
+    const REVISION_MSG = 'New revision cannot be created when the current revision is still open';
+    const projectRow = {
+      id: 'project-1',
+      projectNo: 'P-1',
+      name: 'Project One',
+      category: 'Project',
+      businessUnit: null,
+      description: null,
+      status: 'ACTIVE',
+      salesPerson: null,
+      technicalHead: 'TH',
+      teamLead: 'TL',
+      subTeamLead: 'STL',
+      designers: 'Alex',
+      createdById: null,
+      createdAt: new Date('2026-01-01T00:00:00.000Z'),
+      updatedAt: new Date('2026-01-01T00:00:00.000Z'),
+    };
+
+    it('getNextRevision returns open R0 instead of R1 while work is in progress', async () => {
+      prisma.task.findMany.mockResolvedValue([
+        { taskNo: 'T-1', revisionCode: 'R0', status: 'IN_PROGRESS' },
+      ]);
+
+      const result = await service.getNextRevision({
+        projectId: 'project-1',
+        opNo: 'OP-1',
+        designType: 'Project',
+      });
+
+      expect(result.revisionCode).toBe('R0');
+    });
+
+    it('getNextRevision returns R0 when no tasks exist in scope', async () => {
+      prisma.task.findMany.mockResolvedValue([]);
+
+      const result = await service.getNextRevision({
+        projectId: 'project-1',
+        opNo: 'OP-1',
+        designType: 'Retail',
+      });
+
+      expect(result.revisionCode).toBe('R0');
+    });
+
+    it('getNextRevision returns R1 after CLIENT_REJECTED with no open successor', async () => {
+      prisma.task.findMany.mockResolvedValue([
+        { taskNo: 'T-1', revisionCode: 'R0', status: 'CLIENT_REJECTED' },
+      ]);
+
+      const result = await service.getNextRevision({
+        projectId: 'project-1',
+        opNo: 'OP-1',
+        designType: 'Retail',
+      });
+
+      expect(result.revisionCode).toBe('R1');
+    });
+
+    it('getNextRevision blocks when only CLIENT_ACCEPTED tasks exist', async () => {
+      prisma.task.findMany.mockResolvedValue([
+        { taskNo: 'T-1', revisionCode: 'R0', status: 'CLIENT_ACCEPTED' },
+      ]);
+
+      await expect(
+        service.getNextRevision({ projectId: 'project-1', opNo: 'OP-1', designType: 'Project' }),
+      ).rejects.toThrow(REVISION_MSG);
+    });
+
+    it('createExtended rejects explicit R1 while R0 is still open', async () => {
+      prisma.project.findFirst.mockResolvedValue(projectRow);
+      prisma.$queryRaw.mockResolvedValue([{ status: 'completed' }]);
+      prisma.task.findMany.mockResolvedValue([
+        { taskNo: 'T-1', revisionCode: 'R0', status: 'HOD_REVIEW' },
+      ]);
+
+      await expect(
+        service.createExtended('user-1', {
+          designType: 'Project',
+          task: {
+            projectNo: 'P-1',
+            projectName: 'Project One',
+            opNo: 'OP-1',
+            revisionCode: 'R1',
+          },
+          projectDetails: [
+            { signType: 'Pylon', disciplineType: 'Artwork', artwork: true, artworkHours: 2 },
+          ],
+        } as any),
+      ).rejects.toThrow(/still open/);
+
+      expect(prisma.task.create).not.toHaveBeenCalled();
+    });
+
+    it('createExtended stays on open R0 when revision is omitted', async () => {
+      prisma.project.findFirst.mockResolvedValue(projectRow);
+      prisma.$queryRaw.mockResolvedValue([{ status: 'completed' }]);
+      prisma.user.findMany.mockResolvedValue([]);
+      prisma.task.findMany
+        .mockResolvedValueOnce([
+          { taskNo: 'T-1', revisionCode: 'R0', status: 'IN_PROGRESS' },
+        ])
+        .mockResolvedValueOnce([])
+        .mockResolvedValueOnce([]);
+      prisma.task.create.mockResolvedValue({ id: 'task-new' });
+      prisma.projectTaskDetail.create.mockResolvedValue({ id: 'detail-1' });
+      prisma.task.findUnique.mockResolvedValue({
+        id: 'task-new',
+        taskNo: 'T-new',
+        opNo: 'OP-1',
+        title: 'Signage',
+        status: 'DESIGN_NEW',
+        assigneeId: null,
+        assignee: null,
+        project: { id: 'project-1', projectNo: 'P-1', name: 'Project One' },
+      });
+
+      await service.createExtended('user-1', {
+        designType: 'Project',
+        task: { projectNo: 'P-1', projectName: 'Project One', opNo: 'OP-1', phase: 1 },
+        projectDetails: [
+          { signType: 'Monolith', disciplineType: 'Technical', technical: true, technicalHours: 2 },
+        ],
+      } as any);
+
+      expect(prisma.task.create.mock.calls[0][0].data.revisionCode).toBe('R0');
+    });
+
+    it('createExtended uses open-revision toast wording when the R0 slot is already taken', async () => {
+      prisma.project.findFirst.mockResolvedValue(projectRow);
+      prisma.$queryRaw.mockResolvedValue([{ status: 'completed' }]);
+      prisma.task.findMany.mockReset();
+      prisma.task.findMany
+        .mockResolvedValueOnce([
+          { taskNo: 'T-1', revisionCode: 'R0', status: 'IN_PROGRESS' },
+        ])
+        .mockResolvedValueOnce([
+          { taskNo: 'T-1', revisionCode: 'R0', status: 'IN_PROGRESS' },
+        ]);
+
+      await expect(
+        service.createExtended('user-1', {
+          designType: 'Project',
+          task: {
+            projectNo: 'P-1',
+            projectName: 'Project One',
+            opNo: 'OP-1',
+            revisionCode: 'R0',
+            phase: 1,
+          },
+          projectDetails: [
+            { signType: 'Pylon', disciplineType: 'Artwork', artwork: true, artworkHours: 2 },
+          ],
+        } as any),
+      ).rejects.toThrow(/still open \(T-1, R0, IN_PROGRESS\)/);
+
+      expect(prisma.task.create).not.toHaveBeenCalled();
+    });
+
+    it('createExtended blocks a new revision when only CLIENT_ACCEPTED tasks exist', async () => {
+      prisma.project.findFirst.mockResolvedValue(projectRow);
+      prisma.$queryRaw.mockResolvedValue([{ status: 'completed' }]);
+      prisma.task.findMany.mockReset();
+      prisma.task.findMany.mockResolvedValue([
+        { taskNo: 'T-1', revisionCode: 'R0', status: 'CLIENT_ACCEPTED' },
+      ]);
+
+      await expect(
+        service.createExtended('user-1', {
+          designType: 'Project',
+          task: {
+            projectNo: 'P-1',
+            projectName: 'Project One',
+            opNo: 'OP-1',
+            revisionCode: 'R1',
+          },
+          projectDetails: [
+            { signType: 'Pylon', disciplineType: 'Artwork', artwork: true, artworkHours: 2 },
+          ],
+        } as any),
+      ).rejects.toThrow(REVISION_MSG);
+
+      expect(prisma.task.create).not.toHaveBeenCalled();
     });
   });
 
