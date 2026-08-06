@@ -18,7 +18,10 @@ function projectHref(row) {
   return `/qs/projects/${encodeURIComponent(projectCode)}${op ? `?op=${encodeURIComponent(op)}` : ''}`
 }
 
-const renderCell = (value) => (value == null || value === '' ? 'null' : String(value))
+const renderCell = (value) => {
+  if (value == null || value === '' || value === 'null' || value === 'undefined') return '—'
+  return String(value)
+}
 
 export default function QsProjectsPage() {
   const router = useRouter()

@@ -371,7 +371,10 @@ export function listChatterMentionUsers(params?: { taskId?: string | null; proje
   if (params?.taskId?.trim()) qs.set('taskId', params.taskId.trim());
   if (params?.projectId?.trim()) qs.set('projectId', params.projectId.trim());
   const suffix = qs.toString() ? `?${qs.toString()}` : '';
-  return apiClient.get<ChatterMentionUser[]>(`/chatter-posts/mention-users${suffix}`);
+  const key = `chatter-mention-users${suffix}`;
+  return singleflight(key, () =>
+    apiClient.get<ChatterMentionUser[]>(`/chatter-posts/mention-users${suffix}`),
+  );
 }
 
 export type ChatterPostsPagedResponse = {

@@ -83,7 +83,7 @@ export function TeamActivityFeedScreenInner() {
     void loadActivities(false);
     const interval = setInterval(() => {
       if (document.visibilityState === "visible") void loadActivities(true);
-    }, 60_000);
+    }, 90_000);
     const onVisible = () => {
       if (document.visibilityState === "visible") void loadActivities(true);
     };

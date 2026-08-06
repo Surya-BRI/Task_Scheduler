@@ -210,7 +210,7 @@ const Toolbar = ({ viewMode, setViewMode, filters, setFilters, designerName }) =
 
 const Table = ({ data }) => {
   const router = useRouter();
-  return <div className="flex min-h-0 flex-1 flex-col px-4 pb-6 sm:px-6"><div className="ui-surface h-full overflow-auto"><table className="w-full text-xs text-left leading-tight"><thead className="ui-table-header sticky top-0 z-10 border-b border-slate-200"><tr><th className="px-2 py-1.5">OP No</th><th className="px-2 py-1.5">Project No</th><th className="px-2 py-1.5">Business Unit</th><th className="px-2 py-1.5">Design Type</th><th className="px-2 py-1.5">Revision</th><th className="px-2 py-1.5">Project Name</th><th className="px-2 py-1.5">Status</th><th className="px-2 py-1.5">Sales Person</th><th className="px-2 py-1.5">Created</th><th className="px-2 py-1.5">Deadline</th><th className="px-2 py-1.5">Aging</th><th className="px-2 py-1.5 text-center">Actions</th></tr></thead><tbody className="divide-y divide-slate-100">{data.map((row) => <tr key={row.id} className="hover:bg-slate-50 transition-colors"><td className="px-2 py-1 text-slate-800 font-medium">{row.opNo}</td><td className="px-2 py-1"><button type="button" onClick={() => router.push(taskDetailPath(row))} className="text-left text-blue-600 cursor-pointer hover:underline font-medium">{row.projectNo}</button></td><td className="px-2 py-1 text-slate-700">{row.businessUnit}</td><td className="px-2 py-1 font-medium text-slate-800 whitespace-nowrap" ><TypeOfDesignChip value={row.typeOfDesign} /></td><td className="px-2 py-1 w-[180px]"><button type="button" onClick={() => router.push(taskDetailPath(row))} className="block w-[180px] overflow-hidden text-ellipsis whitespace-nowrap text-left text-slate-900 font-medium hover:text-blue-600 hover:underline" title={row.name}>{truncateText(row.name, 20)}</button></td><td className="px-2 py-1 text-slate-700 w-[200px] whitespace-nowrap" title={row.projectName || "�"}>{truncateText(row.projectName, 20)}</td><td className="px-2 py-1"><span className={`px-1.5 py-0.5 rounded-full text-[10px] font-medium leading-none inline-block ${getStatusColor(row.status)}`}>{getStatusLabel(row.status)}</span></td><td className="px-2 py-1 text-slate-700">{row.salesPerson}</td><td className="px-2 py-1 text-slate-500 whitespace-nowrap">{row.created}</td><td className="px-2 py-1 text-slate-500 whitespace-nowrap">{row.deadline}</td><td className={`px-2 py-1 font-medium whitespace-nowrap ${row.agingDays > 20 ? "text-red-600" : "text-slate-500"}`}>{row.agingDays} d</td><td className="px-2 py-1"><div className="inline-flex items-center justify-center"><ProjectTaskTimer taskId={String(row.id)} taskStatus={row.status} inline /></div></td></tr>)}</tbody></table></div></div>;
+  return <div className="flex min-h-0 flex-1 flex-col px-4 pb-6 sm:px-6"><div className="ui-surface h-full overflow-auto"><table className="w-full text-xs text-left leading-tight"><thead className="ui-table-header sticky top-0 z-10 border-b border-slate-200"><tr><th className="px-2 py-1.5">OP No</th><th className="px-2 py-1.5">Project No</th><th className="px-2 py-1.5">Business Unit</th><th className="px-2 py-1.5">Design Type</th><th className="px-2 py-1.5">Revision</th><th className="px-2 py-1.5">Project Name</th><th className="px-2 py-1.5">Status</th><th className="px-2 py-1.5">Sales Person</th><th className="px-2 py-1.5">Created</th><th className="px-2 py-1.5">Deadline</th><th className="px-2 py-1.5">Aging</th><th className="px-2 py-1.5 text-center">Actions</th></tr></thead><tbody className="divide-y divide-slate-100">{data.map((row) => <tr key={row.id} className="hover:bg-slate-50 transition-colors"><td className="px-2 py-1 text-slate-800 font-medium">{row.opNo}</td><td className="px-2 py-1"><button type="button" onClick={() => router.push(taskDetailPath(row))} className="text-left text-blue-600 cursor-pointer hover:underline font-medium">{row.projectNo}</button></td><td className="px-2 py-1 text-slate-700">{row.businessUnit}</td><td className="px-2 py-1 font-medium text-slate-800 whitespace-nowrap" ><TypeOfDesignChip value={row.typeOfDesign} /></td><td className="px-2 py-1 w-[180px]"><button type="button" onClick={() => router.push(taskDetailPath(row))} className="block w-[180px] overflow-hidden text-ellipsis whitespace-nowrap text-left text-slate-900 font-medium hover:text-blue-600 hover:underline" title={row.name}>{truncateText(row.name, 20)}</button></td><td className="px-2 py-1 text-slate-700 w-[200px] whitespace-nowrap" title={row.projectName || "—"}>{truncateText(row.projectName, 20)}</td><td className="px-2 py-1"><span className={`px-1.5 py-0.5 rounded-full text-[10px] font-medium leading-none inline-block ${getStatusColor(row.status)}`}>{getStatusLabel(row.status)}</span></td><td className="px-2 py-1 text-slate-700">{row.salesPerson}</td><td className="px-2 py-1 text-slate-500 whitespace-nowrap">{row.created}</td><td className="px-2 py-1 text-slate-500 whitespace-nowrap">{row.deadline}</td><td className={`px-2 py-1 font-medium whitespace-nowrap ${row.agingDays > 20 ? "text-red-600" : "text-slate-500"}`}>{row.agingDays} d</td><td className="px-2 py-1"><div className="inline-flex items-center justify-center"><ProjectTaskTimer taskId={String(row.id)} taskStatus={row.status} initialSubmittedSeconds={row.submittedDurationSeconds} inline /></div></td></tr>)}</tbody></table></div></div>;
 };
 
 const Board = ({ data }) => {
@@ -254,7 +254,12 @@ const Board = ({ data }) => {
                   </div>
                   {/* Same timer controls + lock rules as list view (ProjectTaskTimer). */}
                   <div className="shrink-0" onClick={(e) => e.stopPropagation()}>
-                    <ProjectTaskTimer taskId={String(item.id)} taskStatus={item.status} inline />
+                    <ProjectTaskTimer
+                      taskId={String(item.id)}
+                      taskStatus={item.status}
+                      initialSubmittedSeconds={item.submittedDurationSeconds}
+                      inline
+                    />
                   </div>
                 </div>
               </div>
@@ -284,13 +289,17 @@ const ListSkeleton = () => (
 );
 
 export function DesignerDesignListScreen() {
+  const PAGE_SIZE = 100;
   const [designerIdentity, setDesignerIdentity] = useState({ id: "", name: "Designer" });
   const [allDesigns, setAllDesigns] = useState([]);
+  const [serverTotal, setServerTotal] = useState(0);
+  const [page, setPage] = useState(1);
   const [viewMode, setViewMode] = useState("list");
   const [filters, setFilters] = useState({ type: "", status: "", startDate: "", endDate: "", searchQuery: "" });
   const [debouncedSearchQuery, setDebouncedSearchQuery] = useState("");
   const [listRefreshTick, setListRefreshTick] = useState(0);
   const [listLoading, setListLoading] = useState(true);
+  const [listError, setListError] = useState("");
 
   useEffect(() => {
     const session = getSession();
@@ -306,6 +315,9 @@ export function DesignerDesignListScreen() {
     return () => clearTimeout(timer);
   }, [filters.searchQuery]);
 
+  const filterKey = `${debouncedSearchQuery}|${filters.status}|${filters.type}|${filters.startDate}|${filters.endDate}|${viewMode}`;
+  const prevFilterKeyRef = useRef(filterKey);
+
   const reloadList = useCallback(() => {
     setListRefreshTick((n) => n + 1);
   }, []);
@@ -313,11 +325,20 @@ export function DesignerDesignListScreen() {
   useTaskLifecycleRefresh({ onRefresh: reloadList, debounceMs: 400 });
 
   useEffect(() => {
+    // When filters change, reset to page 1 and skip the stale page>1 fetch.
+    if (prevFilterKeyRef.current !== filterKey) {
+      prevFilterKeyRef.current = filterKey;
+      if (page !== 1) {
+        setPage(1);
+        return undefined;
+      }
+    }
     let mounted = true;
     setListLoading(true);
+    setListError("");
     const params = new URLSearchParams();
-    params.set("page", "1");
-    params.set("limit", "500");
+    params.set("page", String(Math.max(1, page)));
+    params.set("limit", String(PAGE_SIZE));
     if (debouncedSearchQuery.trim()) params.set("search", debouncedSearchQuery.trim());
     if (filters.status) params.set("status", filters.status);
     if (filters.type) params.set("type", filters.type);
@@ -327,13 +348,21 @@ export function DesignerDesignListScreen() {
       if (!mounted) return;
       const rows = Array.isArray(res?.data) ? res.data.map(mapTaskToDesignRow) : [];
       setAllDesigns(rows);
-    }).catch(() => { if (mounted) setAllDesigns([]); }).finally(() => {
+      setServerTotal(Number(res?.total ?? rows.length) || 0);
+    }).catch((err) => {
+      if (!mounted) return;
+      setAllDesigns([]);
+      setServerTotal(0);
+      setListError(err instanceof Error ? err.message : "Could not load tasks.");
+    }).finally(() => {
       if (mounted) setListLoading(false);
     });
     return () => { mounted = false; };
-  }, [debouncedSearchQuery, filters.status, filters.type, filters.startDate, filters.endDate, listRefreshTick]);
+  }, [filterKey, debouncedSearchQuery, filters.status, filters.type, filters.startDate, filters.endDate, listRefreshTick, page]);
 
   const filteredDesigns = useMemo(() => allDesigns, [allDesigns]);
+  const totalPages = Math.max(1, Math.ceil(Math.max(serverTotal, 1) / PAGE_SIZE));
+  const currentPage = Math.min(page, totalPages);
 
   return (
     <ActiveRunningTaskProvider>
@@ -343,6 +372,17 @@ export function DesignerDesignListScreen() {
         <div className="shrink-0"><Toolbar viewMode={viewMode} setViewMode={setViewMode} filters={filters} setFilters={setFilters} designerName={designerIdentity.name} /></div>
         {listLoading ? (
           <ListSkeleton />
+        ) : listError ? (
+          <div className="flex flex-1 flex-col items-center justify-center gap-3 px-6 py-10 text-sm text-slate-600">
+            <p>{listError}</p>
+            <button
+              type="button"
+              onClick={reloadList}
+              className="rounded-md border border-slate-300 bg-white px-3 py-1.5 text-sm font-medium text-slate-700 hover:bg-slate-50"
+            >
+              Retry
+            </button>
+          </div>
         ) : filteredDesigns.length < 1 ? (
           <div className="flex flex-1 items-center justify-center px-6 py-10 text-sm text-slate-500">No tasks are available for {designerIdentity.name}.</div>
         ) : viewMode === "list" ? (
@@ -350,6 +390,33 @@ export function DesignerDesignListScreen() {
         ) : (
           <Board data={filteredDesigns} />
         )}
+        {!listLoading && !listError && serverTotal > 0 ? (
+          <div className="shrink-0 flex items-center justify-between px-4 pb-4 pt-2 sm:px-6 text-xs text-slate-600">
+            <span>
+              Showing {(currentPage - 1) * PAGE_SIZE + 1}-
+              {Math.min(currentPage * PAGE_SIZE, serverTotal)} of {serverTotal}
+            </span>
+            <div className="flex items-center gap-2">
+              <button
+                type="button"
+                onClick={() => setPage((p) => Math.max(1, p - 1))}
+                disabled={currentPage === 1}
+                className="px-2.5 py-1 border border-slate-300 rounded disabled:opacity-50 disabled:cursor-not-allowed hover:bg-slate-50"
+              >
+                Prev
+              </button>
+              <span>Page {currentPage} / {totalPages}</span>
+              <button
+                type="button"
+                onClick={() => setPage((p) => Math.min(totalPages, p + 1))}
+                disabled={currentPage === totalPages}
+                className="px-2.5 py-1 border border-slate-300 rounded disabled:opacity-50 disabled:cursor-not-allowed hover:bg-slate-50"
+              >
+                Next
+              </button>
+            </div>
+          </div>
+        ) : null}
       </div>
     </div>
     </ActiveRunningTaskProvider>
