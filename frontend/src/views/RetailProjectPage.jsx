@@ -1223,8 +1223,6 @@ function ActivityTimelinePane({
   const [expandedTaskId, setExpandedTaskId] = useState(null)
   const hodDisplayName = (value) => {
     if (!value) return '-'
-    if (value === 'hod-1') return 'A. Khan'
-    if (value === 'hod-2') return 'M. Rahman'
     return value
   }
   return (
