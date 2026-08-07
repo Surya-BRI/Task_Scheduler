@@ -556,8 +556,6 @@ function ActivityTimelinePane({
   const [expandedTaskId, setExpandedTaskId] = useState(null)
   const hodDisplayName = (value) => {
     if (!value) return '-'
-    if (value === 'hod-1') return 'A. Khan'
-    if (value === 'hod-2') return 'M. Rahman'
     return value
   }
   return (
@@ -709,8 +707,6 @@ function formatDdMmYyyy(dateLike) {
 function prettifyHodName(value) {
   const raw = String(value ?? '').trim()
   if (!raw) return '-'
-  if (raw === 'hod-1') return 'A. Khan'
-  if (raw === 'hod-2') return 'M. Rahman'
   return raw
 }
 

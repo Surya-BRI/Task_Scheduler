@@ -74,6 +74,9 @@ export function CreateTaskModal({ open, onClose, onCreated, submissionDate, reco
   const [touched, setTouched] = useState({})
   const [submitAttempted, setSubmitAttempted] = useState(false)
   const [revisionFetchError, setRevisionFetchError] = useState('')
+  const [hodUsers, setHodUsers] = useState([])
+  const [hodUsersLoading, setHodUsersLoading] = useState(false)
+  const [hodUsersError, setHodUsersError] = useState('')
 
   useEffect(() => {
     if (!open) return undefined
@@ -87,6 +90,31 @@ export function CreateTaskModal({ open, onClose, onCreated, submissionDate, reco
       document.body.style.overflow = ''
     }
   }, [open, onClose])
+
+  useEffect(() => {
+    if (!open) return undefined
+    let alive = true
+    setHodUsersLoading(true)
+    setHodUsersError('')
+    apiClient
+      .get('/users?role=HOD')
+      .then((res) => {
+        if (!alive) return
+        const list = Array.isArray(res) ? res : (res?.data ?? [])
+        setHodUsers(Array.isArray(list) ? list : [])
+      })
+      .catch((err) => {
+        if (!alive) return
+        setHodUsers([])
+        setHodUsersError(err instanceof Error ? err.message : 'Could not load HOD list')
+      })
+      .finally(() => {
+        if (alive) setHodUsersLoading(false)
+      })
+    return () => {
+      alive = false
+    }
+  }, [open])
 
   useEffect(() => {
     if (!open) {
@@ -485,13 +513,28 @@ export function CreateTaskModal({ open, onClose, onCreated, submissionDate, reco
                 }}
                 onBlur={() => setTouched((prev) => ({ ...prev, hod: true }))}
                 required
-                className="mt-1.5 w-full rounded-md border border-slate-300 bg-white px-3 py-2 text-sm text-slate-900 outline-none transition-colors focus:border-blue-500 focus:ring-2 focus:ring-blue-500/20"
+                disabled={hodUsersLoading || Boolean(hodUsersError)}
+                className="mt-1.5 w-full rounded-md border border-slate-300 bg-white px-3 py-2 text-sm text-slate-900 outline-none transition-colors focus:border-blue-500 focus:ring-2 focus:ring-blue-500/20 disabled:cursor-not-allowed disabled:bg-slate-50"
               >
-                <option value="">Select</option>
-                <option value="Sarah Mitchell">Sarah Mitchell</option>
-                <option value="A. Khan">A. Khan</option>
-                <option value="M. Rahman">M. Rahman</option>
+                <option value="">
+                  {hodUsersLoading ? 'Loading HODs…' : hodUsersError ? 'Failed to load HODs' : 'Select'}
+                </option>
+                {hodUsers.map((user) => {
+                  const name = String(user?.fullName ?? '').trim()
+                  if (!name) return null
+                  return (
+                    <option key={user.id ?? name} value={name}>
+                      {name}
+                    </option>
+                  )
+                })}
               </select>
+              {hodUsersError ? (
+                <p className="mt-1 text-xs text-red-600">{hodUsersError}</p>
+              ) : null}
+              {!hodUsersLoading && !hodUsersError && hodUsers.length === 0 ? (
+                <p className="mt-1 text-xs text-amber-700">No HOD users found. Seed HOD accounts first.</p>
+              ) : null}
               {((submitAttempted || touched.hod) && !hod.trim()) || fieldErrors.hod ? (
                 <p className="mt-1 text-xs text-red-600">{fieldErrors.hod || 'HOD is required'}</p>
               ) : null}
