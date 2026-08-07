@@ -1438,7 +1438,8 @@ export class TasksService {
         ],
       };
     } else if (role === UserRole.SALESPERSON && salesHistory) {
-      const historyTaskIds = await this.findSalesHistoryTaskIds(userId, Math.max(limit * page, 500));
+      // Distinct task ids only — no growing activity take(500–1000). Pagination stays on Task.
+      const historyTaskIds = await this.findSalesHistoryTaskIds(userId);
       if (historyTaskIds.length === 0) {
         return { data: [], total: 0, page, limit, totalPages: 0 };
       }
@@ -1592,39 +1593,36 @@ export class TasksService {
   }
 
   /**
-   * Task ids the salesperson already decided on after Sales Review
+   * Distinct task ids the salesperson already decided on after Sales Review
    * (accepted / rejected / rework / other leave from SALES_REVIEW).
    * Active ON_HOLD parked from Sales Review is excluded by findAll's salesHistory filter
    * so those remain in the Queue for Resume.
+   *
+   * Uses DISTINCT over activity rows (no take 500–1000 cap) so deep pages stay correct;
+   * findAll then paginates Task rows with skip/limit.
    */
-  private async findSalesHistoryTaskIds(salesUserId: string, take = 500): Promise<string[]> {
-    const rows = await this.prisma.activityLog.findMany({
-      where: {
-        userId: salesUserId,
-        taskId: { not: null },
-        OR: [
-          { action: ActivityAction.CLIENT_APPROVED },
-          { action: ActivityAction.CLIENT_REJECTED_TASK },
-          {
-            action: ActivityAction.STATUS_CHANGED,
-            details: { contains: '"oldStatus":"SALES_REVIEW"' },
-          },
-        ],
-      },
-      select: { taskId: true, createdAt: true },
-      orderBy: { createdAt: 'desc' },
-      take: Math.min(Math.max(take, 50), 1000),
-    });
+  private async findSalesHistoryTaskIds(salesUserId: string): Promise<string[]> {
+    const approved = ActivityAction.CLIENT_APPROVED;
+    const rejected = ActivityAction.CLIENT_REJECTED_TASK;
+    const statusChanged = ActivityAction.STATUS_CHANGED;
+    const salesReviewMarker = '%"oldStatus":"SALES_REVIEW"%';
 
-    const seen = new Set<string>();
-    const ids: string[] = [];
-    for (const row of rows) {
-      const id = row.taskId;
-      if (!id || seen.has(id)) continue;
-      seen.add(id);
-      ids.push(id);
-    }
-    return ids;
+    const rows = await this.prisma.$queryRaw<Array<{ taskId: string }>>(Prisma.sql`
+      SELECT DISTINCT [taskId] AS [taskId]
+      FROM [ErpTSActivityLog]
+      WHERE [userId] = ${salesUserId}
+        AND [taskId] IS NOT NULL
+        AND (
+          [action] = ${approved}
+          OR [action] = ${rejected}
+          OR (
+            [action] = ${statusChanged}
+            AND [details] LIKE ${salesReviewMarker}
+          )
+        )
+    `);
+
+    return rows.map((row) => row.taskId).filter(Boolean);
   }
 
   /** Sidebar backlog only — unassigned + on-hold, excluding completed. */

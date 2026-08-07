@@ -34,10 +34,9 @@ function nextStatus(current) {
 
 function shouldLoadDesignList(pathname) {
   if (!pathname) return false
-  // Project Design hub + design-list record pages consume the store.
-  // HOD/Sales Design List screens load via GET /tasks — skip unused /design-list there.
-  if (pathname.startsWith('/project-design') || pathname.startsWith('/sales/project-design')) return true
-  if (pathname.includes('/design-list/record')) return true
+  // Project Design hub fetches its own paginated /design-list?fields=hub.
+  // Legacy /design-list/record redirects to task-summary — do not pull ERP catalog.
+  // HOD/Sales Design List screens load via GET /tasks.
   return false
 }
 

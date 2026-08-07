@@ -1,4 +1,5 @@
 import { apiClient } from '@/lib/api-client';
+import { formatHoursAsHm } from '@/lib/format-duration';
 
 export type ReallocationRequestDto = {
   id: string;
@@ -104,4 +105,28 @@ export function reviewReallocationRequest(
     `/reallocation-requests/${encodeURIComponent(id)}/review`,
     payload,
   );
+}
+
+/** Success vs warning copy after approve — surfaces unplacedHours so hours aren't silently dropped. */
+export function reallocationApproveFeedback(result: {
+  remainingHoursMoved?: number | null;
+  unplacedHours?: number | null;
+}): { tone: 'success' | 'warning'; title: string; description?: string } {
+  const moved = Number(result?.remainingHoursMoved ?? 0);
+  const unplaced = Number(result?.unplacedHours ?? 0);
+  if (unplaced > 0.001) {
+    const movedLabel = Number.isFinite(moved) && moved > 0 ? formatHoursAsHm(moved) : '0m';
+    return {
+      tone: 'warning',
+      title: `Reallocation approved — ${formatHoursAsHm(unplaced)} could not be placed`,
+      description: `${movedLabel} moved to the target designer within 6 weeks. Schedule the rest manually.`,
+    };
+  }
+  if (Number.isFinite(moved) && moved > 0) {
+    return {
+      tone: 'success',
+      title: `Reallocation approved — ${formatHoursAsHm(moved)} scheduled`,
+    };
+  }
+  return { tone: 'success', title: 'Reallocation approved — schedule updated' };
 }

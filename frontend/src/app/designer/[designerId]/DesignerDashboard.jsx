@@ -26,9 +26,13 @@ import { apiClient } from "@/lib/api-client";
 import { FROM_DESIGN_LIST, FROM_DESIGNER_QUEUE, taskViewPathForRecord } from "@/lib/design-list-routes";
 import { getSession } from "@/lib/mock-auth";
 import { leavePlannerPath, requestsPath } from "@/lib/role-routes";
-import { connectDashboardRealtime } from "@/lib/realtime";
+import { connectDashboardRealtime, isDashboardRealtimeConnected } from "@/lib/realtime";
 
 const UUID_RE = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
+
+/** Backup HTTP poll only when the dashboard socket is down (WS drives live updates). */
+const BACKUP_POLL_MS = 180_000;
+
 
 function fmtYmd(date) {
   const y = date.getFullYear();
@@ -367,14 +371,17 @@ export default function DesignerDashboard({ designer: designerProp } = {}) {
     fetchWeekAssignments(true);
   }, [erpId, currentDate, fetchWeekAssignments]);
 
-  // Poll every 30s — but only when the tab is visible (no point hitting the network while hidden)
+  // Backup poll only when WS is down (and tab visible). Live updates come from dashboard:refresh.
   useEffect(() => {
     if (!erpId) return;
     const id = setInterval(() => {
-      if (!document.hidden) fetchWeekAssignments(false);
-    }, 30_000);
+      if (document.hidden) return;
+      if (isDashboardRealtimeConnected()) return;
+      void fetchWeekAssignments(false);
+      void refreshAssigneeTaskStats().catch(() => {});
+    }, BACKUP_POLL_MS);
     return () => clearInterval(id);
-  }, [erpId, fetchWeekAssignments]);
+  }, [erpId, fetchWeekAssignments, refreshAssigneeTaskStats]);
 
   useEffect(() => {
     if (!erpId) return undefined;
@@ -435,10 +442,12 @@ export default function DesignerDashboard({ designer: designerProp } = {}) {
     };
     syncLocalNow();
 
-    // On tab focus/visibility restore: hit the API so cross-machine HOD changes appear.
-    // visibilitychange also fires on hide — guard so we only fetch when becoming visible.
+    // On tab focus/visibility restore: hit the API so cross-machine HOD changes appear
+    // (and catch anything missed while WS was down). Only when becoming visible.
     const syncApiOnFocus = () => {
-      if (document.visibilityState === 'visible') fetchWeekAssignments(false);
+      if (document.visibilityState !== "visible") return;
+      void fetchWeekAssignments(false);
+      void refreshAssigneeTaskStats().catch(() => {});
     };
 
     const handleStorage = (e) => { if (e.key === SCHEDULER_DASHBOARD_SYNC_KEY) syncLocalNow(); };
@@ -453,7 +462,7 @@ export default function DesignerDashboard({ designer: designerProp } = {}) {
       document.removeEventListener("visibilitychange", syncApiOnFocus);
       window.removeEventListener("focus", syncApiOnFocus);
     };
-  }, [designer.id, fetchWeekAssignments]);
+  }, [designer.id, fetchWeekAssignments, refreshAssigneeTaskStats]);
 
   // Work Till = last weekday with scheduled work in the viewed week + that day's hours,
   // straight from the scheduler assignments (not task due dates).

@@ -66,6 +66,6 @@ This isn't broken, just architecturally split from where the docs (and a new rea
 
 ### 6. Designer reallocation request — gaps tracked separately
 
-Reallocation (Rule 13) has its own audit: non-atomic timer freeze vs handoff, partial unplaced hours on approve, pending double-submit race, stale pendings, list N+1, etc.
+Reallocation (Rule 13) has its own audit. Remaining open items include stale pendings, list N+1, etc. Atomic timer freeze, 6-week pack + unplaced warning toast, and pending unique index were fixed 2026-08-07.
 
 **See:** [REALLOCATION_GAPS.md](REALLOCATION_GAPS.md)

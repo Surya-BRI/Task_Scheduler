@@ -54,6 +54,12 @@ const INBOX_ACTION_LABELS: Record<string, string> = {
 
 @Injectable()
 export class DashboardService {
+  private readonly overviewCache = new Map<
+    string,
+    { expiresAt: number; value: ProjectsOverviewResponseDto }
+  >();
+  private static readonly OVERVIEW_TTL_MS = 20_000;
+
   constructor(private readonly prisma: PrismaService) {}
 
   async getProjectsOverview(
@@ -62,154 +68,165 @@ export class DashboardService {
     viewerRole?: UserRole,
   ): Promise<ProjectsOverviewResponseDto> {
     const ws = this.parseWeekStart(weekStart ?? this.getCurrentMonday());
+    const weekKey = ws.toISOString().split('T')[0];
+    const cacheKey = `${weekKey}|${viewerId ?? ''}|${viewerRole ?? ''}`;
+    const cached = this.overviewCache.get(cacheKey);
+    if (cached && cached.expiresAt > Date.now()) {
+      return cached.value;
+    }
+
     const we = new Date(ws);
     we.setUTCDate(we.getUTCDate() + 6);
     we.setUTCHours(23, 59, 59, 999);
 
-    const metricsWhere = viewerId && viewerRole
-      ? await this.buildMetricsTaskWhere(viewerId, viewerRole)
-      : {};
+    let hodDepartmentId: string | null | undefined;
+    if (viewerId && viewerRole && hasDepartmentManagerAccess(viewerRole)) {
+      const viewer = await this.prisma.user.findUnique({
+        where: { id: viewerId },
+        select: { departmentId: true },
+      });
+      hodDepartmentId = viewer?.departmentId ?? null;
+    }
+
+    const metricsWhere =
+      viewerId && viewerRole
+        ? await this.buildMetricsTaskWhere(viewerId, viewerRole, hodDepartmentId)
+        : {};
     const hasMetricsFilter = Object.keys(metricsWhere).length > 0;
     const taskScope = hasMetricsFilter ? { task: metricsWhere } : {};
     const LIST_TAKE = 40;
     const SCHEDULED_TAKE = 40;
 
     const [
-      assignmentRows,
-      completedRows,
-      onHoldRows,
-      fragmentHoldRows,
-      reworkRows,
+      [assignmentRows, completedRows, onHoldRows, fragmentHoldRows, reworkRows],
+      [activityRows, statusGroups, onTimeAgg],
+      approvalInbox,
     ] = await Promise.all([
-      this.prisma.schedulerAssignment.findMany({
-        where: { weekStartDate: ws, ...taskScope },
-        select: {
-          taskId: true,
-          task: {
-            select: {
-              id: true,
-              taskNo: true,
-              title: true,
-              designType: true,
-              revisionCode: true,
-              dueDate: true,
-              project: { select: { name: true, projectNo: true } },
-              assignee: { select: { fullName: true } },
+      Promise.all([
+        this.prisma.schedulerAssignment.findMany({
+          where: { weekStartDate: ws, ...taskScope },
+          select: {
+            taskId: true,
+            task: {
+              select: {
+                id: true,
+                taskNo: true,
+                title: true,
+                designType: true,
+                revisionCode: true,
+                dueDate: true,
+                project: { select: { name: true, projectNo: true } },
+                assignee: { select: { fullName: true } },
+              },
+            },
+            designer: { select: { fullName: true } },
+          },
+          orderBy: [{ taskId: 'asc' }, { dayIndex: 'asc' }],
+          take: SCHEDULED_TAKE * 8,
+        }),
+        this.prisma.task.findMany({
+          where: {
+            status: { in: COMPLETED_STATUS_FILTER },
+            completedAt: { gte: ws, lte: we },
+            ...metricsWhere,
+          },
+          select: {
+            id: true,
+            taskNo: true,
+            title: true,
+            designType: true,
+            revisionCode: true,
+            completedAt: true,
+            project: { select: { name: true, projectNo: true } },
+          },
+          orderBy: { completedAt: 'desc' },
+          take: LIST_TAKE,
+        }),
+        this.prisma.task.findMany({
+          where: { status: 'ON_HOLD', ...metricsWhere },
+          select: {
+            id: true,
+            taskNo: true,
+            title: true,
+            designType: true,
+            revisionCode: true,
+            updatedAt: true,
+            project: { select: { name: true, projectNo: true } },
+          },
+          orderBy: { updatedAt: 'desc' },
+          take: LIST_TAKE,
+        }),
+        this.prisma.schedulerTaskFragment.findMany({
+          where: { status: 'ON_HOLD', ...taskScope },
+          select: {
+            id: true,
+            updatedAt: true,
+            createdAt: true,
+            task: {
+              select: {
+                id: true,
+                taskNo: true,
+                title: true,
+                designType: true,
+                revisionCode: true,
+                project: { select: { name: true, projectNo: true } },
+              },
             },
           },
-          designer: { select: { fullName: true } },
-        },
-        orderBy: [{ taskId: 'asc' }, { dayIndex: 'asc' }],
-        // Cap raw rows so a busy week cannot materialize thousands of day-slices.
-        take: SCHEDULED_TAKE * 8,
-      }),
-      this.prisma.task.findMany({
-        where: {
-          status: { in: COMPLETED_STATUS_FILTER },
-          completedAt: { gte: ws, lte: we },
-          ...metricsWhere,
-        },
-        select: {
-          id: true,
-          taskNo: true,
-          title: true,
-          designType: true,
-          revisionCode: true,
-          completedAt: true,
-          project: { select: { name: true, projectNo: true } },
-        },
-        orderBy: { completedAt: 'desc' },
-        take: LIST_TAKE,
-      }),
-      this.prisma.task.findMany({
-        where: { status: 'ON_HOLD', ...metricsWhere },
-        select: {
-          id: true,
-          taskNo: true,
-          title: true,
-          designType: true,
-          revisionCode: true,
-          updatedAt: true,
-          project: { select: { name: true, projectNo: true } },
-        },
-        orderBy: { updatedAt: 'desc' },
-        take: LIST_TAKE,
-      }),
-      this.prisma.schedulerTaskFragment.findMany({
-        where: { status: 'ON_HOLD', ...taskScope },
-        select: {
-          id: true,
-          updatedAt: true,
-          createdAt: true,
-          task: {
-            select: {
-              id: true,
-              taskNo: true,
-              title: true,
-              designType: true,
-              revisionCode: true,
-              project: { select: { name: true, projectNo: true } },
+          orderBy: { updatedAt: 'desc' },
+          take: LIST_TAKE,
+        }),
+        this.prisma.task.findMany({
+          where: { status: 'REWORK', ...metricsWhere },
+          select: {
+            id: true,
+            taskNo: true,
+            title: true,
+            designType: true,
+            revisionCode: true,
+            updatedAt: true,
+            project: { select: { name: true, projectNo: true } },
+            assignee: { select: { fullName: true } },
+            taskDesigners: {
+              select: { designer: { select: { fullName: true } } },
+              take: 5,
             },
           },
-        },
-        orderBy: { updatedAt: 'desc' },
-        take: LIST_TAKE,
-      }),
-      this.prisma.task.findMany({
-        where: { status: 'REWORK', ...metricsWhere },
-        select: {
-          id: true,
-          taskNo: true,
-          title: true,
-          designType: true,
-          revisionCode: true,
-          updatedAt: true,
-          project: { select: { name: true, projectNo: true } },
-          assignee: { select: { fullName: true } },
-          taskDesigners: {
-            select: { designer: { select: { fullName: true } } },
-            take: 5,
+          orderBy: { updatedAt: 'desc' },
+          take: LIST_TAKE,
+        }),
+      ]),
+      Promise.all([
+        this.prisma.activityLog.findMany({
+          orderBy: { createdAt: 'desc' },
+          take: 15,
+          select: {
+            id: true,
+            action: true,
+            details: true,
+            createdAt: true,
+            taskId: true,
+            user: { select: { fullName: true } },
+            task: { select: { taskNo: true, id: true, designType: true } },
           },
-        },
-        orderBy: { updatedAt: 'desc' },
-        take: LIST_TAKE,
-      }),
-    ]);
-
-    const [
-      activityRows,
-      statusGroups,
-      onTimeAgg,
-    ] = await Promise.all([
-      this.prisma.activityLog.findMany({
-        orderBy: { createdAt: 'desc' },
-        take: 15,
-        select: {
-          id: true,
-          action: true,
-          details: true,
-          createdAt: true,
-          taskId: true,
-          user: { select: { fullName: true } },
-          task: { select: { taskNo: true, id: true, designType: true } },
-        },
-      }),
-      this.prisma.task.groupBy({
-        by: ['status'],
-        where: metricsWhere,
-        _count: { status: true },
-      }),
-      // Week-scoped on-time KPI — avoids scanning every completed+due task in the department.
-      this.prisma.task.findMany({
-        where: {
-          status: { in: COMPLETED_STATUS_FILTER },
-          completedAt: { gte: ws, lte: we },
-          dueDate: { not: null },
-          ...metricsWhere,
-        },
-        select: { completedAt: true, dueDate: true },
-        take: 500,
-      }),
+        }),
+        this.prisma.task.groupBy({
+          by: ['status'],
+          where: metricsWhere,
+          _count: { status: true },
+        }),
+        this.prisma.task.findMany({
+          where: {
+            status: { in: COMPLETED_STATUS_FILTER },
+            completedAt: { gte: ws, lte: we },
+            dueDate: { not: null },
+            ...metricsWhere,
+          },
+          select: { completedAt: true, dueDate: true },
+          take: 500,
+        }),
+      ]),
+      this.buildApprovalInbox(viewerId, viewerRole, hodDepartmentId),
     ]);
 
     const seenScheduled = new Set<string>();
@@ -305,7 +322,6 @@ export class DashboardService {
       };
     });
 
-    const approvalInbox = await this.buildApprovalInbox(viewerId, viewerRole);
     const activityInbox: InboxItem[] = activityRows.map((row) => {
       const label = INBOX_ACTION_LABELS[row.action] ?? row.action;
       const actor = row.user?.fullName ?? 'System';
@@ -371,8 +387,8 @@ export class DashboardService {
       color,
     });
 
-    return {
-      weekStart: ws.toISOString().split('T')[0],
+    const result: ProjectsOverviewResponseDto = {
+      weekStart: weekKey,
       scheduledTasks,
       completedTasks,
       onHoldTasks,
@@ -396,6 +412,11 @@ export class DashboardService {
         },
       },
     };
+    this.overviewCache.set(cacheKey, {
+      expiresAt: Date.now() + DashboardService.OVERVIEW_TTL_MS,
+      value: result,
+    });
+    return result;
   }
 
   async getMetrics(userId: string, role: UserRole) {
@@ -432,7 +453,11 @@ export class DashboardService {
     };
   }
 
-  private async buildMetricsTaskWhere(userId: string, role: UserRole) {
+  private async buildMetricsTaskWhere(
+    userId: string,
+    role: UserRole,
+    preloadedDepartmentId?: string | null,
+  ) {
     if (role === UserRole.DESIGNER) {
       const junctionIds = await this.prisma.taskDesigner.findMany({
         where: { designerId: userId },
@@ -447,12 +472,15 @@ export class DashboardService {
       };
     }
     if (hasDepartmentManagerAccess(role)) {
-      const viewer = await this.prisma.user.findUnique({
-        where: { id: userId },
-        select: { departmentId: true },
-      });
-      if (viewer?.departmentId) {
-        const departmentId = viewer.departmentId;
+      let departmentId = preloadedDepartmentId;
+      if (departmentId === undefined) {
+        const viewer = await this.prisma.user.findUnique({
+          where: { id: userId },
+          select: { departmentId: true },
+        });
+        departmentId = viewer?.departmentId ?? null;
+      }
+      if (departmentId) {
         return {
           OR: [
             { assignee: { departmentId } },
@@ -469,22 +497,24 @@ export class DashboardService {
   private async buildApprovalInbox(
     viewerId?: string,
     viewerRole?: UserRole,
+    preloadedDepartmentId?: string | null,
   ): Promise<InboxItem[]> {
     if (!viewerId || !hasDepartmentManagerAccess(viewerRole ?? '')) {
       return [];
     }
 
     const deptFilter: Record<string, unknown> = {};
-    let hodDepartmentId: string | null = null;
-    if (hasDepartmentManagerAccess(viewerRole ?? '')) {
+    let hodDepartmentId: string | null =
+      preloadedDepartmentId === undefined ? null : preloadedDepartmentId;
+    if (preloadedDepartmentId === undefined) {
       const viewer = await this.prisma.user.findUnique({
         where: { id: viewerId },
         select: { departmentId: true },
       });
       hodDepartmentId = viewer?.departmentId ?? null;
-      if (hodDepartmentId) {
-        deptFilter.designer = { departmentId: hodDepartmentId };
-      }
+    }
+    if (hodDepartmentId) {
+      deptFilter.designer = { departmentId: hodDepartmentId };
     }
 
     const [regRows, otRows, leaveRows] = await Promise.all([

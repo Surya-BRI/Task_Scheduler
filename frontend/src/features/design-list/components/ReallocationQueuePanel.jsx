@@ -6,6 +6,7 @@ import { toast } from "sonner";
 import {
   listReallocationEligibleDesigners,
   listReallocationPendingApprovals,
+  reallocationApproveFeedback,
   reviewReallocationRequest,
 } from "@/features/requests/services/reallocation-requests.api";
 import { taskSummaryPath } from "@/lib/design-list-routes";
@@ -73,12 +74,17 @@ export function ReallocationQueuePanel({ highlightId }) {
     setBusy(true);
     setReviewingId(approveRow.id);
     try {
-      await reviewReallocationRequest(approveRow.id, {
+      const result = await reviewReallocationRequest(approveRow.id, {
         status: "Approved",
         targetDesignerId: targetDesignerId || approveRow.suggestedDesignerId,
         remarks: remarks.trim() || undefined,
       });
-      toast.success("Reallocation approved — schedule updated");
+      const feedback = reallocationApproveFeedback(result ?? {});
+      if (feedback.tone === "warning") {
+        toast.warning(feedback.title, feedback.description ? { description: feedback.description } : undefined);
+      } else {
+        toast.success(feedback.title);
+      }
       setApproveRow(null);
       load();
     } catch (err) {

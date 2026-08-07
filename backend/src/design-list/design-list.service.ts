@@ -36,7 +36,7 @@ type DesignListRow = {
 };
 
 type ProjectListPageResult = {
-  data: Array<ReturnType<DesignListService['mapRow']>>;
+  data: Array<ReturnType<DesignListService['mapRow']> | ReturnType<DesignListService['mapRowHub']>>;
   page: number;
   limit: number;
   total: number;
@@ -50,6 +50,10 @@ type DesignListPageFilters = {
   salesPerson: string;
   startDate: string;
   endDate: string;
+};
+
+type DesignListPageOptions = {
+  fields?: 'hub' | 'full';
 };
 
 function toDdMmYyyy(value: Date): string {
@@ -186,6 +190,28 @@ export class DesignListService {
       customerName: preserveNulls ? customerName : customerName ?? undefined,
       projectManager: preserveNulls ? projectManager : projectManager ?? undefined,
       projectOwner: preserveNulls ? projectOwner : projectOwner ?? undefined,
+    };
+  }
+
+  /** Slim row for project-design hub tables (op/project/name/status only). */
+  private mapRowHub(row: DesignListRow) {
+    const id = String(row.projectId);
+    const projectCode = row.projectCode ?? null;
+    const salesForceCode = row.salesForceCode ?? null;
+    const projectName = row.projectName ?? null;
+    return {
+      id,
+      taskId: row.taskId ?? null,
+      opNo: salesForceCode ?? projectCode ?? id,
+      projectNo: projectCode ?? id,
+      projectCode: projectCode ?? undefined,
+      salesForceCode: salesForceCode ?? undefined,
+      designType: this.resolveDesignType(row.businessUnitCode),
+      businessUnit: row.businessUnitCode ?? 'Project',
+      name: projectName ?? projectCode ?? id,
+      status: (row.status as
+        | 'DESIGN_NEW' | 'DESIGN_PLANNED' | 'IN_PROGRESS' | 'DESIGN_COMPLETED'
+        | 'HOD_REVIEW' | 'SALES_REVIEW' | 'REWORK' | 'CLIENT_ACCEPTED' | 'CLIENT_REJECTED' | 'ON_HOLD') ?? 'DESIGN_NEW',
     };
   }
 
@@ -399,6 +425,7 @@ export class DesignListService {
     page: number,
     limit: number,
     filters: DesignListPageFilters,
+    options: DesignListPageOptions = {},
   ): Promise<ProjectListPageResult> {
     const safePage = Math.max(1, page);
     const safeLimit = Math.min(200, Math.max(1, limit));
@@ -409,8 +436,13 @@ export class DesignListService {
       this.queryDesignListPage(whereFragments, offset, safeLimit),
     );
 
+    const data =
+      options.fields === 'hub'
+        ? result.pageRows.map((row) => this.mapRowHub(row))
+        : result.pageRows.map((row) => this.mapRow(row));
+
     return {
-      data: result.pageRows.map((row) => this.mapRow(row)),
+      data,
       page: safePage,
       limit: safeLimit,
       total: result.total,

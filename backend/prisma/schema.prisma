@@ -585,6 +585,8 @@ model ReallocationRequest {
   @@index([requesterId, status], name: "IX_ErpTSReallocationRequest_requesterId_status")
   @@index([taskId, status], name: "IX_ErpTSReallocationRequest_taskId_status")
   @@index([status, createdAt(sort: Desc)], name: "IX_ErpTSReallocationRequest_status_createdAt")
+  // Filtered unique index (Pending only) lives in SQL — see prisma/sql/add-reallocation-pending-unique.sql
+  // UQ_ErpTSReallocationRequest_pending_task_requester ON (taskId, requesterId) WHERE status = 'Pending'
   @@map("ErpTSReallocationRequest")
 }
 

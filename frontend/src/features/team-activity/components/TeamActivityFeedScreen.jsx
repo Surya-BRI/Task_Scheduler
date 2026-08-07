@@ -3,7 +3,7 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { useSearchParams } from "next/navigation";
 import { Navbar } from "@/components/Navbar";
-import { connectDashboardRealtime } from "@/lib/realtime";
+import { connectDashboardRealtime, isDashboardRealtimeConnected } from "@/lib/realtime";
 import { fetchTeamActivities, fetchUserActivities } from "../services/activities.api";
 import { filterActivities } from "../lib/teamActivityFilters";
 import { TeamActivityFilters } from "./TeamActivityFilters";
@@ -22,6 +22,10 @@ const DEFAULT_RANGE = () => ({
   startDate: "",
   endDate: "",
 });
+
+const COLD_LIMIT = 40;
+const DELTA_LIMIT = 20;
+const POLL_MS = 90_000;
 
 export function TeamActivityFeedScreenInner() {
   const searchParams = useSearchParams();
@@ -54,15 +58,45 @@ export function TeamActivityFeedScreenInner() {
   const [activityError, setActivityError] = useState("");
   const lastActivityErrorRef = useRef("");
   const loadGenerationRef = useRef(0);
+  const newestOccurredAtRef = useRef(null);
 
-  const loadActivities = useCallback((silent = false) => {
+  const mergeDelta = useCallback((incoming) => {
+    if (!Array.isArray(incoming) || incoming.length === 0) return;
+    setActivities((prev) => {
+      const seen = new Set(prev.map((a) => a.id));
+      const fresh = incoming.filter((a) => a?.id && !seen.has(a.id));
+      if (fresh.length === 0) return prev;
+      setLikes((prevLikes) => ({ ...buildInitialLikes(fresh), ...prevLikes }));
+      const next = [...fresh, ...prev];
+      const top = next[0]?.occurredAt;
+      if (top) newestOccurredAtRef.current = top;
+      return next;
+    });
+  }, []);
+
+  const loadActivities = useCallback((opts = {}) => {
+    const { silent = false, delta = false } = opts;
     const generation = ++loadGenerationRef.current;
     if (!silent) setLoading(true);
-    return fetchTeamActivities({ limit: 100 })
-      .then((data) => {
+
+    const params = delta
+      ? {
+          limit: DELTA_LIMIT,
+          ...(newestOccurredAtRef.current ? { since: newestOccurredAtRef.current } : {}),
+        }
+      : { limit: COLD_LIMIT };
+
+    return fetchTeamActivities(params)
+      .then((page) => {
         if (generation !== loadGenerationRef.current) return;
-        setActivities(data);
-        setLikes(buildInitialLikes(data));
+        const data = page.data;
+        if (delta && newestOccurredAtRef.current) {
+          mergeDelta(data);
+        } else {
+          setActivities(data);
+          setLikes(buildInitialLikes(data));
+          newestOccurredAtRef.current = data[0]?.occurredAt ?? null;
+        }
         setActivityError("");
         lastActivityErrorRef.current = "";
         setLoading(false);
@@ -77,15 +111,20 @@ export function TeamActivityFeedScreenInner() {
           console.warn("Team Activity feed temporarily unavailable:", message);
         }
       });
-  }, []);
+  }, [mergeDelta]);
 
   useEffect(() => {
-    void loadActivities(false);
+    void loadActivities({ silent: false, delta: false });
     const interval = setInterval(() => {
-      if (document.visibilityState === "visible") void loadActivities(true);
-    }, 90_000);
+      if (document.visibilityState !== "visible") return;
+      // When WS is healthy, dashboard:refresh drives deltas — skip fat/full polls.
+      if (isDashboardRealtimeConnected()) return;
+      void loadActivities({ silent: true, delta: true });
+    }, POLL_MS);
     const onVisible = () => {
-      if (document.visibilityState === "visible") void loadActivities(true);
+      if (document.visibilityState === "visible") {
+        void loadActivities({ silent: true, delta: true });
+      }
     };
     document.addEventListener("visibilitychange", onVisible);
     return () => {
@@ -101,7 +140,9 @@ export function TeamActivityFeedScreenInner() {
       onDashboardRefresh: () => {
         if (timer) clearTimeout(timer);
         timer = setTimeout(() => {
-          if (document.visibilityState === "visible") void loadActivities(true);
+          if (document.visibilityState === "visible") {
+            void loadActivities({ silent: true, delta: true });
+          }
         }, 400);
       },
     });
@@ -179,7 +220,7 @@ export function TeamActivityFeedScreenInner() {
     if (!selectedPersonId) { setUserFeed([]); return; }
     let active = true;
     setUserFeedLoading(true);
-    fetchUserActivities(selectedPersonId, { limit: 100 })
+    fetchUserActivities(selectedPersonId, { limit: COLD_LIMIT })
       .then(data => { if (active) { setUserFeed(data); setUserFeedLoading(false); } })
       .catch(() => { if (active) setUserFeedLoading(false); });
     return () => { active = false; };

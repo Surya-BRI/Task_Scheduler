@@ -43,11 +43,8 @@ export type SchedulerTaskSummaryDto = {
   id: string;
   opNo: string | null;
   title: string | null;
-  signType: string | null;
-  revisionCode: string | null;
   designType: string | null;
   disciplineType: string | null;
-  phase: number | null;
   status: string;
   priority: string | null;
   assigneeId: string | null;
@@ -61,10 +58,6 @@ export type SchedulerTaskSummaryDto = {
     name: string | null;
     projectNo: string | null;
     category: string | null;
-    technicalHead: string | null;
-    teamLead: string | null;
-    subTeamLead: string | null;
-    designers: string | null;
   } | null;
 };
 
@@ -93,10 +86,6 @@ export function mapSchedulerTaskSummary(task: SchedulerTaskSummaryRow): Schedule
         name: task.project.name,
         projectNo: task.project.projectNo,
         category: task.project.category,
-        technicalHead: null,
-        teamLead: null,
-        subTeamLead: null,
-        designers: null,
       }
     : null;
 
@@ -104,11 +93,8 @@ export function mapSchedulerTaskSummary(task: SchedulerTaskSummaryRow): Schedule
     id: task.id,
     opNo: task.opNo,
     title: task.title,
-    signType: null,
-    revisionCode: null,
     designType: task.designType,
     disciplineType: task.disciplineType,
-    phase: null,
     status: mapStatusForApi(task.status),
     priority: task.priority,
     assigneeId: task.assigneeId,

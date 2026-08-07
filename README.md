@@ -12,6 +12,7 @@ Monorepo for task scheduling and resource workflows: **Next.js** frontend + **Ne
 | DevOps (Docker, CI/CD, logging, tracing) | [backend/docs/DEVOPS.md](backend/docs/DEVOPS.md) |
 | Activity log event coverage | [backend/docs/ACTIVITY_LOG_COVERAGE.md](backend/docs/ACTIVITY_LOG_COVERAGE.md) |
 | Frontend guide (Next.js env + runtime) | [frontend/docs/DEVELOPMENT.md](frontend/docs/DEVELOPMENT.md) |
+| API load & efficiency playbook | [API_LOAD_EFFICIENCY_PLAYBOOK.md](API_LOAD_EFFICIENCY_PLAYBOOK.md) |
 | Full repository technical reference | [repo refrence.md](repo%20refrence.md) |
 
 ## Recent Feature Notes

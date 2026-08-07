@@ -17,27 +17,25 @@ export class DesignListController {
     @Query('salesPerson') salesPerson?: string,
     @Query('startDate') startDate?: string,
     @Query('endDate') endDate?: string,
+    @Query('fields') fields?: string,
   ) {
-    const hasPagination = pageParam != null || limitParam != null;
-    const hasFilters = [q, type, status, salesPerson, startDate, endDate].some(
-      (value) => (value ?? '').trim().length > 0,
-    );
-
-    if (!hasPagination && !hasFilters) {
-      return this.designListService.findAll();
-    }
-
+    // Always paginate — bare GET previously pulled up to 500 fat ERP rows.
     const page = Math.max(1, Number.parseInt(pageParam ?? '1', 10) || 1);
     const limit = Math.min(200, Math.max(1, Number.parseInt(limitParam ?? '100', 10) || 100));
 
-    return this.designListService.findDesignListPage(page, limit, {
-      q: q ?? '',
-      type: type ?? '',
-      status: status ?? '',
-      salesPerson: salesPerson ?? '',
-      startDate: startDate ?? '',
-      endDate: endDate ?? '',
-    });
+    return this.designListService.findDesignListPage(
+      page,
+      limit,
+      {
+        q: q ?? '',
+        type: type ?? '',
+        status: status ?? '',
+        salesPerson: salesPerson ?? '',
+        startDate: startDate ?? '',
+        endDate: endDate ?? '',
+      },
+      { fields: fields === 'hub' ? 'hub' : 'full' },
+    );
   }
 
   @Get('project-sign-types')

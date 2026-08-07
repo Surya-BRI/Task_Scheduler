@@ -15,14 +15,16 @@ import { UserRole } from '../common/constants/roles.enum';
 import { hasDepartmentManagerAccess } from '../common/utils/workflow-roles.util';
 import { DashboardRealtimeService } from '../dashboard/dashboard-realtime.service';
 import { SchedulerAssignmentsService } from '../scheduler-assignments/scheduler-assignments.service';
-import { TasksService } from '../tasks/tasks.service';
 import { taskViewPath } from '../common/utils/design-type.util';
-import { effectiveWorkSessionSeconds } from '../common/utils/task-work-session-time.util';
 import {
   CreateReallocationRequestDto,
   ReviewReallocationRequestDto,
 } from './dto/reallocation-request.dto';
 import { isUuidString } from './sql-uuid.util';
+import {
+  collectProjectTeamNames,
+  normalizePersonName,
+} from '../common/utils/project-team-names.util';
 
 const ALLOWED_TASK_STATUSES = new Set(['DESIGN_PLANNED', 'IN_PROGRESS', 'REWORK']);
 
@@ -85,7 +87,6 @@ export class ReallocationRequestsService {
     private readonly prisma: PrismaService,
     private readonly activityLogger: ActivityLoggerService,
     private readonly schedulerAssignments: SchedulerAssignmentsService,
-    private readonly tasksService: TasksService,
     @Optional() private readonly dashboardRealtime?: DashboardRealtimeService,
   ) {}
 
@@ -127,16 +128,38 @@ export class ReallocationRequestsService {
     ) / 100;
   }
 
+  /** One grouped SUM for all Pending rows — avoids N+1 findMany in list endpoints. */
   private async mapWithRemaining(rows: ReallocationFull[]): Promise<ReallocationRequestView[]> {
-    return Promise.all(
-      rows.map(async (row) => {
-        const remaining =
-          row.status === 'Pending'
-            ? await this.remainingHoursFor(row.taskId, row.requesterId)
-            : null;
-        return this.toView(row, remaining);
-      }),
-    );
+    const pending = rows.filter((row) => row.status === 'Pending');
+    const remainingByKey = new Map<string, number>();
+
+    if (pending.length > 0) {
+      const taskIds = Array.from(new Set(pending.map((row) => row.taskId)));
+      const designerIds = Array.from(new Set(pending.map((row) => row.requesterId)));
+      const grouped = await this.prisma.schedulerAssignment.groupBy({
+        by: ['taskId', 'designerId'],
+        where: {
+          taskId: { in: taskIds },
+          designerId: { in: designerIds },
+          isLocked: { not: true },
+        },
+        _sum: { assignedHours: true },
+      });
+      for (const group of grouped) {
+        if (!group.taskId || !group.designerId) continue;
+        const hours =
+          Math.round(Number(group._sum.assignedHours ?? 0) * 100) / 100;
+        remainingByKey.set(`${group.taskId}:${group.designerId}`, hours);
+      }
+    }
+
+    return rows.map((row) => {
+      const remaining =
+        row.status === 'Pending'
+          ? (remainingByKey.get(`${row.taskId}:${row.requesterId}`) ?? 0)
+          : null;
+      return this.toView(row, remaining);
+    });
   }
 
   private assertManager(role: UserRole) {
@@ -218,24 +241,32 @@ export class ReallocationRequestsService {
     });
     if (!task) throw new NotFoundException('Task not found');
 
+    const team = collectProjectTeamNames(task.project);
+    const roleFilter = {
+      role: { name: { in: [UserRole.DESIGNER, UserRole.HOD] } },
+      id: { not: requesterId },
+    };
+
+    // Empty team → keep prior fallback (full Designer/HOD directory except requester).
+    if (team.normalized.size === 0) {
+      return this.prisma.user.findMany({
+        where: roleFilter,
+        select: { id: true, fullName: true },
+        orderBy: { fullName: 'asc' },
+      });
+    }
+
     const designers = await this.prisma.user.findMany({
       where: {
-        role: { name: { in: [UserRole.DESIGNER, UserRole.HOD] } },
-        id: { not: requesterId },
+        ...roleFilter,
+        OR: [...team.displayNames].map((fullName) => ({ fullName })),
       },
       select: { id: true, fullName: true },
       orderBy: { fullName: 'asc' },
     });
 
-    const project = task.project;
-    const normalize = (v: string) => v.trim().toLowerCase();
-    const teamNames = new Set(
-      [project?.technicalHead, project?.teamLead, project?.subTeamLead, ...(project?.designers?.split(',') ?? [])]
-        .map((n) => (n ? normalize(n) : ''))
-        .filter(Boolean),
-    );
-    if (teamNames.size === 0) return designers;
-    return designers.filter((d) => teamNames.has(normalize(d.fullName)));
+    // Preserve trim+lower eligibility semantics regardless of DB collation.
+    return designers.filter((d) => team.normalized.has(normalizePersonName(d.fullName)));
   }
 
   async findByRequester(requesterId: string) {
@@ -330,16 +361,31 @@ export class ReallocationRequestsService {
       throw new BadRequestException('You already have a pending reallocation request for this task.');
     }
 
-    const created = await this.prisma.reallocationRequest.create({
-      data: {
-        taskId: dto.taskId,
-        requesterId: userId,
-        suggestedDesignerId: dto.suggestedDesignerId,
-        reason: dto.reason.trim(),
-        status: 'Pending',
-      },
-      include: INCLUDE,
-    });
+    let created;
+    try {
+      created = await this.prisma.reallocationRequest.create({
+        data: {
+          taskId: dto.taskId,
+          requesterId: userId,
+          suggestedDesignerId: dto.suggestedDesignerId,
+          reason: dto.reason.trim(),
+          status: 'Pending',
+        },
+        include: INCLUDE,
+      });
+    } catch (error) {
+      // Filtered unique index UQ_ErpTSReallocationRequest_pending_task_requester
+      // closes the double-submit race the findFirst guard alone cannot.
+      if (
+        error instanceof Prisma.PrismaClientKnownRequestError &&
+        error.code === 'P2002'
+      ) {
+        throw new BadRequestException(
+          'You already have a pending reallocation request for this task.',
+        );
+      }
+      throw error;
+    }
 
     await this.activityLogger.log({
       action: ActivityAction.REALLOCATION_REQUEST_SUBMITTED,
@@ -453,23 +499,14 @@ export class ReallocationRequestsService {
       throw new BadRequestException('Target designer must be different from the requester.');
     }
 
-    // Only Draft timer seconds count toward FIFO on unlocked slices.
-    // Prior HandedOff time is already represented by locked logged-remainder cards.
-    const draft = await this.prisma.taskWorkSession.findFirst({
-      where: { taskId: row.taskId, designerId: row.requesterId, status: 'Draft' },
-      orderBy: { createdAt: 'desc' },
-    });
-    const workedSeconds = draft
-      ? effectiveWorkSessionSeconds(draft.durationSeconds, draft.runStartedAt)
-      : 0;
-    await this.tasksService.freezeDraftWorkSession(row.taskId, row.requesterId, true);
-
+    // Freeze + pack share one DB transaction inside applyReallocationHandoff.
+    // Draft seconds for FIFO are read and frozen there so a failed pack never
+    // leaves the requester timer HandedOff while this request stays Pending.
     const handoff = await this.schedulerAssignments.applyReallocationHandoff({
       taskId: row.taskId,
       fromDesignerId: row.requesterId,
       toDesignerId: targetDesignerId,
       assignedBy: reviewerId,
-      workedSeconds,
     });
 
     const updated = await this.prisma.reallocationRequest.update({

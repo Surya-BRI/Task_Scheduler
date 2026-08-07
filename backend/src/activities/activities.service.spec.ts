@@ -81,6 +81,26 @@ describe('ActivitiesService', () => {
     }
   });
 
+  it('applies since and slim task include on team feed', async () => {
+    const since = '2026-07-01T12:00:00.000Z';
+    await service.findAll({ limit: 20, since });
+
+    const call = prisma.activityLog.findMany.mock.calls[0][0];
+    expect(call.where.createdAt).toEqual({ gt: new Date(since) });
+    expect(call.include.task.select).not.toHaveProperty('assignee');
+    expect(call.include.task.select).not.toHaveProperty('taskDesigners');
+    expect(call.include.task.select).toHaveProperty('project');
+  });
+
+  it('returns pageInfo wrapper from findAll', async () => {
+    prisma.activityLog.findMany.mockResolvedValueOnce([]);
+    const result = await service.findAll({ limit: 10 });
+    expect(result).toEqual({
+      data: [],
+      pageInfo: { hasMore: false, nextCursor: null },
+    });
+  });
+
   it('returns chronologically ordered task events and never maps excluded actions in project history', async () => {
     const projectId = 'cccccccc-cccc-4ccc-8ccc-cccccccccccc';
     const older = new Date('2026-07-01T10:00:00.000Z');
