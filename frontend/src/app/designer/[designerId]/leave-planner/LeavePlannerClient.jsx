@@ -20,8 +20,13 @@ import { apiClient } from "@/lib/api-client";
 import { StatusBadge } from "@/components/ui/StatusBadge";
 import { getSession } from "@/lib/mock-auth";
 import { requestsPath } from "@/lib/role-routes";
+import { connectDashboardRealtime, isDashboardRealtimeConnected } from "@/lib/realtime";
 
 const UUID_RE = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
+
+/** Backup HTTP poll only when the dashboard socket is down (WS drives live leave updates). */
+const BACKUP_POLL_MS = 180_000;
+
 function isUuidString(value) {
   return UUID_RE.test(String(value ?? "").trim());
 }
@@ -573,8 +578,8 @@ export default function LeavePlannerClient() {
     }
   }, [canReview, currentYearRange]);
 
-  const loadFullTeamHistory = useCallback(async () => {
-    if (!canReview || teamHistoryLoaded) return;
+  const loadFullTeamHistory = useCallback(async (force = false) => {
+    if (!canReview || (!force && teamHistoryLoaded)) return;
     try {
       const team = await fetchLeaveTeamRequests();
       const rows = Array.isArray(team) ? team : [];
@@ -585,6 +590,15 @@ export default function LeavePlannerClient() {
       setTeamHistoryLoaded(true);
     }
   }, [canReview, teamHistoryLoaded, designer.id]);
+
+  const refreshLeavePlanner = useCallback(() => {
+    void reloadLeaves();
+    void reloadTeamData();
+    // Team tab already opened → keep full history warm without loading it for everyone.
+    if (teamHistoryLoaded) {
+      void loadFullTeamHistory(true);
+    }
+  }, [reloadLeaves, reloadTeamData, teamHistoryLoaded, loadFullTeamHistory]);
 
   useEffect(() => {
     void reloadLeaves();
@@ -597,24 +611,30 @@ export default function LeavePlannerClient() {
     }
   }, [historyTab, canReview, loadFullTeamHistory]);
 
+  // Live updates via WS; backup poll only when socket is down (visible tab).
   useEffect(() => {
-    const pollMs = 90000;
-    const tick = () => {
+    const unsub = connectDashboardRealtime({
+      onDashboardRefresh: () => refreshLeavePlanner(),
+      onNotificationsRefresh: () => refreshLeavePlanner(),
+    });
+    const id = window.setInterval(() => {
       if (typeof document !== "undefined" && document.hidden) return;
-      void reloadLeaves();
-      void reloadTeamData();
+      if (isDashboardRealtimeConnected()) return;
+      refreshLeavePlanner();
+    }, BACKUP_POLL_MS);
+    const onVisibleOrFocus = () => {
+      if (typeof document !== "undefined" && document.visibilityState !== "visible") return;
+      refreshLeavePlanner();
     };
-    const id = window.setInterval(tick, pollMs);
-    const onVisibility = () => {
-      if (typeof document !== "undefined" && document.hidden) return;
-      tick();
-    };
-    document.addEventListener("visibilitychange", onVisibility);
+    document.addEventListener("visibilitychange", onVisibleOrFocus);
+    window.addEventListener("focus", onVisibleOrFocus);
     return () => {
+      unsub();
       window.clearInterval(id);
-      document.removeEventListener("visibilitychange", onVisibility);
+      document.removeEventListener("visibilitychange", onVisibleOrFocus);
+      window.removeEventListener("focus", onVisibleOrFocus);
     };
-  }, [reloadLeaves, reloadTeamData]);
+  }, [refreshLeavePlanner]);
 
   const openReviewModal = useCallback((leave) => {
     setSelectedLeave(leave);

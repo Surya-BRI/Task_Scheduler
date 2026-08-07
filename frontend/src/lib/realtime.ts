@@ -220,3 +220,8 @@ export function connectDashboardRealtime(handlers: DashboardRealtimeHandlers): (
     teardownSharedSocketIfIdle();
   };
 }
+
+/** True when the shared /dashboard socket is currently connected. */
+export function isDashboardRealtimeConnected(): boolean {
+  return Boolean(sharedSocket?.connected);
+}

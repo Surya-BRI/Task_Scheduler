@@ -24,6 +24,7 @@ import {
   parseRequestedHoursLabel,
 } from "@/lib/overtime-constants";
 import { apiClient } from "@/lib/api-client";
+import { singleflight } from "@/lib/singleflight";
 import { getDesignerStatsBar } from "@/features/scheduler/services/scheduler-assignments.api";
 import { formatLocalYyyyMmDd } from "@/features/scheduler/utils/schedulerNavigationState";
 import { getWeekDays } from "@/features/scheduler/utils/schedulerWeek";
@@ -225,15 +226,18 @@ export default function RequestsClient() {
       setDesignerList([]);
       return;
     }
-    apiClient.get("/users?role=DESIGNER").then((res) => {
-      const rows = Array.isArray(res) ? res : (Array.isArray(res?.data) ? res.data : []);
-      setDesignerList(rows.map((u) => ({
-        id: u.id,
-        name: u.fullName,
-        email: u.email ?? "",
-        designation: u.department?.name ?? u.role?.name ?? "Designer",
-      })));
-    }).catch(() => {});
+    // Tab-scoped OT/Reg/Realloc loads already; coalesce designer catalog across remounts.
+    singleflight("users?role=DESIGNER", () => apiClient.get("/users?role=DESIGNER"))
+      .then((res) => {
+        const rows = Array.isArray(res) ? res : (Array.isArray(res?.data) ? res.data : []);
+        setDesignerList(rows.map((u) => ({
+          id: u.id,
+          name: u.fullName,
+          email: u.email ?? "",
+          designation: u.department?.name ?? u.role?.name ?? "Designer",
+        })));
+      })
+      .catch(() => {});
   }, [isHOD]);
 
   const erpDesignerIdRaw = sessionErpId ?? '';

@@ -1,9 +1,9 @@
 "use client";
 
 import Link from "next/link";
-import { useMemo, useState } from "react";
+import { useEffect, useMemo, useRef, useState } from "react";
 import { Search } from "lucide-react";
-import { useDesignListStore } from "@/state/DesignListContext";
+import { apiClient } from "@/lib/api-client";
 import { Navbar } from "@/components/Navbar";
 import {
   FROM_PROJECT_DESIGN,
@@ -14,10 +14,10 @@ import {
 function hubTaskHref(row, workflowFromOrOpts = FROM_PROJECT_DESIGN, maybeOpts = {}) {
   let workflowFrom = FROM_PROJECT_DESIGN;
   let opts = {};
-  if (typeof workflowFromOrOpts === 'string') {
+  if (typeof workflowFromOrOpts === "string") {
     workflowFrom = workflowFromOrOpts;
     opts = maybeOpts ?? {};
-  } else if (workflowFromOrOpts && typeof workflowFromOrOpts === 'object') {
+  } else if (workflowFromOrOpts && typeof workflowFromOrOpts === "object") {
     opts = workflowFromOrOpts;
   }
   const routingId = row?.taskId || row?.salesForceCode || row?.opNo || row?.id;
@@ -126,36 +126,116 @@ function DesignTypeTable({ rows, variant, workflowFrom = FROM_PROJECT_DESIGN }) 
   );
 }
 
-export function ProjectDesignHub({ workflowFrom = FROM_PROJECT_DESIGN }) {
-  const { records, loading, error } = useDesignListStore();
-  const list = records;
-  const [searchQuery, setSearchQuery] = useState("");
-  const [segment, setSegment] = useState("retail");
+function mapHubRow(r) {
+  return {
+    id: r.id,
+    designType: r.designType,
+    category: r.designType,
+    opNo: r.opNo,
+    projectNo: r.projectNo,
+    projectCode: r.projectCode,
+    salesForceCode: r.salesForceCode,
+    name: r.name,
+    status: r.status,
+    taskId: r.taskId ?? null,
+    businessUnit: r.businessUnit,
+  };
+}
 
-  const { retailRows, projectRows } = useMemo(() => {
-    const q = searchQuery.trim().toLowerCase();
-    const match = (r) => {
-      if (!q) return true;
-      const hay = [r.opNo, r.projectNo, r.name, r.businessUnit].join(" ").toLowerCase();
-      return hay.includes(q);
-    };
-    const retail = list.filter((r) => String(r.designType).toLowerCase() === "retail" && match(r));
-    const project = list.filter((r) => String(r.designType).toLowerCase() === "project" && match(r));
-    const mapRow = (r) => ({
-      id: r.id,
-      designType: r.designType,
-      category: r.designType,
-      opNo: r.opNo,
-      projectNo: r.projectNo,
-      name: r.name,
-      status: r.status,
-      taskId: r.taskId ?? null,
+const PAGE_SIZE = 100;
+
+export function ProjectDesignHub({ workflowFrom = FROM_PROJECT_DESIGN }) {
+  const [searchQuery, setSearchQuery] = useState("");
+  const [debouncedQuery, setDebouncedQuery] = useState("");
+  const [segment, setSegment] = useState("retail");
+  const [page, setPage] = useState(1);
+  const [rows, setRows] = useState([]);
+  const [total, setTotal] = useState(0);
+  const [totalPages, setTotalPages] = useState(1);
+  const [otherTotal, setOtherTotal] = useState(null);
+  const [loading, setLoading] = useState(true);
+  const [error, setError] = useState(null);
+
+  useEffect(() => {
+    const timer = setTimeout(() => setDebouncedQuery(searchQuery), 350);
+    return () => clearTimeout(timer);
+  }, [searchQuery]);
+
+  const filterKey = `${segment}|${debouncedQuery}`;
+  const prevFilterKeyRef = useRef(filterKey);
+
+  useEffect(() => {
+    if (prevFilterKeyRef.current !== filterKey) {
+      prevFilterKeyRef.current = filterKey;
+      if (page !== 1) {
+        setPage(1);
+        return undefined;
+      }
+    }
+
+    let mounted = true;
+    setLoading(true);
+    setError(null);
+    const q = debouncedQuery.trim();
+    const type = segment === "retail" ? "retail" : "project";
+    const otherType = segment === "retail" ? "project" : "retail";
+    const qs = new URLSearchParams({
+      page: String(page),
+      limit: String(PAGE_SIZE),
+      type,
+      fields: "hub",
     });
-    return {
-      retailRows: retail.map(mapRow),
-      projectRows: project.map(mapRow),
+    if (q) qs.set("q", q);
+
+    const otherQs = new URLSearchParams({
+      page: "1",
+      limit: "1",
+      type: otherType,
+      fields: "hub",
+    });
+    if (q) otherQs.set("q", q);
+
+    Promise.all([
+      apiClient.get(`/design-list?${qs.toString()}`),
+      apiClient.get(`/design-list?${otherQs.toString()}`),
+    ])
+      .then(([res, otherRes]) => {
+        if (!mounted) return;
+        const data = Array.isArray(res?.data) ? res.data : [];
+        setRows(data.map(mapHubRow));
+        const nextTotal = Number(res?.total);
+        setTotal(Number.isFinite(nextTotal) ? Math.max(0, nextTotal) : data.length);
+        setTotalPages(
+          Math.max(
+            1,
+            Number(res?.totalPages) ||
+              Math.ceil(Math.max(0, Number.isFinite(nextTotal) ? nextTotal : data.length) / PAGE_SIZE) ||
+              1,
+          ),
+        );
+        const other = Number(otherRes?.total);
+        setOtherTotal(Number.isFinite(other) ? Math.max(0, other) : null);
+      })
+      .catch((err) => {
+        if (!mounted) return;
+        setRows([]);
+        setTotal(0);
+        setTotalPages(1);
+        setOtherTotal(null);
+        setError(err?.message || "Could not load project design records.");
+      })
+      .finally(() => {
+        if (mounted) setLoading(false);
+      });
+
+    return () => {
+      mounted = false;
     };
-  }, [list, searchQuery]);
+  }, [debouncedQuery, filterKey, page, segment]);
+
+  const retailTotal = segment === "retail" ? total : otherTotal;
+  const projectTotal = segment === "project" ? total : otherTotal;
+  const currentPage = Math.min(page, totalPages);
 
   const tabClass = (active) =>
     `rounded border text-sm font-medium transition-colors px-3 py-1.5 ${
@@ -163,6 +243,10 @@ export function ProjectDesignHub({ workflowFrom = FROM_PROJECT_DESIGN }) {
         ? "bg-blue-50 border-blue-300 text-blue-700 shadow-sm"
         : "bg-white border-slate-300 text-slate-600 hover:bg-slate-50"
     }`;
+
+  const badge = (n) => (n == null ? "…" : String(n));
+
+  const tableRows = useMemo(() => rows, [rows]);
 
   return (
     <div className="h-screen bg-slate-50 flex flex-col font-sans overflow-hidden">
@@ -185,11 +269,19 @@ export function ProjectDesignHub({ workflowFrom = FROM_PROJECT_DESIGN }) {
         </div>
 
         <div className="mb-3 flex flex-wrap items-center gap-2">
-          <button type="button" className={tabClass(segment === "retail")} onClick={() => setSegment("retail")}>
-            Retail ({retailRows.length})
+          <button
+            type="button"
+            className={tabClass(segment === "retail")}
+            onClick={() => setSegment("retail")}
+          >
+            Retail ({badge(retailTotal)})
           </button>
-          <button type="button" className={tabClass(segment === "project")} onClick={() => setSegment("project")}>
-            Project ({projectRows.length})
+          <button
+            type="button"
+            className={tabClass(segment === "project")}
+            onClick={() => setSegment("project")}
+          >
+            Project ({badge(projectTotal)})
           </button>
         </div>
 
@@ -201,13 +293,43 @@ export function ProjectDesignHub({ workflowFrom = FROM_PROJECT_DESIGN }) {
           ) : error ? (
             <div className="flex flex-1 flex-col items-center justify-center gap-2 rounded-xl border border-amber-200 bg-amber-50 px-4 py-8 text-center">
               <p className="text-sm font-medium text-amber-950">{error}</p>
-              <p className="text-xs text-amber-800">Check that the backend is running and the design-list API is available.</p>
+              <p className="text-xs text-amber-800">
+                Check that the backend is running and the design-list API is available.
+              </p>
             </div>
           ) : segment === "retail" ? (
-            <DesignTypeTable rows={retailRows} variant="retail" workflowFrom={workflowFrom} />
+            <DesignTypeTable rows={tableRows} variant="retail" workflowFrom={workflowFrom} />
           ) : (
-            <DesignTypeTable rows={projectRows} variant="project" workflowFrom={workflowFrom} />
+            <DesignTypeTable rows={tableRows} variant="project" workflowFrom={workflowFrom} />
           )}
+        </div>
+
+        <div className="shrink-0 flex items-center justify-between pt-3 text-xs text-slate-600">
+          <span>
+            Showing {total === 0 ? 0 : (currentPage - 1) * PAGE_SIZE + 1}-
+            {Math.min(currentPage * PAGE_SIZE, total)} of {total}
+          </span>
+          <div className="flex items-center gap-2">
+            <button
+              type="button"
+              onClick={() => setPage((p) => Math.max(1, p - 1))}
+              disabled={currentPage === 1 || loading}
+              className="px-2.5 py-1 border border-slate-300 rounded disabled:opacity-50 disabled:cursor-not-allowed hover:bg-slate-50"
+            >
+              Prev
+            </button>
+            <span>
+              Page {currentPage} / {totalPages}
+            </span>
+            <button
+              type="button"
+              onClick={() => setPage((p) => Math.min(totalPages, p + 1))}
+              disabled={currentPage === totalPages || loading}
+              className="px-2.5 py-1 border border-slate-300 rounded disabled:opacity-50 disabled:cursor-not-allowed hover:bg-slate-50"
+            >
+              Next
+            </button>
+          </div>
         </div>
       </div>
     </div>

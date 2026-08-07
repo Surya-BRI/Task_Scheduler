@@ -598,9 +598,19 @@ export function ProjectsOverviewScreen() {
   }, [loadOverview]);
 
   useEffect(() => {
-    return connectDashboardRealtime({
-      onDashboardRefresh: () => void loadOverview(true),
+    let timer = null;
+    const unsub = connectDashboardRealtime({
+      onDashboardRefresh: () => {
+        clearTimeout(timer);
+        timer = setTimeout(() => {
+          void loadOverview(true);
+        }, 1500);
+      },
     });
+    return () => {
+      clearTimeout(timer);
+      unsub();
+    };
   }, [loadOverview]);
 
   const data = useMemo(() => {

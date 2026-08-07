@@ -26,7 +26,7 @@ import {
   updateChatterComment,
   updateChatterPost,
 } from "@/features/chatter/services/chatter-posts.api";
-import { emitChatterRefresh, onChatterRefresh } from "@/features/chatter/utils/chatter-events";
+import { onChatterRefresh } from "@/features/chatter/utils/chatter-events";
 import { connectDashboardRealtime } from "@/lib/realtime";
 import { apiClient } from "@/lib/api-client";
 import { getSession } from "@/lib/mock-auth";
@@ -1261,6 +1261,8 @@ export function ChatterScreen() {
     if (!ids.length) return;
     const keys = ids.map((id) => normalizeUserId(id)).filter(Boolean);
     try {
+      // Local-only path: POST /seen returns patches — never reloadPosts/reloadPrivateFeeds here.
+      // Backend must not notifyChatterRefresh on seen (that caused full-list storms).
       const result = await markChatterPostsSeen(ids);
       const updates = Array.isArray(result?.updates) ? result.updates : [];
       for (const key of keys) seenRecordedRef.current.add(key);
@@ -1530,23 +1532,49 @@ export function ChatterScreen() {
   }, [urlPostId, urlCommentId, postsLoading, posts.length, queueMarkPostSeen, ensureFocusedPostAvailable]);
 
   // Single refresh owner: prefer live socket; keep local event bus as fallback only.
+  // Debounce + single-post merge avoids full-list storms (create/comment self-pings, bursts).
   useEffect(() => {
-    const refreshActiveTab = () => {
+    let timer = null;
+    let pendingDetail = null;
+
+    const runRefresh = async (detail) => {
+      const postId = detail?.postId ? normalizeUserId(detail.postId) ?? detail.postId : null;
+      if (postId && activeTab !== "private") {
+        try {
+          const dto = await getChatterPost(postId);
+          mergePostIntoFeed(mapChatterPostDtoToFeedPost(dto, currentUserId));
+          return;
+        } catch {
+          // Fall through to full active-tab reload.
+        }
+      }
       if (activeTab === "private") {
         void reloadPrivateFeeds();
         return;
       }
       void reloadPosts();
     };
+
+    const refreshActiveTab = (detail) => {
+      pendingDetail = detail ?? pendingDetail ?? {};
+      clearTimeout(timer);
+      timer = setTimeout(() => {
+        const next = pendingDetail ?? {};
+        pendingDetail = null;
+        void runRefresh(next);
+      }, 400);
+    };
+
     const unsubLocal = onChatterRefresh(refreshActiveTab);
     const unsubSocket = connectDashboardRealtime({
       onChatterRefresh: refreshActiveTab,
     });
     return () => {
+      clearTimeout(timer);
       unsubLocal();
       unsubSocket();
     };
-  }, [activeTab, reloadPosts, reloadPrivateFeeds]);
+  }, [activeTab, reloadPosts, reloadPrivateFeeds, mergePostIntoFeed, currentUserId]);
 
   const openChatterTab = useCallback(
     (tab) => {
@@ -1742,9 +1770,10 @@ export function ChatterScreen() {
       );
       setDraftByPostId((prev) => ({ ...prev, [postId]: "" }));
       setOpenComposerPostId(null);
-      const targetPost = posts.find((p) => p.id === postId);
-      emitChatterRefresh({ postId, taskId: targetPost?.taskId, projectId: targetPost?.projectId });
-      void reloadPrivateFeeds();
+      // Local state already updated; other clients get backend WS. Avoid self full-list reload.
+      if (activeTab === "private") {
+        void reloadPrivateFeeds();
+      }
     } catch (err) {
       console.error("Failed to save comment:", err);
       toast.error(err instanceof Error ? err.message : "Could not save comment. Please try again.");
@@ -1879,11 +1908,7 @@ export function ChatterScreen() {
       // Private tab is an @mention / my-comments inbox, not the destination for drafts of that type.
       const targetTab = postData.postType === "Task Updates" ? "task-updates" : "posts";
       setActiveTab(targetTab);
-      emitChatterRefresh({
-        taskId: createdDto.taskId,
-        projectId: createdDto.projectId,
-        postId: createdDto.id,
-      });
+      // Local setPosts already has the row; other clients refresh via backend WS — no self emit.
       toast.success("Post created successfully");
     } catch (err) {
       console.error("Failed to create post:", err);

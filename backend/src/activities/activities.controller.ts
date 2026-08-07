@@ -17,12 +17,16 @@ export class ActivitiesController {
   findAll(
     @Query('limit') limit?: string,
     @Query('userId') userId?: string,
+    @Query('since') since?: string,
+    @Query('cursor') cursor?: string,
     @CurrentUser() currentUser?: JwtPayload,
   ) {
     const parsedLimit = limit ? parseInt(limit, 10) : 50;
     return this.activitiesService.findAll({
       limit: parsedLimit,
       userId,
+      since,
+      cursor,
       requestingUserId: currentUser?.sub,
       requestingUserRole: currentUser?.role,
     });

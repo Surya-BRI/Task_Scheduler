@@ -33,18 +33,59 @@ export interface TeamActivity {
   team?: string;
 }
 
-export function fetchTeamActivities(params?: { limit?: number }) {
-  const qs = new URLSearchParams();
-  if (params?.limit != null) qs.set('limit', String(params.limit));
-  const suffix = qs.toString() ? `?${qs.toString()}` : '';
-  const key = `activities${suffix || '?limit=default'}`;
-  return singleflight(key, () => apiClient.get<TeamActivity[]>(`/activities${suffix}`));
+export interface TeamActivitiesPage {
+  data: TeamActivity[];
+  pageInfo: {
+    hasMore: boolean;
+    nextCursor: string | null;
+  };
 }
 
-export function fetchUserActivities(userId: string, params?: { limit?: number }) {
+function normalizeTeamActivitiesResponse(
+  res: TeamActivity[] | TeamActivitiesPage,
+): TeamActivitiesPage {
+  if (Array.isArray(res)) {
+    return { data: res, pageInfo: { hasMore: false, nextCursor: null } };
+  }
+  return {
+    data: Array.isArray(res?.data) ? res.data : [],
+    pageInfo: {
+      hasMore: Boolean(res?.pageInfo?.hasMore),
+      nextCursor: res?.pageInfo?.nextCursor ?? null,
+    },
+  };
+}
+
+export function fetchTeamActivities(params?: {
+  limit?: number;
+  since?: string;
+  cursor?: string;
+}) {
+  const qs = new URLSearchParams();
+  if (params?.limit != null) qs.set('limit', String(params.limit));
+  if (params?.since) qs.set('since', params.since);
+  if (params?.cursor) qs.set('cursor', params.cursor);
+  const suffix = qs.toString() ? `?${qs.toString()}` : '';
+  const key = `activities${suffix || '?limit=default'}`;
+  return singleflight(key, () =>
+    apiClient
+      .get<TeamActivity[] | TeamActivitiesPage>(`/activities${suffix}`)
+      .then(normalizeTeamActivitiesResponse),
+  );
+}
+
+export function fetchUserActivities(
+  userId: string,
+  params?: { limit?: number; since?: string; cursor?: string },
+) {
   const qs = new URLSearchParams({ userId });
   if (params?.limit != null) qs.set('limit', String(params.limit));
-  return apiClient.get<TeamActivity[]>(`/activities?${qs.toString()}`);
+  if (params?.since) qs.set('since', params.since);
+  if (params?.cursor) qs.set('cursor', params.cursor);
+  return apiClient
+    .get<TeamActivity[] | TeamActivitiesPage>(`/activities?${qs.toString()}`)
+    .then(normalizeTeamActivitiesResponse)
+    .then((page) => page.data);
 }
 
 export interface ActivityTimelineItem {

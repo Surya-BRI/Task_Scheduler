@@ -5,8 +5,6 @@ export type SchedulerTaskSummary = {
   id: string;
   opNo: string | null;
   title: string | null;
-  signType: string | null;
-  revisionCode: string | null;
   designType: string | null;
   disciplineType: string | null;
   status: string;
@@ -22,10 +20,6 @@ export type SchedulerTaskSummary = {
     name: string | null;
     projectNo: string | null;
     category: string | null;
-    technicalHead: string | null;
-    teamLead: string | null;
-    subTeamLead: string | null;
-    designers: string | null;
   } | null;
 };
 

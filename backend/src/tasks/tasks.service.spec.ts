@@ -39,7 +39,7 @@ describe('TasksService', () => {
   };
 
   const prisma: any = {
-    task: { findUnique: jest.fn(), update: jest.fn(), create: jest.fn(), findMany: jest.fn() },
+    task: { findUnique: jest.fn(), update: jest.fn(), create: jest.fn(), findMany: jest.fn(), count: jest.fn() },
     taskDesigner: { findUnique: jest.fn(), findMany: jest.fn(), create: jest.fn(), deleteMany: jest.fn() },
     schedulerAssignment: { findMany: jest.fn(), deleteMany: jest.fn() },
     user: { findMany: jest.fn(), findUnique: jest.fn() },
@@ -997,6 +997,35 @@ describe('TasksService', () => {
         ).rejects.toThrow(/cannot be reassigned/i);
       }
       expect(prisma.task.update).not.toHaveBeenCalled();
+    });
+  });
+
+  describe('findAll — salesHistory', () => {
+    it('loads distinct history task ids without an activity take cap', async () => {
+      const historyId = 'bbbbbbbb-bbbb-4bbb-8bbb-bbbbbbbbbbbb';
+      prisma.$queryRaw.mockResolvedValue([{ taskId: historyId }]);
+      prisma.task.findMany.mockResolvedValue([]);
+      prisma.task.count.mockResolvedValue(0);
+      prisma.taskWorkSession.findMany.mockResolvedValue([]);
+
+      await service.findAll('sales-1', UserRole.SALESPERSON, {
+        salesHistory: true,
+        page: 2,
+        limit: 100,
+      });
+
+      expect(prisma.$queryRaw).toHaveBeenCalled();
+      expect(prisma.activityLog?.findMany).toBeUndefined();
+      expect(prisma.task.findMany).toHaveBeenCalledWith(
+        expect.objectContaining({
+          where: expect.objectContaining({
+            id: { in: [historyId] },
+            status: { not: 'SALES_REVIEW' },
+          }),
+          skip: 100,
+          take: 100,
+        }),
+      );
     });
   });
 });

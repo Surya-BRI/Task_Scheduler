@@ -17,6 +17,7 @@ import { createHash } from 'crypto';
 import { shouldRunRuntimeSchemaBootstrap } from '../common/utils/runtime-schema-bootstrap.util';
 import {
   effectiveWorkSessionSeconds,
+  normalizeWorkSeconds,
   workedHoursFromSeconds,
 } from '../common/utils/task-work-session-time.util';
 import { CronLockService, LOCK_NOT_ACQUIRED } from '../common/services/cron-lock.service';
@@ -38,6 +39,10 @@ import {
   type SchedulerTaskSummaryDto,
 } from '../tasks/scheduler-task-summary.util';
 import { taskViewPath } from '../common/utils/design-type.util';
+import {
+  collectProjectTeamNames,
+  normalizePersonName,
+} from '../common/utils/project-team-names.util';
 import {
   computeDesignerTaskBarStats,
   computeDesignerWeekWorkloadStats,
@@ -3797,19 +3802,14 @@ export class SchedulerAssignmentsService implements OnModuleInit {
     const project = task.project;
     if (!project) return;
 
-    const normalize = (value: string) => value.trim().toLowerCase();
-    const teamNames = new Set(
-      [project.technicalHead, project.teamLead, project.subTeamLead, ...(project.designers?.split(',') ?? [])]
-        .map((name) => (name ? normalize(name) : ''))
-        .filter(Boolean),
-    );
-    if (teamNames.size === 0) return;
+    const team = collectProjectTeamNames(project);
+    if (team.normalized.size === 0) return;
 
     const designer = await this.prisma.user.findUnique({
       where: { id: designerId },
       select: { id: true, fullName: true },
     });
-    if (!designer || !teamNames.has(normalize(designer.fullName))) {
+    if (!designer || !team.normalized.has(normalizePersonName(designer.fullName))) {
       throw new BadRequestException(
         `${designer?.fullName ?? designerId} is not on this project's team.`,
       );
@@ -3820,13 +3820,16 @@ export class SchedulerAssignmentsService implements OnModuleInit {
    * Whole-designer remaining handoff for an approved reallocation request.
    * Keeps locked logged-remainder cards on the source designer; packs remaining
    * hours onto the target after existing cards (append by position).
+   *
+   * Draft timer freeze runs inside the same DB transaction as packing so a failed
+   * handoff (locked week / no capacity) never leaves the requester's session HandedOff
+   * while the reallocation request stays Pending.
    */
   async applyReallocationHandoff(params: {
     taskId: string;
     fromDesignerId: string;
     toDesignerId: string;
     assignedBy: string;
-    workedSeconds: number;
   }): Promise<{
     remainingHoursMoved: number;
     affectedWeekStarts: string[];
@@ -3841,6 +3844,37 @@ export class SchedulerAssignmentsService implements OnModuleInit {
 
     // Remote SQL Server latency makes the default 5s interactive-tx timeout fail (P2028).
     const result = await this.prisma.$transaction(async (tx) => {
+      // Only Draft timer seconds count toward FIFO on unlocked slices.
+      // Prior HandedOff time is already represented by locked logged-remainder cards.
+      const draft = await tx.taskWorkSession.findFirst({
+        where: { taskId, designerId: fromDesignerId, status: 'Draft' },
+        orderBy: { createdAt: 'desc' },
+      });
+      let workedRemainingSeconds = 0;
+      let draftFreezeNotify: {
+        hadRunningTimer: boolean;
+        accumulatedSeconds: number;
+      } | null = null;
+
+      if (draft) {
+        const draftFrozenOnly = normalizeWorkSeconds(
+          effectiveWorkSessionSeconds(draft.durationSeconds, draft.runStartedAt),
+        );
+        workedRemainingSeconds = draftFrozenOnly;
+        await tx.taskWorkSession.update({
+          where: { id: draft.id },
+          data: {
+            durationSeconds: draftFrozenOnly,
+            runStartedAt: null,
+            status: 'HandedOff',
+          },
+        });
+        draftFreezeNotify = {
+          hadRunningTimer: draft.runStartedAt != null,
+          accumulatedSeconds: draftFrozenOnly,
+        };
+      }
+
       const rows = await tx.schedulerAssignment.findMany({
         where: { taskId, designerId: fromDesignerId },
         orderBy: [{ weekStartDate: 'asc' }, { dayIndex: 'asc' }, { position: 'asc' }],
@@ -3859,8 +3893,6 @@ export class SchedulerAssignmentsService implements OnModuleInit {
       const lockedWeekKeys = new Set(
         weeks.filter((w) => w.isLocked).map((w) => this.dateKey(new Date(w.weekStartDate))),
       );
-
-      let workedRemainingSeconds = Math.max(0, Math.floor(params.workedSeconds || 0));
       let remainingHoursToMove = 0;
       let earliestMoveDate: Date | null = null;
       const affectedWeekStarts = new Set<string>();
@@ -3936,7 +3968,7 @@ export class SchedulerAssignmentsService implements OnModuleInit {
         earliestMoveDate && earliestMoveDate.getTime() > today.getTime()
           ? earliestMoveDate
           : today;
-      const packEnd = this.addUtcDays(packStart, 28);
+      const packEnd = this.addUtcDays(packStart, 42);
 
       const [holidayKeys, approvedLeaves, existingTargetRows, packWeeks] = await Promise.all([
         this.loadHolidayKeys(tx, packStart, packEnd),
@@ -4072,7 +4104,7 @@ export class SchedulerAssignmentsService implements OnModuleInit {
       const unplacedHours = Math.max(0, hoursRemaining);
       if (placements.length === 0) {
         throw new BadRequestException(
-          'Could not place remaining hours on the target designer within the next 4 weeks.',
+          'Could not place remaining hours on the target designer within the next 6 weeks.',
         );
       }
 
@@ -4130,8 +4162,21 @@ export class SchedulerAssignmentsService implements OnModuleInit {
         remainingHoursMoved: remainingHoursToMove - unplacedHours,
         affectedWeekStarts: Array.from(affectedWeekStarts).sort(),
         unplacedHours,
+        draftFreezeNotify,
       };
     }, { timeout: 60_000, maxWait: 20_000 });
+
+    if (result.draftFreezeNotify?.hadRunningTimer) {
+      this.dashboardRealtime?.notifyTimerPaused(fromDesignerId, taskId, true);
+      this.dashboardRealtime?.notifyTimerUpdated(fromDesignerId, {
+        taskId,
+        accumulatedSeconds: result.draftFreezeNotify.accumulatedSeconds,
+        runStartedAt: null,
+        handedOff: true,
+        locked: true,
+        sessionClosed: true,
+      });
+    }
 
     this.dashboardRealtime?.notifyOverviewRefresh('task_reallocated', {
       taskId,
@@ -4139,7 +4184,11 @@ export class SchedulerAssignmentsService implements OnModuleInit {
       changedTaskIds: [taskId],
     });
 
-    return result;
+    return {
+      remainingHoursMoved: result.remainingHoursMoved,
+      affectedWeekStarts: result.affectedWeekStarts,
+      unplacedHours: result.unplacedHours,
+    };
   }
 
   /**

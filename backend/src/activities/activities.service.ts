@@ -28,11 +28,15 @@ function formatStatusLabel(status?: string | null): string | null {
 type FindInput = {
   limit?: number;
   cursor?: string;
+  /** ISO timestamp — return rows with createdAt strictly after this (deltas). */
+  since?: string;
   taskId?: string;
   projectId?: string;
   userId?: string;
   requestingUserId?: string;
   requestingUserRole?: string;
+  /** Lean task join for team/user feed (no assignee / designers / retail). */
+  slimTask?: boolean;
 };
 
 @Injectable()
@@ -275,6 +279,7 @@ export class ActivitiesService {
   private async queryActivities(input: FindInput) {
     const limit = Math.min(Math.max(input.limit ?? 30, 1), 100);
     const cursorDate = input.cursor ? new Date(input.cursor) : null;
+    const sinceDate = input.since ? new Date(input.since) : null;
     const isProjectOrTaskHistory = Boolean(input.projectId || input.taskId);
     const excludedActions: string[] = [ActivityAction.CHATTER_MENTION];
     if (isProjectOrTaskHistory) {
@@ -283,8 +288,15 @@ export class ActivitiesService {
     const where: Record<string, unknown> = {
       action: { notIn: excludedActions },
     };
+    const createdAtFilter: Record<string, Date> = {};
+    if (sinceDate && !Number.isNaN(sinceDate.getTime())) {
+      createdAtFilter.gt = sinceDate;
+    }
     if (cursorDate && !Number.isNaN(cursorDate.getTime())) {
-      where.createdAt = { lt: cursorDate };
+      createdAtFilter.lt = cursorDate;
+    }
+    if (Object.keys(createdAtFilter).length > 0) {
+      where.createdAt = createdAtFilter;
     }
     if (input.userId) {
       where.userId = input.userId;
@@ -319,7 +331,7 @@ export class ActivitiesService {
       where,
       take: limit + 1,
       orderBy: { createdAt: 'desc' },
-      include: this.getTaskInclude(),
+      include: this.getTaskInclude({ slim: Boolean(input.slimTask) }),
     });
 
     const hasMore = rows.length > limit;
@@ -413,7 +425,23 @@ export class ActivitiesService {
     };
   }
 
-  private getTaskInclude() {
+  private getTaskInclude(options?: { slim?: boolean }) {
+    if (options?.slim) {
+      return {
+        user: { select: { id: true, fullName: true } },
+        task: {
+          select: {
+            id: true,
+            taskNo: true,
+            opNo: true,
+            title: true,
+            status: true,
+            priority: true,
+            project: { select: { id: true, name: true, projectNo: true } },
+          },
+        },
+      };
+    }
     return {
       user: { select: { id: true, fullName: true } },
       task: {
@@ -434,14 +462,24 @@ export class ActivitiesService {
     };
   }
 
-  async findAll(input: { limit?: number; userId?: string; requestingUserId?: string; requestingUserRole?: string }) {
+  async findAll(input: {
+    limit?: number;
+    userId?: string;
+    since?: string;
+    cursor?: string;
+    requestingUserId?: string;
+    requestingUserRole?: string;
+  }) {
     const result = await this.queryActivities({
       limit: input.limit,
       userId: input.userId,
+      since: input.since,
+      cursor: input.cursor,
       requestingUserId: input.requestingUserId,
       requestingUserRole: input.requestingUserRole,
+      slimTask: true,
     });
-    return result.data.map((item) => ({
+    const data = result.data.map((item) => ({
       id: item.id,
       action: item.action,
       kind: MILESTONE_ACTIONS.has(item.action) ? 'project_milestone' : 'task_update',
@@ -453,7 +491,6 @@ export class ActivitiesService {
       monthIndex: new Date(item.occurredAt).getMonth(),
       year: new Date(item.occurredAt).getFullYear(),
       priority: item.task?.priority ? item.task.priority.toLowerCase() : 'normal',
-      project: item.project?.name ?? null,
       projectId: item.project?.id ?? null,
       projectNo: item.project?.projectNo ?? null,
       projectName: item.project?.name ?? null,
@@ -462,8 +499,11 @@ export class ActivitiesService {
       taskName: item.task?.title ?? item.task?.taskNo ?? null,
       status: item.task?.status ?? item.details?.changes?.newStatus ?? null,
       statusLabel: formatStatusLabel(item.task?.status ?? item.details?.changes?.newStatus ?? null),
-      team: null,
     }));
+    return {
+      data,
+      pageInfo: result.pageInfo,
+    };
   }
 
   async findByTask(input: { taskId: string; limit?: number; cursor?: string; requestingUserId?: string; requestingUserRole?: string }) {

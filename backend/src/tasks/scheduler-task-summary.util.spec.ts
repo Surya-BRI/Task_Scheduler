@@ -28,7 +28,7 @@ describe('scheduler-task-summary.util', () => {
     projectDetails: [],
   };
 
-  it('maps slim task rows for scheduler clients', () => {
+  it('maps slim task rows for scheduler clients without null stub fields', () => {
     const mapped = mapSchedulerTaskSummary(baseTask);
     expect(mapped).toMatchObject({
       id: 'task-1',
@@ -36,15 +36,16 @@ describe('scheduler-task-summary.util', () => {
       status: 'DESIGN_NEW',
       estimatedHours: 6,
       hasTaskDesigners: false,
-      signType: null,
-      revisionCode: null,
-      phase: null,
       project: expect.objectContaining({
         projectNo: 'P-100',
-        technicalHead: null,
-        teamLead: null,
+        category: 'Retail',
       }),
     });
+    expect(mapped).not.toHaveProperty('signType');
+    expect(mapped).not.toHaveProperty('revisionCode');
+    expect(mapped).not.toHaveProperty('phase');
+    expect(mapped.project).not.toHaveProperty('technicalHead');
+    expect(mapped.project).not.toHaveProperty('teamLead');
   });
 
   it('computes estimated hours from project detail lines when retail hours are absent', () => {

@@ -7,6 +7,7 @@ import {
   cancelReallocationRequest,
   listReallocationPendingApprovals,
   listReallocationRequests,
+  reallocationApproveFeedback,
   reviewReallocationRequest,
   listReallocationEligibleDesigners,
 } from "@/features/requests/services/reallocation-requests.api";
@@ -88,12 +89,17 @@ export default function ReallocationRequestsSection({
     if (!approveRow) return;
     setBusy(true);
     try {
-      await reviewReallocationRequest(approveRow.id, {
+      const result = await reviewReallocationRequest(approveRow.id, {
         status: "Approved",
         targetDesignerId: targetDesignerId || approveRow.suggestedDesignerId,
         remarks: remarks.trim() || undefined,
       });
-      toast.success("Reallocation approved — schedule updated");
+      const feedback = reallocationApproveFeedback(result ?? {});
+      if (feedback.tone === "warning") {
+        toast.warning(feedback.title, feedback.description ? { description: feedback.description } : undefined);
+      } else {
+        toast.success(feedback.title);
+      }
       setApproveRow(null);
       await load();
     } catch (err) {
