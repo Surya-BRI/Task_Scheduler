@@ -56,12 +56,19 @@ npm run prisma:seed
 ```
 
 Seed currently upserts:
-- Roles: `HOD`, `DESIGNER`
-- Demo users with bcrypt-hashed passwords:
-- `sarah.mitchell@bluerhine.com` / `hod123`
-- `alex.johnson@bluerhine.com` / `alex123`
-- `alexander.allen@bluerhine.com` / `alex123`
-- `benjamin.harris@bluerhine.com` / `ben123`
+- Roles: `HOD`, `DESIGNER`, `SALESPERSON`, `QS`
+- Legacy demo users (own passwords):
+  - `sarah.mitchell@bluerhine.com` / `hod123`
+  - `alex.johnson@bluerhine.com` / `alex123`
+  - `alexander.allen@bluerhine.com` / `alex123`
+  - `benjamin.harris@bluerhine.com` / `ben123`
+  - `rehman@bluerhine.com` / `rehman123`
+  - `qs.team@bluerhine.com` / `qs1234`
+- UAT accounts (all password `tester@321`; email = `firstname.lastname@bluerhine.com` from display name):
+  - Sales (`SALESPERSON`): Sithara Sukumaran, Fahad
+  - HOD: Gopan, Tony, Subin
+  - Designers (`DESIGNER`): Retail — Navin Saju, Saji Saju, Amal, Alekhya, Sulakshana, Sunayana, Arjun, Sooraj, Anagha, Fougil, Ganesh, Gokul, Vipin, Ashik; Project — Rajil Ravindran, Aakash Vijayan, Joseph Shilton
+  - QS: Aleena, Chithira, Rony, Sreekutty, Vishun T K
 
 ## Run API
 

@@ -23,7 +23,17 @@ async function main(): Promise<void> {
     throw new Error('Required roles were not found after seeding roles');
   }
 
-  const demoAccounts = [
+  type SeedRole = { id: string; name: string };
+
+  const emailFromName = (fullName: string): string =>
+    `${fullName
+      .trim()
+      .toLowerCase()
+      .replace(/\s+/g, '.')
+      .replace(/[^a-z0-9.]/g, '')}@bluerhine.com`;
+
+  // Legacy demo accounts (kept for existing E2E / local fixtures).
+  const demoAccounts: Array<{ fullName: string; email: string; password: string; role: SeedRole }> = [
     { fullName: 'Sarah Mitchell', email: 'sarah.mitchell@bluerhine.com', password: 'hod123', role: hodRole },
     { fullName: 'James Carter', email: 'james.carter@bluerhine.com', password: 'hod456', role: hodRole },
     { fullName: 'Priya Sharma', email: 'priya.sharma@bluerhine.com', password: 'hod789', role: hodRole },
@@ -32,6 +42,43 @@ async function main(): Promise<void> {
     { fullName: 'Benjamin Harris', email: 'benjamin.harris@bluerhine.com', password: 'ben123', role: designerRole },
     { fullName: 'Rehman', email: 'rehman@bluerhine.com', password: 'rehman123', role: salespersonRole },
     { fullName: 'Ojas', email: 'qs.team@bluerhine.com', password: 'qs1234', role: qsTeamRole },
+  ];
+
+  // UAT tester accounts — shared password for all roles.
+  const UAT_PASSWORD = 'tester@321';
+  const uatAccounts: Array<{ fullName: string; role: SeedRole }> = [
+    // Sales → SALESPERSON
+    { fullName: 'Sithara Sukumaran', role: salespersonRole },
+    { fullName: 'Fahad', role: salespersonRole },
+    // HOD
+    { fullName: 'Gopan', role: hodRole },
+    { fullName: 'Tony', role: hodRole },
+    { fullName: 'Subin', role: hodRole },
+    // Retail designers → DESIGNER
+    { fullName: 'Navin Saju', role: designerRole },
+    { fullName: 'Saji Saju', role: designerRole },
+    { fullName: 'Amal', role: designerRole },
+    { fullName: 'Alekhya', role: designerRole },
+    { fullName: 'Sulakshana', role: designerRole },
+    { fullName: 'Sunayana', role: designerRole },
+    { fullName: 'Arjun', role: designerRole },
+    { fullName: 'Sooraj', role: designerRole },
+    { fullName: 'Anagha', role: designerRole },
+    { fullName: 'Fougil', role: designerRole },
+    { fullName: 'Ganesh', role: designerRole },
+    { fullName: 'Gokul', role: designerRole },
+    { fullName: 'Vipin', role: designerRole },
+    { fullName: 'Ashik', role: designerRole },
+    // Project designers → DESIGNER
+    { fullName: 'Rajil Ravindran', role: designerRole },
+    { fullName: 'Aakash Vijayan', role: designerRole },
+    { fullName: 'Joseph Shilton', role: designerRole },
+    // QS
+    { fullName: 'Aleena', role: qsTeamRole },
+    { fullName: 'Chithira', role: qsTeamRole },
+    { fullName: 'Rony', role: qsTeamRole },
+    { fullName: 'Sreekutty', role: qsTeamRole },
+    { fullName: 'Vishun T K', role: qsTeamRole },
   ];
 
   for (const acc of demoAccounts) {
@@ -48,6 +95,25 @@ async function main(): Promise<void> {
         fullName: acc.fullName,
         roleId: acc.role.id,
         passwordHash,
+      },
+    });
+  }
+
+  const uatPasswordHash = await bcrypt.hash(UAT_PASSWORD, 10);
+  for (const acc of uatAccounts) {
+    const email = emailFromName(acc.fullName);
+    await prisma.user.upsert({
+      where: { email },
+      update: {
+        fullName: acc.fullName,
+        roleId: acc.role.id,
+        passwordHash: uatPasswordHash,
+      },
+      create: {
+        email,
+        fullName: acc.fullName,
+        roleId: acc.role.id,
+        passwordHash: uatPasswordHash,
       },
     });
   }
