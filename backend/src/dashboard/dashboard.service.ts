@@ -62,6 +62,11 @@ export class DashboardService {
 
   constructor(private readonly prisma: PrismaService) {}
 
+  /** Drop in-memory overview entries (tests, or after known mutations). */
+  clearProjectsOverviewCache(): void {
+    this.overviewCache.clear();
+  }
+
   async getProjectsOverview(
     weekStart?: string,
     viewerId?: string,

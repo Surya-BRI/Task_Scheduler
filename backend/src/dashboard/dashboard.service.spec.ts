@@ -34,6 +34,7 @@ describe('DashboardService', () => {
 
   beforeEach(() => {
     jest.clearAllMocks();
+    service.clearProjectsOverviewCache();
     prisma.taskDesigner.findMany.mockResolvedValue([]);
     emptyOverviewMocks();
   });
