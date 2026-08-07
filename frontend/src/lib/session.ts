@@ -63,5 +63,5 @@ export function getHomeRoute(session: AppSession | null) {
   if (session.role === 'DESIGNER') return '/design-list/tasks';
   if (session.role === 'SALESPERSON') return '/sales/tasks';
   if (session.role === 'QS') return '/qs/projects';
-  return '/design-list';
+  return '/login';
 }
