@@ -151,6 +151,12 @@ export function mapTaskToDesignRow(task) {
         ? task.taskDesigners.map((d) => d.designer.fullName).join(', ')
         : null),
     revisionCode: task?.revisionCode || "—",
+    submittedDurationSeconds:
+      typeof task?.submittedDurationSeconds === "number"
+        ? task.submittedDurationSeconds
+        : task?.submittedDurationSeconds === null
+          ? null
+          : undefined,
   };
 }
 

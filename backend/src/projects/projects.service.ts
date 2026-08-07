@@ -828,23 +828,31 @@ END;
       throw new ForbiddenException('The status of approved sign rows cannot be changed.');
     }
 
-    const savedRows = await this.prisma.$transaction(async (tx) => {
-      for (const row of rowsToPersist) {
-        const { id, ...data } = row;
-        if (id && existingById.has(id)) {
-          if (this.hasSignRowChanges(existingById.get(id), data)) {
-            await tx.projectSignRow.update({ where: { id }, data });
+    // Writes only inside the tx — reload rows after commit (avoids default 5s P2028 on large registers).
+    await this.prisma.$transaction(
+      async (tx) => {
+        for (const row of rowsToPersist) {
+          const { id, ...data } = row;
+          if (id && existingById.has(id)) {
+            if (this.hasSignRowChanges(existingById.get(id), data)) {
+              await tx.projectSignRow.update({ where: { id }, data });
+            }
+          } else {
+            await tx.projectSignRow.create({ data: { projectId, ...data } });
           }
-        } else {
-          await tx.projectSignRow.create({ data: { projectId, ...data } });
         }
-      }
-      for (const row of existingRows) {
-        if (!incomingIds.has(row.id)) {
-          await tx.projectSignRow.delete({ where: { id: row.id } });
+        for (const row of existingRows) {
+          if (!incomingIds.has(row.id)) {
+            await tx.projectSignRow.delete({ where: { id: row.id } });
+          }
         }
-      }
-      return tx.projectSignRow.findMany({ where: { projectId }, orderBy: { createdAt: 'asc' } });
+      },
+      { timeout: 30_000 },
+    );
+
+    const savedRows = await this.prisma.projectSignRow.findMany({
+      where: { projectId },
+      orderBy: { createdAt: 'asc' },
     });
 
     if (userId) {

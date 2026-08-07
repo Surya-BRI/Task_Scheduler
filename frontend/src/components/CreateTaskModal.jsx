@@ -2,6 +2,7 @@ import { useEffect, useId, useRef, useState } from 'react'
 import { Pencil, X } from 'lucide-react'
 import DatePicker from 'react-datepicker'
 import { apiClient } from '@/lib/api-client'
+import { assertHoursWithinDeadline } from '@/lib/task-deadline-hours'
 import { toast } from 'sonner'
 
 const DESIGN_OPTIONS = [
@@ -72,6 +73,7 @@ export function CreateTaskModal({ open, onClose, onCreated, submissionDate, reco
   const [fieldErrors, setFieldErrors] = useState({})
   const [touched, setTouched] = useState({})
   const [submitAttempted, setSubmitAttempted] = useState(false)
+  const [revisionFetchError, setRevisionFetchError] = useState('')
 
   useEffect(() => {
     if (!open) return undefined
@@ -87,8 +89,13 @@ export function CreateTaskModal({ open, onClose, onCreated, submissionDate, reco
   }, [open, onClose])
 
   useEffect(() => {
-    if (!open) return
+    if (!open) {
+      setError('')
+      setRevisionFetchError('')
+      return
+    }
     setRevisionCode('')
+    setRevisionFetchError('')
     setDesignType('')
     setHod('')
     setPriorityLevel('Medium')
@@ -103,6 +110,7 @@ export function CreateTaskModal({ open, onClose, onCreated, submissionDate, reco
     setFieldErrors({})
     setTouched({})
     setSubmitAttempted(false)
+    setError('')
     const initDate = submissionDate instanceof Date && !Number.isNaN(submissionDate.getTime()) ? submissionDate : null
     setLocalDeadline(initDate)
   }, [open, submissionDate])
@@ -111,6 +119,7 @@ export function CreateTaskModal({ open, onClose, onCreated, submissionDate, reco
   useEffect(() => {
     if (!designType) return
     setRevisionCode('')
+    setRevisionFetchError('')
   }, [designType])
 
   const startOfToday = new Date()
@@ -130,9 +139,20 @@ export function CreateTaskModal({ open, onClose, onCreated, submissionDate, reco
     apiClient
       .get(`/tasks/next-revision?${qs}`)
       .then((res) => {
+        setRevisionFetchError('')
         if (!revisionCode.trim()) setRevisionCode(res?.revisionCode ?? 'R0')
       })
-      .catch(() => {})
+      .catch((err) => {
+        const msg = err instanceof Error ? err.message : 'Could not resolve revision'
+        setRevisionFetchError(msg)
+        setError(msg)
+        setFieldErrors((prev) => {
+          const next = { ...prev }
+          delete next.revisionCode
+          return next
+        })
+        toast.error(msg)
+      })
   }, [open, record, designType, revisionCode])
 
   if (!open) return null
@@ -143,6 +163,11 @@ export function CreateTaskModal({ open, onClose, onCreated, submissionDate, reco
     setSubmitAttempted(true)
     const normalizedRevision = revisionCode.trim().toUpperCase()
     const nextFieldErrors = {}
+    if (revisionFetchError) {
+      setError(revisionFetchError)
+      toast.error(revisionFetchError)
+      return
+    }
     if (!REVISION_PATTERN.test(normalizedRevision)) {
       nextFieldErrors.revisionCode = 'Revision must be like R0, R1, R2'
     }
@@ -167,6 +192,16 @@ export function CreateTaskModal({ open, onClose, onCreated, submissionDate, reco
       setError(nextFieldErrors.projectName || 'Please fill required fields')
       return
     }
+
+    if (validSubmissionDate && Number.isFinite(parsedHours) && parsedHours >= 1) {
+      const hoursCheck = assertHoursWithinDeadline(parsedHours, validSubmissionDate)
+      if (!hoursCheck.ok) {
+        setError(hoursCheck.message)
+        toast.error(hoursCheck.message)
+        return
+      }
+    }
+
     setFieldErrors({})
     setError('')
     setSubmitting(true)
@@ -235,6 +270,11 @@ export function CreateTaskModal({ open, onClose, onCreated, submissionDate, reco
     } catch (err) {
       const msg = err instanceof Error ? err.message : 'Failed to create task'
       setError(msg)
+      setFieldErrors((prev) => {
+        const next = { ...prev }
+        delete next.revisionCode
+        return next
+      })
       toast.error(msg)
     } finally {
       setSubmitting(false)

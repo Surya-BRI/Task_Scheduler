@@ -113,7 +113,7 @@ export class ChatService {
       });
 
       return conversation;
-    });
+    }, { timeout: 15_000 });
   }
 
   /**
@@ -256,7 +256,7 @@ export class ChatService {
       });
 
       return msg;
-    });
+    }, { timeout: 15_000 });
 
     this.notifyOtherParticipants(conversationId, message).catch((err) =>
       this.logger.error('Failed to notify conversation participants of new message', err),

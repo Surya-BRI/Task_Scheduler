@@ -746,7 +746,10 @@ export class OvertimeRequestsService {
       }
 
       return created;
-    }, { isolationLevel: Prisma.TransactionIsolationLevel.Serializable });
+    }, {
+      isolationLevel: Prisma.TransactionIsolationLevel.Serializable,
+      timeout: 15_000,
+    });
 
     if (hodAutoApprove) {
       await this.logOvertimeActivity({
@@ -871,7 +874,10 @@ export class OvertimeRequestsService {
       });
 
       return row;
-    }, { isolationLevel: Prisma.TransactionIsolationLevel.Serializable });
+    }, {
+      isolationLevel: Prisma.TransactionIsolationLevel.Serializable,
+      timeout: 15_000,
+    });
 
     if (status === 'SUBMITTED' && request.status !== 'SUBMITTED') {
       const recipientName = await this.resolveOvertimeApproverName(updated.designer?.departmentId);
@@ -1161,7 +1167,7 @@ export class OvertimeRequestsService {
         });
 
         return row;
-      });
+      }, { timeout: 15_000 });
 
       const approved = dto.status === 'APPROVED_BY_MANAGER';
       await this.logOvertimeActivity({

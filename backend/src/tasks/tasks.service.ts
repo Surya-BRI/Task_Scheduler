@@ -13,7 +13,7 @@ import { ActivityAction } from '../activities/activity-events';
 import { SubmitWorkDto } from './dto/submit-work.dto';
 import { SaveTimerStateDto } from './dto/save-timer-state.dto';
 import { DashboardRealtimeService } from '../dashboard/dashboard-realtime.service';
-import { COMPLETED_STATUS_FILTER } from '../dashboard/task-status-buckets.util';
+import { COMPLETED_STATUS_FILTER, isTaskReassignmentBlocked, TASK_REASSIGNMENT_BLOCKED_MESSAGE } from '../dashboard/task-status-buckets.util';
 import { toApiTaskStatus, toDbTaskStatus } from './task-status.util';
 import { NotificationsService } from '../notifications/notifications.service';
 import {
@@ -462,6 +462,9 @@ export class TasksService {
     return raw.replace(/\s+/g, '_');
   }
 
+  private static readonly REVISION_BUMP_BLOCKED_MESSAGE =
+    'New revision cannot be created when the current revision is still open';
+
   private normalizeRevisionCode(value?: string | null): string | null {
     const raw = String(value ?? '').trim().toUpperCase();
     if (!raw) return null;
@@ -476,8 +479,159 @@ export class TasksService {
     return m ? Number.parseInt(m[1], 10) : -1;
   }
 
+  /** True while the revision line is still active (work, review, rework, hold). */
+  private isRevisionOpenStatus(status?: string | null): boolean {
+    const api = toApiTaskStatus(status);
+    return api !== 'CLIENT_ACCEPTED' && api !== 'CLIENT_REJECTED';
+  }
+
+  private async findOpenRevisionState(
+    tx: Prisma.TransactionClient | PrismaService,
+    params: { projectId: string; opNo: string; designType: string },
+  ): Promise<{
+    hasTasks: boolean;
+    openMaxRevision: string | null;
+    overallMaxRevision: string | null;
+    /** True when the highest revision in scope was client-rejected (next Rn is allowed). */
+    canBumpAfterReject: boolean;
+    blocker: { taskNo: string | null; revisionCode: string | null; status: string } | null;
+  }> {
+    const rows = await tx.task.findMany({
+      where: {
+        projectId: params.projectId,
+        opNo: params.opNo,
+        designType: params.designType,
+        revisionCode: { not: null },
+      },
+      select: { taskNo: true, revisionCode: true, status: true },
+    });
+
+    let openMax = -1;
+    let overallMax = -1;
+    let rejectedAtOverallMax = false;
+    let blocker: { taskNo: string | null; revisionCode: string | null; status: string } | null = null;
+
+    for (const row of rows) {
+      if (!row.revisionCode) continue;
+      const n = this.getRevisionNumber(row.revisionCode);
+      const api = toApiTaskStatus(row.status);
+      if (n > overallMax) {
+        overallMax = n;
+        rejectedAtOverallMax = api === 'CLIENT_REJECTED';
+      } else if (n === overallMax && api === 'CLIENT_REJECTED') {
+        rejectedAtOverallMax = true;
+      }
+      if (this.isRevisionOpenStatus(row.status) && n >= openMax) {
+        openMax = n;
+        blocker = {
+          taskNo: row.taskNo ?? null,
+          revisionCode: row.revisionCode,
+          status: api,
+        };
+      }
+    }
+
+    // If any open task sits on overall max, that line is not "rejected-only".
+    if (openMax >= 0 && openMax === overallMax) {
+      rejectedAtOverallMax = false;
+    }
+
+    return {
+      hasTasks: rows.length > 0,
+      openMaxRevision: openMax >= 0 ? `R${openMax}` : null,
+      overallMaxRevision: overallMax >= 0 ? `R${overallMax}` : null,
+      canBumpAfterReject: overallMax >= 0 && rejectedAtOverallMax,
+      blocker,
+    };
+  }
+
+  /**
+   * Revision for Create Task / next-revision: stay on the open line.
+   * After Client Rejected (no open successor yet), allow R{max+1}.
+   * Pure Client Accepted lines stay blocked.
+   */
+  private async resolveRevisionCodeForCreate(
+    tx: Prisma.TransactionClient | PrismaService,
+    params: { projectId: string; opNo: string; designType: string },
+  ): Promise<string> {
+    const state = await this.findOpenRevisionState(tx, params);
+    if (state.openMaxRevision) return state.openMaxRevision;
+    if (!state.hasTasks) return 'R0';
+    if (state.canBumpAfterReject && state.overallMaxRevision) {
+      return `R${this.getRevisionNumber(state.overallMaxRevision) + 1}`;
+    }
+    throw new BadRequestException(TasksService.REVISION_BUMP_BLOCKED_MESSAGE);
+  }
+
+  /** Enforce stay-on-open / reject-only bump when the client sends or omits revisionCode. */
+  private async assertRevisionAllowedForCreate(
+    tx: Prisma.TransactionClient | PrismaService,
+    params: {
+      projectId: string;
+      opNo: string;
+      designType: string;
+      requestedRevision: string | null;
+    },
+  ): Promise<string> {
+    const state = await this.findOpenRevisionState(tx, {
+      projectId: params.projectId,
+      opNo: params.opNo,
+      designType: params.designType,
+    });
+
+    if (state.openMaxRevision) {
+      if (!params.requestedRevision) return state.openMaxRevision;
+      if (this.getRevisionNumber(params.requestedRevision) > this.getRevisionNumber(state.openMaxRevision)) {
+        const detail = state.blocker
+          ? ` (${state.blocker.taskNo ?? 'task'}, ${state.blocker.revisionCode ?? state.openMaxRevision}, ${state.blocker.status})`
+          : ` (${state.openMaxRevision})`;
+        throw new BadRequestException(`${TasksService.REVISION_BUMP_BLOCKED_MESSAGE}${detail}`);
+      }
+      return params.requestedRevision;
+    }
+
+    if (!state.hasTasks) {
+      return params.requestedRevision ?? 'R0';
+    }
+
+    if (state.canBumpAfterReject && state.overallMaxRevision) {
+      const next = `R${this.getRevisionNumber(state.overallMaxRevision) + 1}`;
+      if (!params.requestedRevision) return next;
+      // Stale form still sending closed Rn → promote to the post-reject revision.
+      if (this.getRevisionNumber(params.requestedRevision) <= this.getRevisionNumber(state.overallMaxRevision)) {
+        return next;
+      }
+      if (this.getRevisionNumber(params.requestedRevision) > this.getRevisionNumber(next)) {
+        throw new BadRequestException(TasksService.REVISION_BUMP_BLOCKED_MESSAGE);
+      }
+      return params.requestedRevision;
+    }
+
+    throw new BadRequestException(TasksService.REVISION_BUMP_BLOCKED_MESSAGE);
+  }
+
+  /** When this revision slot is already taken by an open task. */
+  private throwRevisionSlotTaken(existing: {
+    taskNo?: string | null;
+    revisionCode?: string | null;
+    status?: string | null;
+  }, fallbackRevision: string): never {
+    const taskNo = existing.taskNo?.trim() || 'task';
+    const revision = existing.revisionCode?.trim() || fallbackRevision;
+    const status = toApiTaskStatus(existing.status);
+    if (status === 'CLIENT_REJECTED' || status === 'CLIENT_ACCEPTED') {
+      throw new BadRequestException(
+        `Revision ${revision} is closed (${taskNo}, ${status}). A new revision is created only after Client Rejected.`,
+      );
+    }
+    throw new BadRequestException(
+      `${TasksService.REVISION_BUMP_BLOCKED_MESSAGE} (${taskNo}, ${revision}, ${status})`,
+    );
+  }
+
+  /** True max+1 — used only by createRevisionFromClientReject. */
   private async resolveNextRevisionCode(
-    tx: Prisma.TransactionClient,
+    tx: Prisma.TransactionClient | PrismaService,
     params: { projectId: string; opNo: string; designType: string; signType?: string | null },
   ): Promise<string> {
     const rows = await tx.task.findMany({
@@ -509,7 +663,7 @@ export class TasksService {
       projectId = project.id;
     }
     const designType = this.normalizeDesignType(query.designType);
-    const revisionCode = await this.resolveNextRevisionCode(this.prisma, { projectId, opNo, designType });
+    const revisionCode = await this.resolveRevisionCodeForCreate(this.prisma, { projectId, opNo, designType });
     return { projectId, opNo, designType, revisionCode };
   }
 
@@ -722,47 +876,55 @@ export class TasksService {
 
     for (let attempt = 0; attempt < 5; attempt++) {
       try {
-        const created = await this.prisma.$transaction(async (tx) => {
-          const requestedRevision = this.normalizeRevisionCode(dto.revisionCode);
-          const revisionCode =
-            requestedRevision ??
-            (await this.resolveNextRevisionCode(tx, {
-              projectId: project.id,
-              opNo: normalizedOpNo,
-              designType: normalizedDesignType,
-            }));
-
-          const duplicate = await tx.task.findFirst({
-            where: {
-              projectId: project.id,
-              opNo: normalizedOpNo,
-              designType: normalizedDesignType,
-              revisionCode,
-            },
-            select: { id: true },
-          });
-          if (duplicate) {
-            throw new BadRequestException(
-              `Revision ${revisionCode} already exists for ${normalizedDesignType} in this project/opNo.`,
-            );
-          }
-
-          return tx.task.create({
-            data: {
-              taskNo: this.buildTaskNo(dto.opNo),
-              title: dto.title?.trim() || null,
-              revisionCode,
-              designType: normalizedDesignType,
-              opNo: normalizedOpNo,
-              description: dto.description,
-              priority: dto.priority ?? 'Medium',
-              dueDate: dto.dueDate ? new Date(dto.dueDate) : undefined,
-              projectId: project.id,
-              assigneeId: dto.assigneeId ?? null,
-            },
-            select: TASK_SELECT,
-          });
+        const requestedRevision = this.normalizeRevisionCode(dto.revisionCode);
+        const revisionCode = await this.assertRevisionAllowedForCreate(this.prisma, {
+          projectId: project.id,
+          opNo: normalizedOpNo,
+          designType: normalizedDesignType,
+          requestedRevision,
         });
+
+        const duplicate = await this.prisma.task.findFirst({
+          where: {
+            projectId: project.id,
+            opNo: normalizedOpNo,
+            designType: normalizedDesignType,
+            revisionCode,
+          },
+          select: { taskNo: true, revisionCode: true, status: true },
+        });
+        if (duplicate) {
+          this.throwRevisionSlotTaken(duplicate, revisionCode);
+        }
+
+        const createdId = await this.prisma.$transaction(
+          async (tx) => {
+            const created = await tx.task.create({
+              data: {
+                taskNo: this.buildTaskNo(dto.opNo),
+                title: dto.title?.trim() || null,
+                revisionCode,
+                designType: normalizedDesignType,
+                opNo: normalizedOpNo,
+                description: dto.description,
+                priority: dto.priority ?? 'Medium',
+                dueDate: dto.dueDate ? new Date(dto.dueDate) : undefined,
+                projectId: project.id,
+                assigneeId: dto.assigneeId ?? null,
+              },
+              select: { id: true },
+            });
+            return created.id;
+          },
+          { timeout: 15_000 },
+        );
+
+        const created = await this.prisma.task.findUnique({
+          where: { id: createdId },
+          select: TASK_SELECT,
+        });
+        if (!created) throw new NotFoundException('Task not found after create');
+
         await this.activityLogger.log({
           action: ActivityAction.TASK_CREATED,
           userId,
@@ -865,117 +1027,123 @@ export class TasksService {
       await this.taskFilesService.assertKeysExist(fileKeysToCheck);
     }
 
-    // ── RETAIL PATH: unchanged — 1 task + N retail detail rows ─────────────
+    // ── RETAIL PATH: 1 task + N retail detail rows ─────────────────────────
+    // Reads (revision/duplicate + TASK_SELECT) stay outside the interactive tx —
+    // remote SQL Server + heavy joins blow Prisma's default 5s timeout (P2028).
     if (dto.designType === 'Retail') {
-      const created = await this.prisma.$transaction(async (tx) => {
-        let taskId: string | null = null;
-        for (let attempt = 0; attempt < 5; attempt++) {
-          try {
-            const requestedRevision = this.normalizeRevisionCode(dto.task.revisionCode);
-            const revisionCode =
-              requestedRevision ??
-              (await this.resolveNextRevisionCode(tx, {
-                projectId: project.id,
-                opNo: normalizedOpNo,
-                designType: normalizedDesignType,
-              }));
-
-            const duplicate = await tx.task.findFirst({
-              where: {
-                projectId: project.id,
-                opNo: normalizedOpNo,
-                designType: normalizedDesignType,
-                revisionCode,
-              },
-              select: { id: true },
-            });
-            if (duplicate) {
-              throw new BadRequestException(
-                `Revision ${revisionCode} already exists for ${normalizedDesignType} in this project/opNo.`,
-              );
-            }
-
-            const createdTask = await tx.task.create({
-              data: {
-                taskNo: this.buildTaskNo(dto.task.opNo),
-                title: dto.task.title?.trim() || null,
-                revisionCode,
-                designType: normalizedDesignType,
-                opNo: normalizedOpNo,
-                description: dto.task.description,
-                priority: dto.task.priority ?? 'Medium',
-                dueDate: dto.task.dueDate ? new Date(dto.task.dueDate) : undefined,
-                projectId: project.id,
-                assigneeId: dto.task.assigneeId ?? null,
-              },
-              select: { id: true },
-            });
-            taskId = createdTask.id;
-            break;
-          } catch (error) {
-            if (
-              error instanceof Prisma.PrismaClientKnownRequestError &&
-              error.code === 'P2002' &&
-              attempt < 4
-            ) {
-              continue;
-            }
-            throw error;
-          }
-        }
-        if (!taskId) throw new BadRequestException('Failed to generate unique task number');
-
-        for (const line of dto.retailDetails ?? []) {
-          const createdLine = await tx.retailTaskDetail.create({
-            data: {
-              taskId,
-              providedFile: line.providedFile,
-              fileUrl: line.fileUrl,
-              hodName: line.hodName,
-              designTypes: line.designTypes?.length ? line.designTypes[0] : null,
-              hoursRequired: line.hoursRequired ?? null,
-              comment: line.comment,
-              signFamily: line.signFamily,
-              signType: line.signType,
-              planCode: line.planCode,
-              contractRef: line.contractRef,
-              quantity: line.quantity ?? null,
-              deadline: line.deadline ? new Date(line.deadline) : null,
-            },
-            select: { id: true },
-          });
-
-          const attachments = [
-            ...(line.attachments ?? []),
-            ...(line.fileKey
-              ? [
-                  {
-                    fileKey: line.fileKey,
-                    fileName: line.providedFile ?? 'attachment',
-                    mimeType: null,
-                    size: undefined,
-                  },
-                ]
-              : []),
-          ];
-
-          if (attachments.length > 0) {
-            await tx.retailTaskDetailAttachment.createMany({
-              data: attachments.map((attachment) => ({
-                retailTaskDetailId: createdLine.id,
-                fileKey: attachment.fileKey,
-                fileName: attachment.fileName,
-                mimeType: attachment.mimeType ?? null,
-                sizeBytes:
-                  typeof attachment.size === 'number' ? Math.round(attachment.size) : null,
-              })),
-            });
-          }
-        }
-
-        return tx.task.findUnique({ where: { id: taskId }, select: TASK_SELECT });
+      const requestedRevision = this.normalizeRevisionCode(dto.task.revisionCode);
+      const revisionCode = await this.assertRevisionAllowedForCreate(this.prisma, {
+        projectId: project.id,
+        opNo: normalizedOpNo,
+        designType: normalizedDesignType,
+        requestedRevision,
       });
 
+      const duplicate = await this.prisma.task.findFirst({
+        where: {
+          projectId: project.id,
+          opNo: normalizedOpNo,
+          designType: normalizedDesignType,
+          revisionCode,
+        },
+        select: { taskNo: true, revisionCode: true, status: true },
+      });
+      if (duplicate) {
+        this.throwRevisionSlotTaken(duplicate, revisionCode);
+      }
+
+      const taskId = await this.prisma.$transaction(
+        async (tx) => {
+          let createdTaskId: string | null = null;
+          for (let attempt = 0; attempt < 5; attempt++) {
+            try {
+              const createdTask = await tx.task.create({
+                data: {
+                  taskNo: this.buildTaskNo(dto.task.opNo),
+                  title: dto.task.title?.trim() || null,
+                  revisionCode,
+                  designType: normalizedDesignType,
+                  opNo: normalizedOpNo,
+                  description: dto.task.description,
+                  priority: dto.task.priority ?? 'Medium',
+                  dueDate: dto.task.dueDate ? new Date(dto.task.dueDate) : undefined,
+                  projectId: project.id,
+                  assigneeId: dto.task.assigneeId ?? null,
+                },
+                select: { id: true },
+              });
+              createdTaskId = createdTask.id;
+              break;
+            } catch (error) {
+              if (
+                error instanceof Prisma.PrismaClientKnownRequestError &&
+                error.code === 'P2002' &&
+                attempt < 4
+              ) {
+                continue;
+              }
+              throw error;
+            }
+          }
+          if (!createdTaskId) throw new BadRequestException('Failed to generate unique task number');
+
+          for (const line of dto.retailDetails ?? []) {
+            const createdLine = await tx.retailTaskDetail.create({
+              data: {
+                taskId: createdTaskId,
+                providedFile: line.providedFile,
+                fileUrl: line.fileUrl,
+                hodName: line.hodName,
+                designTypes: line.designTypes?.length ? line.designTypes[0] : null,
+                hoursRequired: line.hoursRequired ?? null,
+                comment: line.comment,
+                signFamily: line.signFamily,
+                signType: line.signType,
+                planCode: line.planCode,
+                contractRef: line.contractRef,
+                quantity: line.quantity ?? null,
+                deadline: line.deadline ? new Date(line.deadline) : null,
+              },
+              select: { id: true },
+            });
+
+            const attachments = [
+              ...(line.attachments ?? []),
+              ...(line.fileKey
+                ? [
+                    {
+                      fileKey: line.fileKey,
+                      fileName: line.providedFile ?? 'attachment',
+                      mimeType: null,
+                      size: undefined,
+                    },
+                  ]
+                : []),
+            ];
+
+            if (attachments.length > 0) {
+              await tx.retailTaskDetailAttachment.createMany({
+                data: attachments.map((attachment) => ({
+                  retailTaskDetailId: createdLine.id,
+                  fileKey: attachment.fileKey,
+                  fileName: attachment.fileName,
+                  mimeType: attachment.mimeType ?? null,
+                  sizeBytes:
+                    typeof attachment.size === 'number' ? Math.round(attachment.size) : null,
+                })),
+              });
+            }
+          }
+
+          return createdTaskId;
+        },
+        { timeout: 15_000 },
+      );
+
+      const created = await this.prisma.task.findUnique({
+        where: { id: taskId },
+        select: TASK_SELECT,
+      });
       if (!created) throw new NotFoundException('Task not found after create');
       await this.activityLogger.log({
         action: ActivityAction.TASK_CREATED,
@@ -1020,37 +1188,42 @@ export class TasksService {
 
     // ── PROJECT PATH: one ErpTSTask per sign-type detail line ───────────────
     const requestedRevision = this.normalizeRevisionCode(dto.task.revisionCode);
+    const revisionCode = await this.assertRevisionAllowedForCreate(this.prisma, {
+      projectId: project.id,
+      opNo: normalizedOpNo,
+      designType: normalizedDesignType,
+      requestedRevision,
+    });
     const requestedPhase = dto.task.phase != null ? Math.trunc(dto.task.phase) : null;
     if (requestedPhase != null && requestedPhase < 1) {
       throw new BadRequestException('phase must be a positive integer (1, 2, 3, ...).');
     }
 
     // Pre-flight: batch duplicate check outside the transaction (one query instead of N)
-    if (requestedRevision) {
+    {
       const lines = dto.projectDetails ?? [];
-      const existing = await this.prisma.task.findMany({
-        where: {
-          projectId: project.id,
-          opNo: normalizedOpNo,
-          designType: normalizedDesignType,
-          revisionCode: requestedRevision,
-          OR: lines.map((line) => ({
-            signType: line.signType ?? null,
-            disciplineType: line.disciplineType?.trim() ?? null,
-          })),
-        },
-        select: { signType: true, disciplineType: true },
-      });
-      if (existing.length > 0) {
-        const label = [existing[0].signType ?? normalizedDesignType, existing[0].disciplineType].filter(Boolean).join(' — ');
-        throw new BadRequestException(
-          `Revision ${requestedRevision} already exists for "${label}" in this project/opNo.`,
-        );
+      if (lines.length > 0) {
+        const existing = await this.prisma.task.findMany({
+          where: {
+            projectId: project.id,
+            opNo: normalizedOpNo,
+            designType: normalizedDesignType,
+            revisionCode,
+            OR: lines.map((line) => ({
+              signType: line.signType ?? null,
+              disciplineType: line.disciplineType?.trim() ?? null,
+            })),
+          },
+          select: { taskNo: true, revisionCode: true, status: true },
+        });
+        if (existing.length > 0) {
+          this.throwRevisionSlotTaken(existing[0], revisionCode);
+        }
       }
     }
 
-    // Only writes inside the transaction; reads moved out to avoid P2028 timeout.
-    // Transaction: writes only — no reads except resolveNextRevisionCode when revision not provided.
+    // Only writes inside the transaction; reads moved out where possible to avoid P2028 timeout.
+    // Revision is resolved once for the whole submission (reject-only bump policy).
     // Returns task IDs and detail IDs; attachments are batched outside in one createMany.
     const created = await this.prisma.$transaction(async (tx) => {
       const results: { taskId: string; detailId: string }[] = [];
@@ -1072,15 +1245,6 @@ export class TasksService {
 
         for (let attempt = 0; attempt < 5; attempt++) {
           try {
-            const revisionCode =
-              requestedRevision ??
-              (await this.resolveNextRevisionCode(tx, {
-                projectId: project.id,
-                opNo: normalizedOpNo,
-                designType: normalizedDesignType,
-                signType: lineSignType,
-              }));
-
             const taskTitle = [normalizedOpNo, lineSignType, lineDiscipline, revisionCode].filter(Boolean).join(' - ') || dto.task.title?.trim() || null;
             const createdTask = await tx.task.create({
               data: {
@@ -1369,6 +1533,25 @@ export class TasksService {
       addAndFilter({ dueDate: dueRange });
     }
 
+    // Sales design-list (no queue/history flag): scope to this salesperson's projects
+    // so Sales cannot pull the org-wide task catalog.
+    if (
+      role === UserRole.SALESPERSON &&
+      !salesQueue &&
+      !salesHistory &&
+      !salesPerson
+    ) {
+      const me = await this.prisma.user.findUnique({
+        where: { id: userId },
+        select: { fullName: true },
+      });
+      const myName = String(me?.fullName ?? '').trim();
+      if (!myName) {
+        return { data: [], total: 0, page, limit, totalPages: 0 };
+      }
+      addAndFilter({ project: { salesPerson: { contains: myName } } });
+    }
+
     const [data, total] = await Promise.all([
       this.prisma.task.findMany({
         where: baseWhere,
@@ -1380,8 +1563,27 @@ export class TasksService {
       this.prisma.task.count({ where: baseWhere }),
     ]);
 
+    // Batch latest submitted-session durations for list rows (kills N+1 timer UI fetches).
+    const submittedDurationByTaskId = new Map<string, number>();
+    const taskIds = data.map((t) => t.id).filter(Boolean);
+    if (taskIds.length > 0) {
+      const sessions = await this.prisma.taskWorkSession.findMany({
+        where: { taskId: { in: taskIds }, status: 'Submitted' },
+        orderBy: { submittedAt: 'desc' },
+        select: { taskId: true, durationSeconds: true },
+      });
+      for (const session of sessions) {
+        if (!submittedDurationByTaskId.has(session.taskId)) {
+          submittedDurationByTaskId.set(session.taskId, session.durationSeconds);
+        }
+      }
+    }
+
     return {
-      data: data.map((task) => this.normalizeTaskForApi(task)),
+      data: data.map((task) => ({
+        ...this.normalizeTaskForApi(task),
+        submittedDurationSeconds: submittedDurationByTaskId.get(task.id) ?? null,
+      })),
       total,
       page,
       limit,
@@ -1879,6 +2081,10 @@ export class TasksService {
     const existing = await this.prisma.task.findUnique({ where: { id } });
     if (!existing) throw new NotFoundException('Task not found');
 
+    if (isTaskReassignmentBlocked(existing.status)) {
+      throw new BadRequestException(TASK_REASSIGNMENT_BLOCKED_MESSAGE);
+    }
+
     const [assignee, oldAssignee, existingSplitDesigners] = await Promise.all([
       this.prisma.user.findUnique({ where: { id: dto.assigneeId } }),
       existing.assigneeId ? this.prisma.user.findUnique({ where: { id: existing.assigneeId }, select: { fullName: true } }) : null,
@@ -2026,18 +2232,20 @@ export class TasksService {
       if (!inJunction) throw new ForbiddenException('Designers can only update status on their own tasks');
     }
 
-    // Only SALESPERSON and ADMIN can issue rework or client-reject (which creates the next revision)
+    // REWORK = same revision (HOD internal or Sales). CLIENT_REJECTED = new Rn (Sales/Admin only).
     const newStatusApi = toApiTaskStatus(dto.status);
-    if (
-      (newStatusApi === 'REWORK' || newStatusApi === 'CLIENT_REJECTED') &&
-      role !== UserRole.SALESPERSON &&
-      role !== UserRole.ADMIN
-    ) {
-      throw new ForbiddenException(
-        newStatusApi === 'REWORK'
-          ? 'Only SALESPERSON or ADMIN can issue rework'
-          : 'Only SALESPERSON or ADMIN can mark client rejected',
-      );
+    if (newStatusApi === 'REWORK') {
+      if (
+        role !== UserRole.SALESPERSON &&
+        role !== UserRole.ADMIN &&
+        role !== UserRole.HOD
+      ) {
+        throw new ForbiddenException('Only HOD, SALESPERSON, or ADMIN can issue rework');
+      }
+    } else if (newStatusApi === 'CLIENT_REJECTED') {
+      if (role !== UserRole.SALESPERSON && role !== UserRole.ADMIN) {
+        throw new ForbiddenException('Only SALESPERSON or ADMIN can mark client rejected');
+      }
     }
 
     // Sales may only change status once the task is in Sales Review (or hold parked from there).
@@ -2171,7 +2379,12 @@ export class TasksService {
           oldStatus: toApiTaskStatus(existing.status),
           newStatus: effectiveStatusApi,
         },
-        context: { source: 'tasks.updateStatus' },
+        context: {
+          source:
+            effectiveStatusApi === 'REWORK' && role === UserRole.HOD
+              ? 'hod_internal_rework'
+              : 'tasks.updateStatus',
+        },
       },
     });
 
@@ -2249,7 +2462,25 @@ export class TasksService {
     // CLIENT_REJECTED — create next revision first, then notify designers with link to the new task
     let revisionResult: { id: string; taskNo: string } | null = null;
     if (effectiveStatusApi === 'CLIENT_REJECTED') {
-      revisionResult = await this.createRevisionFromClientReject(existing, dto, userId);
+      try {
+        revisionResult = await this.createRevisionFromClientReject(existing, dto, userId);
+      } catch (err) {
+        // Don't leave the old task CLIENT_REJECTED without a DESIGN_NEW successor.
+        this.logger.error('createRevisionFromClientReject failed — rolling back status', err);
+        await this.prisma.task
+          .update({
+            where: { id },
+            data: {
+              status: existing.status,
+              completedAt: existing.completedAt,
+              holdPreviousStatus: existing.holdPreviousStatus,
+            },
+          })
+          .catch((rollbackErr) =>
+            this.logger.error('Failed to roll back status after revision create failure', rollbackErr),
+          );
+        throw err;
+      }
 
       const linkUrlClientRejected =
         taskViewPath(revisionResult.id, (updatedTask as any).designType);
@@ -2394,11 +2625,12 @@ export class TasksService {
       }
 
       if (note) {
+        const isHodInternal = role === UserRole.HOD;
         await this.prisma.chatterPost.create({
           data: {
             taskId: id,
-            title: 'Rework Instructions',
-            message: `Rework Required:\n${note}`,
+            title: isHodInternal ? 'Internal Rework Instructions' : 'Rework Instructions',
+            message: `${isHodInternal ? 'Internal Rework Required' : 'Rework Required'}:\n${note}`,
             postType: 'REWORK',
             authorId: userId,
           },
@@ -2425,12 +2657,15 @@ export class TasksService {
     userId: string,
   ): Promise<{ id: string; taskNo: string }> {
     const opNo = originalTask.opNo ?? '';
-    const designType = originalTask.designType ?? 'PROJECT';
+    // Must match create / next-revision scope — raw "Estimation Purpose" vs ESTIMATION_PURPOSE
+    // previously caused R0 to be minted again as DESIGN_NEW instead of R1.
+    const designType = this.normalizeDesignType(originalTask.designType);
 
     // Fetch detail rows and attachments from the original task
     const originalFull = await this.prisma.task.findUnique({
       where: { id: originalTask.id },
       select: {
+        phase: true,
         retailDetails: {
           select: {
             providedFile: true, fileKey: true, fileUrl: true, hodName: true,
@@ -2453,117 +2688,129 @@ export class TasksService {
     });
 
     this.logger.log(`createRevisionFromClientReject: start — original=${originalTask.id} opNo=${opNo} designType=${designType} projectId=${originalTask.projectId}`);
-    const result = await this.prisma.$transaction(async (tx) => {
-      // Resolve next revision code
-      const nextRevision = await this.resolveNextRevisionCode(tx, {
-        projectId: originalTask.projectId,
-        opNo,
-        designType,
-        signType: originalTask.signType,
-      });
-      this.logger.log(`createRevisionFromClientReject: nextRevision=${nextRevision}`);
 
-      const newTaskNo = this.buildTaskNo(opNo);
-
-      // Build auto-title for project tasks (same pattern as createExtended)
-      let newTitle: string | null = originalTask.title || null;
-      if (designType === 'PROJECT' || designType === 'project') {
-        newTitle = [opNo, originalTask.signType, originalTask.disciplineType, nextRevision]
-          .filter(Boolean).join(' - ') || originalTask.title || null;
-      }
-
-      this.logger.log(`createRevisionFromClientReject: creating task taskNo=${newTaskNo} title=${newTitle}`);
-      // Create the new revision task (core fields only — reject context applied separately below)
-      const newTask = await tx.task.create({
-        data: {
-          taskNo: newTaskNo,
-          opNo: opNo || null,
-          title: newTitle,
-          revisionCode: nextRevision,
-          designType,
-          signType: originalTask.signType,
-          signFamily: originalTask.signFamily,
-          disciplineType: originalTask.disciplineType,
-          description: originalTask.description,
-          status: 'DESIGN_NEW',
-          priority: originalTask.priority,
-          projectId: originalTask.projectId,
-          assigneeId: null,
-          dueDate: originalTask.dueDate,
-          technicalHead: originalTask.technicalHead,
-          teamLead: originalTask.teamLead,
-          subTeamLead: originalTask.subTeamLead,
-          designers: originalTask.designers,
-        },
-        select: { id: true, taskNo: true },
-      });
-
-      this.logger.log(`createRevisionFromClientReject: task created id=${newTask.id} taskNo=${newTask.taskNo}`);
-
-      // Clone retail detail + attachments
-      if (originalFull?.retailDetails && originalFull.retailDetails.length > 0) {
-        for (const detail of originalFull.retailDetails) {
-          const newDetail = await tx.retailTaskDetail.create({
-            data: {
-              taskId: newTask.id,
-              providedFile: detail.providedFile,
-              fileKey: detail.fileKey,
-              fileUrl: detail.fileUrl,
-              hodName: detail.hodName,
-              designTypes: detail.designTypes,
-              hoursRequired: detail.hoursRequired,
-              comment: detail.comment,
-              signFamily: detail.signFamily,
-              signType: detail.signType,
-              planCode: detail.planCode,
-              contractRef: detail.contractRef,
-              quantity: detail.quantity,
-              deadline: detail.deadline,
-            },
-            select: { id: true },
-          });
-          for (const att of detail.attachments) {
-            await tx.retailTaskDetailAttachment.create({
-              data: { retailTaskDetailId: newDetail.id, fileKey: att.fileKey, fileName: att.fileName, mimeType: att.mimeType, sizeBytes: att.sizeBytes },
-            });
-          }
-        }
-      }
-
-      // Clone project detail + attachments
-      if (originalFull?.projectDetails && originalFull.projectDetails.length > 0) {
-        for (const detail of originalFull.projectDetails) {
-          const newDetail = await tx.projectTaskDetail.create({
-            data: {
-              taskId: newTask.id,
-              signType: detail.signType,
-              planCode: detail.planCode,
-              area: detail.area,
-              level: detail.level,
-              artwork: detail.artwork,
-              artworkHours: detail.artworkHours,
-              technical: detail.technical,
-              technicalHours: detail.technicalHours,
-              location: detail.location,
-              locationHours: detail.locationHours,
-              asBuilt: detail.asBuilt,
-              asBuiltHours: detail.asBuiltHours,
-              bim: detail.bim,
-              deadline: detail.deadline,
-              comment: detail.comment,
-            },
-            select: { id: true },
-          });
-          for (const att of detail.attachments) {
-            await tx.projectTaskDetailAttachment.create({
-              data: { projectTaskDetailId: newDetail.id, fileKey: att.fileKey, fileName: att.fileName, mimeType: att.mimeType, sizeBytes: att.sizeBytes },
-            });
-          }
-        }
-      }
-
-      return { id: newTask.id, taskNo: newTask.taskNo, _revision: nextRevision };
+    // Resolve next Rn outside the interactive tx (light read). Writes below stay write-only
+    // with batched attachment inserts so many files don't blow the default 5s timeout (P2028).
+    const nextRevision = await this.resolveNextRevisionCode(this.prisma, {
+      projectId: originalTask.projectId,
+      opNo,
+      designType,
     });
+    this.logger.log(`createRevisionFromClientReject: nextRevision=${nextRevision}`);
+
+    const newTaskNo = this.buildTaskNo(opNo);
+    let newTitle: string | null = originalTask.title || null;
+    if (designType === 'PROJECT') {
+      newTitle = [opNo, originalTask.signType, originalTask.disciplineType, nextRevision]
+        .filter(Boolean).join(' - ') || originalTask.title || null;
+    }
+
+    const result = await this.prisma.$transaction(
+      async (tx) => {
+        this.logger.log(`createRevisionFromClientReject: creating task taskNo=${newTaskNo} title=${newTitle}`);
+        const newTask = await tx.task.create({
+          data: {
+            taskNo: newTaskNo,
+            opNo: opNo || null,
+            title: newTitle,
+            revisionCode: nextRevision,
+            designType,
+            signType: originalTask.signType,
+            signFamily: originalTask.signFamily,
+            disciplineType: originalTask.disciplineType,
+            phase: originalFull?.phase ?? null,
+            description: originalTask.description,
+            status: 'DESIGN_NEW',
+            priority: originalTask.priority,
+            projectId: originalTask.projectId,
+            assigneeId: null,
+            dueDate: originalTask.dueDate,
+            technicalHead: originalTask.technicalHead,
+            teamLead: originalTask.teamLead,
+            subTeamLead: originalTask.subTeamLead,
+            designers: originalTask.designers,
+          },
+          select: { id: true, taskNo: true },
+        });
+
+        this.logger.log(`createRevisionFromClientReject: task created id=${newTask.id} taskNo=${newTask.taskNo} revision=${nextRevision}`);
+
+        if (originalFull?.retailDetails && originalFull.retailDetails.length > 0) {
+          for (const detail of originalFull.retailDetails) {
+            const newDetail = await tx.retailTaskDetail.create({
+              data: {
+                taskId: newTask.id,
+                providedFile: detail.providedFile,
+                fileKey: detail.fileKey,
+                fileUrl: detail.fileUrl,
+                hodName: detail.hodName,
+                designTypes: detail.designTypes,
+                hoursRequired: detail.hoursRequired,
+                comment: detail.comment,
+                signFamily: detail.signFamily,
+                signType: detail.signType,
+                planCode: detail.planCode,
+                contractRef: detail.contractRef,
+                quantity: detail.quantity,
+                deadline: detail.deadline,
+              },
+              select: { id: true },
+            });
+            if (detail.attachments.length > 0) {
+              await tx.retailTaskDetailAttachment.createMany({
+                data: detail.attachments.map((att) => ({
+                  retailTaskDetailId: newDetail.id,
+                  fileKey: att.fileKey,
+                  fileName: att.fileName,
+                  mimeType: att.mimeType,
+                  sizeBytes: att.sizeBytes,
+                })),
+              });
+            }
+          }
+        }
+
+        if (originalFull?.projectDetails && originalFull.projectDetails.length > 0) {
+          for (const detail of originalFull.projectDetails) {
+            const newDetail = await tx.projectTaskDetail.create({
+              data: {
+                taskId: newTask.id,
+                signType: detail.signType,
+                planCode: detail.planCode,
+                area: detail.area,
+                level: detail.level,
+                artwork: detail.artwork,
+                artworkHours: detail.artworkHours,
+                technical: detail.technical,
+                technicalHours: detail.technicalHours,
+                location: detail.location,
+                locationHours: detail.locationHours,
+                asBuilt: detail.asBuilt,
+                asBuiltHours: detail.asBuiltHours,
+                bim: detail.bim,
+                deadline: detail.deadline,
+                comment: detail.comment,
+              },
+              select: { id: true },
+            });
+            if (detail.attachments.length > 0) {
+              await tx.projectTaskDetailAttachment.createMany({
+                data: detail.attachments.map((att) => ({
+                  projectTaskDetailId: newDetail.id,
+                  fileKey: att.fileKey,
+                  fileName: att.fileName,
+                  mimeType: att.mimeType,
+                  sizeBytes: att.sizeBytes,
+                })),
+              });
+            }
+          }
+        }
+
+        return { id: newTask.id, taskNo: newTask.taskNo, _revision: nextRevision };
+      },
+      { timeout: 30_000 },
+    );
 
     // Everything below uses this.prisma — must be outside the transaction to avoid P2028.
 
@@ -2757,7 +3004,7 @@ export class TasksService {
       });
 
       return session;
-    });
+    }, { timeout: 15_000 });
 
     // Realtime first so other tabs update as soon as the DB commit succeeds.
     this.dashboardRealtime?.notifyTimerUpdated(userId, {
@@ -3116,7 +3363,7 @@ export class TasksService {
           status: 'Draft',
         },
       });
-    });
+    }, { timeout: 15_000 });
 
     const state = this.buildTimerStatePayload(taskId, saved);
     this.dashboardRealtime?.notifyTimerUpdated(userId, {

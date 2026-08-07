@@ -98,6 +98,8 @@ export function ProjectTaskTimer({
   assignedHours = null,
   approvedOvertimeHours = null,
   pendingOvertimeHours = null,
+  /** When provided (including null), skip GET submitted-session — list APIs batch this. */
+  initialSubmittedSeconds,
   launchAutostart,
   launchPauseModal,
   launchCompleteModal,
@@ -156,6 +158,16 @@ export function ProjectTaskTimer({
     const locked = isTimerLockedStatus(taskStatus)
 
     if (locked) {
+      // List/board already batched submittedDurationSeconds — avoid N+1.
+      if (initialSubmittedSeconds !== undefined) {
+        setSubmittedSeconds(
+          typeof initialSubmittedSeconds === 'number' && initialSubmittedSeconds > 0
+            ? initialSubmittedSeconds
+            : null,
+        )
+        setIsHydrated(true)
+        return
+      }
       apiClient
         .get(`/tasks/${taskId}/submitted-session`)
         .then((data) => {
@@ -197,7 +209,7 @@ export function ProjectTaskTimer({
         // Keep cache paint if network fails; start/pause still require server.
       })
       .finally(() => setIsHydrated(true))
-  }, [taskId, taskStatus])
+  }, [taskId, taskStatus, initialSubmittedSeconds])
 
   useEffect(() => {
     launchConsumed.current = false

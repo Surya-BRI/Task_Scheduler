@@ -1,6 +1,6 @@
 'use client'
 
-import { useCallback, useEffect, useMemo, useState } from 'react'
+import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import { useRouter } from 'next/navigation'
 import { RefreshCw, Search } from 'lucide-react'
 import { SalesReviewIcon } from '@/features/sales/components/SalesReviewIcon'
@@ -9,6 +9,8 @@ import { apiClient } from '@/lib/api-client'
 import { taskViewPathForRecord, FROM_SALES_QUEUE } from '@/lib/design-list-routes'
 import { getStatusLabel, mapTaskToDesignRow } from '@/features/design-list/task-view-model'
 import { TypeOfDesignChip } from '@/lib/ui/TypeOfDesignChip'
+
+const PAGE_SIZE = 100
 
 const getStatusColor = (status) => {
   switch (status) {
@@ -25,46 +27,121 @@ export default function SalesTaskListScreen() {
   const router = useRouter()
   const [listMode, setListMode] = useState('queue') // 'queue' | 'history'
   const [tasks, setTasks] = useState([])
+  const [page, setPage] = useState(1)
+  const [serverTotal, setServerTotal] = useState(0)
   const [loading, setLoading] = useState(true)
+  const [error, setError] = useState('')
   const [search, setSearch] = useState('')
+  const [debouncedSearch, setDebouncedSearch] = useState('')
+  /** Session cache so Queue↔History toggles do not re-pay the network when data is fresh. */
+  const modeCacheRef = useRef({ queue: null, history: null })
+  const fetchGenRef = useRef(0)
 
-  const fetchTasks = useCallback(async () => {
-    setLoading(true)
-    try {
-      const query =
-        listMode === 'history'
-          ? '/tasks?limit=500&salesHistory=true'
-          : '/tasks?limit=500&salesQueue=true'
-      const res = await apiClient.get(query)
-      const raw = Array.isArray(res) ? res : (res?.data ?? [])
-      setTasks(raw.map(mapTaskToDesignRow))
-    } catch {
-      setTasks([])
-    } finally {
+  useEffect(() => {
+    const t = setTimeout(() => setDebouncedSearch(search), 350)
+    return () => clearTimeout(t)
+  }, [search])
+
+  const fetchTasks = useCallback(async ({ force = false } = {}) => {
+    const generation = ++fetchGenRef.current
+    const cacheKey = listMode === 'history' ? 'history' : 'queue'
+    const cached = modeCacheRef.current[cacheKey]
+    if (!force && cached && cached.page === page && cached.search === debouncedSearch) {
+      setTasks(cached.tasks)
+      setServerTotal(cached.total)
       setLoading(false)
+      setError('')
+      return
     }
-  }, [listMode])
 
-  useEffect(() => { fetchTasks() }, [fetchTasks])
+    setLoading(true)
+    setError('')
+    try {
+      const params = new URLSearchParams()
+      params.set('page', String(Math.max(1, page)))
+      params.set('limit', String(PAGE_SIZE))
+      if (listMode === 'history') params.set('salesHistory', 'true')
+      else params.set('salesQueue', 'true')
+      if (debouncedSearch.trim()) params.set('search', debouncedSearch.trim())
+
+      const res = await apiClient.get(`/tasks?${params.toString()}`)
+      if (generation !== fetchGenRef.current) return
+      const raw = Array.isArray(res) ? res : (res?.data ?? [])
+      const mapped = raw.map(mapTaskToDesignRow)
+      const total = Number(res?.total ?? mapped.length) || 0
+      setTasks(mapped)
+      setServerTotal(total)
+      modeCacheRef.current[cacheKey] = {
+        page,
+        search: debouncedSearch,
+        tasks: mapped,
+        total,
+      }
+    } catch (err) {
+      if (generation !== fetchGenRef.current) return
+      setTasks([])
+      setServerTotal(0)
+      setError(err instanceof Error ? err.message : 'Could not load sales review list.')
+    } finally {
+      if (generation === fetchGenRef.current) setLoading(false)
+    }
+  }, [listMode, page, debouncedSearch])
+
+  const filterKey = `${listMode}|${debouncedSearch}`
+  const prevFilterKeyRef = useRef(filterKey)
+
+  useEffect(() => {
+    if (prevFilterKeyRef.current !== filterKey) {
+      prevFilterKeyRef.current = filterKey
+      if (page !== 1) {
+        setPage(1)
+        return
+      }
+    }
+    void fetchTasks()
+  }, [fetchTasks, filterKey, page])
 
   const filtered = useMemo(() => {
     const q = search.trim().toLowerCase()
-    if (!q) return tasks
+    if (!q || q === debouncedSearch.trim().toLowerCase()) return tasks
+    // Local refine while debounce catches up
     return tasks.filter(
       (t) =>
         t.name?.toLowerCase().includes(q) ||
         t.projectName?.toLowerCase().includes(q) ||
         t.opNo?.toLowerCase().includes(q),
     )
-  }, [tasks, search])
+  }, [tasks, search, debouncedSearch])
 
   const isHistory = listMode === 'history'
+  const totalPages = Math.max(1, Math.ceil(Math.max(serverTotal, 1) / PAGE_SIZE))
+  const currentPage = Math.min(page, totalPages)
+  const emptyCopy = (() => {
+    if (error) return null
+    if (tasks.length === 0) {
+      return isHistory ? 'No reviewed tasks yet.' : 'No tasks in sales review.'
+    }
+    if (filtered.length === 0 && search.trim()) {
+      return 'No tasks match your search.'
+    }
+    return null
+  })()
+
+  const handleModeChange = (mode) => {
+    if (mode === listMode) return
+    setListMode(mode)
+    setPage(1)
+  }
+
+  const handleRefresh = () => {
+    modeCacheRef.current[isHistory ? 'history' : 'queue'] = null
+    void fetchTasks({ force: true })
+  }
 
   return (
     <div className="app-shell h-screen flex flex-col overflow-hidden font-sans">
       <Navbar lockPrimaryNav />
       <div className="flex-1 flex flex-col min-h-0">
-        {/* Toolbar */}
         <div className="shrink-0 mb-4 mt-4 flex flex-col gap-4 px-4 sm:px-6 md:flex-row md:items-center md:justify-between">
           <div className="flex flex-col gap-3 sm:flex-row sm:items-center sm:gap-4">
             <h1 className="flex items-center gap-2 text-2xl font-semibold tracking-tight text-slate-900 leading-none shrink-0">
@@ -74,7 +151,7 @@ export default function SalesTaskListScreen() {
             <div className="inline-flex rounded-md border border-slate-300 bg-slate-50 p-0.5 text-xs font-semibold">
               <button
                 type="button"
-                onClick={() => setListMode('queue')}
+                onClick={() => handleModeChange('queue')}
                 className={`rounded px-3 py-1.5 transition-colors ${
                   !isHistory ? 'bg-white text-slate-900 shadow-sm' : 'text-slate-500 hover:text-slate-700'
                 }`}
@@ -83,7 +160,7 @@ export default function SalesTaskListScreen() {
               </button>
               <button
                 type="button"
-                onClick={() => setListMode('history')}
+                onClick={() => handleModeChange('history')}
                 className={`rounded px-3 py-1.5 transition-colors ${
                   isHistory ? 'bg-white text-slate-900 shadow-sm' : 'text-slate-500 hover:text-slate-700'
                 }`}
@@ -105,7 +182,7 @@ export default function SalesTaskListScreen() {
             </div>
             <button
               type="button"
-              onClick={fetchTasks}
+              onClick={handleRefresh}
               className="flex items-center gap-1.5 rounded-md border border-slate-300 bg-white px-3 py-1.5 text-sm font-medium text-slate-700 hover:bg-slate-50 transition-colors"
             >
               <RefreshCw size={14} className={loading ? 'animate-spin' : ''} />
@@ -114,7 +191,6 @@ export default function SalesTaskListScreen() {
           </div>
         </div>
 
-        {/* Table — same design for queue and history */}
         {loading ? (
           <div className="flex min-h-0 flex-1 flex-col px-4 pb-6 sm:px-6" aria-busy="true" aria-label="Loading list">
             <div className="ui-surface h-full overflow-auto">
@@ -151,9 +227,20 @@ export default function SalesTaskListScreen() {
               </table>
             </div>
           </div>
-        ) : filtered.length === 0 ? (
+        ) : error ? (
+          <div className="flex flex-1 flex-col items-center justify-center gap-3 px-6 text-sm text-slate-600">
+            <p className="text-red-600">{error}</p>
+            <button
+              type="button"
+              onClick={handleRefresh}
+              className="rounded-md border border-slate-300 bg-white px-3 py-1.5 text-sm font-medium text-slate-700 hover:bg-slate-50"
+            >
+              Retry
+            </button>
+          </div>
+        ) : emptyCopy ? (
           <div className="flex flex-1 items-center justify-center text-sm text-slate-500">
-            {isHistory ? 'No reviewed tasks yet.' : 'No tasks in sales review.'}
+            {emptyCopy}
           </div>
         ) : (
           <div className="flex min-h-0 flex-1 flex-col px-4 pb-6 sm:px-6">
@@ -202,6 +289,33 @@ export default function SalesTaskListScreen() {
                 </tbody>
               </table>
             </div>
+            {serverTotal > 0 ? (
+              <div className="shrink-0 flex items-center justify-between pt-3 text-xs text-slate-600">
+                <span>
+                  Showing {(currentPage - 1) * PAGE_SIZE + 1}-
+                  {Math.min(currentPage * PAGE_SIZE, serverTotal)} of {serverTotal}
+                </span>
+                <div className="flex items-center gap-2">
+                  <button
+                    type="button"
+                    onClick={() => setPage((p) => Math.max(1, p - 1))}
+                    disabled={currentPage === 1}
+                    className="px-2.5 py-1 border border-slate-300 rounded disabled:opacity-50 disabled:cursor-not-allowed hover:bg-slate-50"
+                  >
+                    Prev
+                  </button>
+                  <span>Page {currentPage} / {totalPages}</span>
+                  <button
+                    type="button"
+                    onClick={() => setPage((p) => Math.min(totalPages, p + 1))}
+                    disabled={currentPage === totalPages}
+                    className="px-2.5 py-1 border border-slate-300 rounded disabled:opacity-50 disabled:cursor-not-allowed hover:bg-slate-50"
+                  >
+                    Next
+                  </button>
+                </div>
+              </div>
+            ) : null}
           </div>
         )}
       </div>

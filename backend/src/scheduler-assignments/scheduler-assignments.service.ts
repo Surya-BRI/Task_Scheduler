@@ -44,6 +44,10 @@ import {
   isoWeekRangeFromWeekStart,
   parseWeekStartLocal,
 } from '../dashboard/designer-stats.util';
+import {
+  isTaskReassignmentBlocked,
+  TASK_REASSIGNMENT_BLOCKED_MESSAGE,
+} from '../dashboard/task-status-buckets.util';
 
 type RawAssignmentRow = {
   id: string;
@@ -1044,6 +1048,51 @@ export class SchedulerAssignmentsService implements OnModuleInit {
   }
 
   /**
+   * Design Completed / in-review / client-final tasks keep their designer set until REWORK.
+   * Same-designer day reshuffles are allowed; changing or clearing designers is not.
+   */
+  private assertNoBlockedTaskReassignment(
+    scopeTaskIds: string[],
+    tasks: Array<{ id: string; status?: string | null; assigneeId?: string | null }>,
+    previousRows: Array<{ taskId?: string | null; designerId?: string | null }>,
+    assigneesByTask: Map<string, Set<string>>,
+  ): void {
+    if (scopeTaskIds.length === 0) return;
+    const taskById = new Map(tasks.map((t) => [t.id, t]));
+
+    for (const taskId of scopeTaskIds) {
+      const task = taskById.get(taskId);
+      if (!task || !isTaskReassignmentBlocked(task.status)) continue;
+
+      const designerSet = assigneesByTask.get(task.id) ?? new Set<string>();
+      const assignedDesigner = designerSet.size === 1 ? [...designerSet][0] : null;
+      const previousDesignerSet = new Set(
+        previousRows
+          .filter((r): r is { taskId: string; designerId: string } =>
+            r.taskId === task.id && !!r.designerId,
+          )
+          .map((r) => r.designerId),
+      );
+      const designersChanged =
+        previousDesignerSet.size !== designerSet.size ||
+        [...previousDesignerSet].some((id) => !designerSet.has(id));
+      const onlyAddingForCurrentAssignee =
+        previousDesignerSet.size === 0 &&
+        assignedDesigner != null &&
+        task.assigneeId === assignedDesigner &&
+        designerSet.size === 1;
+      const assigneeFieldWouldChange =
+        (assignedDesigner != null && task.assigneeId !== assignedDesigner) ||
+        (designerSet.size === 0 && task.assigneeId != null) ||
+        (designerSet.size > 1 && task.assigneeId != null);
+
+      if ((designersChanged && !onlyAddingForCurrentAssignee) || assigneeFieldWouldChange) {
+        throw new BadRequestException(TASK_REASSIGNMENT_BLOCKED_MESSAGE);
+      }
+    }
+  }
+
+  /**
    * A task can only be assigned to a NEW designer who is part of its project's
    * team (technicalHead/teamLead/subTeamLead/designers). Matching is by trimmed,
    * lowercased User.fullName since these project fields are stored as
@@ -1103,7 +1152,7 @@ export class SchedulerAssignmentsService implements OnModuleInit {
 
   private async recordLeaveRescheduleSnapshots(
     tx: {
-      $executeRaw(query: TemplateStringsArray, ...values: unknown[]): Promise<unknown>;
+      $executeRaw(query: TemplateStringsArray | Prisma.Sql, ...values: unknown[]): Promise<unknown>;
     },
     leaveRequestId: string | undefined,
     rows: Array<{ row: unknown; id: string }>,
@@ -1116,15 +1165,23 @@ export class SchedulerAssignmentsService implements OnModuleInit {
       );
     }
 
-    for (const entry of rows) {
+    const chunkSize = 50;
+    for (let offset = 0; offset < rows.length; offset += chunkSize) {
+      const chunk = rows.slice(offset, offset + chunkSize);
       await tx.$executeRaw`
-        MERGE dbo.ErpTSLeaveRescheduleSnapshot AS target
-        USING (SELECT ${leaveRequestId} AS leaveRequestId, ${entry.id} AS assignmentId) AS source
-          ON target.leaveRequestId = source.leaveRequestId
-          AND target.assignmentId = source.assignmentId
-        WHEN NOT MATCHED THEN
-          INSERT (leaveRequestId, assignmentId, originalJson)
-          VALUES (source.leaveRequestId, source.assignmentId, ${JSON.stringify(entry.row)});
+        INSERT INTO dbo.ErpTSLeaveRescheduleSnapshot (leaveRequestId, assignmentId, originalJson)
+        SELECT v.leaveRequestId, v.assignmentId, v.originalJson
+        FROM (VALUES ${Prisma.join(
+          chunk.map(
+            (entry) => Prisma.sql`(${leaveRequestId}, ${entry.id}, ${JSON.stringify(entry.row)})`,
+          ),
+        )}) AS v(leaveRequestId, assignmentId, originalJson)
+        WHERE NOT EXISTS (
+          SELECT 1
+          FROM dbo.ErpTSLeaveRescheduleSnapshot AS t
+          WHERE t.leaveRequestId = v.leaveRequestId
+            AND t.assignmentId = v.assignmentId
+        )
       `;
     }
   }
@@ -1153,7 +1210,7 @@ export class SchedulerAssignmentsService implements OnModuleInit {
 
   private async markLeaveRescheduleSnapshotsRestored(
     tx: {
-      $executeRaw(query: TemplateStringsArray, ...values: unknown[]): Promise<unknown>;
+      $executeRaw(query: TemplateStringsArray | Prisma.Sql, ...values: unknown[]): Promise<unknown>;
     },
     leaveRequestId: string | undefined,
   ): Promise<void> {
@@ -1170,6 +1227,281 @@ export class SchedulerAssignmentsService implements OnModuleInit {
       WHERE leaveRequestId = ${leaveRequestId}
         AND restoredAt IS NULL
     `;
+  }
+
+  /** Week-bucketed assignment rows for leave history (all designers on affected weeks). */
+  private async loadWeekAssignmentBuckets(
+    tx: Prisma.TransactionClient,
+    affectedWeeks: Date[],
+  ): Promise<Map<string, Array<Record<string, unknown>>>> {
+    const beforeByWeek = new Map<string, Array<Record<string, unknown>>>();
+    if (affectedWeeks.length === 0) return beforeByWeek;
+
+    const beforeRows = await tx.schedulerAssignment.findMany({
+      where: { weekStartDate: { in: affectedWeeks } },
+      orderBy: [
+        { designerId: 'asc' },
+        { dayIndex: 'asc' },
+        { position: 'asc' } as unknown as Prisma.SchedulerAssignmentOrderByWithRelationInput,
+        { id: 'asc' },
+      ],
+    });
+    for (const row of beforeRows) {
+      const key = row.weekStartDate ? this.dateKey(new Date(row.weekStartDate)) : '';
+      if (!key) continue;
+      const rows = beforeByWeek.get(key) ?? [];
+      rows.push(row as unknown as Record<string, unknown>);
+      beforeByWeek.set(key, rows);
+    }
+    return beforeByWeek;
+  }
+
+  private sortWeekAssignmentBucket(rows: Array<Record<string, unknown>>): void {
+    rows.sort((a, b) => {
+      const designerCmp = String(a.designerId ?? '').localeCompare(String(b.designerId ?? ''));
+      if (designerCmp !== 0) return designerCmp;
+      const dayCmp = Number(a.dayIndex ?? 0) - Number(b.dayIndex ?? 0);
+      if (dayCmp !== 0) return dayCmp;
+      const posCmp = Number(a.position ?? 0) - Number(b.position ?? 0);
+      if (posCmp !== 0) return posCmp;
+      return String(a.id ?? '').localeCompare(String(b.id ?? ''));
+    });
+  }
+
+  /**
+   * Build post-update week buckets in memory (avoids a second full-week findMany).
+   * Patches must include every field that changed on the assignment row.
+   */
+  private applyAssignmentPatchesToBuckets(
+    beforeByWeek: Map<string, Array<Record<string, unknown>>>,
+    patches: Array<Record<string, unknown> & { id: string }>,
+  ): Map<string, Array<Record<string, unknown>>> {
+    const byId = new Map<string, Record<string, unknown>>();
+    for (const rows of beforeByWeek.values()) {
+      for (const row of rows) {
+        byId.set(String(row.id), { ...row });
+      }
+    }
+
+    for (const patch of patches) {
+      const existing = byId.get(patch.id);
+      if (!existing) continue;
+      Object.assign(existing, patch);
+    }
+
+    const afterByWeek = new Map<string, Array<Record<string, unknown>>>();
+    for (const row of byId.values()) {
+      const key = row.weekStartDate ? this.dateKey(new Date(row.weekStartDate as Date)) : '';
+      if (!key) continue;
+      const rows = afterByWeek.get(key) ?? [];
+      rows.push(row);
+      afterByWeek.set(key, rows);
+    }
+    for (const rows of afterByWeek.values()) {
+      this.sortWeekAssignmentBucket(rows);
+    }
+    return afterByWeek;
+  }
+
+  private async bumpWeeksAndWriteHistory(
+    tx: Prisma.TransactionClient,
+    params: {
+      affectedWeeks: Date[];
+      beforeByWeek: Map<string, Array<Record<string, unknown>>>;
+      afterByWeek: Map<string, Array<Record<string, unknown>>>;
+      actorUserId: string;
+    },
+  ): Promise<void> {
+    for (const weekStartDate of params.affectedWeeks) {
+      const key = this.dateKey(weekStartDate);
+      const existingWeek = await tx.schedulerWeek.findUnique({ where: { weekStartDate } });
+      const versionFrom = existingWeek?.version ?? 0;
+      const versionTo = versionFrom + 1;
+      if (existingWeek) {
+        await tx.schedulerWeek.update({
+          where: { weekStartDate },
+          data: {
+            version: { increment: 1 },
+            updatedBy: params.actorUserId,
+            lastPayloadHash: null,
+          },
+        });
+      } else {
+        await tx.schedulerWeek.create({
+          data: {
+            weekStartDate,
+            version: versionTo,
+            isLocked: false,
+            updatedBy: params.actorUserId,
+            lastPayloadHash: null,
+          },
+        });
+      }
+
+      await tx.schedulerAssignmentHistory.create({
+        data: {
+          weekStartDate,
+          versionFrom,
+          versionTo,
+          changedBy: params.actorUserId,
+          beforeJson: JSON.stringify(params.beforeByWeek.get(key) ?? []),
+          afterJson: JSON.stringify(params.afterByWeek.get(key) ?? []),
+        },
+      });
+    }
+  }
+
+  /** Apply leave: move week/day/position in one UPDATE … FROM VALUES. */
+  private async batchUpdateLeavePlacementMoves(
+    tx: {
+      $executeRaw(query: TemplateStringsArray | Prisma.Sql, ...values: unknown[]): Promise<unknown>;
+    },
+    rows: Array<{
+      id: string;
+      toWeekStartDate: Date;
+      toWeekEndDate: Date;
+      toDayIndex: number;
+      toPosition: number;
+      assignedBy: string;
+    }>,
+  ): Promise<void> {
+    if (rows.length === 0) return;
+    const chunkSize = 50;
+    for (let offset = 0; offset < rows.length; offset += chunkSize) {
+      const chunk = rows.slice(offset, offset + chunkSize);
+      await tx.$executeRaw`
+        UPDATE a
+        SET
+          weekStartDate = v.weekStartDate,
+          weekEndDate = v.weekEndDate,
+          dayIndex = v.dayIndex,
+          [position] = v.position,
+          assignedBy = v.assignedBy,
+          updatedAt = SYSUTCDATETIME()
+        FROM dbo.ErpTSSchedulerAssignment AS a
+        INNER JOIN (VALUES ${Prisma.join(
+          chunk.map(
+            (row) =>
+              Prisma.sql`(${row.id}, ${row.toWeekStartDate}, ${row.toWeekEndDate}, ${row.toDayIndex}, ${row.toPosition}, ${row.assignedBy})`,
+          ),
+        )}) AS v(id, weekStartDate, weekEndDate, dayIndex, position, assignedBy)
+          ON a.id = v.id
+      `;
+    }
+  }
+
+  /** Revoke fallback: move week/day only (no position rewrite). */
+  private async batchUpdateLeaveFallbackMoves(
+    tx: {
+      $executeRaw(query: TemplateStringsArray | Prisma.Sql, ...values: unknown[]): Promise<unknown>;
+    },
+    rows: Array<{
+      id: string;
+      toWeekStartDate: Date;
+      toWeekEndDate: Date;
+      toDayIndex: number;
+      assignedBy: string;
+    }>,
+  ): Promise<void> {
+    if (rows.length === 0) return;
+    const chunkSize = 50;
+    for (let offset = 0; offset < rows.length; offset += chunkSize) {
+      const chunk = rows.slice(offset, offset + chunkSize);
+      await tx.$executeRaw`
+        UPDATE a
+        SET
+          weekStartDate = v.weekStartDate,
+          weekEndDate = v.weekEndDate,
+          dayIndex = v.dayIndex,
+          assignedBy = v.assignedBy,
+          updatedAt = SYSUTCDATETIME()
+        FROM dbo.ErpTSSchedulerAssignment AS a
+        INNER JOIN (VALUES ${Prisma.join(
+          chunk.map(
+            (row) =>
+              Prisma.sql`(${row.id}, ${row.toWeekStartDate}, ${row.toWeekEndDate}, ${row.toDayIndex}, ${row.assignedBy})`,
+          ),
+        )}) AS v(id, weekStartDate, weekEndDate, dayIndex, assignedBy)
+          ON a.id = v.id
+      `;
+    }
+  }
+
+  /** Revoke snapshot restore: full original field set in one UPDATE … FROM VALUES. */
+  private async batchRestoreLeaveSnapshotRows(
+    tx: {
+      $executeRaw(query: TemplateStringsArray | Prisma.Sql, ...values: unknown[]): Promise<unknown>;
+    },
+    rows: Array<{
+      id: string;
+      designerId: string | null;
+      taskId: string | null;
+      dayIndex: number | null;
+      assignedHours: string | number | null;
+      parentId: string | null;
+      splitIndex: number | null;
+      totalParts: number | null;
+      weekStartDate: Date | null;
+      weekEndDate: Date | null;
+      notes: string | null;
+      position: number;
+      isLocked: boolean;
+      isPinned: boolean;
+      assignedBy: string | null;
+      updatedAt: Date | null;
+    }>,
+  ): Promise<void> {
+    if (rows.length === 0) return;
+    const chunkSize = 40;
+    for (let offset = 0; offset < rows.length; offset += chunkSize) {
+      const chunk = rows.slice(offset, offset + chunkSize);
+      await tx.$executeRaw`
+        UPDATE a
+        SET
+          designerId = v.designerId,
+          taskId = v.taskId,
+          dayIndex = v.dayIndex,
+          assignedHours = v.assignedHours,
+          parentId = v.parentId,
+          splitIndex = v.splitIndex,
+          totalParts = v.totalParts,
+          weekStartDate = v.weekStartDate,
+          weekEndDate = v.weekEndDate,
+          notes = v.notes,
+          [position] = v.position,
+          isLocked = v.isLocked,
+          isPinned = v.isPinned,
+          assignedBy = v.assignedBy,
+          updatedAt = COALESCE(v.updatedAt, SYSUTCDATETIME())
+        FROM dbo.ErpTSSchedulerAssignment AS a
+        INNER JOIN (VALUES ${Prisma.join(
+          chunk.map(
+            (row) => Prisma.sql`(
+              ${row.id},
+              ${row.designerId},
+              ${row.taskId},
+              ${row.dayIndex},
+              ${row.assignedHours == null ? null : String(row.assignedHours)},
+              ${row.parentId},
+              ${row.splitIndex},
+              ${row.totalParts},
+              ${row.weekStartDate},
+              ${row.weekEndDate},
+              ${row.notes},
+              ${row.position},
+              ${row.isLocked},
+              ${row.isPinned},
+              ${row.assignedBy},
+              ${row.updatedAt}
+            )`,
+          ),
+        )}) AS v(
+          id, designerId, taskId, dayIndex, assignedHours, parentId, splitIndex, totalParts,
+          weekStartDate, weekEndDate, notes, position, isLocked, isPinned, assignedBy, updatedAt
+        )
+          ON a.id = v.id
+      `;
+    }
   }
 
   async rescheduleForApprovedLeave(
@@ -1381,23 +1713,7 @@ export class SchedulerAssignmentsService implements OnModuleInit {
       }
       const affectedWeeks = [...affectedWeekByKey.values()].sort((a, b) => a.getTime() - b.getTime());
 
-      const beforeRows = await tx.schedulerAssignment.findMany({
-        where: { weekStartDate: { in: affectedWeeks } },
-        orderBy: [
-          { designerId: 'asc' },
-          { dayIndex: 'asc' },
-          { position: 'asc' } as unknown as Prisma.SchedulerAssignmentOrderByWithRelationInput,
-          { id: 'asc' },
-        ],
-      });
-      const beforeRowsByWeek = new Map<string, unknown[]>();
-      for (const row of beforeRows) {
-        const key = row.weekStartDate ? this.dateKey(new Date(row.weekStartDate)) : '';
-        if (!key) continue;
-        const rows = beforeRowsByWeek.get(key) ?? [];
-        rows.push(row);
-        beforeRowsByWeek.set(key, rows);
-      }
+      const beforeRowsByWeek = await this.loadWeekAssignmentBuckets(tx, affectedWeeks);
 
       await this.recordLeaveRescheduleSnapshots(
         tx,
@@ -1405,81 +1721,43 @@ export class SchedulerAssignmentsService implements OnModuleInit {
         changedRows.map((row) => ({ id: row.id, row: row.row })),
       );
 
-      for (const row of changedRows) {
-        await tx.schedulerAssignment.update({
-          where: { id: row.id },
-          data: {
-            weekStartDate: row.toWeekStartDate,
-            weekEndDate: row.toWeekEndDate,
-            dayIndex: row.toDayIndex,
-            position: row.toPosition,
-            assignedBy: actorUserId,
-          },
-        });
-      }
+      await this.batchUpdateLeavePlacementMoves(
+        tx,
+        changedRows.map((row) => ({
+          id: row.id,
+          toWeekStartDate: row.toWeekStartDate,
+          toWeekEndDate: row.toWeekEndDate,
+          toDayIndex: row.toDayIndex,
+          toPosition: row.toPosition,
+          assignedBy: actorUserId,
+        })),
+      );
 
-      const afterRows = await tx.schedulerAssignment.findMany({
-        where: { weekStartDate: { in: affectedWeeks } },
-        orderBy: [
-          { designerId: 'asc' },
-          { dayIndex: 'asc' },
-          { position: 'asc' } as unknown as Prisma.SchedulerAssignmentOrderByWithRelationInput,
-          { id: 'asc' },
-        ],
+      const afterRowsByWeek = this.applyAssignmentPatchesToBuckets(
+        beforeRowsByWeek,
+        changedRows.map((row) => ({
+          id: row.id,
+          weekStartDate: row.toWeekStartDate,
+          weekEndDate: row.toWeekEndDate,
+          dayIndex: row.toDayIndex,
+          position: row.toPosition,
+          assignedBy: actorUserId,
+        })),
+      );
+
+      await this.bumpWeeksAndWriteHistory(tx, {
+        affectedWeeks,
+        beforeByWeek: beforeRowsByWeek,
+        afterByWeek: afterRowsByWeek,
+        actorUserId,
       });
-      const afterRowsByWeek = new Map<string, unknown[]>();
-      for (const row of afterRows) {
-        const key = row.weekStartDate ? this.dateKey(new Date(row.weekStartDate)) : '';
-        if (!key) continue;
-        const rows = afterRowsByWeek.get(key) ?? [];
-        rows.push(row);
-        afterRowsByWeek.set(key, rows);
-      }
-
-      for (const weekStartDate of affectedWeeks) {
-        const key = this.dateKey(weekStartDate);
-        const existingWeek = await tx.schedulerWeek.findUnique({ where: { weekStartDate } });
-        const versionFrom = existingWeek?.version ?? 0;
-        const versionTo = versionFrom + 1;
-        if (existingWeek) {
-          await tx.schedulerWeek.update({
-            where: { weekStartDate },
-            data: {
-              version: { increment: 1 },
-              updatedBy: actorUserId,
-              lastPayloadHash: null,
-            },
-          });
-        } else {
-          await tx.schedulerWeek.create({
-            data: {
-              weekStartDate,
-              version: versionTo,
-              isLocked: false,
-              updatedBy: actorUserId,
-              lastPayloadHash: null,
-            },
-          });
-        }
-
-        await tx.schedulerAssignmentHistory.create({
-          data: {
-            weekStartDate,
-            versionFrom,
-            versionTo,
-            changedBy: actorUserId,
-            beforeJson: JSON.stringify(beforeRowsByWeek.get(key) ?? []),
-            afterJson: JSON.stringify(afterRowsByWeek.get(key) ?? []),
-          },
-        });
-      }
 
       return {
         movedCount: changedRows.length,
         affectedWeeks: affectedWeeks.map((date) => this.dateKey(date)),
         cancelledOvertimeCount,
       };
-    });
+    }, { timeout: 60_000, maxWait: 20_000 });
 
     if (result.movedCount > 0) {
       await this.activityLogger.log({
@@ -1619,115 +1897,85 @@ export class SchedulerAssignmentsService implements OnModuleInit {
         }
         const affectedWeeks = [...affectedWeekByKey.values()].sort((a, b) => a.getTime() - b.getTime());
 
-        const beforeRows = affectedWeeks.length
-          ? await tx.schedulerAssignment.findMany({
-              where: { weekStartDate: { in: affectedWeeks } },
-              orderBy: [
-                { designerId: 'asc' },
-                { dayIndex: 'asc' },
-                { position: 'asc' } as unknown as Prisma.SchedulerAssignmentOrderByWithRelationInput,
-                { id: 'asc' },
-              ],
-            })
-          : [];
-        const beforeRowsByWeek = new Map<string, unknown[]>();
-        for (const row of beforeRows) {
-          const key = row.weekStartDate ? this.dateKey(new Date(row.weekStartDate)) : '';
-          if (!key) continue;
-          const rows = beforeRowsByWeek.get(key) ?? [];
-          rows.push(row);
-          beforeRowsByWeek.set(key, rows);
-        }
+        const beforeRowsByWeek = await this.loadWeekAssignmentBuckets(tx, affectedWeeks);
 
-        let restoredCount = 0;
+        const restoreRows: Array<{
+          id: string;
+          designerId: string | null;
+          taskId: string | null;
+          dayIndex: number | null;
+          assignedHours: string | number | null;
+          parentId: string | null;
+          splitIndex: number | null;
+          totalParts: number | null;
+          weekStartDate: Date | null;
+          weekEndDate: Date | null;
+          notes: string | null;
+          position: number;
+          isLocked: boolean;
+          isPinned: boolean;
+          assignedBy: string | null;
+          updatedAt: Date | null;
+        }> = [];
+
         for (const entry of originals) {
           if (!currentById.has(entry.assignmentId)) continue;
           const originalWeekStart = entry.row.weekStartDate ? this.startOfUtcDay(new Date(entry.row.weekStartDate)) : null;
           const originalWeekEnd = entry.row.weekEndDate ? this.startOfUtcDay(new Date(entry.row.weekEndDate)) : null;
-          await tx.schedulerAssignment.update({
-            where: { id: entry.assignmentId },
-            data: {
-              designerId: entry.row.designerId,
-              taskId: entry.row.taskId,
-              dayIndex: entry.row.dayIndex,
-              assignedHours: entry.row.assignedHours as any,
-              parentId: entry.row.parentId,
-              splitIndex: entry.row.splitIndex,
-              totalParts: entry.row.totalParts,
-              weekStartDate: originalWeekStart,
-              weekEndDate: originalWeekEnd,
-              notes: entry.row.notes,
-              position: entry.row.position ?? 0,
-              isLocked: entry.row.isLocked ?? false,
-              isPinned: entry.row.isPinned ?? false,
-              assignedBy: entry.row.assignedBy,
-              updatedAt: entry.row.updatedAt ? new Date(entry.row.updatedAt) : undefined,
-            } as Prisma.SchedulerAssignmentUncheckedUpdateInput,
-          });
-          restoredCount += 1;
-        }
-
-        const afterRows = affectedWeeks.length
-          ? await tx.schedulerAssignment.findMany({
-              where: { weekStartDate: { in: affectedWeeks } },
-              orderBy: [
-                { designerId: 'asc' },
-                { dayIndex: 'asc' },
-                { position: 'asc' } as unknown as Prisma.SchedulerAssignmentOrderByWithRelationInput,
-                { id: 'asc' },
-              ],
-            })
-          : [];
-        const afterRowsByWeek = new Map<string, unknown[]>();
-        for (const row of afterRows) {
-          const key = row.weekStartDate ? this.dateKey(new Date(row.weekStartDate)) : '';
-          if (!key) continue;
-          const rows = afterRowsByWeek.get(key) ?? [];
-          rows.push(row);
-          afterRowsByWeek.set(key, rows);
-        }
-
-        for (const weekStartDate of affectedWeeks) {
-          const key = this.dateKey(weekStartDate);
-          const existingWeek = await tx.schedulerWeek.findUnique({ where: { weekStartDate } });
-          const versionFrom = existingWeek?.version ?? 0;
-          const versionTo = versionFrom + 1;
-          if (existingWeek) {
-            await tx.schedulerWeek.update({
-              where: { weekStartDate },
-              data: {
-                version: { increment: 1 },
-                updatedBy: actorUserId,
-                lastPayloadHash: null,
-              },
-            });
-          } else {
-            await tx.schedulerWeek.create({
-              data: {
-                weekStartDate,
-                version: versionTo,
-                isLocked: false,
-                updatedBy: actorUserId,
-                lastPayloadHash: null,
-              },
-            });
-          }
-
-          await tx.schedulerAssignmentHistory.create({
-            data: {
-              weekStartDate,
-              versionFrom,
-              versionTo,
-              changedBy: actorUserId,
-              beforeJson: JSON.stringify(beforeRowsByWeek.get(key) ?? []),
-              afterJson: JSON.stringify(afterRowsByWeek.get(key) ?? []),
-            },
+          restoreRows.push({
+            id: entry.assignmentId,
+            designerId: entry.row.designerId,
+            taskId: entry.row.taskId,
+            dayIndex: entry.row.dayIndex,
+            assignedHours: entry.row.assignedHours as string | number | null,
+            parentId: entry.row.parentId,
+            splitIndex: entry.row.splitIndex,
+            totalParts: entry.row.totalParts,
+            weekStartDate: originalWeekStart,
+            weekEndDate: originalWeekEnd,
+            notes: entry.row.notes,
+            position: entry.row.position ?? 0,
+            isLocked: entry.row.isLocked ?? false,
+            isPinned: entry.row.isPinned ?? false,
+            assignedBy: entry.row.assignedBy,
+            updatedAt: entry.row.updatedAt ? new Date(entry.row.updatedAt) : null,
           });
         }
+
+        await this.batchRestoreLeaveSnapshotRows(tx, restoreRows);
+
+        const afterRowsByWeek = this.applyAssignmentPatchesToBuckets(
+          beforeRowsByWeek,
+          restoreRows.map((row) => ({
+            id: row.id,
+            designerId: row.designerId,
+            taskId: row.taskId,
+            dayIndex: row.dayIndex,
+            assignedHours: row.assignedHours,
+            parentId: row.parentId,
+            splitIndex: row.splitIndex,
+            totalParts: row.totalParts,
+            weekStartDate: row.weekStartDate,
+            weekEndDate: row.weekEndDate,
+            notes: row.notes,
+            position: row.position,
+            isLocked: row.isLocked,
+            isPinned: row.isPinned,
+            assignedBy: row.assignedBy,
+            updatedAt: row.updatedAt,
+          })),
+        );
+
+        await this.bumpWeeksAndWriteHistory(tx, {
+          affectedWeeks,
+          beforeByWeek: beforeRowsByWeek,
+          afterByWeek: afterRowsByWeek,
+          actorUserId,
+        });
 
         await this.markLeaveRescheduleSnapshotsRestored(tx, leave.id);
         return {
-          movedCount: restoredCount,
+          movedCount: restoreRows.length,
           affectedWeeks: affectedWeeks.map((date) => this.dateKey(date)),
         };
       }
@@ -1863,97 +2111,42 @@ export class SchedulerAssignmentsService implements OnModuleInit {
       }
       const affectedWeeks = [...affectedWeekByKey.values()].sort((a, b) => a.getTime() - b.getTime());
 
-      const beforeRows = await tx.schedulerAssignment.findMany({
-        where: { weekStartDate: { in: affectedWeeks } },
-        orderBy: [
-          { designerId: 'asc' },
-          { dayIndex: 'asc' },
-          { position: 'asc' } as unknown as Prisma.SchedulerAssignmentOrderByWithRelationInput,
-          { id: 'asc' },
-        ],
+      const beforeRowsByWeek = await this.loadWeekAssignmentBuckets(tx, affectedWeeks);
+
+      await this.batchUpdateLeaveFallbackMoves(
+        tx,
+        movedRows.map((row) => ({
+          id: row.id,
+          toWeekStartDate: row.toWeekStartDate,
+          toWeekEndDate: row.toWeekEndDate,
+          toDayIndex: row.toDayIndex,
+          assignedBy: actorUserId,
+        })),
+      );
+
+      const afterRowsByWeek = this.applyAssignmentPatchesToBuckets(
+        beforeRowsByWeek,
+        movedRows.map((row) => ({
+          id: row.id,
+          weekStartDate: row.toWeekStartDate,
+          weekEndDate: row.toWeekEndDate,
+          dayIndex: row.toDayIndex,
+          assignedBy: actorUserId,
+        })),
+      );
+
+      await this.bumpWeeksAndWriteHistory(tx, {
+        affectedWeeks,
+        beforeByWeek: beforeRowsByWeek,
+        afterByWeek: afterRowsByWeek,
+        actorUserId,
       });
-      const beforeRowsByWeek = new Map<string, unknown[]>();
-      for (const row of beforeRows) {
-        const key = row.weekStartDate ? this.dateKey(new Date(row.weekStartDate)) : '';
-        if (!key) continue;
-        const rows = beforeRowsByWeek.get(key) ?? [];
-        rows.push(row);
-        beforeRowsByWeek.set(key, rows);
-      }
-
-      for (const row of movedRows) {
-        await tx.schedulerAssignment.update({
-          where: { id: row.id },
-          data: {
-            weekStartDate: row.toWeekStartDate,
-            weekEndDate: row.toWeekEndDate,
-            dayIndex: row.toDayIndex,
-            assignedBy: actorUserId,
-          },
-        });
-      }
-
-      const afterRows = await tx.schedulerAssignment.findMany({
-        where: { weekStartDate: { in: affectedWeeks } },
-        orderBy: [
-          { designerId: 'asc' },
-          { dayIndex: 'asc' },
-          { position: 'asc' } as unknown as Prisma.SchedulerAssignmentOrderByWithRelationInput,
-          { id: 'asc' },
-        ],
-      });
-      const afterRowsByWeek = new Map<string, unknown[]>();
-      for (const row of afterRows) {
-        const key = row.weekStartDate ? this.dateKey(new Date(row.weekStartDate)) : '';
-        if (!key) continue;
-        const rows = afterRowsByWeek.get(key) ?? [];
-        rows.push(row);
-        afterRowsByWeek.set(key, rows);
-      }
-
-      for (const weekStartDate of affectedWeeks) {
-        const key = this.dateKey(weekStartDate);
-        const existingWeek = await tx.schedulerWeek.findUnique({ where: { weekStartDate } });
-        const versionFrom = existingWeek?.version ?? 0;
-        const versionTo = versionFrom + 1;
-        if (existingWeek) {
-          await tx.schedulerWeek.update({
-            where: { weekStartDate },
-            data: {
-              version: { increment: 1 },
-              updatedBy: actorUserId,
-              lastPayloadHash: null,
-            },
-          });
-        } else {
-          await tx.schedulerWeek.create({
-            data: {
-              weekStartDate,
-              version: versionTo,
-              isLocked: false,
-              updatedBy: actorUserId,
-              lastPayloadHash: null,
-            },
-          });
-        }
-
-        await tx.schedulerAssignmentHistory.create({
-          data: {
-            weekStartDate,
-            versionFrom,
-            versionTo,
-            changedBy: actorUserId,
-            beforeJson: JSON.stringify(beforeRowsByWeek.get(key) ?? []),
-            afterJson: JSON.stringify(afterRowsByWeek.get(key) ?? []),
-          },
-        });
-      }
 
       return {
         movedCount: movedRows.length,
         affectedWeeks: affectedWeeks.map((date) => this.dateKey(date)),
       };
-    });
+    }, { timeout: 60_000, maxWait: 20_000 });
 
     if (result.movedCount > 0) {
       await this.activityLogger.log({
@@ -2406,7 +2599,7 @@ export class SchedulerAssignmentsService implements OnModuleInit {
       }
 
       return savedRequest;
-    });
+    }, { timeout: 15_000 });
 
     if (updated.date) {
       await this.touchSchedulerWeek(this.weekStartForDate(new Date(updated.date)), userId);
@@ -2533,7 +2726,7 @@ export class SchedulerAssignmentsService implements OnModuleInit {
       await tx.schedulerAssignment.deleteMany({
         where: { taskId, weekStartDate: { gte: todayMidnight } },
       });
-    });
+    }, { timeout: 15_000 });
   }
 
   /**
@@ -2601,7 +2794,7 @@ export class SchedulerAssignmentsService implements OnModuleInit {
       }
 
       return { fragmentId: fragment.id };
-    });
+    }, { timeout: 15_000 });
   }
 
   /** Flips an already-detached fragment (Rule 5a) between UNASSIGNED and ON_HOLD in place — it has no grid placement or siblings to consider. */
@@ -2807,7 +3000,18 @@ export class SchedulerAssignmentsService implements OnModuleInit {
                 project: { select: { technicalHead: true, teamLead: true, subTeamLead: true, designers: true } },
               },
             })
-          : Promise.resolve([]),
+          : Promise.resolve([] as Array<{
+              id: string;
+              status: string | null;
+              assigneeId: string | null;
+              projectId: string | null;
+              project: {
+                technicalHead: string | null;
+                teamLead: string | null;
+                subTeamLead: string | null;
+                designers: string | null;
+              } | null;
+            }>),
         tx.schedulerAssignment.findMany({ where: { weekStartDate } }),
         // UPDLOCK + ROWLOCK: prevents two concurrent transactions from both passing the
         // version check before either commits, which would cause a silent lost update.
@@ -2907,6 +3111,41 @@ export class SchedulerAssignmentsService implements OnModuleInit {
       }
 
       this.assertNoApprovedFullDayLeaveConflicts(dto.assignments, approvedLeaves, weekStartDate);
+
+      // Reject completed/in-review reassignment before any schedule rows are written.
+      {
+        const prevTaskIdsForGuard = Array.from(new Set(
+          previousRows
+            .map((r: { taskId?: string | null }) => r.taskId)
+            .filter((id): id is string => {
+              if (!id) return false;
+              return !incremental || incrementalTaskIds.includes(id);
+            }),
+        ));
+        const guardScopeTaskIds = incremental
+          ? incrementalTaskIds
+          : Array.from(new Set([...prevTaskIdsForGuard, ...taskIds]));
+        const missingGuardIds = guardScopeTaskIds.filter((id) => !tasks.some((t) => t.id === id));
+        const guardTasks = missingGuardIds.length > 0
+          ? [
+              ...tasks,
+              ...(await tx.task.findMany({
+                where: { id: { in: missingGuardIds } },
+                select: { id: true, status: true, assigneeId: true },
+              })),
+            ]
+          : tasks;
+        const guardAssigneesByTask = new Map<string, Set<string>>();
+        const guardAssigneeRows = incremental
+          ? this.buildMergedAssignmentsForValidation(previousRows, dto)
+          : dto.assignments;
+        for (const row of guardAssigneeRows) {
+          if (incremental && !incrementalTaskIds.includes(row.taskId)) continue;
+          if (!guardAssigneesByTask.has(row.taskId)) guardAssigneesByTask.set(row.taskId, new Set());
+          guardAssigneesByTask.get(row.taskId)?.add(row.designerId);
+        }
+        this.assertNoBlockedTaskReassignment(guardScopeTaskIds, guardTasks, previousRows, guardAssigneesByTask);
+      }
 
       if (!incremental && existing.lastPayloadHash && existing.lastPayloadHash === payloadHash && !dto.overflow?.length) {
         return {

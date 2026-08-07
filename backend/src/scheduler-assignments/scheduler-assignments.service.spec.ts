@@ -644,8 +644,8 @@ describe('SchedulerAssignmentsService', () => {
       makeRow('assignment-2', '2026-06-15', 0, 'task-2'),
     ];
 
+    // Designer plan rows + one before-week history load (no post-update reload).
     prisma.schedulerAssignment.findMany
-      .mockResolvedValueOnce(rows)
       .mockResolvedValueOnce(rows)
       .mockResolvedValueOnce(rows);
     prisma.leaveRequest.findMany.mockResolvedValue([
@@ -676,28 +676,13 @@ describe('SchedulerAssignmentsService', () => {
     );
 
     expect(result).toEqual({ movedCount: 2, affectedWeeks: ['2026-06-08', '2026-06-15'], cancelledOvertimeCount: 0 });
-    expect(prisma.schedulerAssignment.update).toHaveBeenNthCalledWith(
-      1,
-      expect.objectContaining({
-        where: { id: 'assignment-1' },
-        data: expect.objectContaining({
-          weekStartDate: new Date('2026-06-15T00:00:00.000Z'),
-          dayIndex: 2,
-          assignedBy: 'hod-1',
-        }),
-      }),
-    );
-    expect(prisma.schedulerAssignment.update).toHaveBeenNthCalledWith(
-      2,
-      expect.objectContaining({
-        where: { id: 'assignment-2' },
-        data: expect.objectContaining({
-          weekStartDate: new Date('2026-06-15T00:00:00.000Z'),
-          dayIndex: 3,
-          assignedBy: 'hod-1',
-        }),
-      }),
-    );
+    expect(prisma.schedulerAssignment.update).not.toHaveBeenCalled();
+    expect(prisma.schedulerAssignment.findMany).toHaveBeenCalledTimes(2);
+    const executeRawFlat = JSON.stringify(prisma.$executeRaw.mock.calls);
+    expect(executeRawFlat).toContain('assignment-1');
+    expect(executeRawFlat).toContain('assignment-2');
+    expect(executeRawFlat).toContain('ErpTSLeaveRescheduleSnapshot');
+    expect(executeRawFlat).toContain('ErpTSSchedulerAssignment');
     expect(prisma.schedulerWeek.update).toHaveBeenCalledTimes(2);
     expect(prisma.schedulerAssignmentHistory.create).toHaveBeenCalledTimes(2);
     expect(activityLogger.log).toHaveBeenCalledWith(
@@ -757,7 +742,6 @@ describe('SchedulerAssignmentsService', () => {
 
     prisma.schedulerAssignment.findMany
       .mockResolvedValueOnce(rows)
-      .mockResolvedValueOnce(rows)
       .mockResolvedValueOnce(rows);
     prisma.leaveRequest.findMany.mockResolvedValue([]);
     prisma.$queryRaw.mockResolvedValue([]);
@@ -774,12 +758,9 @@ describe('SchedulerAssignmentsService', () => {
     );
 
     expect(result.movedCount).toBe(1);
-    expect(prisma.schedulerAssignment.update).toHaveBeenCalledWith(
-      expect.objectContaining({
-        where: { id: 'assignment-1' },
-        data: expect.objectContaining({ dayIndex: 2 }),
-      }),
-    );
+    expect(prisma.schedulerAssignment.update).not.toHaveBeenCalled();
+    expect(prisma.schedulerAssignment.findMany).toHaveBeenCalledTimes(2);
+    expect(JSON.stringify(prisma.$executeRaw.mock.calls)).toContain('assignment-1');
   });
 
   it('restores revoked leave displacement from the approval snapshot', async () => {
@@ -812,7 +793,6 @@ describe('SchedulerAssignmentsService', () => {
 
     prisma.schedulerAssignment.findMany
       .mockResolvedValueOnce(rows)
-      .mockResolvedValueOnce(rows)
       .mockResolvedValueOnce(rows);
     prisma.$queryRaw.mockResolvedValueOnce([
       {
@@ -837,28 +817,12 @@ describe('SchedulerAssignmentsService', () => {
     );
 
     expect(result).toEqual({ movedCount: 2, affectedWeeks: ['2026-06-08', '2026-06-15'] });
-    expect(prisma.schedulerAssignment.update).toHaveBeenNthCalledWith(
-      1,
-      expect.objectContaining({
-        where: { id: 'assignment-1' },
-        data: expect.objectContaining({
-          weekStartDate: new Date('2026-06-08T00:00:00.000Z'),
-          dayIndex: 4,
-          assignedBy: 'hod-old',
-        }),
-      }),
-    );
-    expect(prisma.schedulerAssignment.update).toHaveBeenNthCalledWith(
-      2,
-      expect.objectContaining({
-        where: { id: 'assignment-2' },
-        data: expect.objectContaining({
-          weekStartDate: new Date('2026-06-15T00:00:00.000Z'),
-          dayIndex: 0,
-          assignedBy: 'hod-old',
-        }),
-      }),
-    );
+    expect(prisma.schedulerAssignment.update).not.toHaveBeenCalled();
+    expect(prisma.schedulerAssignment.findMany).toHaveBeenCalledTimes(2);
+    const executeRawFlat = JSON.stringify(prisma.$executeRaw.mock.calls);
+    expect(executeRawFlat).toContain('assignment-1');
+    expect(executeRawFlat).toContain('assignment-2');
+    expect(executeRawFlat).toContain('restoredAt');
     expect(prisma.schedulerWeek.update).toHaveBeenCalledTimes(2);
     expect(prisma.schedulerAssignmentHistory.create).toHaveBeenCalledTimes(2);
     expect(activityLogger.log).toHaveBeenCalledWith(
@@ -869,6 +833,95 @@ describe('SchedulerAssignmentsService', () => {
         }),
       }),
     );
+  });
+
+  it('records leave snapshots with insert-where-not-exists (does not overwrite existing originals)', async () => {
+    const makeRow = (id: string, weekStartDate: string, dayIndex: number) => ({
+      id,
+      designerId: 'designer-1',
+      taskId: 'task-1',
+      dayIndex,
+      assignedHours: '8',
+      parentId: null,
+      splitIndex: null,
+      totalParts: null,
+      weekStartDate: new Date(`${weekStartDate}T00:00:00.000Z`),
+      weekEndDate: new Date('2026-06-28T00:00:00.000Z'),
+      notes: null,
+      position: 0,
+      isLocked: false,
+      assignedBy: 'hod-old',
+      createdAt: new Date('2026-06-01T00:00:00.000Z'),
+      updatedAt: new Date('2026-06-01T00:00:00.000Z'),
+    });
+    const rows = [makeRow('assignment-1', '2026-06-22', 1)];
+    prisma.schedulerAssignment.findMany
+      .mockResolvedValueOnce(rows)
+      .mockResolvedValueOnce(rows);
+    prisma.leaveRequest.findMany.mockResolvedValue([]);
+    prisma.$queryRaw.mockResolvedValue([]);
+
+    await service.rescheduleForApprovedLeave(
+      {
+        id: 'leave-1',
+        userId: 'designer-1',
+        type: 'Full Day',
+        startDate: new Date('2026-06-23T00:00:00.000Z'),
+        endDate: new Date('2026-06-23T00:00:00.000Z'),
+      },
+      'hod-1',
+    );
+
+    const snapshotSql = prisma.$executeRaw.mock.calls
+      .map((call: unknown[]) => JSON.stringify(call))
+      .find((s: string) => s.includes('ErpTSLeaveRescheduleSnapshot'));
+    expect(snapshotSql).toBeTruthy();
+    expect(snapshotSql).toContain('WHERE NOT EXISTS');
+    expect(snapshotSql).not.toContain('MERGE');
+  });
+
+  it('builds leave history afterJson without a second week-wide assignment reload', async () => {
+    const makeRow = (id: string, weekStartDate: string, dayIndex: number) => ({
+      id,
+      designerId: 'designer-1',
+      taskId: 'task-1',
+      dayIndex,
+      assignedHours: '5',
+      parentId: null,
+      splitIndex: null,
+      totalParts: null,
+      weekStartDate: new Date(`${weekStartDate}T00:00:00.000Z`),
+      weekEndDate: new Date('2026-06-28T00:00:00.000Z'),
+      notes: null,
+      position: 0,
+      isLocked: false,
+      assignedBy: 'hod-old',
+      createdAt: new Date('2026-06-01T00:00:00.000Z'),
+      updatedAt: new Date('2026-06-01T00:00:00.000Z'),
+    });
+    const rows = [makeRow('assignment-1', '2026-06-22', 1)];
+    prisma.schedulerAssignment.findMany
+      .mockResolvedValueOnce(rows)
+      .mockResolvedValueOnce(rows);
+    prisma.leaveRequest.findMany.mockResolvedValue([]);
+    prisma.$queryRaw.mockResolvedValue([]);
+
+    await service.rescheduleForApprovedLeave(
+      {
+        id: 'leave-1',
+        userId: 'designer-1',
+        type: 'Full Day',
+        startDate: new Date('2026-06-23T00:00:00.000Z'),
+        endDate: new Date('2026-06-23T00:00:00.000Z'),
+      },
+      'hod-1',
+    );
+
+    expect(prisma.schedulerAssignment.findMany).toHaveBeenCalledTimes(2);
+    expect(prisma.schedulerAssignmentHistory.create).toHaveBeenCalled();
+    const historyPayload = prisma.schedulerAssignmentHistory.create.mock.calls[0][0];
+    expect(historyPayload.data.afterJson).toContain('assignment-1');
+    expect(historyPayload.data.afterJson).toContain('"dayIndex":2');
   });
 
   describe('clearTaskSchedule', () => {
@@ -1260,5 +1313,147 @@ describe('SchedulerAssignmentsService', () => {
         service.deleteDayUnlock(HOD_ID, { designerId: DESIGNER_ID, date: '2026-07-11' }),
       ).rejects.toThrow(/assignments exist/);
     });
+  });
+
+  it('rejects reassigning a DESIGN_COMPLETED task to another designer via week save', async () => {
+    const taskId = 'dddddddd-dddd-4ddd-8ddd-dddddddddddd';
+    const designerA = 'aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa';
+    const designerB = 'bbbbbbbb-bbbb-4bbb-8bbb-bbbbbbbbbbbb';
+    const existingRows = [
+      {
+        id: 'row-1',
+        designerId: designerA,
+        taskId,
+        dayIndex: 0,
+        assignedHours: '4',
+        parentId: null,
+        splitIndex: null,
+        totalParts: null,
+        weekStartDate: new Date('2026-06-08T00:00:00.000Z'),
+        weekEndDate: new Date('2026-06-14T00:00:00.000Z'),
+        notes: null,
+        position: 0,
+        isLocked: false,
+        isPinned: false,
+        assignedBy: 'hod-1',
+        createdAt: new Date('2026-06-01T00:00:00.000Z'),
+        updatedAt: new Date('2026-06-01T00:00:00.000Z'),
+      },
+    ];
+
+    prisma.user.findMany.mockImplementation(({ where }: { where: { id: { in: string[] } } }) =>
+      Promise.resolve(
+        where.id.in.map((id) => ({
+          id,
+          fullName: id === designerA ? 'Alex' : 'Ben',
+        })),
+      ),
+    );
+    prisma.task.findMany.mockResolvedValue([
+      { id: taskId, status: 'DESIGN_COMPLETED', assigneeId: designerA, projectId: null, project: null },
+    ]);
+    prisma.schedulerAssignment.findMany.mockResolvedValue(existingRows);
+    prisma.$queryRaw.mockResolvedValue([
+      {
+        id: 'week-1',
+        version: 1,
+        isLocked: false,
+        lastPayloadHash: null,
+        updatedAt: new Date('2026-06-08T00:00:00.000Z'),
+        updatedBy: 'hod-1',
+      },
+    ]);
+
+    await expect(
+      service.saveWeekSnapshot('2026-06-08', 'hod-1', {
+        version: 1,
+        affectedTaskIds: [taskId],
+        assignments: [
+          {
+            designerId: designerB,
+            taskId,
+            dayIndex: 0,
+            assignedHours: 4,
+          },
+        ],
+      }),
+    ).rejects.toThrow('Completed tasks cannot be reassigned. Reopen the task before reassigning.');
+
+    expect(prisma.schedulerAssignment.deleteMany).not.toHaveBeenCalled();
+    expect(prisma.taskDesigner.deleteMany).not.toHaveBeenCalled();
+  });
+
+  it('allows REWORK tasks to be reassigned via week save', async () => {
+    const taskId = 'eeeeeeee-eeee-4eee-8eee-eeeeeeeeeeee';
+    const designerA = 'aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa';
+    const designerB = 'bbbbbbbb-bbbb-4bbb-8bbb-bbbbbbbbbbbb';
+    const existingRows = [
+      {
+        id: 'row-1',
+        designerId: designerA,
+        taskId,
+        dayIndex: 0,
+        assignedHours: '4',
+        parentId: null,
+        splitIndex: null,
+        totalParts: null,
+        weekStartDate: new Date('2026-06-08T00:00:00.000Z'),
+        weekEndDate: new Date('2026-06-14T00:00:00.000Z'),
+        notes: null,
+        position: 0,
+        isLocked: false,
+        isPinned: false,
+        assignedBy: 'hod-1',
+        createdAt: new Date('2026-06-01T00:00:00.000Z'),
+        updatedAt: new Date('2026-06-01T00:00:00.000Z'),
+      },
+    ];
+
+    prisma.user.findMany.mockImplementation(({ where }: { where: { id: { in: string[] } } }) =>
+      Promise.resolve(
+        where.id.in.map((id) => ({
+          id,
+          fullName: id === designerA ? 'Alex' : 'Ben',
+        })),
+      ),
+    );
+    prisma.task.findMany.mockResolvedValue([
+      { id: taskId, status: 'REWORK', assigneeId: designerA, projectId: null, project: null },
+    ]);
+    prisma.schedulerAssignment.findMany
+      .mockResolvedValueOnce(existingRows)
+      .mockResolvedValue(existingRows);
+    prisma.$queryRaw.mockResolvedValue([
+      {
+        id: 'week-1',
+        version: 1,
+        isLocked: false,
+        lastPayloadHash: null,
+        updatedAt: new Date('2026-06-08T00:00:00.000Z'),
+        updatedBy: 'hod-1',
+      },
+    ]);
+    prisma.schedulerWeek.update.mockResolvedValue({
+      version: 2,
+      isLocked: false,
+      updatedAt: new Date('2026-06-08T01:00:00.000Z'),
+      updatedBy: 'hod-1',
+    });
+
+    const result = await service.saveWeekSnapshot('2026-06-08', 'hod-1', {
+      version: 1,
+      affectedTaskIds: [taskId],
+      assignments: [
+        {
+          designerId: designerB,
+          taskId,
+          dayIndex: 1,
+          assignedHours: 4,
+        },
+      ],
+    });
+
+    expect(result.version).toBe(2);
+    expect(prisma.taskDesigner.deleteMany).toHaveBeenCalled();
   });
 });
