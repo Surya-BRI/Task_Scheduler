@@ -893,10 +893,34 @@ describe('TasksService', () => {
       );
     });
 
+    it('allows HOD to issue REWORK without creating a revision', async () => {
+      prisma.task.findUnique.mockResolvedValue({ ...existingTask, status: 'HOD_REVIEW' });
+      prisma.task.update.mockResolvedValue({
+        ...updatedTask,
+        status: 'REWORK',
+        assigneeId: 'designer-1',
+        reworkNote: 'Fix dimensions',
+      });
+      prisma.user.findMany.mockResolvedValue([{ id: 'sales-1' }]);
+
+      const result = await service.updateStatus(TASK_ID, 'hod-1', UserRole.HOD, {
+        status: 'REWORK',
+        reworkNote: 'Fix dimensions',
+      } as any);
+
+      expect(prisma.task.create).not.toHaveBeenCalled();
+      expect(result.newRevisionTaskId).toBeUndefined();
+      expect(prisma.task.update).toHaveBeenCalledWith(
+        expect.objectContaining({
+          data: expect.objectContaining({ status: 'REWORK', reworkNote: 'Fix dimensions' }),
+        }),
+      );
+    });
+
     it('forbids designers from issuing REWORK', async () => {
       await expect(
         service.updateStatus(TASK_ID, 'designer-1', UserRole.DESIGNER, { status: 'REWORK' } as any),
-      ).rejects.toThrow('Only SALESPERSON or ADMIN can issue rework');
+      ).rejects.toThrow('Only HOD, SALESPERSON, or ADMIN can issue rework');
     });
 
     it('forbids designers from marking CLIENT_REJECTED', async () => {

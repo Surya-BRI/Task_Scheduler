@@ -2232,18 +2232,20 @@ export class TasksService {
       if (!inJunction) throw new ForbiddenException('Designers can only update status on their own tasks');
     }
 
-    // Only SALESPERSON and ADMIN can issue rework or client-reject (which creates the next revision)
+    // REWORK = same revision (HOD internal or Sales). CLIENT_REJECTED = new Rn (Sales/Admin only).
     const newStatusApi = toApiTaskStatus(dto.status);
-    if (
-      (newStatusApi === 'REWORK' || newStatusApi === 'CLIENT_REJECTED') &&
-      role !== UserRole.SALESPERSON &&
-      role !== UserRole.ADMIN
-    ) {
-      throw new ForbiddenException(
-        newStatusApi === 'REWORK'
-          ? 'Only SALESPERSON or ADMIN can issue rework'
-          : 'Only SALESPERSON or ADMIN can mark client rejected',
-      );
+    if (newStatusApi === 'REWORK') {
+      if (
+        role !== UserRole.SALESPERSON &&
+        role !== UserRole.ADMIN &&
+        role !== UserRole.HOD
+      ) {
+        throw new ForbiddenException('Only HOD, SALESPERSON, or ADMIN can issue rework');
+      }
+    } else if (newStatusApi === 'CLIENT_REJECTED') {
+      if (role !== UserRole.SALESPERSON && role !== UserRole.ADMIN) {
+        throw new ForbiddenException('Only SALESPERSON or ADMIN can mark client rejected');
+      }
     }
 
     // Sales may only change status once the task is in Sales Review (or hold parked from there).
@@ -2377,7 +2379,12 @@ export class TasksService {
           oldStatus: toApiTaskStatus(existing.status),
           newStatus: effectiveStatusApi,
         },
-        context: { source: 'tasks.updateStatus' },
+        context: {
+          source:
+            effectiveStatusApi === 'REWORK' && role === UserRole.HOD
+              ? 'hod_internal_rework'
+              : 'tasks.updateStatus',
+        },
       },
     });
 
@@ -2618,11 +2625,12 @@ export class TasksService {
       }
 
       if (note) {
+        const isHodInternal = role === UserRole.HOD;
         await this.prisma.chatterPost.create({
           data: {
             taskId: id,
-            title: 'Rework Instructions',
-            message: `Rework Required:\n${note}`,
+            title: isHodInternal ? 'Internal Rework Instructions' : 'Rework Instructions',
+            message: `${isHodInternal ? 'Internal Rework Required' : 'Rework Required'}:\n${note}`,
             postType: 'REWORK',
             authorId: userId,
           },

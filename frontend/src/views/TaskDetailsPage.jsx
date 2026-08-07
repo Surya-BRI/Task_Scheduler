@@ -1302,6 +1302,7 @@ export function TaskDetailsPage() {
   const [historyDialog, setHistoryDialog] = useState(null)
   const [taskAuditInfo, setTaskAuditInfo] = useState({ createdByHod: '-' })
   const [taskRefreshCounter, setTaskRefreshCounter] = useState(0)
+  const [historyRefreshCounter, setHistoryRefreshCounter] = useState(0)
   const [submittedSession, setSubmittedSession] = useState(null)
   const [prevRevisionSession, setPrevRevisionSession] = useState(null)
   const [prevRevisionLoading, setPrevRevisionLoading] = useState(false)
@@ -1496,6 +1497,8 @@ export function TaskDetailsPage() {
         fetchTimerState: () => apiClient.get(`/tasks/${taskId}/timer-state`).catch(() => null),
       })
       writeTaskLifecycleSync(taskId, { status: apiStatus, action: 'status_change' })
+      // Sidebar history is polled slowly — refresh now so Status Changed / rework appears immediately.
+      setHistoryRefreshCounter((c) => c + 1)
       if (newStatus === 'REWORK') {
         toast.success('Rework issued — same task returned to the designer.')
       } else if (newStatus === 'CLIENT_REJECTED' && res?.newRevisionTaskNo) {
@@ -2016,17 +2019,17 @@ export function TaskDetailsPage() {
         setSidebarHasMore(false)
       }
     }
-    // Defer first fetch; refresh infrequently (realtime covers most updates).
+    // Initial + after status/history bumps; keep a slow poll as backup.
     const initial = setTimeout(() => {
       void fetchSidebarHistory()
-    }, 500)
+    }, historyRefreshCounter === 0 ? 500 : 0)
     const interval = setInterval(fetchSidebarHistory, 60000)
     return () => {
       alive = false
       clearTimeout(initial)
       clearInterval(interval)
     }
-  }, [projectId])
+  }, [projectId, historyRefreshCounter])
 
   const chatterRefreshPendingRef = useRef(false)
   const recordOpNo = record?.opNo ?? null
@@ -2906,6 +2909,7 @@ export function TaskDetailsPage() {
                             )}
                             {taskStatus === 'HOD_REVIEW' && (<>
                               <button type="button" onClick={() => handleStatusChange('SALES_REVIEW')} className="rounded-md bg-orange-500 px-3 py-1.5 text-xs font-semibold text-white hover:bg-orange-600 transition-colors">Send to Sales</button>
+                              <button type="button" onClick={() => openSalesActionDialog('rework')} className="rounded-md bg-red-500 px-3 py-1.5 text-xs font-semibold text-white hover:bg-red-600 transition-colors">Send for Rework</button>
                             </>)}
                             {taskStatus === 'ON_HOLD' && (
                               <button type="button" onClick={() => handleStatusChange(record?.holdPreviousStatus || 'HOD_REVIEW')} className="rounded-md bg-violet-600 px-3 py-1.5 text-xs font-semibold text-white hover:bg-violet-700 transition-colors">Resume</button>
@@ -3782,7 +3786,11 @@ export function TaskDetailsPage() {
           <div className="bg-white rounded-xl shadow-xl w-full max-w-lg flex flex-col gap-4 p-6">
             <div>
               <h2 className="text-sm font-bold text-slate-900">
-                {reworkDialogMode === 'reject' ? 'Client Rejected' : 'Request Rework'}
+                {reworkDialogMode === 'reject'
+                  ? 'Client Rejected'
+                  : isHodManagementMode
+                    ? 'Send for Internal Rework'
+                    : 'Request Rework'}
               </h2>
               <p className="mt-1 text-xs text-slate-500">
                 {reworkDialogMode === 'reject'
