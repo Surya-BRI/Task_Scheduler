@@ -1,13 +1,10 @@
 import { Suspense } from 'react';
 import { LoginForm } from '@/features/auth/components/login-form';
-import { shouldShowDemoLogins } from '@/lib/demo-logins';
 
 export const metadata = {
   title: 'Sign In — Blue Rhine Industries',
   description: 'Sign in to the Task Scheduler',
 };
-
-export const dynamic = 'force-dynamic';
 
 export default function LoginPage() {
   return (
@@ -23,7 +20,7 @@ export default function LoginPage() {
 
         <div className="px-8 py-7">
           <Suspense fallback={<div className="text-sm text-slate-500">Loading...</div>}>
-            <LoginForm showDemoLogins={shouldShowDemoLogins()} />
+            <LoginForm />
           </Suspense>
         </div>
       </div>

@@ -6,9 +6,8 @@ import { Eye, EyeOff, Lock, Mail, ShieldCheck } from 'lucide-react';
 import { getHomeRoute, setSession } from '@/lib/mock-auth';
 import { buildSessionForUser } from '@/lib/designers';
 import { loginApi } from '@/features/auth/services/auth.api';
-import { getDemoAccounts } from '@/config/demoUsers';
 
-export function LoginForm({ showDemoLogins = false }) {
+export function LoginForm() {
   const router = useRouter();
   const searchParams = useSearchParams();
   const sessionExpired = searchParams.get('expired') === '1';
@@ -34,12 +33,6 @@ export function LoginForm({ showDemoLogins = false }) {
     } finally {
       setLoading(false);
     }
-  };
-
-  const fillDemo = (account) => {
-    setEmail(account.email);
-    setPassword(account.password);
-    setError('');
   };
 
   return (
@@ -111,27 +104,6 @@ export function LoginForm({ showDemoLogins = false }) {
           </>
         ) : 'Sign In'}
       </button>
-
-      {showDemoLogins && (
-      <div className="pt-3 border-t border-slate-100">
-        <p className="text-xs font-semibold text-slate-400 uppercase tracking-wider mb-2.5">Quick Demo Logins</p>
-        <div className="grid grid-cols-1 gap-1.5">
-          {getDemoAccounts().map((account) => (
-            <button
-              key={account.email}
-              type="button"
-              onClick={() => fillDemo(account)}
-              className="flex items-center justify-between gap-3 rounded-lg border border-slate-200 bg-white px-3 py-2 text-left text-xs hover:bg-slate-50 hover:border-slate-300 transition-colors group"
-            >
-              <span className="font-medium text-slate-700 group-hover:text-slate-900 truncate">{account.label}</span>
-              <span className={`shrink-0 rounded-full border px-2 py-0.5 text-[10px] font-bold ${account.color}`}>
-                {account.badge}
-              </span>
-            </button>
-          ))}
-        </div>
-      </div>
-      )}
     </form>
   );
 }
