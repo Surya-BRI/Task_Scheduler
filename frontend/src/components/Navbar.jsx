@@ -2,7 +2,7 @@
 
 import { useEffect, useRef, useState } from 'react'
 import { usePathname, useRouter } from 'next/navigation'
-import { Bell, Calendar, ClipboardList, Clock, Home, LogOut, MessageSquareText, Users, Volume2, VolumeX } from 'lucide-react'
+import { Bell, Calendar, ClipboardList, Clock, Home, LayoutList, LogOut, MessageSquareText, Users, Volume2, VolumeX } from 'lucide-react'
 import { SalesReviewIcon } from '@/features/sales/components/SalesReviewIcon'
 import { getSession, mockLogout } from '@/lib/mock-auth'
 import {
@@ -487,19 +487,11 @@ export function Navbar({ currentDate, onCalendarChange, dateRangeText }) {
   const onSalesReview = pathname === '/sales/tasks' || pathname.startsWith('/sales/tasks/')
   const onSalesProjectsList = pathname === '/sales/projects-list' || pathname.startsWith('/sales/projects-list/')
   const onScheduler = pathname === '/design-scheduler' || pathname.startsWith('/designer') || pathname.startsWith('/hod')
-
-  // Logo click: role-based home route (Design List for HOD/Sales design modules)
-  const handleLogoClick = () => {
-    if (isDesigner) {
-      router.push('/design-list/tasks')
-    } else if (isSalesperson) {
-      router.push('/sales/design-list')
-    } else if (isQs) {
-      router.push('/qs/projects')
-    } else {
-      router.push('/design-list')
-    }
-  }
+  const onDesignList =
+    pathname === '/design-list' ||
+    pathname.startsWith('/design-list/') ||
+    pathname === '/sales/design-list' ||
+    pathname.startsWith('/sales/design-list/')
 
   // Scheduler icon behaviour differs by role
   const handleSchedulerClick = () => {
@@ -515,7 +507,7 @@ export function Navbar({ currentDate, onCalendarChange, dateRangeText }) {
     }
   }
 
-  // Home button: HOD/Sales → Project Design (projects-list), Designer → disabled / my-work
+  // Home button: Project Design hub by role (Designer has no projects-list — hide)
   const handleHomeClick = () => {
     if (isDesigner) return
     if (isSalesperson) { router.push('/sales/projects-list'); return }
@@ -523,24 +515,32 @@ export function Navbar({ currentDate, onCalendarChange, dateRangeText }) {
     router.push('/projects-list')
   }
 
+  // Design List — HOD / Designer / Sales only (QS has no design-list module)
+  const handleDesignListClick = () => {
+    if (isDesigner) {
+      router.push('/design-list/tasks')
+      return
+    }
+    if (isSalesperson) {
+      router.push('/sales/design-list')
+      return
+    }
+    router.push('/design-list')
+  }
+
   return (
     <header className="sticky top-0 z-40 border-b border-slate-200 bg-white">
       <div className="bg-white">
         <div className="w-full flex items-center gap-3 px-4 py-2 sm:px-6">
-          {/* Logo */}
+          {/* Logo — display only (no navigation to design-list) */}
           <div className="flex items-center gap-4">
-            <button
-              type="button"
-              onClick={handleLogoClick}
-              className="rounded-md bg-white px-2 py-1 flex items-center gap-4"
-              aria-label="Go to main page"
-            >
+            <div className="rounded-md bg-white px-2 py-1 flex items-center gap-4">
               <img
                 src="/blue-rhine-logo.png"
                 alt="Blue Rhine Industries"
                 className="h-12 w-auto object-contain"
               />
-            </button>
+            </div>
             {dateRangeText && (
               <div className="hidden sm:block text-sm font-semibold text-slate-700 bg-slate-50 px-3 py-1.5 rounded-md border border-slate-200">
                 {dateRangeText}
@@ -554,6 +554,46 @@ export function Navbar({ currentDate, onCalendarChange, dateRangeText }) {
             <span className="text-sm font-semibold text-slate-700">
               {new Date().toLocaleDateString('en-GB', { day: '2-digit', month: 'short', year: 'numeric' })}
             </span>
+
+            {/* Home — Project Design hub (Designer uses Design List instead) */}
+            {!isDesigner && (
+              <button
+                type="button"
+                onClick={handleHomeClick}
+                className={`${utilityIconClass}${
+                  isSalesperson && onSalesProjectsList ? ' bg-slate-100 text-slate-900' : ''
+                }${isQs && pathname.startsWith('/qs/projects') ? ' bg-slate-100 text-slate-900' : ''}${
+                  isHod && (pathname === '/projects-list' || pathname.startsWith('/projects-list/'))
+                    ? ' bg-slate-100 text-slate-900'
+                    : ''
+                }`}
+                aria-label={isQs ? 'Go to Project Design' : 'Go to Projects List'}
+                title={isQs ? 'Project Design' : 'Projects List'}
+                aria-current={
+                  (isSalesperson && onSalesProjectsList) ||
+                  (isQs && pathname.startsWith('/qs/projects')) ||
+                  (isHod && (pathname === '/projects-list' || pathname.startsWith('/projects-list/')))
+                    ? 'page'
+                    : undefined
+                }
+              >
+                <Home className="h-5 w-5" strokeWidth={1.75} aria-hidden />
+              </button>
+            )}
+
+            {/* Design List — HOD / Designer / Sales only */}
+            {!isQs && (
+              <button
+                type="button"
+                onClick={handleDesignListClick}
+                className={`${utilityIconClass}${onDesignList ? ' bg-slate-100 text-slate-900' : ''}`}
+                aria-label="Open design list"
+                title="Design List"
+                aria-current={onDesignList ? 'page' : undefined}
+              >
+                <LayoutList className="h-5 w-5" strokeWidth={1.75} aria-hidden />
+              </button>
+            )}
 
             {/* Scheduler / Calendar icon — hidden for Salesperson */}
             {!isSalesperson && !isQs && (
@@ -658,47 +698,31 @@ export function Navbar({ currentDate, onCalendarChange, dateRangeText }) {
       {!isQs && (
       <div className="bg-slate-200/80 border-t border-slate-200">
         <div className="w-full flex items-center px-4 py-1.5 sm:px-6">
-          <div className="flex w-full items-center gap-1">
-            {/* Home button: clickable for all; designers stay on current page */}
-            <button
-              type="button"
-              onClick={handleHomeClick}
-              className={`ui-icon-button h-8 w-8 ${isDesigner ? 'opacity-70' : ''}${
-                isSalesperson && onSalesProjectsList ? ' bg-white text-slate-900 shadow-sm' : ''
-              }`}
-              aria-label={isDesigner ? 'Home (stay on current page)' : 'Go to Projects List'}
-              title={isDesigner ? 'Home' : 'Projects List'}
-              aria-current={isSalesperson && onSalesProjectsList ? 'page' : undefined}
-            >
-              <Home className="h-4 w-4" />
-            </button>
-
-            <nav className="min-w-0 flex-1">
-              <div className="flex w-full items-center justify-evenly">
-                {bottomNavItems.map((item) => {
-                  const label = typeof item === 'string' ? item : item.label
-                  const href = typeof item === 'string' ? null : item.href
-                  const active = href
-                    ? pathname === href.split('#')[0]
-                    : false
-                  return (
-                    <button
-                      key={label}
-                      type="button"
-                      onClick={() => {
-                        if (href) router.push(href)
-                      }}
-                      className={`rounded-lg px-3 py-1.5 text-sm font-semibold transition-colors hover:bg-white/50 ${
-                        active ? 'bg-white text-slate-900 shadow-sm' : 'text-slate-700'
-                      }`}
-                    >
-                      {label}
-                    </button>
-                  )
-                })}
-              </div>
-            </nav>
-          </div>
+          <nav className="min-w-0 flex-1">
+            <div className="flex w-full items-center justify-evenly">
+              {bottomNavItems.map((item) => {
+                const label = typeof item === 'string' ? item : item.label
+                const href = typeof item === 'string' ? null : item.href
+                const active = href
+                  ? pathname === href.split('#')[0]
+                  : false
+                return (
+                  <button
+                    key={label}
+                    type="button"
+                    onClick={() => {
+                      if (href) router.push(href)
+                    }}
+                    className={`rounded-lg px-3 py-1.5 text-sm font-semibold transition-colors hover:bg-white/50 ${
+                      active ? 'bg-white text-slate-900 shadow-sm' : 'text-slate-700'
+                    }`}
+                  >
+                    {label}
+                  </button>
+                )
+              })}
+            </div>
+          </nav>
         </div>
       </div>
       )}

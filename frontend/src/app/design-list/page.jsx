@@ -2,13 +2,13 @@
 
 import { Suspense, useEffect, useState } from 'react'
 import { useRouter } from 'next/navigation'
-import { getSession } from '@/lib/mock-auth'
+import { getSession, getHomeRoute } from '@/lib/mock-auth'
 import { SessionBootstrapSkeleton } from '@/components/SessionBootstrapSkeleton'
 import { DesignListScreen } from '@/features/design-list/components/DesignListScreen'
 
 function DesignListPageInner() {
   const router = useRouter()
-  const [role, setRole] = useState(null)
+  const [authorized, setAuthorized] = useState(false)
 
   useEffect(() => {
     const session = getSession()
@@ -16,22 +16,14 @@ function DesignListPageInner() {
       router.replace('/login')
       return
     }
-    if (session.role === 'DESIGNER') {
-      router.replace('/design-list/tasks')
+    if (session.role !== 'HOD') {
+      router.replace(getHomeRoute(session))
       return
     }
-    if (session.role === 'QS') {
-      router.replace('/qs/projects')
-      return
-    }
-    if (session.role === 'SALESPERSON') {
-      router.replace('/sales/design-list')
-      return
-    }
-    setRole('HOD')
+    setAuthorized(true)
   }, [router])
 
-  if (role !== 'HOD') return <SessionBootstrapSkeleton label="Loading design list" />
+  if (!authorized) return <SessionBootstrapSkeleton label="Loading design list" />
 
   return <DesignListScreen />
 }
