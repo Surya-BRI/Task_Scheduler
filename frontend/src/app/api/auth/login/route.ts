@@ -38,7 +38,7 @@ export async function POST(request: NextRequest) {
   } catch {
     return NextResponse.json(
       {
-        message: `Cannot reach the API at ${loginUrl}. Start the backend and confirm NEXT_PUBLIC_API_BASE_URL / BACKEND_ORIGIN match its PORT.`,
+        message: 'Unable to connect to the server. Please check your connection and try again.',
       },
       { status: 503 },
     );

@@ -6,6 +6,7 @@ import { Eye, EyeOff, Lock, Mail, ShieldCheck } from 'lucide-react';
 import { getHomeRoute, setSession } from '@/lib/mock-auth';
 import { buildSessionForUser } from '@/lib/designers';
 import { loginApi } from '@/features/auth/services/auth.api';
+import { toUserFacingError } from '@/lib/api-error';
 
 export function LoginForm() {
   const router = useRouter();
@@ -29,7 +30,7 @@ export function LoginForm() {
       setSession(session);
       router.push(getHomeRoute(session));
     } catch (err) {
-      setError(err.message || 'Login failed. Check your credentials.');
+      setError(toUserFacingError(err, 'Login failed. Please check your credentials.'));
     } finally {
       setLoading(false);
     }

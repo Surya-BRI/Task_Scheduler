@@ -1878,7 +1878,7 @@ export function ChatterScreen() {
           ")",
         );
         toast.error(
-          "Post was saved but files were not stored. The API may be outdated — deploy the latest backend or confirm NEXT_PUBLIC_API_BASE_URL points to it.",
+          "Post was saved but files could not be stored. Please try uploading again or contact support.",
         );
         return;
       }
@@ -2018,15 +2018,7 @@ export function ChatterScreen() {
             {!postsLoading && sortedPosts.length === 0 ? (
               postsLoadError ? (
                 <div className="rounded-lg border border-slate-200 bg-slate-50 px-4 py-8 text-center text-sm text-slate-600">
-                  <p>
-                    No chatter posts loaded. Ensure the backend is running,{" "}
-                    <code className="rounded bg-slate-200 px-1">NEXT_PUBLIC_API_BASE_URL</code> points at it (not an older
-                    deploy missing <code className="rounded bg-slate-200 px-1">/chatter-posts</code>), the chatter table
-                    has rows, or check the browser network tab for errors.
-                  </p>
-                  <pre className="mt-3 max-h-48 overflow-auto text-left font-mono text-[11px] leading-snug text-red-700 whitespace-pre-wrap break-words">
-                    {postsLoadError}
-                  </pre>
+                  <p>Unable to load chatter posts right now. Please try again.</p>
                 </div>
               ) : (
                 <div className="rounded-lg border border-dashed border-slate-300 bg-white px-6 py-10 text-center text-sm text-slate-500">

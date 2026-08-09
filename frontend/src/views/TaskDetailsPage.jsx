@@ -16,6 +16,7 @@ import {
   writeTaskLifecycleSync,
 } from '../components/design-list-task-timer-storage'
 import { apiClient } from '@/lib/api-client'
+import { toUserFacingError } from '@/lib/api-error'
 import { fetchProjectActivities, fetchTaskActivities } from '@/features/team-activity/services/activities.api'
 import {
   createChatterComment,
@@ -113,7 +114,7 @@ function deriveFileNameFromUrl(value) {
 }
 
 function friendlyError(error, fallback) {
-  const msg = error instanceof Error ? error.message : String(error ?? '')
+  const msg = toUserFacingError(error, fallback)
   if (msg.includes('should not be empty') || msg.includes('must be an integer') || msg.includes('must be a number')) {
     return 'Please fill all required fields in each row before saving.'
   }
@@ -1502,7 +1503,7 @@ export function TaskDetailsPage() {
         // Reload project task list so the new DESIGN_NEW / Rn row appears beside the rejected one.
         setTaskRefreshCounter((c) => c + 1)
       } else if (newStatus === 'CLIENT_REJECTED') {
-        toast.error('Client rejected but revision task creation failed — check backend logs.')
+        toast.error('Client rejected, but creating the next revision failed. Please try again or contact support.')
         setTaskRefreshCounter((c) => c + 1)
       }
       // Hold clears scheduler rows — refresh extras only (hours / realloc), not full core.

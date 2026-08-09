@@ -9,6 +9,7 @@ import { Button } from '@/components/ui/button'
 import { Modal } from '@/components/ui/Modal'
 import { QsStatusIndicator } from '@/components/ui/QsStatusIndicator'
 import { apiClient } from '@/lib/api-client'
+import { toUserFacingError } from '@/lib/api-error'
 import { useRoleGuard } from '@/lib/use-role-guard'
 import { useDesignListStore } from '@/state/DesignListContext'
 
@@ -120,7 +121,7 @@ function DetailRow({ label, value }) {
 }
 
 function friendlyError(error, fallback) {
-  const msg = error instanceof Error ? error.message : String(error ?? '')
+  const msg = toUserFacingError(error, fallback)
   if (msg.includes('should not be empty') || msg.includes('must be an integer') || msg.includes('must be a number')) {
     return 'Please fill all required fields in each row before saving.'
   }
