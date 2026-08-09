@@ -137,10 +137,8 @@ function SchedulerRow({ day, daySlot, dayDate, onOtClick, onOpenTask }) {
     }))
     .filter((task) => task.endHr > task.startHr);
   const hasOvertimeTasks = timelineTasks.some((t) => t.isOvertime);
-  // Show weekend work when tasks exist (HOD unlocked Sat/Sun for this designer).
-  const showWeekendTasks = isWeekend && timelineTasks.length > 0;
-  const treatAsInactiveWeekend = isWeekend && !showWeekendTasks;
-  const hasOverflow = !treatAsInactiveWeekend && overflowTasks.length > 0;
+  // Sat/Sun are open working days (same as Mon–Fri); only show a small weekend label.
+  const hasOverflow = overflowTasks.length > 0;
   const rowMinHeight = hasOverflow ? 84 : 56;
 
   return (
@@ -150,17 +148,17 @@ function SchedulerRow({ day, daySlot, dayDate, onOtClick, onOpenTask }) {
     >
       {/* Day label */}
       <div
-        className={`w-[100px] shrink-0 py-1.5 px-2 flex items-center border-r border-slate-200 z-10 transition-colors group-hover:bg-slate-50 ${treatAsInactiveWeekend ? 'bg-slate-50' : 'bg-white'}`}
+        className="w-[100px] shrink-0 py-1.5 px-2 flex items-center border-r border-slate-200 z-10 transition-colors bg-white group-hover:bg-slate-50"
       >
         <div className="min-w-0">
-          <span className={`text-[11px] font-semibold truncate tracking-tight block ${treatAsInactiveWeekend ? 'text-slate-400' : 'text-slate-900'}`}>{dayLabel}</span>
+          <span className="text-[11px] font-semibold truncate tracking-tight block text-slate-900">{dayLabel}</span>
           {hasOverflow ? (
             <span className="mt-0.5 block text-[9px] font-medium text-violet-600">
               +{overflowTasks.length} reg overflow
             </span>
           ) : null}
-          {showWeekendTasks ? (
-            <span className="mt-0.5 block text-[9px] font-medium text-amber-600">Weekend</span>
+          {isWeekend ? (
+            <span className="mt-0.5 block text-[9px] font-medium text-slate-500">Weekend</span>
           ) : null}
         </div>
       </div>
@@ -168,9 +166,7 @@ function SchedulerRow({ day, daySlot, dayDate, onOtClick, onOpenTask }) {
       {/* Time grid with exact hour-based positioning */}
       <div className="flex-1 relative">
         <div
-          className={`h-full grid relative ${
-            treatAsInactiveWeekend ? "bg-slate-100" : "bg-white group-hover:bg-blue-50/20"
-          }`}
+          className="h-full grid relative bg-white group-hover:bg-blue-50/20"
           style={{ gridTemplateColumns: `repeat(${TOTAL_COLS}, minmax(0, 1fr))` }}
         >
           {Array.from({ length: TOTAL_COLS }).map((_, index) => {
@@ -180,21 +176,19 @@ function SchedulerRow({ day, daySlot, dayDate, onOtClick, onOpenTask }) {
               <div
                 key={`${day}-cell-${index}`}
                 className={`border-r border-slate-100 ${
-                  treatAsInactiveWeekend
-                    ? "bg-slate-100 border-slate-200"
-                    : isOutsideAssigned
-                      ? isOvertime
-                        ? "bg-red-50/25"
-                        : "bg-slate-50"
-                      : isOvertime
-                        ? "bg-red-50/40"
-                        : "bg-white"
+                  isOutsideAssigned
+                    ? isOvertime
+                      ? "bg-red-50/25"
+                      : "bg-slate-50"
+                    : isOvertime
+                      ? "bg-red-50/40"
+                      : "bg-white"
                 }`}
               />
             );
           })}
 
-          {!treatAsInactiveWeekend && hasOvertimeTasks && (
+          {hasOvertimeTasks && (
             <div
               className="absolute top-0 bottom-0 z-20 pointer-events-none flex flex-col items-center"
               style={{ left: `${(NORMAL_COL_COUNT / TOTAL_COLS) * 100}%` }}
@@ -203,8 +197,7 @@ function SchedulerRow({ day, daySlot, dayDate, onOtClick, onOpenTask }) {
               <span className="absolute top-1 text-[7px] font-bold text-red-500 bg-white/90 px-0.5 rounded leading-none whitespace-nowrap -translate-x-1/2">OVERTIME</span>
             </div>
           )}
-          {!treatAsInactiveWeekend && (
-            <div
+          <div
               className={`absolute inset-x-0 pointer-events-none ${hasOverflow ? "top-1 h-[28px]" : "inset-y-1"}`}
             >
               {timelineTasks.map((task, index) => {
@@ -221,7 +214,6 @@ function SchedulerRow({ day, daySlot, dayDate, onOtClick, onOpenTask }) {
                 );
               })}
             </div>
-          )}
           {hasOverflow && (
             <div className="absolute inset-x-0 bottom-1 h-[28px] pointer-events-none border-t border-dashed border-violet-200/80">
               <span className="absolute left-1 top-0 text-[7px] font-bold uppercase tracking-wide text-violet-500 leading-none">
@@ -275,7 +267,6 @@ function SchedulerGridSkeleton({ weekDates = [], visibleDays }) {
       {visibleDays.map((dayIndex) => {
         const day = DAYS[dayIndex];
         if (!day) return null;
-        const isWeekend = dayIndex >= 5;
         const dayDate = weekDates[dayIndex];
         const dayLabel = dayDate
           ? `${dayDate.toLocaleDateString("en-US", { weekday: "short" })} ${dayDate.getDate()}`
@@ -287,40 +278,32 @@ function SchedulerGridSkeleton({ weekDates = [], visibleDays }) {
             className="flex border-b border-slate-100 items-stretch animate-pulse"
             style={{ minHeight: 56 }}
           >
-            <div
-              className={`w-[100px] shrink-0 py-1.5 px-2 flex items-center border-r border-slate-200 ${isWeekend ? "bg-slate-50" : "bg-white"}`}
-            >
-              <span className={`text-[11px] font-semibold tracking-tight ${isWeekend ? "text-slate-400" : "text-slate-900"}`}>
+            <div className="w-[100px] shrink-0 py-1.5 px-2 flex items-center border-r border-slate-200 bg-white">
+              <span className="text-[11px] font-semibold tracking-tight text-slate-900">
                 {dayLabel}
               </span>
             </div>
             <div
-              className={`flex-1 relative grid ${isWeekend ? "bg-slate-100" : "bg-white"}`}
+              className="flex-1 relative grid bg-white"
               style={{ gridTemplateColumns: `repeat(${TOTAL_COLS}, minmax(0, 1fr))` }}
             >
               {Array.from({ length: TOTAL_COLS }).map((_, index) => (
                 <div
                   key={`sk-cell-${day}-${index}`}
                   className={`border-r border-slate-100 ${
-                    isWeekend
-                      ? "bg-slate-100 border-slate-200"
-                      : index >= NORMAL_COL_COUNT
-                        ? "bg-red-50/40"
-                        : "bg-white"
+                    index >= NORMAL_COL_COUNT ? "bg-red-50/40" : "bg-white"
                   }`}
                 />
               ))}
-              {!isWeekend && (
-                <div className="absolute inset-y-1 inset-x-2 flex items-center gap-2 pointer-events-none">
-                  {barWidths.map((width, i) => (
-                    <div
-                      key={`sk-bar-${day}-${i}`}
-                      className="h-5 rounded bg-slate-200/90"
-                      style={{ width }}
-                    />
-                  ))}
-                </div>
-              )}
+              <div className="absolute inset-y-1 inset-x-2 flex items-center gap-2 pointer-events-none">
+                {barWidths.map((width, i) => (
+                  <div
+                    key={`sk-bar-${day}-${i}`}
+                    className="h-5 rounded bg-slate-200/90"
+                    style={{ width }}
+                  />
+                ))}
+              </div>
             </div>
           </div>
         );

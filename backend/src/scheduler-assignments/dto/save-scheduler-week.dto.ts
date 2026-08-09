@@ -58,7 +58,7 @@ export class SchedulerAssignmentInputDto {
 /**
  * Hours that didn't fit anywhere in the week being saved — e.g. a task dropped on a designer's
  * Friday whose remaining capacity is less than the task's hours. The server finds the next
- * available working day (skipping weekends/holidays/full-day leave, possibly in a later week)
+ * available working day (skipping holidays/full-day leave/designer weekend day-locks; weekends are otherwise open)
  * and creates the SchedulerAssignment row(s) itself, atomically with the rest of this save —
  * no client-side carry-forward, no dependency on the destination week ever being loaded.
  */

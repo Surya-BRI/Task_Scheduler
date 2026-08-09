@@ -1,4 +1,6 @@
--- Creates ErpTSSchedulerDayUnlock for HOD per-designer weekend (Sat/Sun) unlocks.
+-- Creates ErpTSSchedulerDayUnlock for HOD per-designer weekend (Sat/Sun) day-locks.
+-- Semantics (2026-08 invert): a row means the weekend day is LOCKED/skipped.
+-- Weekends are open by default like weekdays; HOD locks optionally via day-locks API.
 -- Safe to run multiple times (IF NOT EXISTS guard).
 -- Run with: npx prisma db execute --file prisma/sql/create-scheduler-day-unlock.sql --schema prisma/schema.prisma
 

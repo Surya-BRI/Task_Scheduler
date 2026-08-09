@@ -1,6 +1,7 @@
 import { Injectable, NotFoundException } from '@nestjs/common';
 import { randomUUID } from 'crypto';
 import { PrismaService } from '../prisma/prisma.service';
+import { startOfBusinessDayUtc } from '../common/utils/date-window.util';
 
 @Injectable()
 export class NotificationsService {
@@ -62,11 +63,9 @@ export class NotificationsService {
     return this.prisma.notification.create({ data: { id: randomUUID(), ...data } });
   }
 
-  // Returns true if the same userId+title+linkUrl notification was already sent today (UTC midnight reset —
-  // createdAt is stored/compared in UTC throughout this codebase, so the boundary must match).
+  /** True if the same userId+title+linkUrl was already sent since 00:00 GST (Asia/Dubai). */
   async existsToday(userId: string, title: string, linkUrl: string): Promise<boolean> {
-    const startOfDay = new Date();
-    startOfDay.setUTCHours(0, 0, 0, 0);
+    const startOfDay = startOfBusinessDayUtc();
     const count = await this.prisma.notification.count({
       where: { userId, title, linkUrl, createdAt: { gte: startOfDay } },
     });

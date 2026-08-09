@@ -27,7 +27,7 @@ import { CurrentUser } from '../common/decorators/current-user.decorator';
 import type { JwtPayload } from '../common/types/jwt-payload.type';
 import { Throttle } from '@nestjs/throttler';
 import { resolveDesignerScope } from '../common/utils/resolve-designer-scope.util';
-import { hasDepartmentManagerAccess } from '../common/utils/workflow-roles.util';
+import { hasHrApproverAccess } from '../common/utils/workflow-roles.util';
 
 @Controller('overtime-requests')
 @UseGuards(JwtAuthGuard, RolesGuard)
@@ -37,7 +37,7 @@ export class OvertimeRequestsController {
   // --- Employee (DESIGNER) APIs ---
 
   @Post()
-  @Roles(UserRole.DESIGNER, UserRole.HOD, UserRole.SALESPERSON)
+  @Roles(UserRole.DESIGNER, UserRole.HOD)
   @Throttle({ default: { limit: 10, ttl: 60_000 } })
   @UseInterceptors(
     FileInterceptor('file', {
@@ -59,7 +59,7 @@ export class OvertimeRequestsController {
   }
 
   @Put(':id')
-  @Roles(UserRole.DESIGNER, UserRole.HOD, UserRole.SALESPERSON)
+  @Roles(UserRole.DESIGNER, UserRole.HOD)
   @Throttle({ default: { limit: 10, ttl: 60_000 } })
   @UseInterceptors(
     FileInterceptor('file', {
@@ -82,28 +82,28 @@ export class OvertimeRequestsController {
   }
 
   @Post(':id/submit')
-  @Roles(UserRole.DESIGNER, UserRole.HOD, UserRole.SALESPERSON)
+  @Roles(UserRole.DESIGNER, UserRole.HOD)
   submit(@Param('id') id: string, @CurrentUser() user: JwtPayload) {
     const userId = user.sub;
     return this.service.submit(id, userId);
   }
 
   @Post(':id/withdraw')
-  @Roles(UserRole.DESIGNER, UserRole.HOD, UserRole.SALESPERSON)
+  @Roles(UserRole.DESIGNER, UserRole.HOD)
   withdraw(@Param('id') id: string, @CurrentUser() user: JwtPayload) {
     const userId = user.sub;
     return this.service.withdraw(id, userId);
   }
 
   @Delete(':id')
-  @Roles(UserRole.DESIGNER, UserRole.HOD, UserRole.SALESPERSON)
+  @Roles(UserRole.DESIGNER, UserRole.HOD)
   delete(@Param('id') id: string, @CurrentUser() user: JwtPayload) {
     const userId = user.sub;
     return this.service.delete(id, userId);
   }
 
   @Get('my-requests')
-  @Roles(UserRole.DESIGNER, UserRole.HOD, UserRole.SALESPERSON)
+  @Roles(UserRole.DESIGNER, UserRole.HOD)
   findOwnRequests(
     @CurrentUser() user: JwtPayload,
     @Query('status') status?: string,
@@ -115,7 +115,7 @@ export class OvertimeRequestsController {
   }
 
   @Post(':id/attachment')
-  @Roles(UserRole.DESIGNER, UserRole.HOD, UserRole.SALESPERSON)
+  @Roles(UserRole.DESIGNER, UserRole.HOD)
   @Throttle({ default: { limit: 10, ttl: 60_000 } })
   @UseInterceptors(
     FileInterceptor('file', {
@@ -136,14 +136,14 @@ export class OvertimeRequestsController {
   // --- Manager (HOD) APIs ---
 
   @Get('pending-approvals')
-  @Roles(UserRole.HOD, UserRole.SALESPERSON)
+  @Roles(UserRole.HOD)
   findPendingApprovals(@CurrentUser() user: JwtPayload) {
     const userId = user.sub;
     return this.service.findPendingApprovalsForView(userId, user.role);
   }
 
   @Post(':id/review')
-  @Roles(UserRole.HOD, UserRole.SALESPERSON)
+  @Roles(UserRole.HOD)
   review(
     @Param('id') id: string,
     @CurrentUser() user: JwtPayload,
@@ -154,7 +154,7 @@ export class OvertimeRequestsController {
   }
 
   @Get('team-requests')
-  @Roles(UserRole.HOD, UserRole.SALESPERSON)
+  @Roles(UserRole.HOD)
   findTeamRequests(
     @CurrentUser() user: JwtPayload,
     @Query('status') status?: string,
@@ -167,7 +167,7 @@ export class OvertimeRequestsController {
   // --- HR/Admin APIs ---
 
   @Get('all')
-  @Roles(UserRole.HOD, UserRole.SALESPERSON)
+  @Roles(UserRole.HOD)
   findAllRequests(
     @Query('status') status?: string,
     @Query('designerId') designerId?: string,
@@ -181,13 +181,13 @@ export class OvertimeRequestsController {
   }
 
   @Get('statistics')
-  @Roles(UserRole.HOD, UserRole.SALESPERSON)
+  @Roles(UserRole.HOD)
   getStatistics() {
     return this.service.getStatistics();
   }
 
   @Get('export')
-  @Roles(UserRole.HOD, UserRole.SALESPERSON)
+  @Roles(UserRole.HOD)
   exportReport(@Query('status') status?: string) {
     return this.service.exportReport(status);
   }
@@ -195,7 +195,7 @@ export class OvertimeRequestsController {
   // --- Common APIs ---
 
   @Get('task-options')
-  @Roles(UserRole.DESIGNER, UserRole.HOD, UserRole.SALESPERSON)
+  @Roles(UserRole.DESIGNER, UserRole.HOD)
   listTaskOptions(
     @Query('designerId') designerIdParam: string | undefined,
     @Query('date') date: string | undefined,
@@ -203,7 +203,7 @@ export class OvertimeRequestsController {
   ) {
     const designerId = (designerIdParam ?? user.sub ?? '').trim();
     if (!designerId) return [];
-    if (!hasDepartmentManagerAccess(user.role) && designerId !== user.sub) {
+    if (!hasHrApproverAccess(user.role) && designerId !== user.sub) {
       throw new ForbiddenException('You can only view your own overtime task options.');
     }
     return this.service.listTaskOptions(designerId, date ?? '');
@@ -211,7 +211,7 @@ export class OvertimeRequestsController {
 
   /** GET /overtime-requests?designerId= — list for designer requests page */
   @Get()
-  @Roles(UserRole.DESIGNER, UserRole.HOD, UserRole.SALESPERSON)
+  @Roles(UserRole.DESIGNER, UserRole.HOD)
   findForDesigner(
     @Query('designerId') designerId?: string,
     @CurrentUser() user?: JwtPayload,
@@ -223,7 +223,7 @@ export class OvertimeRequestsController {
   }
 
   @Get(':id')
-  @Roles(UserRole.DESIGNER, UserRole.HOD, UserRole.SALESPERSON)
+  @Roles(UserRole.DESIGNER, UserRole.HOD)
   findOne(@Param('id') id: string, @CurrentUser() user: JwtPayload) {
     const userId = user.sub;
     return this.service.findOne(id, userId, user.role);

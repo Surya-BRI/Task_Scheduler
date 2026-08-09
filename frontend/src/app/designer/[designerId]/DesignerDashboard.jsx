@@ -464,7 +464,7 @@ export default function DesignerDashboard({ designer: designerProp } = {}) {
     };
   }, [designer.id, fetchWeekAssignments, refreshAssigneeTaskStats]);
 
-  // Work Till = last weekday with scheduled work in the viewed week + that day's hours,
+  // Work Till = last working day (Mon–Sun) with scheduled work in the viewed week + that day's hours,
   // straight from the scheduler assignments (not task due dates).
   const workTillFromSchedule = useMemo(() => {
     if (!dynamicStats || dynamicStats.lastWorkDayIndex == null) return null;

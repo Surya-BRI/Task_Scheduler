@@ -19,7 +19,7 @@ import {
 } from 'lucide-react';
 import { Navbar } from '@/components/Navbar';
 import { getSession } from '@/lib/mock-auth';
-import { hasDepartmentManagerAccess } from '@/lib/workflow-roles';
+import { hasHrApproverAccess } from '@/lib/workflow-roles';
 import { getProjectsOverview } from '../services/projects-overview.api';
 import { reviewLeaveRequest } from '@/features/requests/services/requests.api';
 import { reviewOvertimeRequest } from '@/features/requests/services/overtime-requests.api';
@@ -564,7 +564,7 @@ export function ProjectsOverviewScreen() {
 
   const weekStart = useMemo(() => getUtcMondayOfDate(currentDate), [currentDate]);
   const weekLabel = useMemo(() => formatUtcWeekLabel(weekStart), [weekStart]);
-  const isHOD = hasDepartmentManagerAccess(session?.role);
+  const isHOD = hasHrApproverAccess(session?.role);
 
   useEffect(() => {
     setSession(getSession());

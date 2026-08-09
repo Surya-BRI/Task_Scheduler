@@ -10,8 +10,8 @@ import { SaveSchedulerWeekDto } from './dto/save-scheduler-week.dto';
 import { UpdateOvertimeSchedulerActionDto } from './dto/update-overtime-scheduler-action.dto';
 import { DetachAssignmentPartDto } from './dto/detach-assignment-part.dto';
 import {
-  CreateSchedulerDayUnlockDto,
-  DeleteSchedulerDayUnlockDto,
+  CreateSchedulerDayLockDto,
+  DeleteSchedulerDayLockDto,
 } from './dto/scheduler-day-unlock.dto';
 import { resolveDesignerScope } from '../common/utils/resolve-designer-scope.util';
 import { hasDepartmentManagerAccess } from '../common/utils/workflow-roles.util';
@@ -30,7 +30,7 @@ export class SchedulerAssignmentsController {
   ) {
     const ws = weekStart?.trim() ?? '';
     if (!ws) {
-      return { assignments: [], dayUnlocks: [] };
+      return { assignments: [], dayLocks: [], dayLockKeys: [], dayUnlocks: [], dayUnlockKeys: [] };
     }
     const trimmedDesignerId = designerId?.trim();
     // resolveDesignerScope defaults to the caller's own id whenever no designerId is passed —
@@ -62,16 +62,18 @@ export class SchedulerAssignmentsController {
     return this.schedulerAssignmentsService.getDesignerStats(scopedDesignerId, ws);
   }
 
-  @Post('day-unlocks')
+  /** Lock a weekend day for a designer (skipped by packing like a holiday). */
+  @Post('day-locks')
   @Roles(UserRole.HOD)
-  createDayUnlock(@CurrentUser() user: JwtPayload, @Body() dto: CreateSchedulerDayUnlockDto) {
-    return this.schedulerAssignmentsService.createDayUnlock(user.sub, dto);
+  createDayLock(@CurrentUser() user: JwtPayload, @Body() dto: CreateSchedulerDayLockDto) {
+    return this.schedulerAssignmentsService.createDayLock(user.sub, dto);
   }
 
-  @Delete('day-unlocks')
+  /** Remove a weekend day lock (day becomes open again). */
+  @Delete('day-locks')
   @Roles(UserRole.HOD)
-  deleteDayUnlock(@CurrentUser() user: JwtPayload, @Body() dto: DeleteSchedulerDayUnlockDto) {
-    return this.schedulerAssignmentsService.deleteDayUnlock(user.sub, dto);
+  deleteDayLock(@CurrentUser() user: JwtPayload, @Body() dto: DeleteSchedulerDayLockDto) {
+    return this.schedulerAssignmentsService.deleteDayLock(user.sub, dto);
   }
 
   @Get('week/:weekStart/meta')

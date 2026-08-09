@@ -231,13 +231,11 @@ export const buildDesignerSnapshot = (tasksMap, designerScheduleByDayIndex = {})
     dayTaskRecordIds[dayName] = recordIdsForDay;
     const daySlot = buildDaySlot(taskIds, tasksMap);
     schedule[dayName] = daySlot;
-    if (dayIndex <= 4) {
-      // Same total as week workload / HOD day sum (regular + OT + leave/reg) — not the 12h visual cap.
-      const dayTotalHours = sumSlotTotalHours(tasksMap, taskIds);
-      if (dayTotalHours > 0) {
-        lastWorkDayIndex = dayIndex;
-        lastWorkDayHours = dayTotalHours;
-      }
+    // Mon–Sun (weekends count like weekdays when scheduled).
+    const dayTotalHours = sumSlotTotalHours(tasksMap, taskIds);
+    if (dayTotalHours > 0) {
+      lastWorkDayIndex = dayIndex;
+      lastWorkDayHours = dayTotalHours;
     }
     for (const recordId of daySlot.rawRecordIds || []) {
       if (!recordId || seenAssignedRecordIds.has(recordId)) continue;
@@ -253,7 +251,7 @@ export const buildDesignerSnapshot = (tasksMap, designerScheduleByDayIndex = {})
     stats: {
       tasks: countDesignerWeekSlots(designerScheduleByDayIndex),
       hours: sumDesignerWeekWorkload(tasksMap, designerScheduleByDayIndex),
-      // Last weekday (0=Mon..4=Fri) with scheduled work this week, and that day's hours.
+      // Last working day (0=Mon..6=Sun) with scheduled work this week, and that day's hours.
       lastWorkDayIndex,
       lastWorkDayHours,
     },

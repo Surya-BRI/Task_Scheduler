@@ -13,7 +13,7 @@ import { PrismaService } from '../prisma/prisma.service';
 import { ActivityLoggerService } from '../activities/activity-logger.service';
 import { ActivityAction } from '../activities/activity-events';
 import { UserRole } from '../common/constants/roles.enum';
-import { hasDepartmentManagerAccess } from '../common/utils/workflow-roles.util';
+import { hasHrApproverAccess } from '../common/utils/workflow-roles.util';
 import { shouldRunRuntimeSchemaBootstrap } from '../common/utils/runtime-schema-bootstrap.util';
 import { assertValidLeaveReason } from '../common/constants/leave-reasons';
 import { CreateLeaveRequestDto } from './dto/create-request.dto';
@@ -373,7 +373,7 @@ export class RequestsService implements OnModuleInit {
     return this.prisma.user.findMany({
       where: {
         departmentId: departmentId.trim(),
-        role: { name: { in: [UserRole.HOD, UserRole.SALESPERSON] } },
+        role: { name: UserRole.HOD },
       },
       select: { id: true, fullName: true },
     });
@@ -387,7 +387,7 @@ export class RequestsService implements OnModuleInit {
     let targets = await this.findDepartmentHods(departmentId);
     if (targets.length === 0) {
       targets = await this.prisma.user.findMany({
-        where: { role: { name: { in: [UserRole.HOD, UserRole.SALESPERSON] } } },
+        where: { role: { name: UserRole.HOD } },
         select: { id: true, fullName: true },
         take: 1,
       });
@@ -418,7 +418,7 @@ export class RequestsService implements OnModuleInit {
     let targets = await this.findDepartmentHods(requester?.departmentId);
     if (targets.length === 0) {
       targets = await this.prisma.user.findMany({
-        where: { role: { name: { in: [UserRole.HOD, UserRole.SALESPERSON] } } },
+        where: { role: { name: UserRole.HOD } },
         select: { id: true, fullName: true },
       });
     }
@@ -456,7 +456,7 @@ export class RequestsService implements OnModuleInit {
     let targets = await this.findDepartmentHods(requester?.departmentId);
     if (targets.length === 0) {
       targets = await this.prisma.user.findMany({
-        where: { role: { name: { in: [UserRole.HOD, UserRole.SALESPERSON] } } },
+        where: { role: { name: UserRole.HOD } },
         select: { id: true, fullName: true },
       });
     }
@@ -535,7 +535,7 @@ export class RequestsService implements OnModuleInit {
   }
 
   private assertCreateAccess(submitterId: string, role: UserRole, targetUserId: string) {
-    if (hasDepartmentManagerAccess(role)) {
+    if (hasHrApproverAccess(role)) {
       return;
     }
     if (role !== UserRole.DESIGNER) {
@@ -557,7 +557,7 @@ export class RequestsService implements OnModuleInit {
 
     const requesterRole = request.user.role.name;
 
-    if (!hasDepartmentManagerAccess(role)) {
+    if (!hasHrApproverAccess(role)) {
       throw new ForbiddenException('Only department managers can review leave requests');
     }
 
@@ -584,7 +584,7 @@ export class RequestsService implements OnModuleInit {
     role: UserRole,
     request: { userId: string; user: { role: { name: string }; departmentId: string | null } },
   ) {
-    if (!hasDepartmentManagerAccess(role)) {
+    if (!hasHrApproverAccess(role)) {
       throw new ForbiddenException('Only HOD can revoke leave requests');
     }
     if (revokerId === request.userId) {
@@ -606,7 +606,7 @@ export class RequestsService implements OnModuleInit {
     if (role === UserRole.DESIGNER && resolvedId !== requesterId) {
       throw new ForbiddenException('You can only view your own leave requests');
     }
-    if (hasDepartmentManagerAccess(role) && userId && resolvedId !== requesterId) {
+    if (hasHrApproverAccess(role) && userId && resolvedId !== requesterId) {
       const target = await this.prisma.user.findUnique({
         where: { id: resolvedId },
         select: { role: { select: { name: true } } },
@@ -626,7 +626,7 @@ export class RequestsService implements OnModuleInit {
   }
 
   async findPendingApprovals(reviewerId: string, role: UserRole): Promise<LeaveRequestView[]> {
-    if (!hasDepartmentManagerAccess(role)) {
+    if (!hasHrApproverAccess(role)) {
       throw new ForbiddenException('Only HOD can view pending leave approvals');
     }
 
@@ -657,7 +657,7 @@ export class RequestsService implements OnModuleInit {
     role: UserRole,
     filters?: { status?: string; designerId?: string; from?: string; to?: string },
   ): Promise<LeaveRequestView[]> {
-    if (!hasDepartmentManagerAccess(role)) {
+    if (!hasHrApproverAccess(role)) {
       throw new ForbiddenException('Only HOD can view team leave requests');
     }
 
@@ -722,7 +722,7 @@ export class RequestsService implements OnModuleInit {
       throw new BadRequestException('A valid user id is required to submit a leave request');
     }
 
-    if (hasDepartmentManagerAccess(role) && resolvedId !== submitterId) {
+    if (hasHrApproverAccess(role) && resolvedId !== submitterId) {
       if (requester.role.name !== UserRole.DESIGNER) {
         throw new ForbiddenException('HOD can only apply leave on behalf of designers');
       }
@@ -743,7 +743,7 @@ export class RequestsService implements OnModuleInit {
     const halfDaySession = this.resolveHalfDaySessionOrThrow(type, dto.halfDaySession);
     await this.assertNoOverlappingLeave(resolvedId, range, type, halfDaySession);
 
-    const hodAutoApprove = hasDepartmentManagerAccess(role);
+    const hodAutoApprove = hasHrApproverAccess(role);
     const status = hodAutoApprove ? 'Approved' : 'Pending';
     const reviewedAt = hodAutoApprove ? new Date() : undefined;
 

@@ -22,6 +22,10 @@ describe('scheduler-task-summary.util', () => {
       name: 'Retail rollout',
       projectNo: 'P-100',
       category: 'Retail',
+      technicalHead: 'Alex Johnson',
+      teamLead: null,
+      subTeamLead: null,
+      designers: 'Sam Lee, Pat Kim',
     },
     taskDesigners: [],
     retailDetails: [{ hoursRequired: 6 }],
@@ -39,13 +43,13 @@ describe('scheduler-task-summary.util', () => {
       project: expect.objectContaining({
         projectNo: 'P-100',
         category: 'Retail',
+        technicalHead: 'Alex Johnson',
+        designers: 'Sam Lee, Pat Kim',
       }),
     });
     expect(mapped).not.toHaveProperty('signType');
     expect(mapped).not.toHaveProperty('revisionCode');
     expect(mapped).not.toHaveProperty('phase');
-    expect(mapped.project).not.toHaveProperty('technicalHead');
-    expect(mapped.project).not.toHaveProperty('teamLead');
   });
 
   it('computes estimated hours from project detail lines when retail hours are absent', () => {

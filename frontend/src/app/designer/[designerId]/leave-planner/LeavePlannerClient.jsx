@@ -974,9 +974,6 @@ export default function LeavePlannerClient() {
     if (day > DAYS_IN_MONTH[monthIndex]) return "bg-slate-100/50 pointer-events-none";
 
     const dateStr = `${YEAR}-${String(monthIndex + 1).padStart(2, '0')}-${String(day).padStart(2, '0')}`;
-    const dateObj = new Date(YEAR, monthIndex, day);
-    const dayOfWeek = dateObj.getDay();
-    const isWeekend = dayOfWeek === 0 || dayOfWeek === 6;
     const isPast = !canReview && isPastDateOnly(dateStr, todayStr);
 
     const dayLeaves = getLeavesOnDate(dateStr);
@@ -991,8 +988,7 @@ export default function LeavePlannerClient() {
       return "bg-slate-100/80 pointer-events-none opacity-60";
     }
 
-    if (isWeekend) return "bg-slate-50 cursor-pointer hover:bg-slate-100 transition-colors";
-
+    // Sat/Sun are open working days — same cell styling as Mon–Fri.
     return "bg-white cursor-pointer hover:bg-slate-50 transition-colors";
   };
 
@@ -1144,10 +1140,6 @@ export default function LeavePlannerClient() {
 
           {/* Legend */}
           <div className="flex flex-wrap gap-6 text-sm font-medium text-slate-600 bg-white py-3 px-5 rounded-lg border border-slate-200 shadow-sm">
-            <div className="flex items-center gap-2.5">
-              <div className="w-4 h-4 bg-slate-50 border border-slate-200 rounded shadow-sm"></div>
-              <span>Weekend</span>
-            </div>
             <div className="flex items-center gap-2.5">
               <div className="w-4 h-4 bg-amber-300/80 border border-amber-200 rounded shadow-sm"></div>
               <span>{calendarScope === "team" ? "Pending" : "My pending"}</span>

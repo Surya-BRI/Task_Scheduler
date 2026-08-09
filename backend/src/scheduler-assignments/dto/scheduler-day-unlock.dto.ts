@@ -1,6 +1,7 @@
 import { IsDateString, IsOptional, IsString, IsUUID, MaxLength } from 'class-validator';
 
-export class CreateSchedulerDayUnlockDto {
+/** Lock a weekend day for a designer (row in ErpTSSchedulerDayUnlock = skip that day). */
+export class CreateSchedulerDayLockDto {
   @IsUUID()
   designerId!: string;
 
@@ -14,10 +15,17 @@ export class CreateSchedulerDayUnlockDto {
   reason?: string;
 }
 
-export class DeleteSchedulerDayUnlockDto {
+/** Remove a weekend day lock (day becomes open again). */
+export class DeleteSchedulerDayLockDto {
   @IsUUID()
   designerId!: string;
 
   @IsDateString()
   date!: string;
 }
+
+/** @deprecated Use CreateSchedulerDayLockDto */
+export class CreateSchedulerDayUnlockDto extends CreateSchedulerDayLockDto {}
+
+/** @deprecated Use DeleteSchedulerDayLockDto */
+export class DeleteSchedulerDayUnlockDto extends DeleteSchedulerDayLockDto {}

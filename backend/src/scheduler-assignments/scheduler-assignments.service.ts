@@ -147,21 +147,28 @@ type SchedulerWeekMetaDto = {
   isLocked: boolean;
   updatedAt: string;
   updatedBy: string | null;
-  /** Sorted `designerId|YYYY-MM-DD` keys — used by clients to sync weekend unlocks without a full week reload. */
+  /** Sorted `designerId|YYYY-MM-DD` keys — weekend days locked (skipped) for that designer. */
+  dayLockKeys: string[];
+  /** @deprecated Alias of dayLockKeys for older clients. */
   dayUnlockKeys: string[];
 };
 
-type SchedulerDayUnlockDto = {
+type SchedulerDayLockDto = {
   id: string;
   designerId: string;
   date: string;
-  unlockedById: string;
+  lockedById: string;
   reason: string | null;
   createdAt: string;
 };
 
+/** @deprecated Alias of SchedulerDayLockDto */
+type SchedulerDayUnlockDto = SchedulerDayLockDto & { unlockedById: string };
+
 type SchedulerWeekPayloadDto = {
   assignments: SchedulerAssignmentDto[];
+  dayLocks: SchedulerDayLockDto[];
+  /** @deprecated Alias of dayLocks */
   dayUnlocks: SchedulerDayUnlockDto[];
   /** Included so week bootstrap needs only one GET (meta poll still uses /meta). */
   weekStart: string;
@@ -169,7 +176,9 @@ type SchedulerWeekPayloadDto = {
   isLocked: boolean;
   updatedAt: string;
   updatedBy: string | null;
-  /** Sorted `designerId|YYYY-MM-DD` keys — prefer over full dayUnlocks for sync. */
+  /** Sorted `designerId|YYYY-MM-DD` keys — prefer over full dayLocks for sync. */
+  dayLockKeys: string[];
+  /** @deprecated Alias of dayLockKeys */
   dayUnlockKeys: string[];
 };
 
@@ -392,6 +401,40 @@ export class SchedulerAssignmentsService implements OnModuleInit {
     return day === 0 || day === 6;
   }
 
+  /**
+   * Day is unavailable for auto-packing / capacity when it is a holiday, a designer
+   * weekend day-lock, or full-day leave. Weekends are otherwise open like weekdays.
+   */
+  private blockedHoursForDesignerDay(
+    date: Date,
+    designerId: string,
+    opts: {
+      holidayKeys: Set<string>;
+      lockedKeys: Set<string>;
+      leaveHours?: number;
+    },
+  ): number {
+    const key = this.dateKey(date);
+    if (opts.holidayKeys.has(key)) return DAILY_CAPACITY;
+    if (opts.lockedKeys.has(this.dayLockKey(designerId, key))) return DAILY_CAPACITY;
+    const leaveHours = opts.leaveHours ?? 0;
+    return Math.min(DAILY_CAPACITY, leaveHours);
+  }
+
+  private availableCapacityForDesignerDay(
+    date: Date,
+    designerId: string,
+    opts: {
+      holidayKeys: Set<string>;
+      lockedKeys: Set<string>;
+      leaveHours?: number;
+    },
+  ): number {
+    const blocked = this.blockedHoursForDesignerDay(date, designerId, opts);
+    if (blocked >= DAILY_CAPACITY) return 0;
+    return Math.max(0, DAILY_CAPACITY - blocked);
+  }
+
   private assignmentDate(row: { weekStartDate: Date | null; dayIndex: number | null }): Date | null {
     if (!row.weekStartDate || row.dayIndex == null) return null;
     return this.dateForDayIndex(new Date(row.weekStartDate), Number(row.dayIndex));
@@ -421,11 +464,12 @@ export class SchedulerAssignmentsService implements OnModuleInit {
     return new Set(rows.map((row) => this.dateKey(new Date(row.date))));
   }
 
-  private async loadDayUnlocksForRange(
+  /** Load weekend day-locks (ErpTSSchedulerDayUnlock rows = locked/skip). */
+  private async loadDayLocksForRange(
     start: Date,
     end: Date,
     designerId?: string,
-  ): Promise<SchedulerDayUnlockDto[]> {
+  ): Promise<SchedulerDayLockDto[]> {
     try {
       const rows = designerId
         ? await this.prisma.$queryRaw<
@@ -467,7 +511,7 @@ export class SchedulerAssignmentsService implements OnModuleInit {
             id: String(row.id ?? ''),
             designerId: String(row.designerId),
             date: Number.isNaN(date.getTime()) ? '' : this.dateKey(date),
-            unlockedById: String(row.unlockedById ?? ''),
+            lockedById: String(row.unlockedById ?? ''),
             reason: row.reason ?? null,
             createdAt: Number.isNaN(createdAt.getTime()) ? new Date(0).toISOString() : this.toIso(createdAt),
           };
@@ -475,32 +519,47 @@ export class SchedulerAssignmentsService implements OnModuleInit {
         .filter((row) => row.date.length > 0);
     } catch (err) {
       const detail = err instanceof Error ? err.message : String(err);
-      this.logger.warn(`Could not load scheduler day unlocks: ${detail}`);
+      this.logger.warn(`Could not load scheduler day locks: ${detail}`);
       return [];
     }
   }
 
-  private dayUnlockKey(designerId: string, date: Date | string): string {
+  /** @deprecated Use loadDayLocksForRange */
+  private loadDayUnlocksForRange(start: Date, end: Date, designerId?: string) {
+    return this.loadDayLocksForRange(start, end, designerId);
+  }
+
+  private dayLockKey(designerId: string, date: Date | string): string {
     const key = typeof date === 'string' ? date : this.dateKey(date);
     return `${designerId}|${key}`;
   }
 
+  /** @deprecated Use dayLockKey */
+  private dayUnlockKey(designerId: string, date: Date | string): string {
+    return this.dayLockKey(designerId, date);
+  }
+
+  private toDayUnlockAlias(lock: SchedulerDayLockDto): SchedulerDayUnlockDto {
+    return { ...lock, unlockedById: lock.lockedById };
+  }
+
   private assertWeekendDate(date: Date): void {
     if (!this.isWeekend(date)) {
-      throw new BadRequestException('Day unlocks are only allowed for Saturday or Sunday.');
+      throw new BadRequestException('Day locks are only allowed for Saturday or Sunday.');
     }
   }
 
-  private validateWeekendUnlocks(
+  /** Reject assignments on weekend days that have an explicit designer day-lock. */
+  private validateWeekendLocks(
     assignments: SaveSchedulerWeekDto['assignments'],
     weekStartDate: Date,
-    unlockedKeys: Set<string>,
+    lockedKeys: Set<string>,
   ) {
     for (const row of assignments) {
       if (row.dayIndex < 5) continue;
       const date = this.dateForDayIndex(weekStartDate, row.dayIndex);
-      const key = this.dayUnlockKey(row.designerId, date);
-      if (!unlockedKeys.has(key)) {
+      const key = this.dayLockKey(row.designerId, date);
+      if (lockedKeys.has(key)) {
         throw new BadRequestException(
           `Weekend ${this.dateKey(date)} is locked for this designer. Unlock the day before scheduling.`,
         );
@@ -508,10 +567,10 @@ export class SchedulerAssignmentsService implements OnModuleInit {
     }
   }
 
-  async createDayUnlock(
+  async createDayLock(
     userId: string,
     input: { designerId: string; date: string; reason?: string },
-  ): Promise<SchedulerDayUnlockDto> {
+  ): Promise<SchedulerDayLockDto> {
     if (!this.isUuid(input.designerId)) {
       throw new BadRequestException('Invalid designerId.');
     }
@@ -535,6 +594,19 @@ export class SchedulerAssignmentsService implements OnModuleInit {
       throw new NotFoundException('Designer not found.');
     }
 
+    const existingAssignments = await this.prisma.schedulerAssignment.count({
+      where: {
+        designerId: input.designerId,
+        weekStartDate,
+        dayIndex: this.dayIndexForDate(date, weekStartDate),
+      },
+    });
+    if (existingAssignments > 0) {
+      throw new BadRequestException(
+        'Cannot lock this weekend day while assignments exist. Move or remove those tasks first.',
+      );
+    }
+
     const reason = input.reason?.trim() || null;
     try {
       await this.prisma.$executeRaw`
@@ -547,17 +619,17 @@ export class SchedulerAssignmentsService implements OnModuleInit {
       `;
     } catch (err) {
       const detail = err instanceof Error ? err.message : String(err);
-      throw new BadRequestException(`Could not unlock weekend day: ${detail}`);
+      throw new BadRequestException(`Could not lock weekend day: ${detail}`);
     }
 
-    const rows = await this.loadDayUnlocksForRange(date, date, input.designerId);
+    const rows = await this.loadDayLocksForRange(date, date, input.designerId);
     const created = rows[0];
     if (!created) {
-      throw new BadRequestException('Weekend day unlock failed.');
+      throw new BadRequestException('Weekend day lock failed.');
     }
 
     const weekStart = this.dateKey(weekStartDate);
-    this.dashboardRealtime?.notifyOverviewRefresh('scheduler_day_unlocked', {
+    this.dashboardRealtime?.notifyOverviewRefresh('scheduler_day_locked', {
       weekStart,
       designerId: input.designerId,
       date: created.date,
@@ -566,7 +638,7 @@ export class SchedulerAssignmentsService implements OnModuleInit {
     return created;
   }
 
-  async deleteDayUnlock(
+  async deleteDayLock(
     userId: string,
     input: { designerId: string; date: string },
   ): Promise<{ ok: true }> {
@@ -585,25 +657,12 @@ export class SchedulerAssignmentsService implements OnModuleInit {
       throw new ForbiddenException('This scheduler week is locked.');
     }
 
-    const existingAssignments = await this.prisma.schedulerAssignment.count({
-      where: {
-        designerId: input.designerId,
-        weekStartDate,
-        dayIndex: this.dayIndexForDate(date, weekStartDate),
-      },
-    });
-    if (existingAssignments > 0) {
-      throw new BadRequestException(
-        'Cannot relock this weekend day while assignments exist. Move or remove those tasks first.',
-      );
-    }
-
     await this.prisma.$executeRaw`
       DELETE FROM dbo.ErpTSSchedulerDayUnlock
       WHERE designerId = ${input.designerId} AND [date] = ${date}
     `;
 
-    this.dashboardRealtime?.notifyOverviewRefresh('scheduler_day_relocked', {
+    this.dashboardRealtime?.notifyOverviewRefresh('scheduler_day_unlocked', {
       weekStart: this.dateKey(weekStartDate),
       designerId: input.designerId,
       date: this.dateKey(date),
@@ -1579,7 +1638,7 @@ export class SchedulerAssignmentsService implements OnModuleInit {
       const horizonDays = Math.max(370, datedRows.length * 7 + 30);
       const horizonEnd = this.addUtcDays(this.maxUtcDate(latestAssignmentDate, leaveEnd), horizonDays);
 
-      const [approvedLeaves, holidayKeys] = await Promise.all([
+      const [approvedLeaves, holidayKeys, dayLocks] = await Promise.all([
         tx.leaveRequest.findMany({
           where: {
             userId: leave.userId,
@@ -1597,7 +1656,9 @@ export class SchedulerAssignmentsService implements OnModuleInit {
           },
         }),
         this.loadHolidayKeys(tx, leaveStart, horizonEnd),
+        this.loadDayLocksForRange(leaveStart, horizonEnd, leave.userId),
       ]);
+      const lockedKeys = new Set(dayLocks.map((u) => this.dayLockKey(u.designerId, u.date)));
 
       const leaveHoursByDate = new Map<string, number>();
       const accumulateLeaveHours = (entry: { type: string | null; startDate: Date; endDate: Date | null }) => {
@@ -1618,13 +1679,12 @@ export class SchedulerAssignmentsService implements OnModuleInit {
       // and no assignments get displaced onto/around the leave being approved.
       accumulateLeaveHours({ type: leave.type, startDate: leaveStart, endDate: leaveEnd });
 
-      const availableCapacity = (date: Date): number => {
-        const key = this.dateKey(date);
-        if (this.isWeekend(date) || holidayKeys.has(key)) return 0;
-        const leaveHours = leaveHoursByDate.get(key) ?? 0;
-        if (leaveHours >= DAILY_CAPACITY) return 0;
-        return Math.max(0, DAILY_CAPACITY - leaveHours);
-      };
+      const availableCapacity = (date: Date): number =>
+        this.availableCapacityForDesignerDay(date, leave.userId, {
+          holidayKeys,
+          lockedKeys,
+          leaveHours: leaveHoursByDate.get(this.dateKey(date)) ?? 0,
+        });
 
       const originalUsage = new Map<string, number>();
       let firstDisplacedIndex = -1;
@@ -2016,7 +2076,7 @@ export class SchedulerAssignmentsService implements OnModuleInit {
       const horizonDays = Math.max(370, datedRows.length * 7 + 30);
       const horizonEnd = this.addUtcDays(this.maxUtcDate(latestAssignmentDate, leaveEnd), horizonDays);
 
-      const [approvedLeaves, holidayKeys] = await Promise.all([
+      const [approvedLeaves, holidayKeys, dayLocks] = await Promise.all([
         tx.leaveRequest.findMany({
           where: {
             userId: leave.userId,
@@ -2033,7 +2093,9 @@ export class SchedulerAssignmentsService implements OnModuleInit {
           },
         }),
         this.loadHolidayKeys(tx, leaveStart, horizonEnd),
+        this.loadDayLocksForRange(leaveStart, horizonEnd, leave.userId),
       ]);
+      const lockedKeys = new Set(dayLocks.map((u) => this.dayLockKey(u.designerId, u.date)));
 
       const leaveHoursByDate = new Map<string, number>();
       for (const approvedLeave of approvedLeaves) {
@@ -2053,13 +2115,12 @@ export class SchedulerAssignmentsService implements OnModuleInit {
         }
       }
 
-      const availableCapacity = (date: Date): number => {
-        const key = this.dateKey(date);
-        if (this.isWeekend(date) || holidayKeys.has(key)) return 0;
-        const leaveHours = leaveHoursByDate.get(key) ?? 0;
-        if (leaveHours >= DAILY_CAPACITY) return 0;
-        return Math.max(0, DAILY_CAPACITY - leaveHours);
-      };
+      const availableCapacity = (date: Date): number =>
+        this.availableCapacityForDesignerDay(date, leave.userId, {
+          holidayKeys,
+          lockedKeys,
+          leaveHours: leaveHoursByDate.get(this.dateKey(date)) ?? 0,
+        });
 
       const movedRows: Array<{
         id: string;
@@ -2508,19 +2569,23 @@ export class SchedulerAssignmentsService implements OnModuleInit {
       ];
       const withCounts = await this.attachOtherScheduledAssignmentCounts(combined);
       const assignments = await this.attachTaskSummaries(withCounts);
-      const dayUnlockKeys = dayUnlocks
-        .map((u) => this.dayUnlockKey(u.designerId, u.date))
+      const dayLockKeys = dayUnlocks
+        .map((u) => this.dayLockKey(u.designerId, u.date))
         .filter((key) => key.includes('|'))
         .sort();
+      const dayLocks = dayUnlocks;
+      const dayUnlockAliases = dayLocks.map((lock) => this.toDayUnlockAlias(lock));
       return {
         assignments,
-        dayUnlocks,
+        dayLocks,
+        dayUnlocks: dayUnlockAliases,
         weekStart,
         version: weekRow?.version ?? 0,
         isLocked: Boolean(weekRow?.isLocked ?? false),
         updatedAt: (weekRow?.updatedAt ?? new Date(0)).toISOString(),
         updatedBy: weekRow?.updatedBy ?? null,
-        dayUnlockKeys,
+        dayLockKeys,
+        dayUnlockKeys: dayLockKeys,
       };
     } catch (err) {
       this.fail('Scheduler assignments query failed', err);
@@ -2530,20 +2595,22 @@ export class SchedulerAssignmentsService implements OnModuleInit {
   async getWeekMeta(weekStart: string): Promise<SchedulerWeekMetaDto> {
     const { weekStartDate } = this.parseWeekStart(weekStart);
     const weekEndDate = this.dateForDayIndex(weekStartDate, 6);
-    const [row, unlocks] = await Promise.all([
+    const [row, locks] = await Promise.all([
       this.prisma.schedulerWeek.findUnique({ where: { weekStartDate } }),
-      this.loadDayUnlocksForRange(weekStartDate, weekEndDate),
+      this.loadDayLocksForRange(weekStartDate, weekEndDate),
     ]);
+    const dayLockKeys = locks
+      .map((u) => this.dayLockKey(u.designerId, u.date))
+      .filter((key) => key.includes('|'))
+      .sort();
     return {
       weekStart,
       version: row?.version ?? 0,
       isLocked: Boolean(row?.isLocked ?? false),
       updatedAt: (row?.updatedAt ?? new Date(0)).toISOString(),
       updatedBy: row?.updatedBy ?? null,
-      dayUnlockKeys: unlocks
-        .map((u) => this.dayUnlockKey(u.designerId, u.date))
-        .filter((key) => key.includes('|'))
-        .sort(),
+      dayLockKeys,
+      dayUnlockKeys: dayLockKeys,
     };
   }
 
@@ -2685,17 +2752,19 @@ export class SchedulerAssignmentsService implements OnModuleInit {
     });
 
     const weekEndDate = this.dateForDayIndex(weekStartDate, 6);
-    const unlocks = await this.loadDayUnlocksForRange(weekStartDate, weekEndDate);
+    const locks = await this.loadDayLocksForRange(weekStartDate, weekEndDate);
+    const dayLockKeys = locks
+      .map((u) => this.dayLockKey(u.designerId, u.date))
+      .filter((key) => key.includes('|'))
+      .sort();
     return {
       weekStart,
       version: result.version,
       isLocked: Boolean(result.isLocked),
       updatedAt: result.updatedAt.toISOString(),
       updatedBy: result.updatedBy ?? null,
-      dayUnlockKeys: unlocks
-        .map((u) => this.dayUnlockKey(u.designerId, u.date))
-        .filter((key) => key.includes('|'))
-        .sort(),
+      dayLockKeys,
+      dayUnlockKeys: dayLockKeys,
     };
   }
 
@@ -2814,15 +2883,15 @@ export class SchedulerAssignmentsService implements OnModuleInit {
   /**
    * Places hours that didn't fit anywhere in the week being saved (e.g. a task dropped on a
    * designer's Friday whose remaining capacity is less than the task's hours). Walks forward
-   * day-by-day from the day after `afterDate`, skipping weekends/holidays/full-day approved
-   * leave, live-checking each candidate day's actual remaining capacity inside this same
-   * transaction (never trusting a client assumption about a week it never loaded — the same
-   * principle as the `expectedAssignmentIds` guard elsewhere in this file), and creates
-   * SchedulerAssignment row(s) to consume the hours — splitting across multiple days/weeks if
-   * one day isn't enough. Every week actually touched gets its version bumped and a history
-   * entry written, mirroring `rescheduleForApprovedLeave`. Bounded by `maxLookaheadDays`;
-   * whatever can't be placed within that bound is reported back in `unplacedHours`, never
-   * silently dropped.
+   * day-by-day from the day after `afterDate`, skipping holidays/full-day approved leave and
+   * designer weekend day-locks (weekends are otherwise open), live-checking each candidate
+   * day's actual remaining capacity inside this same transaction (never trusting a client
+   * assumption about a week it never loaded — the same principle as the
+   * `expectedAssignmentIds` guard elsewhere in this file), and creates SchedulerAssignment
+   * row(s) to consume the hours — splitting across multiple days/weeks if one day isn't enough.
+   * Every week actually touched gets its version bumped and a history entry written, mirroring
+   * `rescheduleForApprovedLeave`. Bounded by `maxLookaheadDays`; whatever can't be placed
+   * within that bound is reported back in `unplacedHours`, never silently dropped.
    *
    * Deliberately NOT unified with the near-identical "next available day" loops in
    * `rescheduleForApprovedLeave`/`rescheduleAfterLeaveRevocation` — those are working,
@@ -2851,7 +2920,7 @@ export class SchedulerAssignmentsService implements OnModuleInit {
     const rangeStart = this.addUtcDays(this.startOfUtcDay(params.afterDate), 1);
     const rangeEnd = this.addUtcDays(rangeStart, maxLookaheadDays);
 
-    const [holidayKeys, approvedLeaves] = await Promise.all([
+    const [holidayKeys, approvedLeaves, dayLocks] = await Promise.all([
       this.loadHolidayKeys(tx, rangeStart, rangeEnd),
       tx.leaveRequest.findMany({
         where: {
@@ -2863,7 +2932,9 @@ export class SchedulerAssignmentsService implements OnModuleInit {
         },
         select: { type: true, startDate: true, endDate: true },
       }),
+      this.loadDayLocksForRange(rangeStart, rangeEnd, designerId),
     ]);
+    const lockedKeys = new Set(dayLocks.map((u) => this.dayLockKey(u.designerId, u.date)));
 
     const leaveHoursForCandidate = (date: Date): number => {
       let hours = 0;
@@ -2879,7 +2950,11 @@ export class SchedulerAssignmentsService implements OnModuleInit {
     let cursor = rangeStart;
     while (hoursRemaining > 0.001 && cursor < rangeEnd) {
       const key = this.dateKey(cursor);
-      const leaveBlocked = this.isWeekend(cursor) || holidayKeys.has(key) ? DAILY_CAPACITY : leaveHoursForCandidate(cursor);
+      const leaveBlocked = this.blockedHoursForDesignerDay(cursor, designerId, {
+        holidayKeys,
+        lockedKeys,
+        leaveHours: leaveHoursForCandidate(cursor),
+      });
       if (leaveBlocked >= DAILY_CAPACITY) {
         cursor = this.addUtcDays(cursor, 1);
         continue;
@@ -3073,11 +3148,9 @@ export class SchedulerAssignmentsService implements OnModuleInit {
 
       const mergedAssignments = this.buildMergedAssignmentsForValidation(previousRows, dto);
       this.validateAssignments(mergedAssignments, approvedOvertimeHoursByDesignerDay);
-      const dayUnlocks = await this.loadDayUnlocksForRange(weekStartDate, weekEndDate);
-      const unlockedKeys = new Set(
-        dayUnlocks.map((u) => this.dayUnlockKey(u.designerId, u.date)),
-      );
-      this.validateWeekendUnlocks(mergedAssignments, weekStartDate, unlockedKeys);
+      const dayLocks = await this.loadDayLocksForRange(weekStartDate, weekEndDate);
+      const lockedKeys = new Set(dayLocks.map((u) => this.dayLockKey(u.designerId, u.date)));
+      this.validateWeekendLocks(mergedAssignments, weekStartDate, lockedKeys);
       const payloadHash = this.stablePayloadHash(mergedAssignments);
 
       if (schedulableUsers.length !== designerIds.length) {
@@ -3970,7 +4043,7 @@ export class SchedulerAssignmentsService implements OnModuleInit {
           : today;
       const packEnd = this.addUtcDays(packStart, 42);
 
-      const [holidayKeys, approvedLeaves, existingTargetRows, packWeeks] = await Promise.all([
+      const [holidayKeys, approvedLeaves, existingTargetRows, packWeeks, dayLocks] = await Promise.all([
         this.loadHolidayKeys(tx, packStart, packEnd),
         tx.leaveRequest.findMany({
           where: {
@@ -4004,7 +4077,9 @@ export class SchedulerAssignmentsService implements OnModuleInit {
           },
           select: { weekStartDate: true },
         }),
+        this.loadDayLocksForRange(packStart, packEnd, toDesignerId),
       ]);
+      const lockedDayKeys = new Set(dayLocks.map((u) => this.dayLockKey(u.designerId, u.date)));
 
       const destLockedWeeks = new Set(
         packWeeks.map((w) => this.dateKey(new Date(w.weekStartDate))),
@@ -4033,8 +4108,11 @@ export class SchedulerAssignmentsService implements OnModuleInit {
 
       while (hoursRemaining > 0.001 && cursor <= packEnd) {
         const key = this.dateKey(cursor);
-        const leaveBlocked =
-          this.isWeekend(cursor) || holidayKeys.has(key) ? DAILY_CAPACITY : leaveHoursForCandidate(cursor);
+        const leaveBlocked = this.blockedHoursForDesignerDay(cursor, toDesignerId, {
+          holidayKeys,
+          lockedKeys: lockedDayKeys,
+          leaveHours: leaveHoursForCandidate(cursor),
+        });
         if (leaveBlocked >= DAILY_CAPACITY) {
           cursor = this.addUtcDays(cursor, 1);
           continue;
