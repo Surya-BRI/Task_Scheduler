@@ -13,6 +13,7 @@ import { useTaskLifecycleRefresh } from "@/hooks/use-task-lifecycle-refresh";
 import { DESIGNER_BOARD_COLUMNS, DESIGNER_QUEUE_FILTER_STATUSES, getStatusLabel, mapTaskToDesignRow } from "../task-view-model";
 import { TypeOfDesignChip } from "@/lib/ui/TypeOfDesignChip";
 
+import { toUserFacingError } from "@/lib/api-error"
 const getStatusColor = (status) => {
   switch (status) {
     case "DESIGN_NEW":       return "bg-amber-100 text-amber-700 border-amber-200";
@@ -353,7 +354,7 @@ export function DesignerDesignListScreen() {
       if (!mounted) return;
       setAllDesigns([]);
       setServerTotal(0);
-      setListError(err instanceof Error ? err.message : "Could not load tasks.");
+      setListError(toUserFacingError(err, "Could not load tasks."));
     }).finally(() => {
       if (mounted) setListLoading(false);
     });

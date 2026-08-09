@@ -47,6 +47,7 @@ import {
 import ReallocationRequestsSection from "@/features/requests/components/ReallocationRequestsSection";
 import { buildDesignSchedulerPath } from "@/features/scheduler/utils/schedulerNavigationState";
 
+import { toUserFacingError } from "@/lib/api-error"
 const UUID_RE = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
 
 function isUuidString(value) {
@@ -372,7 +373,7 @@ export default function RequestsClient() {
       setStats((prev) => ({ ...prev, pendingRegularization: pending }));
     } catch (e) {
       setRegularizationRequests([]);
-      setRegularizationError(e?.message || "Could not load regularization requests.");
+      setRegularizationError(toUserFacingError(e, "Could not load regularization requests."));
     } finally {
       setRegularizationLoading(false);
     }
@@ -391,7 +392,7 @@ export default function RequestsClient() {
       setHodPendingRequests(Array.isArray(rows) ? rows : []);
     } catch (e) {
       setHodPendingRequests([]);
-      setHodInboxError(e?.message || "Could not load HOD inbox.");
+      setHodInboxError(toUserFacingError(e, "Could not load HOD inbox."));
     } finally {
       setHodInboxLoading(false);
     }
@@ -412,7 +413,7 @@ export default function RequestsClient() {
       setPreviousOtRequests(Array.isArray(rows) ? rows : []);
     } catch (e) {
       setPreviousOtRequests([]);
-      setOvertimeError(e?.message || "Could not load overtime requests.");
+      setOvertimeError(toUserFacingError(e, "Could not load overtime requests."));
     } finally {
       setOvertimeLoading(false);
     }
@@ -485,7 +486,7 @@ export default function RequestsClient() {
       setAssignedTasks([]);
       setProjects([]);
       setProjectTasks([]);
-      setAssignedTasksError(e?.message || "Could not load your assigned tasks.");
+      setAssignedTasksError(toUserFacingError(e, "Could not load your assigned tasks."));
     } finally {
       setAssignedTasksLoading(false);
     }
@@ -766,12 +767,7 @@ export default function RequestsClient() {
       toast.success(isHOD ? "Regularization auto-approved" : "Regularization request submitted!");
       setRegForm({ ...EMPTY_REG_FORM, duration: regForm.duration });
     } catch (err) {
-      const message =
-        err instanceof Error
-          ? err.message
-          : typeof err === "string"
-            ? err
-            : "Submit failed. Check that the backend is running.";
+      const message = toUserFacingError(err, "Could not submit the request. Please try again.");
       setRegularizationError(message);
       toast.error(message);
     } finally {
@@ -809,7 +805,7 @@ export default function RequestsClient() {
       await Promise.all([loadRegularization(), loadHodInbox()]);
       toast.success(`Regularization request ${reviewTarget._reviewAction.toLowerCase()}.`);
     } catch (e) {
-      toast.error(e?.message || "Review failed");
+      toast.error(toUserFacingError(e, "Review failed"));
     } finally {
       setReviewSubmitting(false);
     }
@@ -952,12 +948,7 @@ export default function RequestsClient() {
       toast.success(isHOD ? "Overtime auto-approved" : "Overtime request submitted successfully!");
       setOtForm((f) => ({ ...f, reason: "" }));
     } catch (err) {
-      const message =
-        err instanceof Error
-          ? err.message
-          : typeof err === "string"
-            ? err
-            : "Submit failed. Check that the backend is running and the task is still assigned to you.";
+      const message = toUserFacingError(err, "Could not submit the overtime request. Please try again.");
       setOvertimeError(message);
       toast.error(message);
     } finally {
@@ -992,7 +983,7 @@ export default function RequestsClient() {
           : "Overtime request rejected.",
       );
     } catch (e) {
-      toast.error(e?.message || "Review failed");
+      toast.error(toUserFacingError(e, "Review failed"));
     } finally {
       setOtReviewSubmitting(false);
     }

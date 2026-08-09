@@ -11,6 +11,7 @@ import {
   taskViewPathForRecord,
 } from "@/lib/design-list-routes";
 
+import { toUserFacingError } from "@/lib/api-error"
 function hubTaskHref(row, workflowFromOrOpts = FROM_PROJECT_DESIGN, maybeOpts = {}) {
   let workflowFrom = FROM_PROJECT_DESIGN;
   let opts = {};
@@ -222,7 +223,7 @@ export function ProjectDesignHub({ workflowFrom = FROM_PROJECT_DESIGN }) {
         setTotal(0);
         setTotalPages(1);
         setOtherTotal(null);
-        setError(err?.message || "Could not load project design records.");
+        setError(toUserFacingError(err, "Could not load project design records."));
       })
       .finally(() => {
         if (mounted) setLoading(false);
@@ -293,9 +294,7 @@ export function ProjectDesignHub({ workflowFrom = FROM_PROJECT_DESIGN }) {
           ) : error ? (
             <div className="flex flex-1 flex-col items-center justify-center gap-2 rounded-xl border border-amber-200 bg-amber-50 px-4 py-8 text-center">
               <p className="text-sm font-medium text-amber-950">{error}</p>
-              <p className="text-xs text-amber-800">
-                Check that the backend is running and the design-list API is available.
-              </p>
+              <p className="text-xs text-amber-800">Please try again in a moment.</p>
             </div>
           ) : segment === "retail" ? (
             <DesignTypeTable rows={tableRows} variant="retail" workflowFrom={workflowFrom} />

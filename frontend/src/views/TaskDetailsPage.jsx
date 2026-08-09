@@ -1516,7 +1516,7 @@ export function TaskDetailsPage() {
         })
         .catch(() => {})
     } catch (err) {
-      const msg = err?.response?.data?.message || err?.message || 'Status update failed'
+      const msg = toUserFacingError(err, 'Status update failed')
       toast.error(msg)
       setTaskRefreshCounter((c) => c + 1)
     }
@@ -1925,7 +1925,7 @@ export function TaskDetailsPage() {
         setActivityCursor(response?.pageInfo?.nextCursor ?? null)
         setActivityHasMore(Boolean(response?.pageInfo?.hasMore))
       } catch (error) {
-        setActivityError(error instanceof Error ? error.message : 'Failed to load activity')
+        setActivityError(toUserFacingError(error, 'Failed to load activity'))
       } finally {
         setActivityLoading(false)
       }
@@ -2058,7 +2058,7 @@ export function TaskDetailsPage() {
         mergeChatterPostLists(normalized, prev, { taskId: queryTaskId, projectId }),
       )
     } catch (error) {
-      setChatterError(error instanceof Error ? error.message : 'Failed to load chatter')
+      setChatterError(toUserFacingError(error, 'Failed to load chatter'))
       if (!silent) setChatterPosts([])
     } finally {
       if (!silent) setChatterLoading(false)
@@ -2286,7 +2286,7 @@ export function TaskDetailsPage() {
         postId: created.id,
       })
     } catch (error) {
-      toast.error(error instanceof Error ? error.message : 'Failed to post chatter')
+      toast.error(toUserFacingError(error, 'Failed to post chatter'))
     } finally {
       setChatterSubmitting(false)
     }
@@ -2369,7 +2369,7 @@ export function TaskDetailsPage() {
         postId,
       })
     } catch (error) {
-      toast.error(error instanceof Error ? error.message : 'Failed to post comment')
+      toast.error(toUserFacingError(error, 'Failed to post comment'))
     } finally {
       setCommentSubmittingPostId('')
     }
@@ -2403,7 +2403,7 @@ export function TaskDetailsPage() {
       setSavedTeamSnapshot({ technicalHead, teamLead, subTeamLead, designers: [...selectedDesigners] })
       toast.success('Team saved')
     } catch (err) {
-      toast.error(err instanceof Error ? err.message : 'Failed to save team')
+      toast.error(toUserFacingError(err, 'Failed to save team'))
     } finally {
       setTeamSaving(false)
     }

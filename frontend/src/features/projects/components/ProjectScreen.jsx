@@ -8,6 +8,7 @@ import { Navbar } from "@/components/Navbar";
 import { FROM_PROJECTS_LIST, taskCreationPathForRecord } from "@/lib/design-list-routes";
 import { useDesignListStore } from "@/state/DesignListContext";
 
+import { toUserFacingError } from "@/lib/api-error"
 function projectListTaskHref(row, workflowFrom = FROM_PROJECTS_LIST) {
   const projectCode = String(row?.projectCode ?? "").trim();
   const opNo = String(row?.salesForceCode ?? row?.opNo ?? "").trim();
@@ -160,7 +161,7 @@ export function ProjectScreen({ workflowFrom = FROM_PROJECTS_LIST }) {
       .catch((err) => {
         if (!mounted) return;
         setProjects([]);
-        setListError(err instanceof Error ? err.message : "Could not load projects.");
+        setListError(toUserFacingError(err, "Could not load projects."));
         if (includeTotal) {
           setTotal(0);
           setTotalPages(1);

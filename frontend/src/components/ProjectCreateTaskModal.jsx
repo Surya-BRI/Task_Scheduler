@@ -11,6 +11,7 @@ import { apiClient } from '@/lib/api-client'
 import { assertHoursWithinDeadline } from '@/lib/task-deadline-hours'
 import { toast } from 'sonner'
 
+import { toUserFacingError } from '@/lib/api-error'
 const PRIORITY_OPTIONS = ['Low', 'Medium', 'High']
 const REVISION_PATTERN = /^R\d+$/
 
@@ -200,7 +201,7 @@ export function ProjectCreateTaskModal({ open, onClose, onCreated, submissionDat
         setRevisionCode(res?.revisionCode ?? 'R0')
       })
       .catch((err) => {
-        const msg = err instanceof Error ? err.message : 'Could not resolve revision'
+        const msg = toUserFacingError(err, 'Could not resolve revision')
         setRevisionFetchError(msg)
         setError(msg)
         setFieldErrors((prev) => {
@@ -498,7 +499,7 @@ export function ProjectCreateTaskModal({ open, onClose, onCreated, submissionDat
       if (onCreated) onCreated(tasks)
       else onClose()
     } catch (err) {
-      const msg = err instanceof Error ? err.message : 'Failed to create project task'
+      const msg = toUserFacingError(err, 'Failed to create project task')
       setError(msg)
       setFieldErrors((prev) => {
         const next = { ...prev }

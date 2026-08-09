@@ -11,6 +11,7 @@ import {
 } from "@/features/requests/services/reallocation-requests.api";
 import { taskSummaryPath } from "@/lib/design-list-routes";
 
+import { toUserFacingError } from "@/lib/api-error"
 export function ReallocationQueuePanel({ highlightId }) {
   const router = useRouter();
   const [rows, setRows] = useState([]);
@@ -88,7 +89,7 @@ export function ReallocationQueuePanel({ highlightId }) {
       setApproveRow(null);
       load();
     } catch (err) {
-      toast.error(err?.message || "Failed to approve reallocation");
+      toast.error(toUserFacingError(err, "Failed to approve reallocation"));
     } finally {
       setBusy(false);
       setReviewingId(null);
@@ -114,7 +115,7 @@ export function ReallocationQueuePanel({ highlightId }) {
       setRemarks("");
       load();
     } catch (err) {
-      toast.error(err?.message || "Failed to disagree");
+      toast.error(toUserFacingError(err, "Failed to disagree"));
     } finally {
       setBusy(false);
       setReviewingId(null);

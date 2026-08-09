@@ -36,6 +36,7 @@ import { Button } from '@/components/ui/button';
 import { Modal } from '@/components/ui/Modal';
 import { UI_INPUT_CLASS, UI_LABEL_CLASS } from '@/lib/ui/form-classes';
 
+import { toUserFacingError } from '@/lib/api-error'
 const POLL_MS = 45_000;
 /** Uniform dashboard card height — all six cards share this shell. */
 const DASHBOARD_CARD_H = 'h-[320px]';
@@ -234,7 +235,7 @@ function InboxCard({ inbox, fmt, onNavigate, onRefresh, cardState, errorMessage,
       setDetailTarget(null);
       await onRefresh?.();
     } catch (err) {
-      setActionError(err instanceof Error ? err.message : 'Could not approve request');
+      setActionError(toUserFacingError(err, 'Could not approve request'));
     } finally {
       setActingId(null);
     }
@@ -269,7 +270,7 @@ function InboxCard({ inbox, fmt, onNavigate, onRefresh, cardState, errorMessage,
       setDetailTarget(null);
       await onRefresh?.();
     } catch (err) {
-      setActionError(err instanceof Error ? err.message : 'Could not reject request');
+      setActionError(toUserFacingError(err, 'Could not reject request'));
     } finally {
       setActingId(null);
     }
@@ -578,7 +579,7 @@ export function ProjectsOverviewScreen() {
       setOverview(data);
       setUpdatedAt(new Date());
     } catch (err) {
-      setError(err instanceof Error ? err.message : 'Failed to load projects overview');
+      setError(toUserFacingError(err, 'Failed to load projects overview'));
     } finally {
       if (!silent) setLoading(false);
     }

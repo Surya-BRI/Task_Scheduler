@@ -43,6 +43,7 @@ import {
 import { normalizeStatusCode, getStatusLabel } from '@/features/design-list/task-view-model'
 import { taskViewPathForRecord } from '@/lib/design-list-routes'
 
+import { toUserFacingError } from '@/lib/api-error'
 function isValidHttpUrl(value) {
   try {
     const url = new URL(String(value ?? '').trim())
@@ -496,7 +497,7 @@ export function RetailProjectPage() {
         setActivityCursor(response?.pageInfo?.nextCursor ?? null)
         setActivityHasMore(Boolean(response?.pageInfo?.hasMore))
       } catch (error) {
-        setActivityError(error instanceof Error ? error.message : 'Failed to load activity')
+        setActivityError(toUserFacingError(error, 'Failed to load activity'))
       } finally {
         setActivityLoading(false)
       }
@@ -571,7 +572,7 @@ export function RetailProjectPage() {
         mergeChatterPostLists(normalized, prev, { taskId: queryTaskId, projectId }),
       )
     } catch (error) {
-      setChatterError(error instanceof Error ? error.message : 'Failed to load chatter')
+      setChatterError(toUserFacingError(error, 'Failed to load chatter'))
       if (!silent) setChatterPosts([])
     } finally {
       if (!silent) setChatterLoading(false)
@@ -774,7 +775,7 @@ export function RetailProjectPage() {
       })
       emitChatterRefresh({ taskId: resolvedTaskId, projectId, postId: created.id })
     } catch (error) {
-      toast.error(error instanceof Error ? error.message : 'Failed to post chatter')
+      toast.error(toUserFacingError(error, 'Failed to post chatter'))
     } finally {
       setChatterSubmitting(false)
     }
@@ -857,7 +858,7 @@ export function RetailProjectPage() {
         postId,
       })
     } catch (error) {
-      toast.error(error instanceof Error ? error.message : 'Failed to post comment')
+      toast.error(toUserFacingError(error, 'Failed to post comment'))
     } finally {
       setCommentSubmittingPostId('')
     }

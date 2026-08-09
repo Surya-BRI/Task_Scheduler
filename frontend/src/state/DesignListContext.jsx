@@ -3,6 +3,7 @@ import { usePathname } from 'next/navigation'
 import { parseDesignListDate } from '@/lib/design-list-date'
 import { apiClient } from '@/lib/api-client'
 
+import { toUserFacingError } from '@/lib/api-error'
 const DesignListContext = createContext(null)
 
 function dedupeDesignRecords(items) {
@@ -85,7 +86,7 @@ export function DesignListProvider({ children }) {
         if (!mounted) return
         console.error('[DesignList] Failed to load design list records:', err)
         setRecords([])
-        setError(err?.message || 'Could not load project design records.')
+        setError(toUserFacingError(err, 'Could not load project design records.'))
         setLoading(false)
       })
 
