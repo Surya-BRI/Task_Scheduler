@@ -5,6 +5,7 @@ import { apiClient } from '@/lib/api-client'
 import { assertHoursWithinDeadline } from '@/lib/task-deadline-hours'
 import { toast } from 'sonner'
 
+import { toUserFacingError } from '@/lib/api-error'
 const DESIGN_OPTIONS = [
   { value: 'Estimation Purpose', label: 'Estimation Purpose' },
   { value: 'Presentation', label: 'Presentation' },
@@ -106,7 +107,7 @@ export function CreateTaskModal({ open, onClose, onCreated, submissionDate, reco
       .catch((err) => {
         if (!alive) return
         setHodUsers([])
-        setHodUsersError(err instanceof Error ? err.message : 'Could not load HOD list')
+        setHodUsersError(toUserFacingError(err, 'Could not load HOD list'))
       })
       .finally(() => {
         if (alive) setHodUsersLoading(false)
@@ -171,7 +172,7 @@ export function CreateTaskModal({ open, onClose, onCreated, submissionDate, reco
         if (!revisionCode.trim()) setRevisionCode(res?.revisionCode ?? 'R0')
       })
       .catch((err) => {
-        const msg = err instanceof Error ? err.message : 'Could not resolve revision'
+        const msg = toUserFacingError(err, 'Could not resolve revision')
         setRevisionFetchError(msg)
         setError(msg)
         setFieldErrors((prev) => {
@@ -305,7 +306,7 @@ export function CreateTaskModal({ open, onClose, onCreated, submissionDate, reco
         onClose()
       }
     } catch (err) {
-      const msg = err instanceof Error ? err.message : 'Failed to create task'
+      const msg = toUserFacingError(err, 'Failed to create task')
       setError(msg)
       setFieldErrors((prev) => {
         const next = { ...prev }

@@ -10,6 +10,7 @@ import {
 } from "@/features/requests/services/reallocation-requests.api";
 import { requestsPath } from "@/lib/role-routes";
 
+import { toUserFacingError } from "@/lib/api-error"
 /** Soften leftover raw labels if an older API response still embeds TSK / duplicate OP. */
 function formatReallocationTaskOptionLabel(task) {
   const raw = String(task?.name ?? "").trim();
@@ -79,7 +80,7 @@ export function TaskReallocationPanel({
       toast.success("Reallocation request cancelled");
       onChanged?.();
     } catch (err) {
-      toast.error(err?.message || "Failed to cancel");
+      toast.error(toUserFacingError(err, "Failed to cancel"));
     } finally {
       setBusy(false);
     }
@@ -234,7 +235,7 @@ export function ReallocationCreateForm({ designerId, prefillTaskId, onCreated })
       setReason("");
       onCreated?.();
     } catch (err) {
-      toast.error(err?.message || "Failed to submit request");
+      toast.error(toUserFacingError(err, "Failed to submit request"));
     } finally {
       setBusy(false);
     }

@@ -16,6 +16,7 @@ import {
   writeTaskLifecycleSync,
 } from '../components/design-list-task-timer-storage'
 import { apiClient } from '@/lib/api-client'
+import { toUserFacingError } from '@/lib/api-error'
 import { fetchProjectActivities, fetchTaskActivities } from '@/features/team-activity/services/activities.api'
 import {
   createChatterComment,
@@ -113,7 +114,7 @@ function deriveFileNameFromUrl(value) {
 }
 
 function friendlyError(error, fallback) {
-  const msg = error instanceof Error ? error.message : String(error ?? '')
+  const msg = toUserFacingError(error, fallback)
   if (msg.includes('should not be empty') || msg.includes('must be an integer') || msg.includes('must be a number')) {
     return 'Please fill all required fields in each row before saving.'
   }
@@ -1502,7 +1503,7 @@ export function TaskDetailsPage() {
         // Reload project task list so the new DESIGN_NEW / Rn row appears beside the rejected one.
         setTaskRefreshCounter((c) => c + 1)
       } else if (newStatus === 'CLIENT_REJECTED') {
-        toast.error('Client rejected but revision task creation failed — check backend logs.')
+        toast.error('Client rejected, but creating the next revision failed. Please try again or contact support.')
         setTaskRefreshCounter((c) => c + 1)
       }
       // Hold clears scheduler rows — refresh extras only (hours / realloc), not full core.
@@ -1515,7 +1516,7 @@ export function TaskDetailsPage() {
         })
         .catch(() => {})
     } catch (err) {
-      const msg = err?.response?.data?.message || err?.message || 'Status update failed'
+      const msg = toUserFacingError(err, 'Status update failed')
       toast.error(msg)
       setTaskRefreshCounter((c) => c + 1)
     }
@@ -1924,7 +1925,7 @@ export function TaskDetailsPage() {
         setActivityCursor(response?.pageInfo?.nextCursor ?? null)
         setActivityHasMore(Boolean(response?.pageInfo?.hasMore))
       } catch (error) {
-        setActivityError(error instanceof Error ? error.message : 'Failed to load activity')
+        setActivityError(toUserFacingError(error, 'Failed to load activity'))
       } finally {
         setActivityLoading(false)
       }
@@ -2057,7 +2058,7 @@ export function TaskDetailsPage() {
         mergeChatterPostLists(normalized, prev, { taskId: queryTaskId, projectId }),
       )
     } catch (error) {
-      setChatterError(error instanceof Error ? error.message : 'Failed to load chatter')
+      setChatterError(toUserFacingError(error, 'Failed to load chatter'))
       if (!silent) setChatterPosts([])
     } finally {
       if (!silent) setChatterLoading(false)
@@ -2285,7 +2286,7 @@ export function TaskDetailsPage() {
         postId: created.id,
       })
     } catch (error) {
-      toast.error(error instanceof Error ? error.message : 'Failed to post chatter')
+      toast.error(toUserFacingError(error, 'Failed to post chatter'))
     } finally {
       setChatterSubmitting(false)
     }
@@ -2368,7 +2369,7 @@ export function TaskDetailsPage() {
         postId,
       })
     } catch (error) {
-      toast.error(error instanceof Error ? error.message : 'Failed to post comment')
+      toast.error(toUserFacingError(error, 'Failed to post comment'))
     } finally {
       setCommentSubmittingPostId('')
     }
@@ -2402,7 +2403,7 @@ export function TaskDetailsPage() {
       setSavedTeamSnapshot({ technicalHead, teamLead, subTeamLead, designers: [...selectedDesigners] })
       toast.success('Team saved')
     } catch (err) {
-      toast.error(err instanceof Error ? err.message : 'Failed to save team')
+      toast.error(toUserFacingError(err, 'Failed to save team'))
     } finally {
       setTeamSaving(false)
     }

@@ -22,6 +22,7 @@ import { getSession } from "@/lib/mock-auth";
 import { requestsPath } from "@/lib/role-routes";
 import { connectDashboardRealtime, isDashboardRealtimeConnected } from "@/lib/realtime";
 
+import { toUserFacingError } from "@/lib/api-error"
 const UUID_RE = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
 
 /** Backup HTTP poll only when the dashboard socket is down (WS drives live leave updates). */
@@ -744,7 +745,7 @@ export default function LeavePlannerClient() {
       void reloadLeaves();
       void reloadTeamData();
     } catch (e) {
-      toast.error(e instanceof Error ? e.message : "Failed to approve leave");
+      toast.error(toUserFacingError(e, "Failed to approve leave"));
     } finally {
       setReviewSubmitting(false);
     }
@@ -801,7 +802,7 @@ export default function LeavePlannerClient() {
       void reloadLeaves();
       void reloadTeamData();
     } catch (e) {
-      toast.error(e instanceof Error ? e.message : "Failed to update leave request");
+      toast.error(toUserFacingError(e, "Failed to update leave request"));
     } finally {
       setModifySubmitting(false);
     }
@@ -819,7 +820,7 @@ export default function LeavePlannerClient() {
       void reloadLeaves();
       void reloadTeamData();
     } catch (e) {
-      toast.error(e instanceof Error ? e.message : "Failed to cancel leave request");
+      toast.error(toUserFacingError(e, "Failed to cancel leave request"));
     } finally {
       setModifySubmitting(false);
     }
@@ -841,7 +842,7 @@ export default function LeavePlannerClient() {
       void reloadLeaves();
       void reloadTeamData();
     } catch (e) {
-      toast.error(e instanceof Error ? e.message : "Failed to revoke leave");
+      toast.error(toUserFacingError(e, "Failed to revoke leave"));
     } finally {
       setReviewSubmitting(false);
     }
@@ -862,7 +863,7 @@ export default function LeavePlannerClient() {
       void reloadLeaves();
       void reloadTeamData();
     } catch (e) {
-      toast.error(e instanceof Error ? e.message : "Failed to reject leave");
+      toast.error(toUserFacingError(e, "Failed to reject leave"));
     } finally {
       setReviewSubmitting(false);
     }
@@ -948,7 +949,7 @@ export default function LeavePlannerClient() {
       void reloadLeaves();
       void reloadTeamData();
     } catch (error) {
-      const message = error instanceof Error ? error.message : "Failed to submit leave request. Please try again.";
+      const message = toUserFacingError(error, "Failed to submit leave request. Please try again.");
       if (message.toLowerCase().includes("overlap") || message.includes(DUPLICATE_LEAVE_MSG)) {
         const conflict = findOverlappingLeaveClient(
           overlapPool,

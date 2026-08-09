@@ -1,4 +1,4 @@
-import { parseApiErrorMessage } from './api-error';
+import { parseApiErrorMessage, toUserFacingError, USER_NETWORK_ERROR } from './api-error';
 import { clearSession } from './session';
 import { env } from './env';
 import { dateReviver } from './utils';
@@ -41,13 +41,10 @@ async function request<T>(path: string, init?: RequestInit): Promise<T> {
       credentials: 'include',
     });
   } catch (err) {
-    const hint =
-      err instanceof TypeError
-        ? `Cannot reach the API at ${env.apiBaseUrl}. Start the backend (npm run dev:backend) and confirm NEXT_PUBLIC_API_BASE_URL.`
-        : err instanceof Error
-          ? err.message
-          : 'Network request failed';
-    throw new Error(hint);
+    if (typeof console !== 'undefined' && process.env.NODE_ENV !== 'production') {
+      console.warn('[api] network failure', env.apiBaseUrl, err);
+    }
+    throw new Error(toUserFacingError(err, USER_NETWORK_ERROR));
   }
 
   if (response.status === 401) {
@@ -76,7 +73,7 @@ async function request<T>(path: string, init?: RequestInit): Promise<T> {
   try {
     return JSON.parse(text, dateReviver) as T;
   } catch {
-    throw new Error(`Invalid JSON response from server: ${text.slice(0, 200)}`);
+    throw new Error('Received an invalid response from the server. Please try again.');
   }
 }
 

@@ -17,15 +17,29 @@ export async function GET(request: NextRequest) {
     method: 'GET',
     headers: { Authorization: `Bearer ${sessionToken}` },
     cache: 'no-store',
-  });
+  }).catch(() => null);
+
+  if (!backendResponse) {
+    return NextResponse.json(
+      { message: 'Unable to connect to the server. Please try again.' },
+      { status: 503 },
+    );
+  }
 
   const text = await backendResponse.text();
   if (!backendResponse.ok) {
     return NextResponse.json(
-      text.trim() ? JSON.parse(text) : { message: 'Failed to mint ws token' },
+      { message: 'Unable to refresh the live connection. Please try again.' },
       { status: backendResponse.status },
     );
   }
 
-  return NextResponse.json(JSON.parse(text));
+  try {
+    return NextResponse.json(JSON.parse(text));
+  } catch {
+    return NextResponse.json(
+      { message: 'Unable to refresh the live connection. Please try again.' },
+      { status: 502 },
+    );
+  }
 }

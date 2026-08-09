@@ -32,6 +32,7 @@ import { getSession } from '@/lib/mock-auth'
 import { requestsPath } from '@/lib/role-routes'
 import { ACTIVE_TIMER_BLOCKED_MESSAGE } from './use-active-running-task-id'
 
+import { toUserFacingError } from '@/lib/api-error'
 async function saveTimerStateToDb(taskId, accumulatedSeconds, pauseLog, runStartedAt) {
   return apiClient.post(`/tasks/${taskId}/save-timer`, {
     accumulatedSeconds,
@@ -714,7 +715,7 @@ export function ProjectTaskTimer({
       // Single parent refresh — avoid onStatusChange + lifecycle double/triple loadTask.
       onSubmitComplete?.()
     } catch (err) {
-      alert(err?.message || 'Submission failed. Please try again.')
+      alert(toUserFacingError(err, 'Submission failed. Please try again.'))
     } finally {
       setSubmitting(false)
     }

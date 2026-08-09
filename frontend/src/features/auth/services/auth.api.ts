@@ -1,4 +1,4 @@
-import { parseApiErrorMessage } from '@/lib/api-error';
+import { parseApiErrorMessage, toUserFacingError, USER_NETWORK_ERROR } from '@/lib/api-error';
 
 export interface LoginResponse {
   accessToken?: string;
@@ -12,12 +12,17 @@ export interface LoginResponse {
 
 /** Same-origin BFF route sets the httpOnly cookie on the frontend host for middleware. */
 export async function loginApi(email: string, password: string): Promise<LoginResponse> {
-  const response = await fetch('/api/auth/login', {
-    method: 'POST',
-    credentials: 'include',
-    headers: { 'Content-Type': 'application/json' },
-    body: JSON.stringify({ email, password }),
-  });
+  let response: Response;
+  try {
+    response = await fetch('/api/auth/login', {
+      method: 'POST',
+      credentials: 'include',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ email, password }),
+    });
+  } catch (err) {
+    throw new Error(toUserFacingError(err, USER_NETWORK_ERROR));
+  }
 
   const text = await response.text();
   if (!response.ok) {
@@ -25,8 +30,12 @@ export async function loginApi(email: string, password: string): Promise<LoginRe
   }
 
   if (!text.trim()) {
-    throw new Error('Empty authentication response');
+    throw new Error('Unable to sign in right now. Please try again.');
   }
 
-  return JSON.parse(text) as LoginResponse;
+  try {
+    return JSON.parse(text) as LoginResponse;
+  } catch {
+    throw new Error('Unable to sign in right now. Please try again.');
+  }
 }

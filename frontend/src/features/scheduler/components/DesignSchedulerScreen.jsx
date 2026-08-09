@@ -86,6 +86,7 @@ import {
     isTaskReassignmentBlocked,
     TASK_REASSIGNMENT_BLOCKED_MESSAGE,
 } from "../utils/designer-task-stats.util";
+import { toUserFacingError } from "@/lib/api-error"
 // Only these backend events should trigger a scheduler reload for other HODs.
 // Capacity constants
 const DAILY_CAPACITY = 8; // 8hrs per day = normal capacity (green/blue)
@@ -2305,7 +2306,7 @@ export function DesignSchedulerScreen() {
                 toast.success("Weekend day unlocked — open for scheduling.");
             }
         } catch (err) {
-            const msg = err?.response?.data?.message || err?.message || "Could not update weekend day lock.";
+            const msg = toUserFacingError(err, "Could not update weekend day lock.");
             toast.error(msg);
         }
     }, [isWeekLocked, currentDate, weekDates]);
@@ -2586,7 +2587,7 @@ export function DesignSchedulerScreen() {
         queueRecordsRef.current = patchQueueRecordStatus(queueRecordsRef.current);
         setQueueRecords((prev) => patchQueueRecordStatus(prev));
         const handleStaleConsolidationConflict = (error) => {
-            const message = String(error?.message || "");
+            const message = String(toUserFacingError(error, "Something went wrong. Please try again."));
             if (!message.includes("scheduled part of this task changed")) return false;
             toast.error("Another scheduled part of this task changed since this page last loaded. Refreshing…");
             reloadWeekRef.current();

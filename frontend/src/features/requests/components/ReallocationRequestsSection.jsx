@@ -13,6 +13,7 @@ import {
 } from "@/features/requests/services/reallocation-requests.api";
 import { ReallocationCreateForm } from "@/components/TaskReallocationPanel";
 
+import { toUserFacingError } from "@/lib/api-error"
 export default function ReallocationRequestsSection({
   isHOD,
   activeDesignerId,
@@ -43,7 +44,7 @@ export default function ReallocationRequestsSection({
       setRows(Array.isArray(mine) ? mine : []);
       setPending(Array.isArray(inbox) ? inbox : []);
     } catch (e) {
-      setError(e?.message || "Could not load reallocation requests.");
+      setError(toUserFacingError(e, "Could not load reallocation requests."));
       setRows([]);
       setPending([]);
     } finally {
@@ -103,7 +104,7 @@ export default function ReallocationRequestsSection({
       setApproveRow(null);
       await load();
     } catch (err) {
-      toast.error(err?.message || "Failed to approve");
+      toast.error(toUserFacingError(err, "Failed to approve"));
     } finally {
       setBusy(false);
     }
@@ -127,7 +128,7 @@ export default function ReallocationRequestsSection({
       setRemarks("");
       await load();
     } catch (err) {
-      toast.error(err?.message || "Failed to disagree");
+      toast.error(toUserFacingError(err, "Failed to disagree"));
     } finally {
       setBusy(false);
     }
@@ -140,7 +141,7 @@ export default function ReallocationRequestsSection({
       toast.success("Request cancelled");
       await load();
     } catch (err) {
-      toast.error(err?.message || "Failed to cancel");
+      toast.error(toUserFacingError(err, "Failed to cancel"));
     } finally {
       setBusy(false);
     }

@@ -10,6 +10,7 @@ import { TeamActivityFilters } from "./TeamActivityFilters";
 import { ActivityFeedList } from "./ActivityFeedList";
 import { IndividualsPeopleList } from "./IndividualsPeopleList";
 
+import { toUserFacingError } from "@/lib/api-error"
 function buildInitialLikes(activities) {
   const o = {};
   for (const a of activities) {
@@ -103,7 +104,7 @@ export function TeamActivityFeedScreenInner() {
       })
       .catch((err) => {
         if (generation !== loadGenerationRef.current) return;
-        const message = err instanceof Error ? err.message : "Failed to load activities.";
+        const message = toUserFacingError(err, "Failed to load activities.");
         setActivityError(message);
         setLoading(false);
         if (lastActivityErrorRef.current !== message) {

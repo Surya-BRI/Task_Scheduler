@@ -10,6 +10,7 @@ import { taskViewPathForRecord, FROM_SALES_QUEUE } from '@/lib/design-list-route
 import { getStatusLabel, mapTaskToDesignRow } from '@/features/design-list/task-view-model'
 import { TypeOfDesignChip } from '@/lib/ui/TypeOfDesignChip'
 
+import { toUserFacingError } from '@/lib/api-error'
 const PAGE_SIZE = 100
 
 const getStatusColor = (status) => {
@@ -81,7 +82,7 @@ export default function SalesTaskListScreen() {
       if (generation !== fetchGenRef.current) return
       setTasks([])
       setServerTotal(0)
-      setError(err instanceof Error ? err.message : 'Could not load sales review list.')
+      setError(toUserFacingError(err, 'Could not load sales review list.'))
     } finally {
       if (generation === fetchGenRef.current) setLoading(false)
     }
