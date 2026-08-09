@@ -118,7 +118,8 @@ export type DesignerAssignmentStatRow = {
 };
 
 /**
- * Week slot/hours/work-till for Mon–Fri — mirrors live-schedule-from-assignments StatsBar fields.
+ * Week slot/hours/work-till for Mon–Sun — mirrors live-schedule-from-assignments StatsBar fields.
+ * Weekends count the same as weekdays when scheduled.
  */
 export function computeDesignerWeekWorkloadStats(
   rows: DesignerAssignmentStatRow[],
@@ -134,7 +135,7 @@ export function computeDesignerWeekWorkloadStats(
 
   for (const row of rows) {
     const dayIndex = Number(row.dayIndex);
-    if (!Number.isFinite(dayIndex) || dayIndex < 0 || dayIndex > 4) continue;
+    if (!Number.isFinite(dayIndex) || dayIndex < 0 || dayIndex > 6) continue;
 
     let hours = 0;
     if (row.requestType === 'LEAVE') {
@@ -155,7 +156,7 @@ export function computeDesignerWeekWorkloadStats(
 
   let lastWorkDayIndex: number | null = null;
   let lastWorkDayHours = 0;
-  for (let d = 0; d <= 4; d += 1) {
+  for (let d = 0; d <= 6; d += 1) {
     const h = dayHours.get(d) ?? 0;
     if (h > 0) {
       lastWorkDayIndex = d;

@@ -8,8 +8,15 @@ import { ActivityAction } from '../activities/activity-events';
 import { DashboardRealtimeService } from '../dashboard/dashboard-realtime.service';
 import { CronLockService, LOCK_NOT_ACQUIRED } from '../common/services/cron-lock.service';
 import { taskViewPath } from '../common/utils/design-type.util';
+import { matchSalesUsersToProject } from '../common/utils/sales-notification-recipients.util';
+import { normalizePersonName } from '../common/utils/project-team-names.util';
 
 const DEADLINE_CRON_LOCK = 'TaskScheduler:DeadlineAlertsCron';
+
+/** Gulf Standard Time (Asia/Dubai) — UTC+4 year-round, no DST. */
+const GST_UTC_OFFSET_MS = 4 * 60 * 60 * 1000;
+/** Overdue nags fire once daily in this GST morning window (caught by the every-5-minute cron). */
+const OVERDUE_ALERT_GST_HOUR = 8;
 
 const REMINDER_INTERVALS = [
   { label: '24 hours', ms: 24 * 60 * 60 * 1000 },
@@ -48,6 +55,10 @@ export class DeadlineAlertsService {
 
   @Cron('*/5 * * * *')
   async checkDeadlines() {
+    if (this.isDeadlineAlertsDisabled()) {
+      this.logger.debug('Deadline alerts skipped: DEADLINE_ALERTS_ENABLED is off');
+      return;
+    }
     if (this.cronRunning) {
       this.logger.debug('Deadline alerts skipped: previous run still in progress');
       return;
@@ -68,17 +79,26 @@ export class DeadlineAlertsService {
     }
   }
 
+  private isDeadlineAlertsDisabled(): boolean {
+    const raw = String(process.env.DEADLINE_ALERTS_ENABLED ?? 'true').trim().toLowerCase();
+    return raw === '0' || raw === 'false' || raw === 'off' || raw === 'no';
+  }
+
   private async runDeadlineScan() {
     const now = new Date();
     const horizon = new Date(now.getTime() + HORIZON_MS);
 
-    const hodUsers = await this.prisma.user.findMany({
+    const stakeholderUsers = await this.prisma.user.findMany({
       where: { role: { name: { in: ['HOD', 'SALESPERSON', 'ADMIN'] } } },
-      select: { id: true, fullName: true },
+      select: { id: true, fullName: true, role: { select: { name: true } } },
     });
+    const managementUsers = stakeholderUsers.filter(
+      (user) => user.role?.name === 'HOD' || user.role?.name === 'ADMIN',
+    );
+    const salesUsers = stakeholderUsers.filter((user) => user.role?.name === 'SALESPERSON');
 
-    if (hodUsers.length === 0) {
-      this.logger.warn('Deadline alerts skipped: no HOD/Admin users found');
+    if (managementUsers.length === 0 && salesUsers.length === 0) {
+      this.logger.warn('Deadline alerts skipped: no HOD/Admin/Sales users found');
       return;
     }
 
@@ -110,6 +130,7 @@ export class DeadlineAlertsService {
             projectNo: true,
             name: true,
             category: true,
+            salesPerson: true,
             technicalHead: true,
             teamLead: true,
             subTeamLead: true,
@@ -128,6 +149,7 @@ export class DeadlineAlertsService {
 
     let taskAlertCount = 0;
     let projectAlertCount = 0;
+    const fallbackActorId = managementUsers[0]?.id ?? salesUsers[0]?.id;
 
     for (const task of tasksWithDesigners) {
       const dueDate = this.getTaskDueDate(task);
@@ -136,23 +158,26 @@ export class DeadlineAlertsService {
       const interval = this.getReminderInterval(now, dueDate);
       const isOverdue = dueDate <= now;
       if (!interval && !isOverdue) continue;
+      // Overdue: once per GST day at ~08:00 — not on every 5-minute tick.
+      if (isOverdue && !this.isGstMorningOverdueWindow(now)) continue;
 
       const linkUrl = this.taskLink(task);
       const title = isOverdue ? 'Task Deadline Overdue' : `Task Deadline Reminder - ${interval!.label}`;
       const message = this.buildTaskMessage(task, dueDate, now, interval, isOverdue);
-      const recipients = this.getTaskRecipients(task, hodUsers);
+      const recipients = this.getTaskRecipients(task, managementUsers, salesUsers);
 
       if (await this.notifyRecipients(recipients, title, message, linkUrl)) {
         taskAlertCount += 1;
-        await this.logActivity(task, title, dueDate, now, isOverdue, recipients[0] ?? hodUsers[0].id);
+        await this.logActivity(task, title, dueDate, now, isOverdue, recipients[0] ?? fallbackActorId!);
       }
     }
 
-    const projectDeadlines = this.getProjectDeadlines(tasksWithDesigners, hodUsers);
+    const projectDeadlines = this.getProjectDeadlines(tasksWithDesigners, managementUsers, salesUsers);
     for (const projectDeadline of projectDeadlines) {
       const interval = this.getReminderInterval(now, projectDeadline.dueDate);
       const isOverdue = projectDeadline.dueDate <= now;
       if (!interval && !isOverdue) continue;
+      if (isOverdue && !this.isGstMorningOverdueWindow(now)) continue;
 
       const title = isOverdue ? 'Project Deadline Overdue' : `Project Deadline Reminder - ${interval!.label}`;
       const message = this.buildProjectMessage(projectDeadline, now, interval, isOverdue);
@@ -166,7 +191,7 @@ export class DeadlineAlertsService {
           projectDeadline.dueDate,
           now,
           isOverdue,
-          projectDeadline.recipients[0] ?? hodUsers[0].id,
+          projectDeadline.recipients[0] ?? fallbackActorId!,
         );
       }
     }
@@ -187,6 +212,19 @@ export class DeadlineAlertsService {
     );
   }
 
+  /**
+   * True during the ~5.5 min window after 08:00 GST so the every-5-minute cron fires
+   * overdue nags once per Gulf business day (not every tick while a task stays overdue).
+   */
+  private isGstMorningOverdueWindow(now: Date): boolean {
+    const gst = new Date(now.getTime() + GST_UTC_OFFSET_MS);
+    const minutesOfDay =
+      gst.getUTCHours() * 60 + gst.getUTCMinutes() + gst.getUTCSeconds() / 60 + gst.getUTCMilliseconds() / 60_000;
+    const targetMinutes = OVERDUE_ALERT_GST_HOUR * 60;
+    const deltaMinutes = minutesOfDay - targetMinutes;
+    return deltaMinutes >= 0 && deltaMinutes * 60_000 < SCAN_WINDOW_MS;
+  }
+
   private getTaskDueDate(task: any): Date | null {
     const candidates = [
       task.dueDate,
@@ -201,23 +239,32 @@ export class DeadlineAlertsService {
     return candidates.sort((a, b) => a.getTime() - b.getTime())[0];
   }
 
-  private getTaskRecipients(task: any, hodUsers: Array<{ id: string; fullName: string }>): string[] {
+  private getTaskRecipients(
+    task: any,
+    managementUsers: Array<{ id: string; fullName: string }>,
+    salesUsers: Array<{ id: string; fullName: string }>,
+  ): string[] {
     const recipients = new Set<string>();
     if (task.assigneeId) recipients.add(task.assigneeId);
     for (const designerId of task.splitDesignerIds ?? []) {
       if (designerId) recipients.add(designerId);
     }
 
-    const namedHods = this.resolveNamedHods(task, hodUsers);
-    const hodRecipients = namedHods.length > 0 ? namedHods : hodUsers;
-    for (const hod of hodRecipients) {
-      recipients.add(hod.id);
+    // Named TH/TL/STL/HOD when present; otherwise all HOD/Admin — never broadcast to every salesperson.
+    const namedManagers = this.resolveNamedUsers(task, managementUsers);
+    const managerRecipients = namedManagers.length > 0 ? namedManagers : managementUsers;
+    for (const user of managerRecipients) {
+      recipients.add(user.id);
+    }
+
+    for (const salesUser of matchSalesUsersToProject(task.project, salesUsers)) {
+      recipients.add(salesUser.id);
     }
 
     return [...recipients];
   }
 
-  private resolveNamedHods(task: any, hodUsers: Array<{ id: string; fullName: string }>) {
+  private resolveNamedUsers(task: any, users: Array<{ id: string; fullName: string }>) {
     const names = [
       task.technicalHead,
       task.teamLead,
@@ -228,13 +275,17 @@ export class DeadlineAlertsService {
       ...(task.retailDetails ?? []).map((detail: any) => detail.hodName),
     ]
       .filter((value): value is string => typeof value === 'string' && value.trim().length > 0)
-      .map((value) => this.normalizeName(value));
+      .map((value) => normalizePersonName(value));
 
     if (names.length === 0) return [];
-    return hodUsers.filter((user) => names.includes(this.normalizeName(user.fullName)));
+    return users.filter((user) => names.includes(normalizePersonName(user.fullName)));
   }
 
-  private getProjectDeadlines(tasks: any[], hodUsers: Array<{ id: string; fullName: string }>) {
+  private getProjectDeadlines(
+    tasks: any[],
+    managementUsers: Array<{ id: string; fullName: string }>,
+    salesUsers: Array<{ id: string; fullName: string }>,
+  ) {
     const grouped = new Map<
       string,
       {
@@ -253,14 +304,8 @@ export class DeadlineAlertsService {
 
       const existing = grouped.get(task.projectId);
       const recipients = existing?.recipients ?? new Set<string>();
-      if (task.assigneeId) recipients.add(task.assigneeId);
-      for (const designerId of task.splitDesignerIds ?? []) {
-        if (designerId) recipients.add(designerId);
-      }
-      if (task.project.createdById) recipients.add(task.project.createdById);
-      const projectHods = this.resolveNamedHods(task, hodUsers);
-      for (const hod of projectHods.length > 0 ? projectHods : hodUsers) {
-        recipients.add(hod.id);
+      for (const userId of this.getTaskRecipients(task, managementUsers, salesUsers)) {
+        recipients.add(userId);
       }
 
       if (!existing || dueDate < existing.dueDate) {
@@ -403,7 +448,4 @@ export class DeadlineAlertsService {
     return diffMs < 0 ? `${text} overdue` : text;
   }
 
-  private normalizeName(value: string) {
-    return value.trim().replace(/\s+/g, ' ').toLowerCase();
-  }
 }

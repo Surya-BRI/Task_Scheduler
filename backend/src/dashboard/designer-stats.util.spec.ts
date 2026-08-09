@@ -59,22 +59,22 @@ describe('designer-stats.util', () => {
     ).toBe(6);
   });
 
-  it('sums Mon–Fri slots/hours and work-till like live schedule StatsBar', () => {
+  it('sums Mon–Sun slots/hours and work-till like live schedule StatsBar', () => {
     const weekDates = Array.from({ length: 7 }, (_, i) => new Date(2026, 6, 13 + i));
     const result = computeDesignerWeekWorkloadStats(
       [
         { dayIndex: 0, scheduledHours: 4, approvedOvertimeHours: 0 },
         { dayIndex: 2, scheduledHours: 6, approvedOvertimeHours: 2 },
         { dayIndex: 4, requestType: 'LEAVE', leaveHours: 8 },
-        { dayIndex: 5, scheduledHours: 4 }, // Sat ignored
+        { dayIndex: 5, scheduledHours: 4 }, // Sat counts
       ],
       weekDates,
     );
 
-    expect(result.workLoad.tasks).toBe(3);
-    expect(result.workLoad.hours).toBe(20);
-    expect(result.lastWorkDayIndex).toBe(4);
-    expect(result.workTill.hours).toBe(8);
-    expect(result.workTill.label).toMatch(/Friday/i);
+    expect(result.workLoad.tasks).toBe(4);
+    expect(result.workLoad.hours).toBe(24);
+    expect(result.lastWorkDayIndex).toBe(5);
+    expect(result.workTill.hours).toBe(4);
+    expect(result.workTill.label).toMatch(/Saturday/i);
   });
 });

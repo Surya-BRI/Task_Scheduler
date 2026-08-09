@@ -217,7 +217,16 @@ export function CreateTaskModal({ open, onClose, onCreated, submissionDate, reco
     }
     if (Object.keys(nextFieldErrors).length > 0) {
       setFieldErrors(nextFieldErrors)
-      setError(nextFieldErrors.projectName || 'Please fill required fields')
+      const firstMsg =
+        nextFieldErrors.hod ||
+        nextFieldErrors.revisionCode ||
+        nextFieldErrors.designType ||
+        nextFieldErrors.deadline ||
+        nextFieldErrors.hoursRequired ||
+        nextFieldErrors.projectName ||
+        'Please fill required fields'
+      setError(firstMsg)
+      toast.error(firstMsg)
       return
     }
 
@@ -512,7 +521,6 @@ export function CreateTaskModal({ open, onClose, onCreated, submissionDate, reco
                   setFieldErrors((prev) => ({ ...prev, hod: '' }))
                 }}
                 onBlur={() => setTouched((prev) => ({ ...prev, hod: true }))}
-                required
                 disabled={hodUsersLoading || Boolean(hodUsersError)}
                 className="mt-1.5 w-full rounded-md border border-slate-300 bg-white px-3 py-2 text-sm text-slate-900 outline-none transition-colors focus:border-blue-500 focus:ring-2 focus:ring-blue-500/20 disabled:cursor-not-allowed disabled:bg-slate-50"
               >
@@ -567,7 +575,6 @@ export function CreateTaskModal({ open, onClose, onCreated, submissionDate, reco
                 id="create-hours"
                 type="number"
                 min={1}
-                required
                 value={hoursRequired}
                 onChange={(e) => {
                   setHoursRequired(e.target.value)
@@ -626,8 +633,8 @@ export function CreateTaskModal({ open, onClose, onCreated, submissionDate, reco
             {error ? <p className="mr-3 self-center text-xs text-red-600">{error}</p> : null}
             <button
               type="submit"
-              disabled={submitting || !REVISION_PATTERN.test(revisionCode.trim().toUpperCase()) || !designType.trim() || !hod.trim() || !validSubmissionDate}
-              className="rounded-full bg-blue-600 px-10 py-2.5 text-sm font-semibold text-white shadow-sm transition hover:bg-blue-700 focus:outline-none focus-visible:ring-2 focus-visible:ring-blue-500 focus-visible:ring-offset-2"
+              disabled={submitting}
+              className="cursor-pointer rounded-full bg-blue-600 px-10 py-2.5 text-sm font-semibold text-white shadow-sm transition hover:bg-blue-700 focus:outline-none focus-visible:ring-2 focus-visible:ring-blue-500 focus-visible:ring-offset-2 disabled:cursor-not-allowed disabled:opacity-60"
             >
               {submitting ? 'Creating...' : 'Create'}
             </button>

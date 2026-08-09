@@ -45,7 +45,9 @@ export type SchedulerWeekMeta = {
   isLocked: boolean;
   updatedAt: Date;
   updatedBy: string | null;
-  /** Sorted `designerId|YYYY-MM-DD` keys for weekend unlock sync. */
+  /** Sorted `designerId|YYYY-MM-DD` keys for weekend day-locks (skipped days). */
+  dayLockKeys?: string[];
+  /** @deprecated Alias of dayLockKeys */
   dayUnlockKeys?: string[];
 };
 
@@ -65,8 +67,8 @@ export type SaveSchedulerAssignmentInput = {
 
 /**
  * Hours that didn't fit anywhere in the week being saved. The server finds the next available
- * working day (skipping weekends/holidays/full-day leave, possibly in a later week) and creates
- * the assignment row(s) itself, atomically with the rest of this save.
+ * working day (skipping holidays/full-day leave/designer weekend day-locks; weekends otherwise open)
+ * and creates the assignment row(s) itself, atomically with the rest of this save.
  */
 export type SchedulerOverflowInput = {
   designerId: string;
@@ -90,30 +92,44 @@ export type SchedulerUnplacedOverflow = {
   hours: number;
 };
 
-export type SchedulerDayUnlock = {
+export type SchedulerDayLock = {
   id: string;
   designerId: string;
   date: string;
-  unlockedById: string;
+  lockedById?: string;
+  unlockedById?: string;
   reason: string | null;
   createdAt: string;
 };
 
+/** @deprecated Use SchedulerDayLock */
+export type SchedulerDayUnlock = SchedulerDayLock;
+
 export type SchedulerWeekPayload = {
   assignments: SchedulerAssignmentRow[];
-  dayUnlocks: SchedulerDayUnlock[];
+  dayLocks?: SchedulerDayLock[];
+  dayUnlocks?: SchedulerDayUnlock[];
   /** Present on current API — week bootstrap no longer needs a parallel /meta GET. */
   weekStart?: string;
   version?: number;
   isLocked?: boolean;
   updatedAt?: Date | string;
   updatedBy?: string | null;
+  dayLockKeys?: string[];
   dayUnlockKeys?: string[];
 };
 
 function normalizeWeekPayload(res: unknown): SchedulerWeekPayload {
   if (Array.isArray(res)) {
-    return { assignments: res as SchedulerAssignmentRow[], dayUnlocks: [], version: 0, isLocked: false, dayUnlockKeys: [] };
+    return {
+      assignments: res as SchedulerAssignmentRow[],
+      dayLocks: [],
+      dayUnlocks: [],
+      version: 0,
+      isLocked: false,
+      dayLockKeys: [],
+      dayUnlockKeys: [],
+    };
   }
   const obj = (res ?? {}) as SchedulerWeekPayload & { data?: SchedulerAssignmentRow[] };
   const assignments = Array.isArray(obj.assignments)
@@ -121,19 +137,27 @@ function normalizeWeekPayload(res: unknown): SchedulerWeekPayload {
     : Array.isArray(obj.data)
       ? obj.data
       : [];
-  const dayUnlocks = Array.isArray(obj.dayUnlocks) ? obj.dayUnlocks : [];
-  const dayUnlockKeys = Array.isArray(obj.dayUnlockKeys)
-    ? obj.dayUnlockKeys
-    : dayUnlocks.map((u) => `${u.designerId}|${u.date}`).filter((k) => k.includes('|'));
+  const dayLocks = Array.isArray(obj.dayLocks)
+    ? obj.dayLocks
+    : Array.isArray(obj.dayUnlocks)
+      ? obj.dayUnlocks
+      : [];
+  const dayLockKeys = Array.isArray(obj.dayLockKeys) && obj.dayLockKeys.length > 0
+    ? obj.dayLockKeys
+    : Array.isArray(obj.dayUnlockKeys) && obj.dayUnlockKeys.length > 0
+      ? obj.dayUnlockKeys
+      : dayLocks.map((u) => `${u.designerId}|${u.date}`).filter((k) => k.includes('|'));
   return {
     assignments,
-    dayUnlocks,
+    dayLocks,
+    dayUnlocks: dayLocks,
     weekStart: obj.weekStart,
     version: Number(obj.version ?? 0),
     isLocked: Boolean(obj.isLocked),
     updatedAt: obj.updatedAt,
     updatedBy: obj.updatedBy ?? null,
-    dayUnlockKeys,
+    dayLockKeys,
+    dayUnlockKeys: dayLockKeys,
   };
 }
 
@@ -146,12 +170,24 @@ export async function listSchedulerAssignmentsForWeek(weekStart: string, designe
   return normalizeWeekPayload(res);
 }
 
-export function createSchedulerDayUnlock(input: { designerId: string; date: string; reason?: string }) {
-  return apiClient.post<SchedulerDayUnlock>('/scheduler-assignments/day-unlocks', input);
+/** Lock a weekend day for a designer (packing skips it like a holiday). */
+export function createSchedulerDayLock(input: { designerId: string; date: string; reason?: string }) {
+  return apiClient.post<SchedulerDayLock>('/scheduler-assignments/day-locks', input);
 }
 
+/** Remove a weekend day lock (day becomes open again). */
+export function deleteSchedulerDayLock(input: { designerId: string; date: string }) {
+  return apiClient.delete<{ ok: true }>('/scheduler-assignments/day-locks', input);
+}
+
+/** @deprecated Use createSchedulerDayLock */
+export function createSchedulerDayUnlock(input: { designerId: string; date: string; reason?: string }) {
+  return createSchedulerDayLock(input);
+}
+
+/** @deprecated Use deleteSchedulerDayLock */
 export function deleteSchedulerDayUnlock(input: { designerId: string; date: string }) {
-  return apiClient.delete<{ ok: true }>('/scheduler-assignments/day-unlocks', input);
+  return deleteSchedulerDayLock(input);
 }
 
 export function getSchedulerWeekMeta(weekStart: string) {

@@ -35,7 +35,7 @@ describe("scheduler-workload.util", () => {
     expect(sumSlotTotalHours(taskMap, ["taskB"])).toBe(7.5);
   });
 
-  it("tracks the last weekday with scheduled work for Work Till", async () => {
+  it("tracks the last working day with scheduled work for Work Till", async () => {
     const { buildDesignerSnapshot } = await import("./designerDashboardSync");
     const taskMap = {
       mon: { id: "mon", scheduledHours: 4 },
@@ -44,6 +44,13 @@ describe("scheduler-workload.util", () => {
     const snapshot = buildDesignerSnapshot(taskMap, { "0": ["mon"], "4": ["fri"] });
     expect(snapshot.stats.lastWorkDayIndex).toBe(4);
     expect(snapshot.stats.lastWorkDayHours).toBe(8);
+
+    const weekendMap = {
+      sat: { id: "sat", scheduledHours: 6 },
+    };
+    const weekendSnapshot = buildDesignerSnapshot(weekendMap, { "5": ["sat"] });
+    expect(weekendSnapshot.stats.lastWorkDayIndex).toBe(5);
+    expect(weekendSnapshot.stats.lastWorkDayHours).toBe(6);
 
     const emptySnapshot = buildDesignerSnapshot({}, {});
     expect(emptySnapshot.stats.lastWorkDayIndex).toBeNull();
@@ -101,7 +108,7 @@ describe("scheduler-workload.util", () => {
     expect(snapshot.stats.lastWorkDayHours).toBe(11);
   });
 
-  it("aggregates week workload and slot count across weekdays", () => {
+  it("aggregates week workload and slot count across Mon–Sun working days", () => {
     const taskMap = {
       mon: { scheduledHours: 3 },
       tue: { scheduledHours: 4 },

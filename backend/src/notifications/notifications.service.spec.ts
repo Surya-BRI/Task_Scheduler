@@ -82,18 +82,23 @@ describe('NotificationsService', () => {
     });
   });
 
-  it('existsToday checks notifications created since midnight', async () => {
+  it('existsToday checks notifications since 00:00 GST (not UTC midnight)', async () => {
+    // 09 Aug 2026 02:00 UTC = 06:00 GST → GST day started 08 Aug 20:00 UTC
+    jest.useFakeTimers({ now: new Date('2026-08-09T02:00:00.000Z') });
     prisma.notification.count.mockResolvedValue(1);
+
     await expect(service.existsToday(userId, 'Title', '/link')).resolves.toBe(true);
+
     expect(prisma.notification.count).toHaveBeenCalledWith(
       expect.objectContaining({
         where: expect.objectContaining({
           userId,
           title: 'Title',
           linkUrl: '/link',
-          createdAt: expect.objectContaining({ gte: expect.any(Date) }),
+          createdAt: { gte: new Date('2026-08-08T20:00:00.000Z') },
         }),
       }),
     );
+    jest.useRealTimers();
   });
 });

@@ -9,7 +9,8 @@ function startOfLocalDay(date) {
 }
 
 /**
- * Count Mon–Fri days from `fromDate` through `deadlineDate` (inclusive).
+ * Count calendar days from `fromDate` through `deadlineDate` (inclusive).
+ * Sat/Sun count the same as Mon–Fri (scheduler weekends are open working days).
  * Returns 0 if the deadline is before fromDate or invalid.
  */
 export function countWorkingDaysUntil(deadlineDate, fromDate = new Date()) {
@@ -17,14 +18,9 @@ export function countWorkingDaysUntil(deadlineDate, fromDate = new Date()) {
   const end = startOfLocalDay(deadlineDate);
   if (!start || !end || end < start) return 0;
 
-  let count = 0;
-  const cursor = new Date(start);
-  while (cursor <= end) {
-    const day = cursor.getDay(); // 0 Sun … 6 Sat
-    if (day !== 0 && day !== 6) count += 1;
-    cursor.setDate(cursor.getDate() + 1);
-  }
-  return count;
+  // Inclusive day span — every calendar day is a working day (Mon–Sun).
+  const msPerDay = 24 * 60 * 60 * 1000;
+  return Math.floor((end.getTime() - start.getTime()) / msPerDay) + 1;
 }
 
 export function maxHoursForDeadline(deadlineDate, fromDate = new Date()) {

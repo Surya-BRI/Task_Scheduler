@@ -12,7 +12,7 @@ import { PrismaService } from '../prisma/prisma.service';
 import { ActivityLoggerService } from '../activities/activity-logger.service';
 import { ActivityAction } from '../activities/activity-events';
 import { UserRole } from '../common/constants/roles.enum';
-import { hasDepartmentManagerAccess } from '../common/utils/workflow-roles.util';
+import { hasHrApproverAccess } from '../common/utils/workflow-roles.util';
 import { assertRegularizationDateAllowed } from '../common/utils/date-window.util';
 import { CreateRegularizationRequestDto } from './dto/create-regularization-request.dto';
 import { ReviewRegularizationRequestDto } from './dto/review-regularization-request.dto';
@@ -277,7 +277,7 @@ export class RegularizationRequestsService implements RegularizationRequestsCont
     return this.prisma.user.findMany({
       where: {
         departmentId: departmentId.trim(),
-        role: { name: { in: [UserRole.HOD, UserRole.SALESPERSON] } },
+        role: { name: UserRole.HOD },
       },
       select: { id: true, fullName: true, email: true },
     });
@@ -300,7 +300,7 @@ export class RegularizationRequestsService implements RegularizationRequestsCont
 
     if (targets.length === 0) {
       targets = await this.prisma.user.findMany({
-        where: { role: { name: { in: [UserRole.HOD, UserRole.SALESPERSON] } } },
+        where: { role: { name: { in: [UserRole.HOD] } } },
         select: { id: true, fullName: true, email: true },
       });
     }
@@ -356,7 +356,7 @@ export class RegularizationRequestsService implements RegularizationRequestsCont
   }
 
   private assertDesignerOwnership(submitterId: string, role: UserRole, designerId: string) {
-    if (hasDepartmentManagerAccess(role)) return;
+    if (hasHrApproverAccess(role)) return;
     if (submitterId !== designerId) {
       throw new ForbiddenException('You can only submit regularization requests for yourself');
     }
@@ -367,7 +367,7 @@ export class RegularizationRequestsService implements RegularizationRequestsCont
     role: UserRole,
     request: RegularizationRequestView,
   ) {
-    if (!hasDepartmentManagerAccess(role)) {
+    if (!hasHrApproverAccess(role)) {
       throw new ForbiddenException('Only department managers can review regularization requests');
     }
 
@@ -454,7 +454,7 @@ export class RegularizationRequestsService implements RegularizationRequestsCont
     if (!isUuidString(id)) throw new BadRequestException('id must be a UUID.');
     const request = await this.loadRowById(id);
 
-    if (hasDepartmentManagerAccess(role)) {
+    if (hasHrApproverAccess(role)) {
       await this.assertReviewerAccess(userId, role, request);
       return request;
     }
@@ -469,7 +469,7 @@ export class RegularizationRequestsService implements RegularizationRequestsCont
     managerId: string,
     role: UserRole,
   ): Promise<RegularizationRequestView[]> {
-    if (!hasDepartmentManagerAccess(role)) {
+    if (!hasHrApproverAccess(role)) {
       throw new ForbiddenException('Only department managers can view pending approvals');
     }
 
@@ -497,7 +497,7 @@ export class RegularizationRequestsService implements RegularizationRequestsCont
     role: UserRole,
     filters: { status?: string; designerId?: string },
   ): Promise<RegularizationRequestView[]> {
-    if (!hasDepartmentManagerAccess(role)) {
+    if (!hasHrApproverAccess(role)) {
       throw new ForbiddenException('Only department managers can view team requests');
     }
 
@@ -608,7 +608,7 @@ export class RegularizationRequestsService implements RegularizationRequestsCont
 
     const hods = await this.findDepartmentHods(designer.departmentId);
     const assignedHodId = hods[0]?.id ?? null;
-    const hodAutoApprove = hasDepartmentManagerAccess(role);
+    const hodAutoApprove = hasHrApproverAccess(role);
     const hodOnBehalf = hodAutoApprove && submitterId !== dto.designerId;
     const status = hodAutoApprove ? 'Approved' : dto.status?.trim() || 'Pending';
     const reviewedAt = hodAutoApprove ? new Date() : undefined;

@@ -33,16 +33,23 @@ describe('TasksService', () => {
     status: 'ON_HOLD',
     designType: 'Project',
     assigneeId: 'designer-1',
-    project: { id: 'project-1', projectNo: 'P-1', name: 'Project One' },
+    project: {
+      id: 'project-1',
+      projectNo: 'P-1',
+      name: 'Project One',
+      salesPerson: 'FahadQuazi',
+      createdById: null,
+    },
     retailDetails: [],
     projectDetails: [],
   };
 
   const prisma: any = {
-    task: { findUnique: jest.fn(), update: jest.fn(), create: jest.fn(), findMany: jest.fn(), count: jest.fn() },
+    task: { findUnique: jest.fn(), update: jest.fn(), create: jest.fn(), findMany: jest.fn(), count: jest.fn(), findUniqueOrThrow: jest.fn() },
     taskDesigner: { findUnique: jest.fn(), findMany: jest.fn(), create: jest.fn(), deleteMany: jest.fn() },
     schedulerAssignment: { findMany: jest.fn(), deleteMany: jest.fn() },
     user: { findMany: jest.fn(), findUnique: jest.fn() },
+    activityLog: { findFirst: jest.fn() },
     taskWorkSession: {
       findFirst: jest.fn(),
       findMany: jest.fn(),
@@ -51,7 +58,7 @@ describe('TasksService', () => {
       updateMany: jest.fn(),
       create: jest.fn(),
     },
-    project: { findFirst: jest.fn(), findMany: jest.fn(), update: jest.fn(), create: jest.fn() },
+    project: { findFirst: jest.fn(), findMany: jest.fn(), findUnique: jest.fn(), update: jest.fn(), create: jest.fn() },
     retailTaskDetail: { create: jest.fn() },
     retailTaskDetailAttachment: { create: jest.fn(), createMany: jest.fn() },
     projectTaskDetailAttachment: { create: jest.fn(), createMany: jest.fn() },
@@ -72,6 +79,27 @@ describe('TasksService', () => {
 
   const service = new TasksService(prisma, taskFilesService, activityLogger, notificationsService, dashboardRealtime);
 
+  /** Route user.findMany by role — scoped notify helpers issue separate manager vs sales queries. */
+  const mockNotifyUsersByRole = (opts: {
+    managers?: Array<{ id: string }>;
+    admins?: Array<{ id: string }>;
+    sales?: Array<{ id: string; fullName: string }>;
+  }) => {
+    prisma.user.findMany.mockImplementation(({ where }: any) => {
+      const roles: string[] = where?.role?.name?.in ?? (where?.role?.name ? [where.role.name] : []);
+      if (roles.includes('SALESPERSON') && !roles.includes('HOD') && !roles.includes('ADMIN')) {
+        return Promise.resolve(opts.sales ?? []);
+      }
+      if (roles.length === 1 && roles[0] === 'ADMIN') {
+        return Promise.resolve(opts.admins ?? opts.managers ?? []);
+      }
+      if (roles.includes('HOD') || roles.includes('ADMIN')) {
+        return Promise.resolve(opts.managers ?? []);
+      }
+      return Promise.resolve([]);
+    });
+  };
+
   beforeEach(() => {
     jest.clearAllMocks();
     // Prefer reset for findUnique so leftover mockResolvedValueOnce queues from a
@@ -86,6 +114,11 @@ describe('TasksService', () => {
     prisma.taskDesigner.create.mockResolvedValue({});
     prisma.taskDesigner.deleteMany.mockResolvedValue({ count: 0 });
     prisma.user.findMany.mockResolvedValue([]);
+    prisma.activityLog.findFirst.mockResolvedValue(null);
+    prisma.project.findUnique.mockResolvedValue({
+      salesPerson: 'FahadQuazi',
+      createdById: null,
+    });
     notificationsService.create.mockResolvedValue({});
     prisma.task.findMany.mockResolvedValue([]);
     prisma.chatterPost.create.mockResolvedValue({});
@@ -770,7 +803,13 @@ describe('TasksService', () => {
         .mockResolvedValueOnce({ retailDetails: [], projectDetails: [] });
       prisma.task.create.mockResolvedValue(revisionTask);
       prisma.task.findMany.mockResolvedValue([{ revisionCode: 'R0' }]);
-      prisma.user.findMany.mockResolvedValue([{ id: 'hod-1' }, { id: 'sales-1' }]);
+      mockNotifyUsersByRole({
+        managers: [{ id: 'hod-1' }],
+        sales: [
+          { id: 'sales-1', fullName: 'Fahad Quazi' },
+          { id: 'sales-other', fullName: 'Sithara Sukumaran' },
+        ],
+      });
 
       const result = await service.updateStatus(TASK_ID, 'sales-1', UserRole.SALESPERSON, {
         status: 'CLIENT_REJECTED',
@@ -809,6 +848,7 @@ describe('TasksService', () => {
       );
       expect(newRevisionNotifs).toHaveLength(2);
       expect(newRevisionNotifs.map(([p]: any[]) => p.userId).sort()).toEqual(['hod-1', 'sales-1']);
+      expect(newRevisionNotifs.map(([p]: any[]) => p.userId)).not.toContain('sales-other');
       expect(result.newRevisionTaskId).toBe(revisionTask.id);
       expect(result.newRevisionTaskNo).toBe(revisionTask.taskNo);
     });
@@ -841,7 +881,13 @@ describe('TasksService', () => {
         assigneeId: 'designer-1',
         reworkNote: 'Fix sheet 3',
       });
-      prisma.user.findMany.mockResolvedValue([{ id: 'hod-1' }, { id: 'sales-other' }, { id: 'sales-1' }]);
+      mockNotifyUsersByRole({
+        managers: [{ id: 'hod-1' }],
+        sales: [
+          { id: 'sales-1', fullName: 'Fahad Quazi' },
+          { id: 'sales-other', fullName: 'Sithara Sukumaran' },
+        ],
+      });
 
       const result = await service.updateStatus(TASK_ID, 'sales-1', UserRole.SALESPERSON, {
         status: 'REWORK',
@@ -865,10 +911,10 @@ describe('TasksService', () => {
       expect(notificationsService.create).toHaveBeenCalledWith(
         expect.objectContaining({ userId: 'hod-1', title: expect.stringContaining('Rework Issued') }),
       );
-      expect(notificationsService.create).toHaveBeenCalledWith(
+      // Unmatched salesperson is not flooded; matched actor is not re-notified
+      expect(notificationsService.create).not.toHaveBeenCalledWith(
         expect.objectContaining({ userId: 'sales-other', title: expect.stringContaining('Rework Issued') }),
       );
-      // Actor who issued rework is not re-notified as a stakeholder
       expect(notificationsService.create).not.toHaveBeenCalledWith(
         expect.objectContaining({ userId: 'sales-1', title: expect.stringContaining('Rework Issued') }),
       );
@@ -879,18 +925,24 @@ describe('TasksService', () => {
       );
     });
 
-    it('SALES_REVIEW notifies salesperson and admin', async () => {
+    it('SALES_REVIEW notifies matched project sales + admin only (not every salesperson)', async () => {
       prisma.task.update.mockResolvedValue({ ...updatedTask, status: 'SALES_REVIEW' });
-      prisma.user.findMany.mockResolvedValue([{ id: 'sales-1' }, { id: 'admin-1' }]);
+      mockNotifyUsersByRole({
+        admins: [{ id: 'admin-1' }],
+        sales: [
+          { id: 'sales-1', fullName: 'Fahad Quazi' },
+          { id: 'sales-other', fullName: 'Sithara Sukumaran' },
+        ],
+      });
 
       await service.updateStatus(TASK_ID, 'hod-1', UserRole.HOD, { status: 'SALES_REVIEW' } as any);
 
-      expect(notificationsService.create).toHaveBeenCalledWith(
-        expect.objectContaining({ userId: 'sales-1', title: expect.stringContaining('Ready for Review') }),
-      );
-      expect(notificationsService.create).toHaveBeenCalledWith(
-        expect.objectContaining({ userId: 'admin-1', title: expect.stringContaining('Ready for Review') }),
-      );
+      const reviewNotifs = notificationsService.create.mock.calls
+        .filter(([p]: any[]) => String(p?.title ?? '').includes('Ready for Review'))
+        .map(([p]: any[]) => p.userId)
+        .sort();
+      expect(reviewNotifs).toEqual(['admin-1', 'sales-1']);
+      expect(reviewNotifs).not.toContain('sales-other');
     });
 
     it('allows HOD to issue REWORK without creating a revision', async () => {
@@ -901,7 +953,10 @@ describe('TasksService', () => {
         assigneeId: 'designer-1',
         reworkNote: 'Fix dimensions',
       });
-      prisma.user.findMany.mockResolvedValue([{ id: 'sales-1' }]);
+      mockNotifyUsersByRole({
+        managers: [{ id: 'hod-1' }],
+        sales: [{ id: 'sales-1', fullName: 'Fahad Quazi' }],
+      });
 
       const result = await service.updateStatus(TASK_ID, 'hod-1', UserRole.HOD, {
         status: 'REWORK',

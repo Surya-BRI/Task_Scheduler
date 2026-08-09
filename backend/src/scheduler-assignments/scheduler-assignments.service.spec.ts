@@ -23,7 +23,7 @@ describe('SchedulerAssignmentsService', () => {
     regularizationRequest: { findMany: jest.fn() },
     taskWorkSession: { findMany: jest.fn() },
     schedulerTaskFragment: { findMany: jest.fn() },
-    user: { findMany: jest.fn() },
+    user: { findMany: jest.fn(), findFirst: jest.fn() },
     task: { findMany: jest.fn(), update: jest.fn() },
     schedulerWeek: {
       create: jest.fn(),
@@ -620,7 +620,7 @@ describe('SchedulerAssignmentsService', () => {
     ).rejects.toThrow('Scheduler tasks were updated by someone else');
   });
 
-  it('reschedules leave conflicts as an ordered chain around weekends, holidays, and approved leave', async () => {
+  it('reschedules leave conflicts as an ordered chain around holidays, day-locks, and approved leave', async () => {
     const makeRow = (id: string, weekStartDate: string, dayIndex: number, taskId: string) => ({
       id,
       designerId: 'designer-1',
@@ -1057,7 +1057,7 @@ describe('SchedulerAssignmentsService', () => {
       expect(result.unplacedOverflow).toEqual([]);
     });
 
-    it('skips weekends and holidays when finding a day', async () => {
+    it('skips holidays and designer day-locks when finding a day', async () => {
       // Block Mon 07-13 with a holiday so the first real candidate is Tue 07-14.
       mockQueryRaw(0, ['2026-07-13']);
       prisma.schedulerAssignment.findMany.mockImplementation(({ where, select }: any) => {
@@ -1075,6 +1075,33 @@ describe('SchedulerAssignmentsService', () => {
 
       expect(result.overflowPlacements).toEqual([
         expect.objectContaining({ weekStart: '2026-07-13', dayIndex: 1 }),
+      ]);
+    });
+
+    it('places overflow on Saturday when that weekend day is open (no lock)', async () => {
+      // afterDate = week end Sun 07-12 → first candidate Mon 07-13. Fill Mon–Fri so Sat 07-18 is next.
+      // Easier path: place after Friday of next week by filling Mon–Fri of 07-13 week.
+      mockQueryRaw(0, []);
+      prisma.schedulerAssignment.findMany.mockImplementation(({ where, select }: any) => {
+        if (where?.dayIndex !== undefined && select?.assignedHours) {
+          // Fill Mon–Fri (0–4); leave Sat/Sun empty
+          const di = where.dayIndex;
+          if (di >= 0 && di <= 4) return Promise.resolve([{ assignedHours: 8 }]);
+          return Promise.resolve([]);
+        }
+        return Promise.resolve([]);
+      });
+
+      const result = await service.saveWeekSnapshot('2026-07-06', HOD_ID, {
+        version: 0,
+        assignments: [
+          { designerId: DESIGNER_ID, taskId: TASK_ID, dayIndex: 4, assignedHours: 1, parentId: TASK_ID, splitIndex: 1, totalParts: 2 },
+        ],
+        overflow: [{ designerId: DESIGNER_ID, taskId: TASK_ID, hours: 2 }],
+      } as any);
+
+      expect(result.overflowPlacements).toEqual([
+        expect.objectContaining({ weekStart: '2026-07-13', dayIndex: 5, hours: 2 }),
       ]);
     });
 
@@ -1220,40 +1247,13 @@ describe('SchedulerAssignmentsService', () => {
     }
   });
 
-  describe('weekend day unlocks', () => {
+  describe('weekend day locks', () => {
     const DESIGNER_ID = 'cccccccc-cccc-4ccc-8ccc-cccccccccccc';
     const TASK_ID = '79bde5e5-d694-4728-88ab-33d71f238e11';
     const HOD_ID = 'hod-1';
     // 2026-07-06 is Monday; dayIndex 5 = Saturday 2026-07-11
 
-    it('rejects saving a Saturday assignment without an unlock', async () => {
-      prisma.user.findMany.mockResolvedValue([{ id: DESIGNER_ID, fullName: 'Alex' }]);
-      prisma.task.findMany.mockResolvedValue([
-        { id: TASK_ID, status: 'DESIGN_PLANNED', assigneeId: DESIGNER_ID, projectId: null, project: null },
-      ]);
-      prisma.schedulerAssignment.findMany.mockResolvedValue([]);
-      prisma.$queryRaw.mockImplementation((strings: TemplateStringsArray) => {
-        const sql = strings.join('?');
-        if (sql.includes('ErpTSSchedulerWeek')) {
-          return Promise.resolve([
-            { id: 'week-row', version: 0, isLocked: false, lastPayloadHash: null, updatedAt: new Date(), updatedBy: null },
-          ]);
-        }
-        // Day unlocks / holidays empty
-        return Promise.resolve([]);
-      });
-
-      await expect(
-        service.saveWeekSnapshot('2026-07-06', HOD_ID, {
-          version: 0,
-          assignments: [
-            { designerId: DESIGNER_ID, taskId: TASK_ID, dayIndex: 5, assignedHours: 4 },
-          ],
-        } as any),
-      ).rejects.toThrow(/Weekend 2026-07-11 is locked/);
-    });
-
-    it('allows Saturday assignment when unlock exists', async () => {
+    it('allows Saturday assignment by default (no lock row)', async () => {
       prisma.user.findMany.mockResolvedValue([{ id: DESIGNER_ID, fullName: 'Alex' }]);
       prisma.task.findMany.mockResolvedValue([
         { id: TASK_ID, status: 'DESIGN_PLANNED', assigneeId: DESIGNER_ID, projectId: null, project: null },
@@ -1273,18 +1273,7 @@ describe('SchedulerAssignmentsService', () => {
             { id: 'week-row', version: 0, isLocked: false, lastPayloadHash: null, updatedAt: new Date(), updatedBy: null },
           ]);
         }
-        if (sql.includes('ErpTSSchedulerDayUnlock')) {
-          return Promise.resolve([
-            {
-              id: 'unlock-1',
-              designerId: DESIGNER_ID,
-              date: new Date('2026-07-11T00:00:00.000Z'),
-              unlockedById: HOD_ID,
-              reason: null,
-              createdAt: new Date(),
-            },
-          ]);
-        }
+        // Day locks / holidays empty — weekends open by default
         return Promise.resolve([]);
       });
 
@@ -1299,19 +1288,67 @@ describe('SchedulerAssignmentsService', () => {
       expect(prisma.schedulerAssignment.createMany).toHaveBeenCalled();
     });
 
-    it('createDayUnlock rejects weekdays', async () => {
+    it('rejects Saturday assignment when a day-lock exists', async () => {
+      prisma.user.findMany.mockResolvedValue([{ id: DESIGNER_ID, fullName: 'Alex' }]);
+      prisma.task.findMany.mockResolvedValue([
+        { id: TASK_ID, status: 'DESIGN_PLANNED', assigneeId: DESIGNER_ID, projectId: null, project: null },
+      ]);
+      prisma.schedulerAssignment.findMany.mockResolvedValue([]);
+      prisma.$queryRaw.mockImplementation((strings: TemplateStringsArray) => {
+        const sql = strings.join('?');
+        if (sql.includes('ErpTSSchedulerWeek')) {
+          return Promise.resolve([
+            { id: 'week-row', version: 0, isLocked: false, lastPayloadHash: null, updatedAt: new Date(), updatedBy: null },
+          ]);
+        }
+        if (sql.includes('ErpTSSchedulerDayUnlock')) {
+          return Promise.resolve([
+            {
+              id: 'lock-1',
+              designerId: DESIGNER_ID,
+              date: new Date('2026-07-11T00:00:00.000Z'),
+              unlockedById: HOD_ID,
+              reason: null,
+              createdAt: new Date(),
+            },
+          ]);
+        }
+        return Promise.resolve([]);
+      });
+
       await expect(
-        service.createDayUnlock(HOD_ID, { designerId: DESIGNER_ID, date: '2026-07-07' }),
+        service.saveWeekSnapshot('2026-07-06', HOD_ID, {
+          version: 0,
+          assignments: [
+            { designerId: DESIGNER_ID, taskId: TASK_ID, dayIndex: 5, assignedHours: 4 },
+          ],
+        } as any),
+      ).rejects.toThrow(/Weekend 2026-07-11 is locked/);
+    });
+
+    it('createDayLock rejects weekdays', async () => {
+      await expect(
+        service.createDayLock(HOD_ID, { designerId: DESIGNER_ID, date: '2026-07-07' }),
       ).rejects.toThrow(/Saturday or Sunday/);
     });
 
-    it('deleteDayUnlock rejects when assignments remain', async () => {
+    it('createDayLock rejects when assignments remain', async () => {
       prisma.schedulerWeek.findUnique.mockResolvedValue({ isLocked: false });
-      prisma.schedulerAssignment.count = jest.fn().mockResolvedValue(2);
+      prisma.user.findFirst.mockResolvedValue({ id: DESIGNER_ID });
+      prisma.schedulerAssignment.count.mockResolvedValue(2);
 
       await expect(
-        service.deleteDayUnlock(HOD_ID, { designerId: DESIGNER_ID, date: '2026-07-11' }),
+        service.createDayLock(HOD_ID, { designerId: DESIGNER_ID, date: '2026-07-11' }),
       ).rejects.toThrow(/assignments exist/);
+    });
+
+    it('deleteDayLock removes the lock even when the day is empty', async () => {
+      prisma.schedulerWeek.findUnique.mockResolvedValue({ isLocked: false });
+      prisma.$executeRaw.mockResolvedValue(1);
+
+      await expect(
+        service.deleteDayLock(HOD_ID, { designerId: DESIGNER_ID, date: '2026-07-11' }),
+      ).resolves.toEqual({ ok: true });
     });
   });
 

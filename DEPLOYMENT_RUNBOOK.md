@@ -89,6 +89,17 @@ Backend `CORS_ORIGIN` must also include the Vercel frontend URL(s), comma-separa
 
 Auth for this cross-origin socket does **not** rely on the httpOnly session cookie (it lives on the frontend's own host and would never reach the backend's origin). Instead, `frontend/src/lib/realtime.ts` calls the same-origin BFF route `GET /api/auth/ws-token` (which _does_ have the cookie) before every connection/reconnection attempt; that route exchanges it for a short-lived (2 min) token from the backend's `GET /auth/ws-token` and passes it via the socket's `auth: { token }` handshake. No `NEXT_PUBLIC_WS_ORIGIN` means the socket falls back to same-origin (correct for the PM2-hosted case, where the cookie-based rewrite proxy already works and this token exchange is unnecessary but harmless).
 
+## 5a. Weekend day-lock invert (one-time, required with this release)
+
+`ErpTSSchedulerDayUnlock` semantics flipped: **row = locked/skip** (weekends open by default). Old rows meant “unlocked/open” and must be cleared or they would incorrectly lock those days.
+
+```sql
+-- backend/prisma/sql/clear-scheduler-day-unlocks-for-lock-invert.sql
+DELETE FROM dbo.ErpTSSchedulerDayUnlock;
+```
+
+Run once before/with the day-locks API deploy. Safe to re-run. After deploy, HOD uses **Lock** on Sat/Sun cells to skip a day (POST `/scheduler-assignments/day-locks`).
+
 ## 5. DB Check Constraint (one-time / when status changes)
 Task status constraint must include:
 - `PENDING`

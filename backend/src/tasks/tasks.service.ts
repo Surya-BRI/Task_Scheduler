@@ -30,6 +30,7 @@ import {
 import { utcDateOnlyString } from '../common/utils/date-window.util';
 import { summarizeViewerOvertimeHours } from './scheduler-overtime-hours.util';
 import { taskViewPath } from '../common/utils/design-type.util';
+import { matchSalesUsersToProject } from '../common/utils/sales-notification-recipients.util';
 
 const TASK_ATTACHMENT_SELECT = {
   id: true,
@@ -115,6 +116,7 @@ const TASK_SELECT = {
       projectNo: true,
       category: true,
       salesPerson: true,
+      createdById: true,
     },
   },
   assigneeId: true,
@@ -176,6 +178,7 @@ const TASK_CORE_SELECT = {
       projectNo: true,
       category: true,
       salesPerson: true,
+      createdById: true,
     },
   },
   assigneeId: true,
@@ -207,6 +210,8 @@ const TASK_STATUS_SELECT = {
       id: true,
       name: true,
       projectNo: true,
+      salesPerson: true,
+      createdById: true,
     },
   },
 } as const;
@@ -330,6 +335,74 @@ export class TasksService {
     private readonly notificationsService: NotificationsService,
     @Optional() private readonly dashboardRealtime?: DashboardRealtimeService,
   ) {}
+
+  /**
+   * HOD + Admin (org-wide) plus sales users matched to the project — never every salesperson.
+   */
+  private async resolveHodAdminAndSalesNotifyIds(
+    project: { salesPerson?: string | null; createdById?: string | null } | null | undefined,
+    options?: { taskId?: string },
+  ): Promise<string[]> {
+    const [managers, salesUsers] = await Promise.all([
+      this.prisma.user.findMany({
+        where: { role: { name: { in: ['HOD', 'ADMIN'] } } },
+        select: { id: true },
+      }),
+      this.prisma.user.findMany({
+        where: { role: { name: 'SALESPERSON' } },
+        select: { id: true, fullName: true },
+      }),
+    ]);
+
+    let matched = matchSalesUsersToProject(project, salesUsers);
+    if (matched.length === 0 && options?.taskId) {
+      const created = await this.prisma.activityLog.findFirst({
+        where: { taskId: options.taskId, action: ActivityAction.TASK_CREATED },
+        orderBy: { createdAt: 'asc' },
+        select: { userId: true },
+      });
+      if (created?.userId) {
+        matched = matchSalesUsersToProject(project, salesUsers, {
+          extraUserIds: [created.userId],
+        });
+      }
+    }
+
+    return [...new Set([...managers.map((m) => m.id), ...matched.map((s) => s.id)])];
+  }
+
+  /** Admin + project-matched sales only (SALES_REVIEW queue). */
+  private async resolveSalesReviewNotifyIds(
+    project: { salesPerson?: string | null; createdById?: string | null } | null | undefined,
+    options?: { taskId?: string },
+  ): Promise<string[]> {
+    const [admins, salesUsers] = await Promise.all([
+      this.prisma.user.findMany({
+        where: { role: { name: 'ADMIN' } },
+        select: { id: true },
+      }),
+      this.prisma.user.findMany({
+        where: { role: { name: 'SALESPERSON' } },
+        select: { id: true, fullName: true },
+      }),
+    ]);
+
+    let matched = matchSalesUsersToProject(project, salesUsers);
+    if (matched.length === 0 && options?.taskId) {
+      const created = await this.prisma.activityLog.findFirst({
+        where: { taskId: options.taskId, action: ActivityAction.TASK_CREATED },
+        orderBy: { createdAt: 'asc' },
+        select: { userId: true },
+      });
+      if (created?.userId) {
+        matched = matchSalesUsersToProject(project, salesUsers, {
+          extraUserIds: [created.userId],
+        });
+      }
+    }
+
+    return [...new Set([...admins.map((a) => a.id), ...matched.map((s) => s.id)])];
+  }
 
   private normalizeTaskForApi<T extends { status?: string | null; holdPreviousStatus?: string | null }>(
     task: T,
@@ -1167,17 +1240,16 @@ export class TasksService {
           .catch((err) => this.logger.error('Failed to notify designer on task create', err));
         this.dashboardRealtime?.notifyUserNotificationRefresh(created.assigneeId);
 
-        const hodUsers = await this.prisma.user.findMany({
-          where: { role: { name: { in: ['HOD', 'SALESPERSON', 'ADMIN'] } } },
-          select: { id: true },
+        const stakeholderIds = await this.resolveHodAdminAndSalesNotifyIds(created.project, {
+          taskId: created.id,
         });
         const hodMsg = `${created.taskNo} — ${created.project?.name ?? 'Unknown Project'} created and assigned to ${created.assignee?.fullName ?? 'a designer'}.`;
-        for (const hod of hodUsers) {
-          if (hod.id !== created.assigneeId) {
+        for (const stakeholderId of stakeholderIds) {
+          if (stakeholderId !== created.assigneeId) {
             this.notificationsService
-              .create({ userId: hod.id, title: 'New Task Assigned', message: hodMsg, linkUrl: taskLink })
+              .create({ userId: stakeholderId, title: 'New Task Assigned', message: hodMsg, linkUrl: taskLink })
               .catch((err) => this.logger.error('Failed to notify HOD on task create', err));
-            this.dashboardRealtime?.notifyUserNotificationRefresh(hod.id);
+            this.dashboardRealtime?.notifyUserNotificationRefresh(stakeholderId);
           }
         }
       }
@@ -1330,13 +1402,6 @@ export class TasksService {
     );
 
     // Log activity + notify for each created task
-    const hodUsers = createdTasks.some((t) => t?.assigneeId)
-      ? await this.prisma.user.findMany({
-          where: { role: { name: { in: ['HOD', 'SALESPERSON', 'ADMIN'] } } },
-          select: { id: true },
-        })
-      : [];
-
     await Promise.all(createdTasks.filter((t): t is NonNullable<typeof t> => t !== null).map((task) =>
       this.activityLogger.log({
         action: ActivityAction.TASK_CREATED,
@@ -1364,12 +1429,15 @@ export class TasksService {
         this.dashboardRealtime?.notifyUserNotificationRefresh(task.assigneeId);
 
         const hodMsg = `${task.taskNo} — ${task.project?.name ?? 'Unknown Project'} created and assigned to ${task.assignee?.fullName ?? 'a designer'}.`;
-        for (const hod of hodUsers) {
-          if (hod.id !== task.assigneeId) {
+        const stakeholderIds = await this.resolveHodAdminAndSalesNotifyIds(task.project, {
+          taskId: task.id,
+        });
+        for (const stakeholderId of stakeholderIds) {
+          if (stakeholderId !== task.assigneeId) {
             this.notificationsService
-              .create({ userId: hod.id, title: 'New Task Assigned', message: hodMsg, linkUrl: taskLink })
+              .create({ userId: stakeholderId, title: 'New Task Assigned', message: hodMsg, linkUrl: taskLink })
               .catch((err) => this.logger.error('Failed to notify HOD on task create', err));
-            this.dashboardRealtime?.notifyUserNotificationRefresh(hod.id);
+            this.dashboardRealtime?.notifyUserNotificationRefresh(stakeholderId);
           }
         }
       }
@@ -1534,13 +1602,17 @@ export class TasksService {
       addAndFilter({ dueDate: dueRange });
     }
 
-    // Sales design-list (no queue/history flag): scope to this salesperson's projects
+    // Sales design-list (no queue/history flag): scope to this salesperson's work
     // so Sales cannot pull the org-wide task catalog.
+    // When projectId is set (task-creation / project details page), skip the name filter —
+    // salesPerson on the project often won't match the logged-in user (e.g. Sithara viewing
+    // FahadQuazi's OP), which hid tasks they just created.
     if (
       role === UserRole.SALESPERSON &&
       !salesQueue &&
       !salesHistory &&
-      !salesPerson
+      !salesPerson &&
+      !projectId
     ) {
       const me = await this.prisma.user.findUnique({
         where: { id: userId },
@@ -1550,7 +1622,29 @@ export class TasksService {
       if (!myName) {
         return { data: [], total: 0, page, limit, totalPages: 0 };
       }
-      addAndFilter({ project: { salesPerson: { contains: myName } } });
+      // ERP often stores salesPerson as firstName+lastName with no space ("FahadQuazi").
+      const compactName = myName.replace(/\s+/g, '');
+      const firstToken = myName.split(/\s+/)[0] ?? '';
+      const nameVariants = [...new Set(
+        [myName, compactName, firstToken.length >= 3 ? firstToken : '']
+          .map((v) => v.trim())
+          .filter(Boolean),
+      )];
+      addAndFilter({
+        OR: [
+          ...nameVariants.map((variant) => ({
+            project: { salesPerson: { contains: variant } },
+          })),
+          // Projects this sales user created locally
+          { project: { createdById: userId } },
+          // Tasks they personally created (even on another salesPerson's OP)
+          {
+            activityLogs: {
+              some: { userId, action: ActivityAction.TASK_CREATED },
+            },
+          },
+        ],
+      });
     }
 
     const [data, total] = await Promise.all([
@@ -2153,20 +2247,19 @@ export class TasksService {
     const linkUrlAssign =
       taskViewPath(id, updatedTask.designType);
     const assignMessage = `${updatedTask.taskNo} — ${updatedTask.project?.name ?? 'Unknown Project'} has been assigned to ${assignee.fullName}`;
-    const hodUsersAssign = await this.prisma.user.findMany({
-      where: { role: { name: { in: ['HOD', 'SALESPERSON', 'ADMIN'] } } },
-      select: { id: true },
+    const stakeholderIdsAssign = await this.resolveHodAdminAndSalesNotifyIds(updatedTask.project, {
+      taskId: id,
     });
     this.notificationsService
       .create({ userId: dto.assigneeId, title: 'Task Assigned to You', message: assignMessage, linkUrl: linkUrlAssign })
       .catch((err) => this.logger.error('Failed to send assign notification to designer', err));
     this.dashboardRealtime?.notifyUserNotificationRefresh(dto.assigneeId);
-    for (const hod of hodUsersAssign) {
-      if (hod.id !== dto.assigneeId) {
+    for (const stakeholderId of stakeholderIdsAssign) {
+      if (stakeholderId !== dto.assigneeId) {
         this.notificationsService
-          .create({ userId: hod.id, title: 'Task Assigned', message: assignMessage, linkUrl: linkUrlAssign })
+          .create({ userId: stakeholderId, title: 'Task Assigned', message: assignMessage, linkUrl: linkUrlAssign })
           .catch((err) => this.logger.error('Failed to send assign notification to HOD', err));
-        this.dashboardRealtime?.notifyUserNotificationRefresh(hod.id);
+        this.dashboardRealtime?.notifyUserNotificationRefresh(stakeholderId);
       }
     }
     // Tell every designer removed from this task (including former split designers) that
@@ -2404,10 +2497,10 @@ export class TasksService {
       const linkUrlStatus =
         taskViewPath(id, (updatedTask as any).designType);
       const statusMessage = `${(updatedTask as any).taskNo} — ${(updatedTask as any).project?.name ?? 'Unknown Project'} status changed to ${effectiveStatusApi}`;
-      const hodUsersStatus = await this.prisma.user.findMany({
-        where: { role: { name: { in: ['HOD', 'SALESPERSON', 'ADMIN'] } } },
-        select: { id: true },
-      });
+      const stakeholderIdsStatus = await this.resolveHodAdminAndSalesNotifyIds(
+        (updatedTask as any).project,
+        { taskId: id },
+      );
       if ((updatedTask as any).assigneeId) {
         this.notificationsService
           .create({ userId: (updatedTask as any).assigneeId, title: 'Task Marked Complete', message: statusMessage, linkUrl: linkUrlStatus })
@@ -2430,12 +2523,12 @@ export class TasksService {
           .catch((err) => this.logger.error('Failed to send complete notification to split designer', err));
         this.dashboardRealtime?.notifyUserNotificationRefresh(designerId);
       }
-      for (const hod of hodUsersStatus) {
-        if (hod.id !== (updatedTask as any).assigneeId) {
+      for (const stakeholderId of stakeholderIdsStatus) {
+        if (stakeholderId !== (updatedTask as any).assigneeId) {
           this.notificationsService
-            .create({ userId: hod.id, title: 'Task Completed', message: statusMessage, linkUrl: linkUrlStatus })
+            .create({ userId: stakeholderId, title: 'Task Completed', message: statusMessage, linkUrl: linkUrlStatus })
             .catch((err) => this.logger.error('Failed to send complete notification to HOD', err));
-          this.dashboardRealtime?.notifyUserNotificationRefresh(hod.id);
+          this.dashboardRealtime?.notifyUserNotificationRefresh(stakeholderId);
         }
       }
     }
@@ -2541,20 +2634,19 @@ export class TasksService {
       }
     }
 
-    // SALES_REVIEW — notify sales + admin that a task is waiting for their decision
+    // SALES_REVIEW — notify matched project sales + admin (not every salesperson)
     if (effectiveStatusApi === 'SALES_REVIEW') {
       const linkUrlSales =
         taskViewPath(id, (updatedTask as any).designType);
       const salesMessage = `${(updatedTask as any).taskNo} — ${(updatedTask as any).project?.name ?? 'Unknown Project'} is ready for your review.`;
-      const salesReviewers = await this.prisma.user.findMany({
-        where: { role: { name: { in: ['SALESPERSON', 'ADMIN'] } } },
-        select: { id: true },
+      const salesReviewers = await this.resolveSalesReviewNotifyIds((updatedTask as any).project, {
+        taskId: id,
       });
-      for (const sp of salesReviewers) {
+      for (const spId of salesReviewers) {
         this.notificationsService
-          .create({ userId: sp.id, title: `Task Ready for Review — ${(updatedTask as any).taskNo}`, message: salesMessage, linkUrl: linkUrlSales })
+          .create({ userId: spId, title: `Task Ready for Review — ${(updatedTask as any).taskNo}`, message: salesMessage, linkUrl: linkUrlSales })
           .catch((err) => this.logger.error('Failed to send sales-review notification', err));
-        this.dashboardRealtime?.notifyUserNotificationRefresh(sp.id);
+        this.dashboardRealtime?.notifyUserNotificationRefresh(spId);
       }
     }
 
@@ -2601,25 +2693,25 @@ export class TasksService {
         notifiedUserIds.add(designerId);
       }
 
-      // HOD / Sales / Admin (skip actor + anyone already notified as designer)
-      const reworkStakeholders = await this.prisma.user.findMany({
-        where: { role: { name: { in: ['HOD', 'SALESPERSON', 'ADMIN'] } } },
-        select: { id: true },
-      });
+      // HOD / Admin / matched sales (skip actor + anyone already notified as designer)
+      const reworkStakeholders = await this.resolveHodAdminAndSalesNotifyIds(
+        (updatedTask as any).project,
+        { taskId: id },
+      );
       const stakeholderMessage =
         `${(updatedTask as any).taskNo} — ${(updatedTask as any).project?.name ?? 'Unknown Project'} was sent for rework.` +
         (note ? ` ${note}` : '');
-      for (const stakeholder of reworkStakeholders) {
-        if (stakeholder.id === userId || notifiedUserIds.has(stakeholder.id)) continue;
+      for (const stakeholderId of reworkStakeholders) {
+        if (stakeholderId === userId || notifiedUserIds.has(stakeholderId)) continue;
         this.notificationsService
           .create({
-            userId: stakeholder.id,
+            userId: stakeholderId,
             title: reworkTitle,
             message: stakeholderMessage,
             linkUrl: taskLink,
           })
           .catch((err) => this.logger.error('Failed to send rework notification to stakeholder', err));
-        this.dashboardRealtime?.notifyUserNotificationRefresh(stakeholder.id);
+        this.dashboardRealtime?.notifyUserNotificationRefresh(stakeholderId);
       }
 
       if (note) {
@@ -2854,22 +2946,25 @@ export class TasksService {
       },
     }).catch((err) => this.logger.error('Failed to log client-reject revision activity', err));
 
-    // Notify HOD / Sales / Admin once (sales were previously double-notified)
-    const stakeholders = await this.prisma.user.findMany({
-      where: { role: { name: { in: ['HOD', 'SALESPERSON', 'ADMIN'] } } },
-      select: { id: true },
+    // Notify HOD / Admin / matched sales once (not every salesperson)
+    const revisionProject = await this.prisma.project.findUnique({
+      where: { id: originalTask.projectId },
+      select: { salesPerson: true, createdById: true },
+    });
+    const stakeholders = await this.resolveHodAdminAndSalesNotifyIds(revisionProject, {
+      taskId: result.id,
     });
     const taskLink = taskViewPath(result.id, designType);
-    for (const stakeholder of stakeholders) {
+    for (const stakeholderId of stakeholders) {
       this.notificationsService
         .create({
-          userId: stakeholder.id,
+          userId: stakeholderId,
           title: `New Revision Created — ${result.taskNo}`,
           message: `Revision ${result._revision} created after client reject. Awaiting assignment.`,
           linkUrl: taskLink,
         })
         .catch((err) => this.logger.error('Failed to send new revision notification', err));
-      this.dashboardRealtime?.notifyUserNotificationRefresh(stakeholder.id);
+      this.dashboardRealtime?.notifyUserNotificationRefresh(stakeholderId);
     }
 
     return { id: result.id, taskNo: result.taskNo };

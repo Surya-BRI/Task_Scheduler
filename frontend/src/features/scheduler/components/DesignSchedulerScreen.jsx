@@ -21,8 +21,8 @@ import {
     detachAssignmentPart,
     updateFragmentStatus,
     updateOvertimeRequestSchedulerAction,
-    createSchedulerDayUnlock,
-    deleteSchedulerDayUnlock,
+    createSchedulerDayLock,
+    deleteSchedulerDayLock,
 } from "../services/scheduler-assignments.api";
 import { freezeDraftWorkSession, peekDraftWorkSession } from "../services/task-timer.api";
 import {
@@ -73,7 +73,7 @@ import {
     sumDesignerWeekWorkload,
     sumSlotRegularHours,
     sumSlotTotalHours,
-    WEEKDAY_INDICES as WORKLOAD_WEEKDAY_INDICES,
+    WORKING_DAY_INDICES as WORKLOAD_WORKING_DAY_INDICES,
 } from "../utils/scheduler-workload.util";
 import {
     resolveDisciplineBlockClass,
@@ -90,18 +90,18 @@ import {
 // Capacity constants
 const DAILY_CAPACITY = 8; // 8hrs per day = normal capacity (green/blue)
 const MAX_DAILY_HOURS = 12; // absolute max assignable per day
-const WEEKLY_CAPACITY = 40; // 5 working days × 8hrs
+const WEEKLY_CAPACITY = 56; // 7 working days × 8hrs (weekends open like weekdays)
 const MIN_SPLIT_HOURS = 5 / 60; // 5 minutes — smallest allowed split part for optimizer/drag splits
-const WEEKDAY_INDICES = WORKLOAD_WEEKDAY_INDICES;
-const ALL_DAY_INDICES = [0, 1, 2, 3, 4, 5, 6];
-const isWeekdayIndex = (dayIndex) => WEEKDAY_INDICES.includes(dayIndex);
+const WORKING_DAY_INDICES = WORKLOAD_WORKING_DAY_INDICES;
+const ALL_DAY_INDICES = WORKING_DAY_INDICES;
+const isWorkingDayIndex = (dayIndex) => WORKING_DAY_INDICES.includes(dayIndex);
 const cloneState = (value) => JSON.parse(JSON.stringify(value));
 const getRegularTaskHours = getWorkloadRegularHours;
 const getOvertimeTaskHours = getWorkloadOvertimeHours;
 const sumTaskHours = sumSlotRegularHours;
 const sumTaskTotalHours = sumSlotTotalHours;
 
-const nextVisibleWeekdayAfter = (dayIndex, candidateDays) => candidateDays.find((idx) => idx > dayIndex);
+const nextPackingDayAfter = (dayIndex, candidateDays) => candidateDays.find((idx) => idx > dayIndex);
 
 const isFullDayLeaveBlock = (task) => task?.requestType === "LEAVE" &&
     toPositiveHours(task.leaveHours ?? task.scheduledHours ?? task.estimatedHours) >= DAILY_CAPACITY;
@@ -143,6 +143,8 @@ function buildPreparedDropAssignment({
     visibleDays,
     getNextSplitId,
     allowOvertime,
+    /** Optional: (designerId, dayIndex) => true when that day is locked/skipped. */
+    isDayLocked,
 }) {
     const updatedSchedules = cloneState(schedulesSnapshot);
     const updatedTasks = { ...tasksSnapshot };
@@ -159,14 +161,15 @@ function buildPreparedDropAssignment({
     }
     const parentId = droppedTask.parentId ?? droppedTask.id;
     const baseName = droppedTask.baseName ?? droppedTask.name;
-    // Manual weekend drops must pack onto that Sat/Sun. Do not auto-chain onto other
-    // unlocked weekends — leftover hours go to overflow (server weekday packing).
-    const packingDays = targetDayIndex >= 5
-        ? [targetDayIndex]
-        : [...WEEKDAY_INDICES];
+    // Pack Mon–Sun like weekdays; skip designer day-locks. Leftover → server overflow.
+    const packingDays = WORKING_DAY_INDICES.filter(
+        (d) => !(typeof isDayLocked === "function" && isDayLocked(targetDesignerId, d)),
+    );
     let remainingHours = droppedTask.estimatedHours > 0 ? droppedTask.estimatedHours : 1;
     const plannedParts = [];
-    let currentDayIndex = targetDayIndex;
+    let currentDayIndex = packingDays.includes(targetDayIndex)
+        ? targetDayIndex
+        : (packingDays.find((d) => d >= targetDayIndex) ?? packingDays[0]);
     let hasOvertimeFlag = false;
     while (
         remainingHours > 0 &&
@@ -178,7 +181,7 @@ function buildPreparedDropAssignment({
             updatedSchedules[targetDesignerId][dayKey] = [];
         }
         if (hasFullDayLeaveBlock(updatedTasks, updatedSchedules[targetDesignerId][dayKey] || [])) {
-            currentDayIndex = nextVisibleWeekdayAfter(currentDayIndex, packingDays) ?? 7;
+            currentDayIndex = nextPackingDayAfter(currentDayIndex, packingDays) ?? 7;
             continue;
         }
         const usedHours = sumTaskHours(updatedTasks, updatedSchedules[targetDesignerId][dayKey] || []);
@@ -188,7 +191,7 @@ function buildPreparedDropAssignment({
         let partHours = 0;
         if (allowOvertime) {
             if (availableHours < MIN_SPLIT_HOURS) {
-                currentDayIndex = nextVisibleWeekdayAfter(currentDayIndex, packingDays) ?? 7;
+                currentDayIndex = nextPackingDayAfter(currentDayIndex, packingDays) ?? 7;
                 continue;
             }
             partHours = Math.min(remainingHours, availableHours);
@@ -196,7 +199,7 @@ function buildPreparedDropAssignment({
                 hasOvertimeFlag = true;
             }
         } else if (regularHoursLeft < MIN_SPLIT_HOURS) {
-            currentDayIndex = nextVisibleWeekdayAfter(currentDayIndex, packingDays) ?? 7;
+            currentDayIndex = nextPackingDayAfter(currentDayIndex, packingDays) ?? 7;
             continue;
         } else {
             partHours = Math.min(remainingHours, regularHoursLeft);
@@ -208,7 +211,7 @@ function buildPreparedDropAssignment({
             hours: partHours,
         });
         remainingHours -= partHours;
-        currentDayIndex = nextVisibleWeekdayAfter(currentDayIndex, packingDays) ?? 7;
+        currentDayIndex = nextPackingDayAfter(currentDayIndex, packingDays) ?? 7;
     }
 
     if (plannedParts.length === 0) {
@@ -955,6 +958,7 @@ export function DesignSchedulerScreen() {
     const [isWeekLocked, setIsWeekLocked] = useState(false);
     const isWeekLockedRef = useRef(false);
     const [lockInFlight, setLockInFlight] = useState(false);
+    const [weekNavBusy, setWeekNavBusy] = useState(false);
     const [, weekVersionRef, setWeekVersion] = useStateRef(0);
     /** Which weekStart (YYYY-MM-DD) weekVersionRef belongs to — versions are per-week, not global. */
     const weekVersionWeekStartRef = useRef('');
@@ -983,6 +987,9 @@ export function DesignSchedulerScreen() {
     // has no entry for any designer). Only the most recently STARTED call is allowed to apply.
     const reloadSequenceRef = useRef(0);
     const persistDebounceRef      = useRef(null);
+    /** Resolvers waiting for save idle (flush-before week navigate). */
+    const persistIdleWaitersRef   = useRef([]);
+    const weekNavLockRef          = useRef(false);
     // Fragment ids (Rule 5a) resolved by folding a detached part back into a whole-task
     // consolidation — collected outside the normal per-task status scan in flushPersist
     // since those tasks are deleted from state entirely, not transitioned to "assigned".
@@ -1002,13 +1009,13 @@ export function DesignSchedulerScreen() {
     const cancelOvertimeButtonRef = useRef(null);
     const placeOnGapButtonRef = useRef(null);
     const [viewMode, setViewMode] = useState("week");
-    const [selectedDays, setSelectedDays] = useState(WEEKDAY_INDICES);
+    const [selectedDays, setSelectedDays] = useState(WORKING_DAY_INDICES);
     const [currentDay, setCurrentDay] = useState(getCurrentDayIndex(new Date()));
     const [dropIndicator, setDropIndicator] = useState(null);
-    /** Keys: `${designerId}|YYYY-MM-DD` for unlocked weekend days. */
-    const [dayUnlockKeys, setDayUnlockKeys] = useState(() => new Set());
-    const dayUnlockKeysRef = useRef(dayUnlockKeys);
-    dayUnlockKeysRef.current = dayUnlockKeys;
+    /** Keys: `${designerId}|YYYY-MM-DD` for locked weekend days (skipped like holidays). */
+    const [dayLockKeys, setDayLockKeys] = useState(() => new Set());
+    const dayLockKeysRef = useRef(dayLockKeys);
+    dayLockKeysRef.current = dayLockKeys;
     
     // Custom Date selection state
     const [currentDate, setCurrentDate] = useState(() => new Date());
@@ -1216,6 +1223,9 @@ export function DesignSchedulerScreen() {
         return filtered;
     };
 
+    const currentDateRef = useRef(currentDate);
+    currentDateRef.current = currentDate;
+
     const reloadWeek = useCallback(async () => {
         setIsWeekLoading(true);
         const weekStartStr = formatLocalYyyyMmDd(getWeekDays(currentDate)[0]);
@@ -1224,10 +1234,12 @@ export function DesignSchedulerScreen() {
         try {
             const weekPayload = await listSchedulerAssignmentsForWeek(weekStartStr);
             const rows = weekPayload?.assignments ?? [];
-            const unlockKeys = Array.isArray(weekPayload?.dayUnlockKeys) && weekPayload.dayUnlockKeys.length > 0
-                ? weekPayload.dayUnlockKeys
-                : (weekPayload?.dayUnlocks ?? []).map((u) => `${u.designerId}|${u.date}`);
-            setDayUnlockKeys(new Set(unlockKeys.filter((k) => String(k).includes("|"))));
+            const lockKeys = Array.isArray(weekPayload?.dayLockKeys) && weekPayload.dayLockKeys.length > 0
+                ? weekPayload.dayLockKeys
+                : Array.isArray(weekPayload?.dayUnlockKeys) && weekPayload.dayUnlockKeys.length > 0
+                    ? weekPayload.dayUnlockKeys
+                    : (weekPayload?.dayLocks ?? weekPayload?.dayUnlocks ?? []).map((u) => `${u.designerId}|${u.date}`);
+            setDayLockKeys(new Set(lockKeys.filter((k) => String(k).includes("|"))));
             const freshQueueRecords = queueRecordsRef.current;
             const fetchedVersion = Number(weekPayload?.version ?? 0);
             // Version numbers are scoped per week — comparing Jul 13's version 5 against Jul 6's
@@ -1238,15 +1250,31 @@ export function DesignSchedulerScreen() {
                 fetchedVersion < weekVersionRef.current;
             const saveHappenedDuringFetch = saveGenerationRef.current !== generationAtStart;
             const supersededByNewerReload = mySequence !== reloadSequenceRef.current;
+            // Drop results if the user already navigated to another week while this GET was in flight.
+            // The week-change effect starts a fresh reload — don't set pendingReload (avoids a storm).
+            const viewingWeekStr = formatLocalYyyyMmDd(getWeekDays(currentDateRef.current)[0]);
+            if (weekStartStr !== viewingWeekStr || supersededByNewerReload) {
+                setIsWeekLoading(false);
+                return;
+            }
             if (
                 persistInFlightRef.current ||
                 pendingPersistRef.current ||
                 saveHappenedDuringFetch ||
-                isStaleVersion ||
-                supersededByNewerReload
+                isStaleVersion
             ) {
-                if (!supersededByNewerReload) pendingReloadRef.current = true;
+                pendingReloadRef.current = true;
                 setIsWeekLoading(false);
+                // Orphaned pendingReload: save already finished and nothing is in flight to
+                // consume the flag in flushPersist's finally — retry once idle.
+                if (!persistInFlightRef.current && !pendingPersistRef.current) {
+                    queueMicrotask(() => {
+                        if (!pendingReloadRef.current) return;
+                        if (persistInFlightRef.current || pendingPersistRef.current) return;
+                        pendingReloadRef.current = false;
+                        void reloadWeekRef.current();
+                    });
+                }
                 return;
             }
             weekVersionWeekStartRef.current = weekStartStr;
@@ -1254,6 +1282,23 @@ export function DesignSchedulerScreen() {
             const locked = Boolean(weekPayload?.isLocked);
             setIsWeekLocked(locked);
             isWeekLockedRef.current = locked;
+            // Merge project teams from week embeds so Rule 10 pre-drop works for
+            // already-scheduled tasks that aren't in the sidebar queue.
+            setProjectTeamsById((prev) => {
+                const next = { ...prev };
+                for (const row of rows) {
+                    const project = row?.task?.project;
+                    const projectId = project?.id || row?.task?.projectId;
+                    if (!projectId || !project) continue;
+                    next[projectId] = {
+                        technicalHead: project.technicalHead ?? null,
+                        teamLead: project.teamLead ?? null,
+                        subTeamLead: project.subTeamLead ?? null,
+                        designers: project.designers ?? null,
+                    };
+                }
+                return next;
+            });
             if (Array.isArray(rows) && rows.length > 0) {
                 const next = buildSchedulerStateFromErpAssignments(freshQueueRecords, rows, designersRef.current);
                 const rowIdPatch = {};
@@ -1294,12 +1339,17 @@ export function DesignSchedulerScreen() {
     // reloadWeek fires with designers=[] and again when /users resolves (duplicate GETs).
     useEffect(() => {
         if (!navStateReady || !designersFetchDone) return;
+        // Week switch: drop any debounced save for the previous week so it can't block
+        // the new week's load (or re-queue after we clear pendingPersist).
         pendingPersistRef.current = null;
+        pendingOverflowRef.current = [];
+        if (persistDebounceRef.current) {
+            clearTimeout(persistDebounceRef.current);
+            persistDebounceRef.current = null;
+        }
         reloadWeek();
     }, [navStateReady, designersFetchDone, reloadWeek]);
 
-    const currentDateRef = useRef(currentDate);
-    currentDateRef.current = currentDate;
     const reloadWeekRef = useRef(reloadWeek);
     reloadWeekRef.current = reloadWeek;
     const fetchQueueRecordsRef = useRef(fetchQueueRecords);
@@ -1321,10 +1371,32 @@ export function DesignSchedulerScreen() {
     const syncSidebarFromQueueRef = useRef(syncSidebarFromQueue);
     syncSidebarFromQueueRef.current = syncSidebarFromQueue;
 
+    const notifyPersistIdleWaiters = useCallback(() => {
+        if (persistInFlightRef.current || pendingPersistRef.current) return;
+        const waiters = persistIdleWaitersRef.current;
+        if (waiters.length === 0) return;
+        persistIdleWaitersRef.current = [];
+        for (const resolve of waiters) resolve();
+    }, []);
+
+    const waitForPersistIdle = useCallback(() => {
+        if (!persistInFlightRef.current && !pendingPersistRef.current) {
+            return Promise.resolve();
+        }
+        return new Promise((resolve) => {
+            persistIdleWaitersRef.current.push(resolve);
+        });
+    }, []);
+
     const flushPersist = useCallback(async () => {
-        if (persistInFlightRef.current || !pendingPersistRef.current) return;
+        if (persistInFlightRef.current) return;
+        if (!pendingPersistRef.current) {
+            notifyPersistIdleWaiters();
+            return;
+        }
         if (isWeekLockedRef.current) {
             pendingPersistRef.current = null;
+            notifyPersistIdleWaiters();
             return;
         }
         persistInFlightRef.current = true;
@@ -1437,38 +1509,54 @@ export function DesignSchedulerScreen() {
                 }
             }
         } catch (error) {
+            // Drop the failed payload so we don't retry it, and so reloadWeek isn't blocked
+            // by pendingPersist (which would abort → set pendingReload → save again → loop).
+            pendingPersistRef.current = null;
+            pendingOverflowRef.current = [];
+            if (persistDebounceRef.current) {
+                clearTimeout(persistDebounceRef.current);
+                persistDebounceRef.current = null;
+            }
+            // Stop the optimizer from re-queuing the rejected local placement.
+            setLoadedFromErp(true);
+
             const msg = String(error?.message ?? '');
+            // Never call reloadWeek() here — persistInFlight is still true, so reload aborts
+            // and only sets pendingReload. Defer the actual reload to finally.
             if (msg.includes('409')) {
                 toast.warning('Someone else edited the same task — reloading. Please redo your last change.');
-                reloadWeek();
+                pendingReloadRef.current = true;
             } else if (msg.includes('403')) {
                 // Week was locked externally — sync lock state silently
                 setIsWeekLocked(true);
                 isWeekLockedRef.current = true;
             } else if (msg.toLowerCase().includes('approved full-day leave')) {
                 toast.error(msg);
-                reloadWeek();
+                pendingReloadRef.current = true;
             } else if (msg.toLowerCase().includes('cannot be reassigned')) {
                 toast.error(TASK_REASSIGNMENT_BLOCKED_MESSAGE);
-                reloadWeek();
+                pendingReloadRef.current = true;
             } else if (msg.toLowerCase().includes('project team')) {
-                // Backend's Rule 10 eligibility check rejected the save — the frontend's own
-                // pre-drop check should normally catch this first, but reload here as a
-                // safety net so the local grid can't keep showing a placement that was
-                // never actually persisted.
+                // Rule 10 rejected the save — toast once, then restore server grid (no retry loop).
                 toast.error(msg);
-                reloadWeek();
+                pendingReloadRef.current = true;
             } else {
                 toast.error('Unable to save scheduler changes. Please try again.');
+                pendingReloadRef.current = true;
             }
             console.warn('Unable to persist scheduler snapshot', error);
         } finally {
             persistInFlightRef.current = false;
             if (pendingReloadRef.current) {
                 pendingReloadRef.current = false;
-                // A reload queued while our own save was in flight is stale — local state
-                // already reflects what we just persisted.
-                if (!saveSucceeded) {
+                const viewingWeekStr = formatLocalYyyyMmDd(getWeekDays(currentDateRef.current)[0]);
+                // Same week + successful save: local grid already matches what we persisted.
+                // Different week (user hit ‹ › mid-save): must reload — otherwise the header
+                // moves but the previous week's cards stay until a hard refresh.
+                const mustReloadForWeekNav = saveSucceeded && weekStartStr !== viewingWeekStr;
+                if (!saveSucceeded || mustReloadForWeekNav) {
+                    pendingPersistRef.current = null;
+                    pendingOverflowRef.current = [];
                     void (async () => {
                         await refreshSidebarQueueRef.current();
                         await reloadWeekRef.current();
@@ -1480,11 +1568,38 @@ export function DesignSchedulerScreen() {
             } else {
                 flushPersistRef.current?.();
             }
+            notifyPersistIdleWaiters();
         }
-    }, [currentDate, reloadWeek]);
+    }, [notifyPersistIdleWaiters]);
     useEffect(() => {
         flushPersistRef.current = flushPersist;
     }, [flushPersist]);
+
+    /** Flush debounced/in-flight saves, then change week — avoids dropping edits on ‹ ›. */
+    const changeSchedulerWeek = useCallback(async (nextDateOrUpdater) => {
+        if (weekNavLockRef.current) return;
+        weekNavLockRef.current = true;
+        setWeekNavBusy(true);
+        try {
+            if (persistDebounceRef.current) {
+                clearTimeout(persistDebounceRef.current);
+                persistDebounceRef.current = null;
+            }
+            if (pendingPersistRef.current || persistInFlightRef.current) {
+                void flushPersistRef.current?.();
+                await waitForPersistIdle();
+                // finally may have chained another flush — wait until fully idle.
+                if (pendingPersistRef.current || persistInFlightRef.current) {
+                    void flushPersistRef.current?.();
+                    await waitForPersistIdle();
+                }
+            }
+            setCurrentDate(nextDateOrUpdater);
+        } finally {
+            weekNavLockRef.current = false;
+            setWeekNavBusy(false);
+        }
+    }, [waitForPersistIdle]);
 
     const persistWeekSnapshot = useCallback((nextSchedules, nextTasks, overflow) => {
         const weekStartStr = formatLocalYyyyMmDd(getWeekDays(currentDate)[0]);
@@ -1530,14 +1645,14 @@ export function DesignSchedulerScreen() {
         priority: '',
         estimatedHours: 0,
     });
-    const [weekendUnlockPrompt, setWeekendUnlockPrompt] = useState({
+    const [weekendLockPrompt, setWeekendLockPrompt] = useState({
         open: false,
         designerId: null,
         dayIndex: null,
         dayLabel: '',
         designerName: '',
     });
-    const closeWeekendUnlockPrompt = () => setWeekendUnlockPrompt({
+    const closeWeekendLockPrompt = () => setWeekendLockPrompt({
         open: false,
         designerId: null,
         dayIndex: null,
@@ -1592,16 +1707,21 @@ export function DesignSchedulerScreen() {
                     })();
                     return;
                 }
-                // Same assignment version — still sync weekend unlocks if meta carries keys
+                // Same assignment version — still sync weekend day-locks if meta carries keys
                 // (covers missed realtime after socket blip / background tab).
-                if (Array.isArray(meta?.dayUnlockKeys)) {
-                    const serverKeys = meta.dayUnlockKeys;
-                    const local = dayUnlockKeysRef.current;
+                const metaLockKeys = Array.isArray(meta?.dayLockKeys)
+                    ? meta.dayLockKeys
+                    : Array.isArray(meta?.dayUnlockKeys)
+                        ? meta.dayUnlockKeys
+                        : null;
+                if (metaLockKeys) {
+                    const serverKeys = metaLockKeys;
+                    const local = dayLockKeysRef.current;
                     const same =
                         serverKeys.length === local.size &&
                         serverKeys.every((key) => local.has(key));
                     if (!same) {
-                        setDayUnlockKeys(new Set(serverKeys));
+                        setDayLockKeys(new Set(serverKeys));
                     }
                 }
             } catch {}
@@ -1658,18 +1778,27 @@ export function DesignSchedulerScreen() {
                     }
                     return;
                 }
-                if (payload.event === 'scheduler_day_unlocked' || payload.event === 'scheduler_day_relocked') {
+                // day_locked = add skip key; day_unlocked = remove skip key.
+                // Legacy `scheduler_day_relocked` also means locked (old unlock-model wording).
+                if (
+                    payload.event === 'scheduler_day_locked' ||
+                    payload.event === 'scheduler_day_unlocked' ||
+                    payload.event === 'scheduler_day_relocked'
+                ) {
                     if (!payload.weekStart || payload.weekStart === currentWeekStr) {
                         const designerId = payload.designerId;
                         const dateStr = payload.date ? String(payload.date).slice(0, 10) : '';
                         if (designerId && dateStr) {
                             const key = `${designerId}|${dateStr}`;
-                            setDayUnlockKeys((prev) => {
+                            const shouldLock =
+                                payload.event === 'scheduler_day_locked' ||
+                                payload.event === 'scheduler_day_relocked';
+                            setDayLockKeys((prev) => {
                                 const already = prev.has(key);
-                                if (payload.event === 'scheduler_day_unlocked' && already) return prev;
-                                if (payload.event === 'scheduler_day_relocked' && !already) return prev;
+                                if (shouldLock && already) return prev;
+                                if (!shouldLock && !already) return prev;
                                 const next = new Set(prev);
-                                if (payload.event === 'scheduler_day_unlocked') next.add(key);
+                                if (shouldLock) next.add(key);
                                 else next.delete(key);
                                 return next;
                             });
@@ -1757,10 +1886,10 @@ export function DesignSchedulerScreen() {
     const weekDates = useMemo(() => getWeekDays(currentDate), [currentDate]);
     const dateRangeText = useMemo(() => formatSchedulerDateRangeText(weekDates), [weekDates]);
     const customVisibleDays = useMemo(() => {
-        const filtered = [...new Set(selectedDays.filter(isWeekdayIndex))].sort((a, b) => a - b);
+        const filtered = [...new Set(selectedDays.filter(isWorkingDayIndex))].sort((a, b) => a - b);
         if (filtered.length > 0)
             return filtered;
-        return [isWeekdayIndex(currentDay) ? currentDay : WEEKDAY_INDICES[0]];
+        return [isWorkingDayIndex(currentDay) ? currentDay : WORKING_DAY_INDICES[0]];
     }, [selectedDays, currentDay]);
     const visibleDays = viewMode === "week" ? ALL_DAY_INDICES : customVisibleDays;
     const layoutMode = visibleDays.length === 1 ? "single-column" : visibleDays.length <= 3 ? "grid" : "horizontal-scroll";
@@ -1777,14 +1906,14 @@ export function DesignSchedulerScreen() {
     const handleDayToggle = (dayIndex) => {
         if (viewMode !== "custom")
             return;
-        if (!isWeekdayIndex(dayIndex))
+        if (!isWorkingDayIndex(dayIndex))
             return;
         setCurrentDay(dayIndex);
         setSelectedDays((prev) => {
             const exists = prev.includes(dayIndex);
             const next = exists
-                ? prev.filter((d) => d !== dayIndex && isWeekdayIndex(d))
-                : [...prev.filter(isWeekdayIndex), dayIndex];
+                ? prev.filter((d) => d !== dayIndex && isWorkingDayIndex(d))
+                : [...prev.filter(isWorkingDayIndex), dayIndex];
             if (next.length === 0)
                 return prev;
             return [...next].sort((a, b) => a - b);
@@ -1864,12 +1993,12 @@ export function DesignSchedulerScreen() {
         setDropIndicator(null);
         if (!visibleDays.includes(targetDayIndex))
             return;
-        // Block drops on weekends unless HOD unlocked that designer+date.
+        // Block drops on weekend days that the HOD has explicitly locked for this designer.
         if (targetDayIndex >= 5) {
             const weekDays = getWeekDays(currentDate);
             const dateStr = formatLocalYyyyMmDd(weekDays[targetDayIndex]);
-            if (!dayUnlockKeysRef.current.has(`${targetDesignerId}|${dateStr}`)) {
-                toast.error("Unlock this weekend day for the designer before scheduling.");
+            if (dayLockKeysRef.current.has(`${targetDesignerId}|${dateStr}`)) {
+                toast.error("This weekend day is locked for the designer. Unlock it to schedule here.");
                 return;
             }
         }
@@ -2048,6 +2177,11 @@ export function DesignSchedulerScreen() {
                 tasksSnapshot: tasks,
                 visibleDays,
                 getNextSplitId: getNextTaskId,
+                isDayLocked: (designerId, dayIndex) => {
+                    if (dayIndex < 5) return false;
+                    const dateStr = formatLocalYyyyMmDd(weekDates[dayIndex] ?? getWeekDays(currentDate)[dayIndex]);
+                    return dayLockKeysRef.current.has(`${designerId}|${dateStr}`);
+                },
             };
             // Pinning is a per-placement decision, not a sticky tag: every manual re-drag
             // must explicitly set isPinned (true or false) rather than only setting it when
@@ -2103,17 +2237,22 @@ export function DesignSchedulerScreen() {
                 clearHoldPreviousStatus: wasOnHold ? holdPreviousStatusForClear : null,
             });
         };
-        // Always start from the first unfilled weekday so no day is left idle — applies to all drag sources.
-        // Never redirect backward into a day that has already elapsed.
-        // Weekend unlocks are manual placement only — skip Rule 1 redirect onto Sat/Sun.
-        const firstUnfilled = targetDayIndex >= 5
-            ? undefined
-            : WEEKDAY_INDICES.find(
-                (d) => !isPastDayIndex(d, currentDate) && getDayHours(targetDesignerId, d) < DAILY_CAPACITY
-            );
+        // Always start from the first unfilled open day so no day is left idle — applies to all drag sources.
+        // Never redirect backward into a day that has already elapsed or a locked weekend day.
+        const isLockedDay = (d) => {
+            if (d < 5) return false;
+            const dateStr = formatLocalYyyyMmDd(weekDates[d] ?? getWeekDays(currentDate)[d]);
+            return dayLockKeysRef.current.has(`${targetDesignerId}|${dateStr}`);
+        };
+        const firstUnfilled = WORKING_DAY_INDICES.find(
+            (d) =>
+                !isPastDayIndex(d, currentDate) &&
+                !isLockedDay(d) &&
+                getDayHours(targetDesignerId, d) < DAILY_CAPACITY,
+        );
         const wasRedirected = firstUnfilled !== undefined && firstUnfilled < targetDayIndex;
         if (wasRedirected) {
-            const dayNames = ['Mon', 'Tue', 'Wed', 'Thu', 'Fri'];
+            const dayNames = ['Mon', 'Tue', 'Wed', 'Thu', 'Fri', 'Sat', 'Sun'];
             const redirectDesigner = designers.find((d) => d.id === targetDesignerId);
             setRedirectPrompt({
                 open: true,
@@ -2132,74 +2271,75 @@ export function DesignSchedulerScreen() {
         }
         proceedWithPlacement(targetDayIndex, { isPinned: false });
     };
-    const isDesignerDayUnlocked = useCallback((designerId, dayIndex) => {
+    /** Weekdays always open; weekends open unless a day-lock key exists. */
+    const isDesignerDayOpen = useCallback((designerId, dayIndex) => {
         if (dayIndex < 5) return true;
         const dateStr = formatLocalYyyyMmDd(weekDates[dayIndex]);
-        return dayUnlockKeys.has(`${designerId}|${dateStr}`);
-    }, [weekDates, dayUnlockKeys]);
+        return !dayLockKeys.has(`${designerId}|${dateStr}`);
+    }, [weekDates, dayLockKeys]);
 
-    const applyWeekendUnlockChange = useCallback(async (designerId, dayIndex, unlock) => {
+    const applyWeekendLockChange = useCallback(async (designerId, dayIndex, lock) => {
         if (dayIndex < 5) return;
         if (isWeekLocked) {
             toast.error("This week is locked. Unlock it first to make changes.");
             return;
         }
         if (isPastDayIndex(dayIndex, currentDate)) {
-            toast.error("Cannot unlock a past weekend day.");
+            toast.error("Cannot change lock on a past weekend day.");
             return;
         }
         const dateStr = formatLocalYyyyMmDd(weekDates[dayIndex]);
         const key = `${designerId}|${dateStr}`;
         try {
-            if (unlock) {
-                await createSchedulerDayUnlock({ designerId, date: dateStr });
-                setDayUnlockKeys((prev) => new Set(prev).add(key));
-                toast.success("Weekend day unlocked — you can schedule tasks here.");
+            if (lock) {
+                await createSchedulerDayLock({ designerId, date: dateStr });
+                setDayLockKeys((prev) => new Set(prev).add(key));
+                toast.success("Weekend day locked — packing will skip it.");
             } else {
-                await deleteSchedulerDayUnlock({ designerId, date: dateStr });
-                setDayUnlockKeys((prev) => {
+                await deleteSchedulerDayLock({ designerId, date: dateStr });
+                setDayLockKeys((prev) => {
                     const next = new Set(prev);
                     next.delete(key);
                     return next;
                 });
-                toast.success("Weekend day locked again.");
+                toast.success("Weekend day unlocked — open for scheduling.");
             }
         } catch (err) {
-            const msg = err?.response?.data?.message || err?.message || "Could not update weekend unlock.";
+            const msg = err?.response?.data?.message || err?.message || "Could not update weekend day lock.";
             toast.error(msg);
         }
     }, [isWeekLocked, currentDate, weekDates]);
 
-    const toggleWeekendUnlock = useCallback(async (designerId, dayIndex) => {
+    const toggleWeekendLock = useCallback(async (designerId, dayIndex) => {
         if (dayIndex < 5) return;
         if (isWeekLocked) {
             toast.error("This week is locked. Unlock it first to make changes.");
             return;
         }
         if (isPastDayIndex(dayIndex, currentDate)) {
-            toast.error("Cannot unlock a past weekend day.");
+            toast.error("Cannot change lock on a past weekend day.");
             return;
         }
         const dateStr = formatLocalYyyyMmDd(weekDates[dayIndex]);
         const key = `${designerId}|${dateStr}`;
-        const unlocked = dayUnlockKeys.has(key);
-        if (unlocked) {
-            await applyWeekendUnlockChange(designerId, dayIndex, false);
+        const isLocked = dayLockKeys.has(key);
+        if (isLocked) {
+            await applyWeekendLockChange(designerId, dayIndex, false);
             return;
         }
         const date = weekDates[dayIndex];
         const dayLabel = date
-            ? `${date.toLocaleDateString("en-US", { weekday: "long" })} ${date.getDate()}`
+            ? `${date.toLocaleDateString("en-US", { weekday: "long" })} ${date.toLocaleDateString("en-US", { month: "long", day: "numeric" })}`
             : "this weekend day";
         const designerName = designers.find((d) => d.id === designerId)?.name ?? "this designer";
-        setWeekendUnlockPrompt({
+        setWeekendLockPrompt({
             open: true,
             designerId,
             dayIndex,
             dayLabel,
             designerName,
         });
-    }, [isWeekLocked, currentDate, weekDates, dayUnlockKeys, designers, applyWeekendUnlockChange]);
+    }, [isWeekLocked, currentDate, weekDates, dayLockKeys, designers, applyWeekendLockChange]);
 
     const clearOnHoldStatus = (taskId, holdPreviousStatus) => {
         if (!taskId || !isUuid(taskId)) return;
@@ -2542,23 +2682,31 @@ export function DesignSchedulerScreen() {
                 .map((designer) => designer.id),
         );
     }, [teamFilterQuery, teamFilterProject, designers]);
-    // Shift tasks from later weekdays to earlier weekdays up to DAILY_CAPACITY.
+    // Shift tasks from later open days to earlier open days up to DAILY_CAPACITY.
     // When a task from a later day is too large to move whole, it is split: the portion
     // that fills the gap goes to the earlier day, the remainder stays.
+    // Weekends participate like weekdays; locked weekend days are skipped.
     const getOptimizedSchedule = (currentSchedules, currentTasks) => {
         const newSchedules = cloneState(currentSchedules);
         const newTasks = { ...currentTasks };
         let changed = false;
+        const isLockedForDesigner = (designerId, dayIndex) => {
+            if (dayIndex < 5) return false;
+            const dateStr = formatLocalYyyyMmDd(weekDates[dayIndex] ?? getWeekDays(currentDate)[dayIndex]);
+            return dayLockKeysRef.current.has(`${designerId}|${dateStr}`);
+        };
         for (const designer of designers) {
             const dId = designer.id;
             if (!newSchedules[dId])
                 continue;
-            // Iteratively fill each target day (Mon-Thu) from subsequent days (up to Fri)
-            for (let targetDay = 0; targetDay < 4; targetDay++) {
+            // Fill each earlier open day from later open days (Mon→Sat targets; Sun source-only)
+            for (let targetDay = 0; targetDay < 6; targetDay++) {
                 if (isPastDayIndex(targetDay, currentDate)) continue; // never backfill an elapsed day
+                if (isLockedForDesigner(dId, targetDay)) continue;
                 const targetDayStr = targetDay.toString();
-                for (let sourceDay = targetDay + 1; sourceDay < 5; sourceDay++) {
+                for (let sourceDay = targetDay + 1; sourceDay < 7; sourceDay++) {
                     if (isPastDayIndex(sourceDay, currentDate)) continue; // never auto-pull off an elapsed day
+                    if (isLockedForDesigner(dId, sourceDay)) continue;
                     const sourceDayStr = sourceDay.toString();
                     const sourceTasks = [...(newSchedules[dId][sourceDayStr] || [])];
                     if (sourceTasks.length === 0)
@@ -2666,13 +2814,13 @@ export function DesignSchedulerScreen() {
     const getDesignerBookedHours = (designerId) =>
         sumDesignerWeekWorkload(tasks, schedules[designerId] || {});
     const isDesignerOverloaded = (designerId) => {
-        return WEEKDAY_INDICES.some((dayIndex) => getDayTotalHours(designerId, dayIndex) > DAILY_CAPACITY);
+        return WORKING_DAY_INDICES.some((dayIndex) => getDayTotalHours(designerId, dayIndex) > DAILY_CAPACITY);
     };
     const totalScheduledHours = useMemo(() => designers.reduce((acc, designer) => {
         return acc + sumDesignerWeekWorkload(tasks, schedules[designer.id] || {});
     }, 0), [schedules, tasks, designers]);
     const totalDesignersCount = designers.length;
-    const overloadedCount = useMemo(() => designers.filter((designer) => WEEKDAY_INDICES.some((dayIndex) => {
+    const overloadedCount = useMemo(() => designers.filter((designer) => WORKING_DAY_INDICES.some((dayIndex) => {
         const dayTasks = (schedules[designer.id] || {})[dayIndex.toString()] || [];
         return sumTaskTotalHours(tasks, dayTasks) > DAILY_CAPACITY;
     })).length, [schedules, tasks, designers]);
@@ -2685,7 +2833,7 @@ export function DesignSchedulerScreen() {
     return (<div className="app-shell h-screen flex flex-col overflow-hidden font-sans">
       <Navbar 
         currentDate={currentDate}
-        onCalendarChange={setCurrentDate}
+        onCalendarChange={(next) => { void changeSchedulerWeek(next); }}
         dateRangeText={dateRangeText}
       />
 
@@ -2700,16 +2848,40 @@ export function DesignSchedulerScreen() {
             <div className="flex items-center gap-2"><div className="h-2.5 w-2.5 rounded-sm bg-orange-400" /> Total Hours: {isWeekLoading ? <span className="inline-block h-3 w-8 align-middle bg-slate-200 rounded animate-pulse" /> : formatHoursAsHm(totalScheduledHours)}</div>
             <div className="flex items-center gap-2 text-red-500"><AlertTriangle size={14}/> Overloaded: {isWeekLoading ? <span className="inline-block h-3 w-4 align-middle bg-slate-200 rounded animate-pulse" /> : overloadedCount}</div>
             <div className="flex items-center gap-2">
-              <button type="button" onClick={() => setCurrentDate((d) => { const p = new Date(d); p.setDate(p.getDate() - 7); return p; })} className="ui-chip-button px-2" title="Previous week">‹</button>
+              <button
+                type="button"
+                disabled={weekNavBusy}
+                onClick={() => {
+                  void changeSchedulerWeek((d) => {
+                    const p = new Date(d);
+                    p.setDate(p.getDate() - 7);
+                    return p;
+                  });
+                }}
+                className={`ui-chip-button px-2${weekNavBusy ? " opacity-50 cursor-not-allowed" : ""}`}
+                title={weekNavBusy ? "Saving before changing week…" : "Previous week"}
+              >‹</button>
               <span className="whitespace-nowrap rounded-md border border-slate-200 bg-slate-100 px-2.5 py-1 text-xs font-medium text-slate-600">{dateRangeText}</span>
-              <button type="button" onClick={() => setCurrentDate((d) => { const n = new Date(d); n.setDate(n.getDate() + 7); return n; })} className="ui-chip-button px-2" title="Next week">›</button>
+              <button
+                type="button"
+                disabled={weekNavBusy}
+                onClick={() => {
+                  void changeSchedulerWeek((d) => {
+                    const n = new Date(d);
+                    n.setDate(n.getDate() + 7);
+                    return n;
+                  });
+                }}
+                className={`ui-chip-button px-2${weekNavBusy ? " opacity-50 cursor-not-allowed" : ""}`}
+                title={weekNavBusy ? "Saving before changing week…" : "Next week"}
+              >›</button>
               <div className="mx-1 h-4 w-px bg-slate-200" />
               <button type="button" onClick={() => setViewMode("week")} className={`ui-chip-button ${viewMode === "week" ? "ui-chip-button-active" : ""}`}>Week</button>
               <button type="button" onClick={() => {
-                const weekdayCurrentDay = isWeekdayIndex(currentDay) ? currentDay : WEEKDAY_INDICES[0];
+                const workingCurrentDay = isWorkingDayIndex(currentDay) ? currentDay : WORKING_DAY_INDICES[0];
                 setViewMode("custom");
-                setCurrentDay(weekdayCurrentDay);
-                setSelectedDays([weekdayCurrentDay]);
+                setCurrentDay(workingCurrentDay);
+                setSelectedDays([workingCurrentDay]);
               }} className={`ui-chip-button ${viewMode === "custom" ? "ui-chip-button-active" : ""}`}>Custom</button>
             </div>
           </div>
@@ -2755,7 +2927,7 @@ export function DesignSchedulerScreen() {
       {viewMode === "custom" && (<div className="flex shrink-0 items-center gap-2 border-b border-slate-200 bg-white px-6 py-2 text-xs">
           <div className="w-64 border-r border-slate-200 pr-4 font-medium text-slate-500">Visible Days</div>
           <div className="flex-1 flex items-center gap-1 px-6">
-            {WEEKDAY_INDICES.map((dayIndex) => {
+            {WORKING_DAY_INDICES.map((dayIndex) => {
                 const label = weekDates[dayIndex].toLocaleDateString("en-US", { weekday: "short" });
                 const active = selectedDays.includes(dayIndex);
                 return (<button key={`selector-${dayIndex}`} type="button" onClick={() => handleDayToggle(dayIndex)} className={`px-2 py-1 rounded border transition-colors ${active
@@ -2922,8 +3094,8 @@ export function DesignSchedulerScreen() {
                   {visibleDays.map((dayIndex) => {
             const date = weekDates[dayIndex];
             const isWeekend = dayIndex >= 5;
-            return (<button key={`header-day-${dayIndex}`} type="button" onClick={() => viewMode === "custom" && handleDayToggle(dayIndex)} className={`px-2 py-2 text-center border-r ${isWeekend ? 'border-orange-100 bg-slate-100 text-slate-400' : 'border-slate-200'} ${viewMode === "custom" ? "cursor-pointer hover:bg-blue-50/70 transition-colors" : "cursor-default"}`} title={viewMode === "custom" ? "Toggle day visibility" : undefined}>
-                        {date.toLocaleDateString("en-US", { weekday: "short" })} <span className={`font-normal ml-1 ${isWeekend ? 'text-slate-400' : 'text-slate-400'}`}>{date.getDate()}</span>
+            return (<button key={`header-day-${dayIndex}`} type="button" onClick={() => viewMode === "custom" && handleDayToggle(dayIndex)} className={`px-2 py-2 text-center border-r border-slate-200 ${viewMode === "custom" ? "cursor-pointer hover:bg-blue-50/70 transition-colors" : "cursor-default"}`} title={viewMode === "custom" ? "Toggle day visibility" : undefined}>
+                        {date.toLocaleDateString("en-US", { weekday: "short" })} <span className="font-normal ml-1 text-slate-400">{date.getDate()}</span>
                         {isWeekend && <span className="block text-[8px] text-slate-400 font-normal normal-case tracking-wide">Weekend</span>}
                       </button>);
         })}
@@ -2977,7 +3149,7 @@ export function DesignSchedulerScreen() {
                           <span className="text-[11px] font-semibold text-slate-900 truncate tracking-tight">{designer.name}</span>
                           <div
                             className="flex items-center gap-1"
-                            title={`${formatHoursAsHm(booked)} booked Mon–Fri (regular + OT + leave/reg). Bar vs ${WEEKLY_CAPACITY}h regular capacity.`}
+                            title={`${formatHoursAsHm(booked)} booked Mon–Sun (regular + OT + leave/reg). Bar vs ${WEEKLY_CAPACITY}h regular capacity.`}
                           >
                             <div className="flex-1 h-1 bg-slate-100 border border-slate-200 rounded-full mt-0.5 overflow-hidden">
                                <div className={`h-full rounded-full transition-all ${overloaded ? 'bg-red-400' : 'bg-blue-400'}`} style={{ width: `${Math.min((booked / WEEKLY_CAPACITY) * 100, 100)}%` }}></div>
@@ -2998,8 +3170,8 @@ export function DesignSchedulerScreen() {
                     const rawTasksInDay = designerDays[dayIndex.toString()] || [];
                     const { systemBlockIds, visualRegularTaskIds, overtimeTaskIds } = partitionDayTaskIds(rawTasksInDay, tasks);
                     const isWeekend = dayIndex >= 5;
-                    const weekendUnlocked = isWeekend && isDesignerDayUnlocked(designer.id, dayIndex);
-                    const weekendLocked = isWeekend && !weekendUnlocked;
+                    const weekendOpen = isWeekend && isDesignerDayOpen(designer.id, dayIndex);
+                    const weekendLocked = isWeekend && !weekendOpen;
                     const isPastDay = isPastDayIndex(dayIndex, currentDate);
                     const dayHours = getDayHours(designer.id, dayIndex);
                     const overtimeHours = getDayOvertimeHours(designer.id, dayIndex);
@@ -3014,28 +3186,24 @@ export function DesignSchedulerScreen() {
                                 ? 'bg-slate-100/70 border-slate-200 cursor-not-allowed grayscale-[35%]'
                                 : isDayOverloaded
                                 ? 'border-slate-100 bg-red-50/40'
-                                : weekendUnlocked
-                                ? 'border-amber-100 bg-amber-50/30 hover:bg-amber-50/50'
                                 : 'border-slate-100 hover:bg-blue-50/30'}
                               `}
                               onDragOver={dropEnabled ? handleDragOver : undefined}
                               onDrop={dropEnabled ? (e) => { void handleDropToDay(e, designer.id, dayIndex); } : undefined}
                               onClick={isWeekend && !isWeekLocked && !isPastDay ? (e) => {
-                                // Relock only when empty. Unlock uses the chrome button (and this bubble).
-                                if (rawTasksInDay.length > 0 && weekendUnlocked) return;
-                                // Unlocked empty: any click in the cell (inner pad / hours footer) relocks.
-                                if (weekendUnlocked && rawTasksInDay.length === 0) {
-                                  void toggleWeekendUnlock(designer.id, dayIndex);
+                                // Lock only when empty. Unlock (remove lock) from locked chrome.
+                                if (rawTasksInDay.length > 0 && weekendOpen) return;
+                                if (weekendOpen && rawTasksInDay.length === 0) {
+                                  void toggleWeekendLock(designer.id, dayIndex);
                                   return;
                                 }
-                                // Locked: only chrome / cell itself (not accidental nested UI).
                                 if (e.target !== e.currentTarget && !e.target?.closest?.('[data-weekend-chrome]')) return;
-                                void toggleWeekendUnlock(designer.id, dayIndex);
+                                void toggleWeekendLock(designer.id, dayIndex);
                               } : undefined}
-                              title={weekendLocked ? 'Click to unlock this weekend day for scheduling' : weekendUnlocked && rawTasksInDay.length === 0 ? 'Click to lock this weekend day again' : undefined}
+                              title={weekendLocked ? 'Click to unlock this weekend day for scheduling' : weekendOpen && rawTasksInDay.length === 0 ? 'Click to lock this weekend day (skip when packing)' : undefined}
                             >
-                              {/* Gravity fill bar (background) — unlocked weekends + weekdays */}
-                              {!weekendLocked && dayTotalHours > 0 && (<div className={`absolute bottom-0 left-0 right-0 transition-all opacity-20 ${isDayOverloaded ? 'bg-red-400' : weekendUnlocked ? 'bg-amber-400' : 'bg-blue-400'}`} style={{ height: `${gravityPct}%` }}/>)}
+                              {/* Gravity fill bar (background) */}
+                              {!weekendLocked && dayTotalHours > 0 && (<div className={`absolute bottom-0 left-0 right-0 transition-all opacity-20 ${isDayOverloaded ? 'bg-red-400' : 'bg-blue-400'}`} style={{ height: `${gravityPct}%` }}/>)}
                               {/* Tasks list: leave/reg, work, and OT stay on separate strips. */}
                               <div className="flex-1 min-h-0 p-1 relative z-10">
                                 {weekendLocked ? (
@@ -3046,25 +3214,25 @@ export function DesignSchedulerScreen() {
                                     className="w-full h-full min-h-[42px] cursor-pointer hover:bg-slate-200/50 transition-colors"
                                     onClick={(e) => {
                                       e.stopPropagation();
-                                      void toggleWeekendUnlock(designer.id, dayIndex);
+                                      void toggleWeekendLock(designer.id, dayIndex);
                                     }}
                                   />
-                                ) : weekendUnlocked && rawTasksInDay.length === 0 ? (
+                                ) : weekendOpen && rawTasksInDay.length === 0 ? (
                                   <div
                                     data-weekend-chrome="1"
                                     role="button"
                                     tabIndex={0}
                                     aria-label="Lock weekend day"
-                                    className="w-full h-full min-h-[42px] cursor-pointer hover:bg-amber-100/50 transition-colors"
+                                    className="w-full h-full min-h-[42px] cursor-pointer hover:bg-slate-100/70 transition-colors"
                                     onClick={(e) => {
                                       e.stopPropagation();
-                                      void toggleWeekendUnlock(designer.id, dayIndex);
+                                      void toggleWeekendLock(designer.id, dayIndex);
                                     }}
                                     onKeyDown={(e) => {
                                       if (e.key !== "Enter" && e.key !== " ") return;
                                       e.preventDefault();
                                       e.stopPropagation();
-                                      void toggleWeekendUnlock(designer.id, dayIndex);
+                                      void toggleWeekendLock(designer.id, dayIndex);
                                     }}
                                     onDragOver={handleDragOver}
                                     onDrop={(e) => { void handleDropToDay(e, designer.id, dayIndex); }}
@@ -3177,11 +3345,28 @@ export function DesignSchedulerScreen() {
                                     )}
                                   </div>)}
                               </div>
-                              {/* Day hours indicator — weekdays only; total matches name-line week sum.
+                              {/* Day hours indicator — open working days (Mon–Sun); total matches name-line week sum.
                                   Always shown (even at 0h) so free capacity reads as "0h/8h available"
-                                  rather than blank space that's ambiguous with "not loaded yet". */}
-                              {!weekendLocked && (<div
-                                className={`text-[8px] font-bold text-center pb-0.5 relative z-10 ${isDayOverloaded ? 'text-red-600' : dayHours > 0 || overtimeHours > 0 ? (weekendUnlocked ? 'text-amber-600/80' : 'text-blue-500/70') : 'text-slate-400'}`}
+                                  rather than blank space that's ambiguous with "not loaded yet".
+                                  Locked weekend days show a lock mark in the same footer slot. */}
+                              {weekendLocked ? (
+                                <button
+                                  type="button"
+                                  data-weekend-chrome="1"
+                                  aria-label="Unlock weekend day"
+                                  title="Locked — click to unlock"
+                                  className="flex w-full items-center justify-center gap-0.5 pb-0.5 text-slate-500 hover:text-slate-700 relative z-10"
+                                  onClick={(e) => {
+                                    e.stopPropagation();
+                                    void toggleWeekendLock(designer.id, dayIndex);
+                                  }}
+                                >
+                                  <Lock size={10} strokeWidth={2.25} aria-hidden="true" />
+                                  <span className="text-[8px] font-bold">Locked</span>
+                                </button>
+                              ) : (
+                                <div
+                                className={`text-[8px] font-bold text-center pb-0.5 relative z-10 ${isDayOverloaded ? 'text-red-600' : dayHours > 0 || overtimeHours > 0 ? 'text-blue-500/70' : 'text-slate-400'}`}
                                 title={overtimeHours > 0
                                   ? `${formatHoursAsHm(dayHours + overtimeHours)} total = ${formatHoursAsHm(dayHours)} regular + ${formatHoursAsHm(overtimeHours)} OT`
                                   : dayHours > 0
@@ -3189,7 +3374,8 @@ export function DesignSchedulerScreen() {
                                     : `${DAILY_CAPACITY}h available`}
                               >
                                   {formatDayWorkloadFooter(dayHours, overtimeHours, DAILY_CAPACITY)}
-                                </div>)}
+                                </div>
+                              )}
                             </div>);
                 })}
                       </div>
@@ -3200,22 +3386,22 @@ export function DesignSchedulerScreen() {
           </div>
         </div>
       </div>
-      {weekendUnlockPrompt.open ? (
+      {weekendLockPrompt.open ? (
         <div className="fixed inset-0 z-[120] flex items-center justify-center bg-slate-900/40 p-4" aria-modal="true" role="alertdialog">
           <div className="ui-surface w-full max-w-md p-6">
-            <h2 className="text-lg font-semibold text-slate-900">Unlock weekend day?</h2>
+            <h2 className="text-lg font-semibold text-slate-900">Lock weekend day?</h2>
             <p className="mt-3 text-sm leading-6 text-slate-600">
-              <span className="font-semibold text-slate-900">{weekendUnlockPrompt.dayLabel}</span> is a weekend day.
-              Do you want to unlock it so you can schedule tasks for{" "}
-              <span className="font-semibold text-slate-900">{weekendUnlockPrompt.designerName}</span>?
+              Lock <span className="font-semibold text-slate-900">{weekendLockPrompt.dayLabel}</span> for{" "}
+              <span className="font-semibold text-slate-900">{weekendLockPrompt.designerName}</span>?
+              Packing and drops will skip this day and continue to the next available day.
             </p>
             <p className="mt-2 text-xs leading-5 text-slate-500">
-              Weekend days stay locked by default. Unlock only when you need to place work manually.
+              Weekends are open like weekdays by default. Lock only when this designer should not work that day.
             </p>
             <div className="mt-6 flex flex-wrap items-center justify-end gap-2">
               <button
                 type="button"
-                onClick={closeWeekendUnlockPrompt}
+                onClick={closeWeekendLockPrompt}
                 className="ui-chip-button"
               >
                 Cancel
@@ -3223,15 +3409,15 @@ export function DesignSchedulerScreen() {
               <button
                 type="button"
                 onClick={() => {
-                  const { designerId, dayIndex } = weekendUnlockPrompt;
-                  closeWeekendUnlockPrompt();
+                  const { designerId, dayIndex } = weekendLockPrompt;
+                  closeWeekendLockPrompt();
                   if (designerId != null && dayIndex != null) {
-                    void applyWeekendUnlockChange(designerId, dayIndex, true);
+                    void applyWeekendLockChange(designerId, dayIndex, true);
                   }
                 }}
                 className="ui-chip-button ui-chip-button-active"
               >
-                Unlock
+                Lock
               </button>
             </div>
           </div>
@@ -3248,7 +3434,7 @@ export function DesignSchedulerScreen() {
               <ul className="mt-2 list-disc space-y-1 pl-4 leading-6">
                 <li>Total task duration: <strong>{overtimePrompt.totalTaskHours} h</strong></li>
                 <li>
-                  Assignable within normal capacity (visible weekdays):{" "}
+                  Assignable within normal capacity (open working days):{" "}
                   <strong>{overtimePrompt.hoursWithinNormalCapacity} h</strong>
                 </li>
                 <li>
@@ -3262,7 +3448,7 @@ export function DesignSchedulerScreen() {
               </p>
               {overtimePrompt.hoursWithinNormalCapacity === 0 && (
                 <div className="mt-3 rounded-md border border-red-200 bg-red-50 p-3 text-sm text-red-700">
-                  All weekdays are at full capacity (8 h). No hours can be assigned within the normal schedule —
+                  All open working days are at full capacity (8 h). No hours can be assigned within the normal schedule —
                   use <strong>Assign Full (Overtime)</strong> to go beyond 8 h/day, or free up capacity first.
                 </div>
               )}

@@ -1,6 +1,10 @@
 import { formatHoursAsHm, toPositiveHours } from "@/lib/format-duration";
 
+/** Mon–Fri only — used for optional UI filters that still exclude weekends. */
 export const WEEKDAY_INDICES = [0, 1, 2, 3, 4];
+
+/** Mon–Sun — packing, Rule 1, optimizer, and week workload (weekends open like weekdays). */
+export const WORKING_DAY_INDICES = [0, 1, 2, 3, 4, 5, 6];
 
 /**
  * Day-footer label that leads with the same total the week row uses
@@ -57,16 +61,16 @@ export function sumSlotTotalHours(taskMap, taskIds = []) {
 }
 
 /** Week workload for one designer — raw assignment sum (matches HOD planning row total). */
-export function sumDesignerWeekWorkload(taskMap, scheduleByDayIndex = {}, weekdayIndices = WEEKDAY_INDICES) {
-  return weekdayIndices.reduce((acc, dayIdx) => {
+export function sumDesignerWeekWorkload(taskMap, scheduleByDayIndex = {}, workingDayIndices = WORKING_DAY_INDICES) {
+  return workingDayIndices.reduce((acc, dayIdx) => {
     const taskIds = scheduleByDayIndex[dayIdx.toString()] || [];
     return acc + sumSlotTotalHours(taskMap, taskIds);
   }, 0);
 }
 
 /** Assignment slots scheduled this week (each grid cell entry, including OT / leave / reg blocks). */
-export function countDesignerWeekSlots(scheduleByDayIndex = {}, weekdayIndices = WEEKDAY_INDICES) {
-  return weekdayIndices.reduce((acc, dayIdx) => {
+export function countDesignerWeekSlots(scheduleByDayIndex = {}, workingDayIndices = WORKING_DAY_INDICES) {
+  return workingDayIndices.reduce((acc, dayIdx) => {
     return acc + (scheduleByDayIndex[dayIdx.toString()] || []).length;
   }, 0);
 }

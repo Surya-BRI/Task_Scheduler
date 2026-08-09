@@ -2,7 +2,7 @@ import { BadRequestException, Injectable } from '@nestjs/common';
 import { PrismaService } from '../prisma/prisma.service';
 import { ActivityAction } from '../activities/activity-events';
 import { UserRole } from '../common/constants/roles.enum';
-import { hasDepartmentManagerAccess } from '../common/utils/workflow-roles.util';
+import { hasDepartmentManagerAccess, hasHrApproverAccess } from '../common/utils/workflow-roles.util';
 import {
   ProjectsOverviewResponseDto,
   ScheduledTaskItem,
@@ -504,7 +504,7 @@ export class DashboardService {
     viewerRole?: UserRole,
     preloadedDepartmentId?: string | null,
   ): Promise<InboxItem[]> {
-    if (!viewerId || !hasDepartmentManagerAccess(viewerRole ?? '')) {
+    if (!viewerId || !hasHrApproverAccess(viewerRole ?? '')) {
       return [];
     }
 

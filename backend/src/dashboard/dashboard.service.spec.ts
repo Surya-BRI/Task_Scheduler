@@ -247,6 +247,26 @@ describe('DashboardService', () => {
       expect(leaveItems.length).toBeGreaterThan(0);
       expect(leaveItems[0].requiresAction).toBe(true);
     });
+
+    it('does not return leave/OT/regularization inbox items for SALESPERSON', async () => {
+      prisma.user.findUnique.mockResolvedValue({ departmentId: null });
+      prisma.leaveRequest.findMany.mockResolvedValue([
+        {
+          id: 'leave-1',
+          userId: 'designer-1',
+          startDate: new Date('2026-06-10'),
+          endDate: new Date('2026-06-12'),
+          createdAt: new Date(),
+          type: 'Full Day',
+          user: { id: 'designer-1', fullName: 'Alex Johnson' },
+        },
+      ]);
+      const result = await service.getProjectsOverview('2026-06-08', 'sales-1', UserRole.SALESPERSON);
+      expect(result.inbox.filter((i) => i.requestType === 'leave')).toHaveLength(0);
+      expect(result.inbox.filter((i) => i.requestType === 'overtime')).toHaveLength(0);
+      expect(result.inbox.filter((i) => i.requestType === 'regularization')).toHaveLength(0);
+      expect(prisma.leaveRequest.findMany).not.toHaveBeenCalled();
+    });
   });
 
   describe('parseWeekStart', () => {

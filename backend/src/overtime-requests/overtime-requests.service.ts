@@ -9,7 +9,7 @@ import { CreateOvertimeRequestDto } from './dto/create-overtime-request.dto';
 import { UpdateOvertimeRequestDto } from './dto/update-overtime-request.dto';
 import { ReviewOvertimeRequestDto } from './dto/review-overtime-request.dto';
 import { UserRole } from '../common/constants/roles.enum';
-import { hasDepartmentManagerAccess } from '../common/utils/workflow-roles.util';
+import { hasHrApproverAccess } from '../common/utils/workflow-roles.util';
 import { assertOvertimeDateIsToday } from '../common/utils/date-window.util';
 import {
   HALF_DAY_SESSION_SECOND,
@@ -620,7 +620,7 @@ export class OvertimeRequestsService {
   async findPendingApprovalsForView(managerId: string, role: UserRole) {
     const where: Record<string, unknown> = { status: 'SUBMITTED' };
 
-    if (hasDepartmentManagerAccess(role)) {
+    if (hasHrApproverAccess(role)) {
       const manager = await this.prisma.user.findUnique({ where: { id: managerId }, select: { departmentId: true } });
       if (manager?.departmentId) {
         where.designer = { departmentId: manager.departmentId };
@@ -655,7 +655,7 @@ export class OvertimeRequestsService {
     const designerId = dto.designerId || creatorId;
 
     // Authorization check
-    if (designerId !== creatorId && !hasDepartmentManagerAccess(creatorRole)) {
+    if (designerId !== creatorId && !hasHrApproverAccess(creatorRole)) {
       throw new ForbiddenException('You are not authorized to create request for this designer');
     }
 
@@ -675,7 +675,7 @@ export class OvertimeRequestsService {
     const totalHours = new Decimal(
       (this.timeToMinutes(schedule.endTime) - this.timeToMinutes(schedule.startTime)) / 60,
     );
-    const hodAutoApprove = hasDepartmentManagerAccess(creatorRole);
+    const hodAutoApprove = hasHrApproverAccess(creatorRole);
     const hodOnBehalf = hodAutoApprove && creatorId !== designerId;
     const status = hodAutoApprove ? 'APPROVED' : this.normalizeCreateStatus(dto.status);
     const now = new Date();
@@ -813,7 +813,7 @@ export class OvertimeRequestsService {
     }
 
     // Auth check
-    if (request.designerId !== userId && !hasDepartmentManagerAccess(role)) {
+    if (request.designerId !== userId && !hasHrApproverAccess(role)) {
       throw new ForbiddenException('You can only update your own requests');
     }
 
@@ -1050,7 +1050,7 @@ export class OvertimeRequestsService {
 
     // Auth check: owner or HOD in the same department
     if (request.designerId !== userId) {
-      if (!hasDepartmentManagerAccess(role)) {
+      if (!hasHrApproverAccess(role)) {
         throw new ForbiddenException('Access denied');
       }
       const viewer = await this.prisma.user.findUnique({ where: { id: userId }, select: { departmentId: true } });
@@ -1114,7 +1114,7 @@ export class OvertimeRequestsService {
 
     // HOD review (single-step approval — no separate HR role)
     if (dto.status === 'APPROVED_BY_MANAGER' || dto.status === 'REJECTED_BY_MANAGER') {
-      if (!hasDepartmentManagerAccess(reviewerRole)) {
+      if (!hasHrApproverAccess(reviewerRole)) {
         throw new ForbiddenException('Only department managers can review overtime requests');
       }
       if (request.status !== 'SUBMITTED') {
@@ -1215,7 +1215,7 @@ export class OvertimeRequestsService {
     const where: any = { status: 'SUBMITTED' };
 
     // If HOD, filter by department
-    if (hasDepartmentManagerAccess(role)) {
+    if (hasHrApproverAccess(role)) {
       const manager = await this.prisma.user.findUnique({ where: { id: managerId }, select: { departmentId: true } });
       if (manager?.departmentId) {
         where.designer = { departmentId: manager.departmentId };
@@ -1240,7 +1240,7 @@ export class OvertimeRequestsService {
     if (filters.status) where.status = filters.status;
     if (filters.designerId) where.designerId = filters.designerId;
 
-    if (hasDepartmentManagerAccess(role)) {
+    if (hasHrApproverAccess(role)) {
       const manager = await this.prisma.user.findUnique({ where: { id: managerId }, select: { departmentId: true } });
       if (manager?.departmentId) {
         where.designer = { departmentId: manager.departmentId };
@@ -1383,7 +1383,7 @@ export class OvertimeRequestsService {
       hods = await this.prisma.user.findMany({
         where: {
           departmentId,
-          role: { name: { in: [UserRole.HOD, UserRole.SALESPERSON] } },
+          role: { name: UserRole.HOD },
         },
         select: { fullName: true },
         take: 1,
@@ -1391,7 +1391,7 @@ export class OvertimeRequestsService {
     }
     if (hods.length === 0) {
       hods = await this.prisma.user.findMany({
-        where: { role: { name: { in: [UserRole.HOD, UserRole.SALESPERSON] } } },
+        where: { role: { name: UserRole.HOD } },
         select: { fullName: true },
         take: 1,
       });
@@ -1407,14 +1407,14 @@ export class OvertimeRequestsService {
       hods = await this.prisma.user.findMany({
         where: {
           departmentId: deptId,
-          role: { name: { in: [UserRole.HOD, UserRole.SALESPERSON] } },
+          role: { name: UserRole.HOD },
         },
         select: { id: true },
       });
     }
     if (hods.length === 0) {
       hods = await this.prisma.user.findMany({
-        where: { role: { name: { in: [UserRole.HOD, UserRole.SALESPERSON] } } },
+        where: { role: { name: UserRole.HOD } },
         select: { id: true },
       });
     }

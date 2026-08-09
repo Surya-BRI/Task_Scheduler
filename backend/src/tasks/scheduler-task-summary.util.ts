@@ -21,6 +21,11 @@ export const SCHEDULER_TASK_SUMMARY_SELECT = {
       name: true,
       projectNo: true,
       category: true,
+      // Rule 10 — needed so HOD UI can block ineligible drops before save.
+      technicalHead: true,
+      teamLead: true,
+      subTeamLead: true,
+      designers: true,
     },
   },
   taskDesigners: { select: { designerId: true } },
@@ -58,6 +63,10 @@ export type SchedulerTaskSummaryDto = {
     name: string | null;
     projectNo: string | null;
     category: string | null;
+    technicalHead: string | null;
+    teamLead: string | null;
+    subTeamLead: string | null;
+    designers: string | null;
   } | null;
 };
 
@@ -86,6 +95,10 @@ export function mapSchedulerTaskSummary(task: SchedulerTaskSummaryRow): Schedule
         name: task.project.name,
         projectNo: task.project.projectNo,
         category: task.project.category,
+        technicalHead: task.project.technicalHead ?? null,
+        teamLead: task.project.teamLead ?? null,
+        subTeamLead: task.project.subTeamLead ?? null,
+        designers: task.project.designers ?? null,
       }
     : null;
 

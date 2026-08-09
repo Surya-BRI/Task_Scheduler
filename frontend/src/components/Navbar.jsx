@@ -201,7 +201,9 @@ function NotificationDropdown({ session }) {
     }
     if (typeof document !== 'undefined' && document.visibilityState === 'hidden') return
     loadingRef.current = true
-    setLoading(true)
+    // Only flash "Loading…" on the first/empty fetch — background polls and realtime
+    // refreshes should keep the current list visible.
+    if (itemsRef.current.length === 0) setLoading(true)
     try {
       const { data: rows, unreadCount: count } = await listNotifications(30)
       const nextItems = Array.isArray(rows) ? rows : []
@@ -239,7 +241,7 @@ function NotificationDropdown({ session }) {
     const startPolling = () => {
       if (cancelled) return
       void loadNotifications()
-      intervalId = setInterval(() => void loadNotifications(), 45000)
+      intervalId = setInterval(() => void loadNotifications(), 5 * 60_000)
     }
     const deferId =
       typeof window !== 'undefined' && typeof window.requestIdleCallback === 'function'
@@ -405,7 +407,7 @@ function NotificationDropdown({ session }) {
             </div>
           </div>
           <div className="max-h-80 overflow-y-auto">
-            {loading ? (
+            {loading && items.length === 0 ? (
               <p className="px-4 py-6 text-sm text-slate-500">Loading…</p>
             ) : items.length === 0 ? (
               <p className="px-4 py-6 text-sm text-slate-500">No notifications yet.</p>

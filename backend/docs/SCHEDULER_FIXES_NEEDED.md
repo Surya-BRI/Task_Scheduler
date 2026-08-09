@@ -64,7 +64,7 @@ Architectural/scalability items found while investigating [SCHEDULER_DISAPPEARIN
 
 **Was:** "Assign Available Only" overflow fragments were carried to next week via a client-side `localStorage` key (`scheduler_overflow_v1_YYYY-MM-DD`), restored on next-week load and placed at the first day with capacity — fragile (lost if browser storage was cleared) and never validated against the destination week's actual live state.
 
-**Fix:** `SaveSchedulerWeekDto.overflow[]` plus a new backend `placeOverflowCapacity` place overflow atomically with the week save: walks forward day-by-day (skipping weekends/holidays/full-day leave), live-checks real capacity inside the same save transaction, bounded by a 56-day lookahead. The response returns `overflowPlacements`/`unplacedOverflow` so nothing is silently dropped.
+**Fix:** `SaveSchedulerWeekDto.overflow[]` plus a new backend `placeOverflowCapacity` place overflow atomically with the week save: walks forward day-by-day (skipping holidays/full-day leave/designer weekend day-locks; weekends otherwise open), live-checks real capacity inside the same save transaction, bounded by a 56-day lookahead. The response returns `overflowPlacements`/`unplacedOverflow` so nothing is silently dropped.
 
 **Files:**
 - `backend/src/scheduler-assignments/dto/save-scheduler-week.dto.ts` — `SchedulerOverflowInputDto`

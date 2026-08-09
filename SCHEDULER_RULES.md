@@ -11,7 +11,8 @@ If code and these rules conflict, fix the code.
 |---|---|---|
 | `DAILY_CAPACITY` | 8h | Normal working hours per day |
 | `MAX_DAILY_HOURS` | 12h | Absolute ceiling — backend rejects any day above this |
-| `WEEKDAY_INDICES` | [0,1,2,3,4] | Mon–Fri for optimizer / Rule 1 / overflow (Sat/Sun need Rule 14 unlock for manual place) |
+| `WORKING_DAY_INDICES` | [0,1,2,3,4,5,6] | Mon–Sun for Rule 1 / optimizer / overflow packing (same behaviour; locked weekends skipped — Rule 14) |
+| `WEEKDAY_INDICES` | [0,1,2,3,4] | Mon–Fri only — kept for any UI that still filters weekdays separately |
 | `MIN_SPLIT_HOURS` | 5min (0.0833h) | Smallest allowed split part for optimizer/drag splits (was 1h) |
 
 ---
@@ -35,12 +36,12 @@ Triggered when `allowOvertime=true` assignment uses hours beyond 8h/day on any p
 
 **Option A — Assign Full (Overtime)**
 - Fills the day up to `MAX_DAILY_HOURS (12h)` with overtime
-- Remaining hours spill to the next weekday
+- Remaining hours spill to the next open working day (Mon–Sun)
 
 **Option B — Assign Available Only (Xh)**
 - Only places hours within the normal 8h capacity
 - Remaining hours become an overflow fragment (status = `unassigned`)
-- Button is **disabled** (red warning shown) if `hoursWithinNormalCapacity === 0` (all 5 weekdays are already at 8h+)
+- Button is **disabled** (red warning shown) if `hoursWithinNormalCapacity === 0` (all open working days in the packing range are already at 8h+)
 
 ---
 
@@ -50,7 +51,7 @@ Triggered when `allowOvertime=true` assignment uses hours beyond 8h/day on any p
 
 - `buildPreparedDropAssignment` returns an `overflow: {designerId, taskId, hours}` descriptor instead of creating a local unassigned fragment
 - `persistWeekSnapshot` batches pending overflow descriptors (`pendingOverflowRef`) and sends them as `overflow[]` on the next `PUT /scheduler-assignments/week/:weekStart` save
-- Backend `placeOverflowCapacity` (`scheduler-assignments.service.ts`) walks forward day-by-day from the day after the saved week, skipping weekends/holidays/full-day approved leave, and live-checks each candidate day's actual remaining capacity **inside the same save transaction** — it never trusts an assumption about a week the client hasn't loaded
+- Backend `placeOverflowCapacity` (`scheduler-assignments.service.ts`) walks forward day-by-day from the day after the saved week, skipping holidays/full-day approved leave/designer weekend day-locks (weekends are otherwise open), and live-checks each candidate day's actual remaining capacity **inside the same save transaction** — it never trusts an assumption about a week the client hasn't loaded
 - Splits across multiple days/weeks if one day isn't enough, bounded by a 56-day lookahead (`maxLookaheadDays`)
 - The save response includes `overflowPlacements` (where hours landed) and `unplacedOverflow` (hours that didn't fit within the lookahead — reported to the user via toast, never silently dropped)
 - This replaced the old `localStorage` key `scheduler_overflow_v1_YYYY-MM-DD` mechanism entirely (`SCHEDULER_OVERFLOW_KEY`, `addDaysToDateStr`, `pruneOldOverflowKeys`, and the Monday-restore-on-load effect were all removed)
@@ -73,8 +74,9 @@ Runs as a React effect whenever `schedules` reference changes and `loadedFromErp
 - The optimizer does NOT split on ERP reload (`loadedFromErp=true` blocks it entirely)
 
 **Sub-rule 4c — Optimizer range**
-- targetDay loops Mon→Thu (0→3); sourceDay loops targetDay+1→Fri
-- Friday is only ever a source, never a target
+- targetDay loops Mon→Sat (0→5); sourceDay loops targetDay+1→Sun
+- Sunday is only ever a source, never a target
+- Locked weekend days (Rule 14) are skipped as targets and sources
 - Only fills up to `DAILY_CAPACITY (8h)` — never creates overtime
 
 **Sub-rule 4d — Schedules-reference guard**
@@ -131,11 +133,9 @@ Runs as a React effect whenever `schedules` reference changes and `loadedFromErp
 
 ---
 
-## Rule 9 — Weekend Block
+## Rule 9 — (Removed) Weekend Block
 
-> Days 5 (Sat) and 6 (Sun) cannot receive drops.
-
-- `handleDropToDay` returns early if `targetDayIndex >= 5`
+> Superseded by Rule 14. Sat/Sun are open by default like weekdays; only an explicit designer day-lock blocks drops.
 
 ---
 
@@ -201,17 +201,18 @@ Runs as a React effect whenever `schedules` reference changes and `loadedFromErp
 
 ---
 
-## Rule 14 — Weekend Day Unlock (Per Designer)
+## Rule 14 — Weekend Day Lock (Per Designer)
 
-> Sat/Sun are blocked by default. HOD may unlock a specific weekend **date** for a specific **designer**, then manually place tasks there.
+> Sat/Sun are **open by default** with the same packing behaviour as Mon–Fri. HOD may optionally **lock** a specific weekend **date** for a specific **designer** so packing skips it (like a holiday).
 
-- Storage: `ErpTSSchedulerDayUnlock` (`designerId` + `date` unique)
-- API: `POST/DELETE /scheduler-assignments/day-unlocks`; week GET returns `dayUnlocks[]`
-- Save rejects weekend `dayIndex` 5/6 unless an unlock exists for that designer+date
-- Relock is rejected while assignments still sit on that day
-- **Manual only:** Rule 1 redirect, optimizer, overflow, leave reschedule, and reallocation packing still skip weekends
-- Capacity on an unlocked weekend day uses the same 8h / 12h caps as weekdays
-- UI: click the grey Sat/Sun cell → Unlock; empty unlocked cell can Relock
+- Storage: `ErpTSSchedulerDayUnlock` table reused — **row present = locked/skip** (semantics inverted 2026-08; deploy must clear old unlock rows — see `backend/prisma/sql/clear-scheduler-day-unlocks-for-lock-invert.sql`)
+- API: `POST/DELETE /scheduler-assignments/day-locks`; week GET returns `dayLockKeys[]` (and deprecated `dayUnlockKeys` alias)
+- Save allows weekend `dayIndex` 5/6 by default; rejects if a day-lock exists for that designer+date
+- Lock (POST) is rejected while assignments still sit on that day
+- Rule 1, optimizer, overflow, leave reschedule, and reallocation packing treat open weekends like weekdays and skip locked weekend days
+- Capacity on an open weekend day uses the same 8h / 12h caps as weekdays
+- UI: Sat/Sun cells are droppable by default; empty open weekend cell → Lock; locked grey cell → Unlock
+- Realtime: `scheduler_day_locked` / `scheduler_day_unlocked`
 
 ---
 
@@ -224,4 +225,4 @@ Runs as a React effect whenever `schedules` reference changes and `loadedFromErp
 | Fractional hours (< 1h granularity) | No practical floor at the optimizer level (`MIN_SPLIT_HOURS = 5min/0.0833h`, see Constants); the backend DTO's `assignedHours`/`hours` fields separately enforce `@Min(0.01)` (2-decimal precision) — a lower-level "must be positive" guard, not the same threshold as `MIN_SPLIT_HOURS` |
 | Re-assigning overflow if next week is also full | Overflow lands on the last available day or Monday as fallback |
 | Partial work submission | `POST /tasks/:id/submit-work` always marks the task fully `DESIGN_COMPLETED` — there's no "submit partial, keep in progress" flow yet |
-| Auto-fill unlocked weekends | Not supported — HOD places manually (Rule 14) |
+| Locking Mon–Fri days | Not supported — day-locks are weekend-only (Rule 14) |
