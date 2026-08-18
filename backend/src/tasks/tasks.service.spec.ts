@@ -1,3 +1,4 @@
+import { BadRequestException, ForbiddenException } from '@nestjs/common';
 import { TasksService } from './tasks.service';
 import { UserRole } from '../common/constants/roles.enum';
 
@@ -59,10 +60,10 @@ describe('TasksService', () => {
       create: jest.fn(),
     },
     project: { findFirst: jest.fn(), findMany: jest.fn(), findUnique: jest.fn(), update: jest.fn(), create: jest.fn() },
-    retailTaskDetail: { create: jest.fn() },
+    retailTaskDetail: { create: jest.fn(), update: jest.fn() },
     retailTaskDetailAttachment: { create: jest.fn(), createMany: jest.fn() },
     projectTaskDetailAttachment: { create: jest.fn(), createMany: jest.fn() },
-    projectTaskDetail: { create: jest.fn() },
+    projectTaskDetail: { create: jest.fn(), update: jest.fn() },
     chatterPost: { create: jest.fn() },
     $queryRaw: jest.fn(),
     $transaction: jest.fn((cb: (tx: any) => Promise<unknown>) => cb(prisma)),
@@ -1081,6 +1082,89 @@ describe('TasksService', () => {
           take: 100,
         }),
       );
+    });
+  });
+
+  describe('update — Design HOD hours', () => {
+    const deadline = new Date();
+    deadline.setDate(deadline.getDate() + 5);
+
+    const retailExisting = {
+      ...existingTask,
+      dueDate: deadline,
+      retailDetails: [{ id: 'retail-1', hoursRequired: 4, deadline }],
+      projectDetails: [],
+    };
+
+    it('lets Design HOD persist hours entered by Sales on a retail task', async () => {
+      prisma.task.findUnique.mockResolvedValue(retailExisting);
+      prisma.retailTaskDetail.update.mockResolvedValue({});
+      prisma.task.update.mockResolvedValue({
+        ...updatedTask,
+        retailDetails: [{ hoursRequired: 8 }],
+        projectDetails: [],
+      });
+
+      await service.update(TASK_ID, { hoursRequired: 8 }, 'hod-1', UserRole.HOD);
+
+      expect(prisma.retailTaskDetail.update).toHaveBeenCalledWith({
+        where: { id: 'retail-1' },
+        data: { hoursRequired: 8 },
+      });
+    });
+
+    it('lets Design HOD persist hours on the active project discipline', async () => {
+      prisma.task.findUnique.mockResolvedValue({
+        ...existingTask,
+        dueDate: deadline,
+        disciplineType: 'Artwork',
+        retailDetails: [],
+        projectDetails: [
+          {
+            id: 'proj-detail-1',
+            artwork: true,
+            artworkHours: 3,
+            technical: false,
+            technicalHours: null,
+            location: false,
+            locationHours: null,
+            asBuilt: false,
+            asBuiltHours: null,
+            deadline,
+          },
+        ],
+      });
+      prisma.projectTaskDetail.update.mockResolvedValue({});
+      prisma.task.update.mockResolvedValue({
+        ...updatedTask,
+        projectDetails: [{ artworkHours: 6, artwork: true }],
+      });
+
+      await service.update(TASK_ID, { hoursRequired: 6 }, 'hod-1', UserRole.HOD);
+
+      expect(prisma.projectTaskDetail.update).toHaveBeenCalledWith({
+        where: { id: 'proj-detail-1' },
+        data: { artworkHours: 6 },
+      });
+    });
+
+    it('rejects Sales hours edits after creation', async () => {
+      prisma.task.findUnique.mockResolvedValue(retailExisting);
+
+      await expect(
+        service.update(TASK_ID, { hoursRequired: 8 }, 'sales-1', UserRole.SALESPERSON),
+      ).rejects.toBeInstanceOf(ForbiddenException);
+      expect(prisma.retailTaskDetail.update).not.toHaveBeenCalled();
+      expect(prisma.projectTaskDetail.update).not.toHaveBeenCalled();
+    });
+
+    it('rejects hours that exceed the creation deadline cap', async () => {
+      prisma.task.findUnique.mockResolvedValue(retailExisting);
+
+      await expect(
+        service.update(TASK_ID, { hoursRequired: 200 }, 'hod-1', UserRole.HOD),
+      ).rejects.toBeInstanceOf(BadRequestException);
+      expect(prisma.retailTaskDetail.update).not.toHaveBeenCalled();
     });
   });
 });

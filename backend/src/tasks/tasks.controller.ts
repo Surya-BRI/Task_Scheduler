@@ -171,11 +171,15 @@ export class TasksController {
     });
   }
 
-  /** PATCH /tasks/:id — HOD/Sales department managers */
+  /** PATCH /tasks/:id — HOD/Sales department managers. Hours edits are HOD-only in the service. */
   @Patch(':id')
   @Roles(UserRole.HOD, UserRole.SALESPERSON)
-  update(@Param('id') id: string, @Body() dto: UpdateTaskDto) {
-    return this.tasksService.update(id, dto);
+  update(
+    @Param('id') id: string,
+    @Body() dto: UpdateTaskDto,
+    @CurrentUser() user: JwtPayload,
+  ) {
+    return this.tasksService.update(id, dto, user.sub, user.role);
   }
 
   /** PATCH /tasks/:id/assign — HOD/Sales department managers */

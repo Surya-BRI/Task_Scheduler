@@ -17,6 +17,7 @@ import {
 } from '../components/design-list-task-timer-storage'
 import { apiClient } from '@/lib/api-client'
 import { toUserFacingError } from '@/lib/api-error'
+import { assertHoursWithinDeadline } from '@/lib/task-deadline-hours'
 import { fetchProjectActivities, fetchTaskActivities } from '@/features/team-activity/services/activities.api'
 import {
   createChatterComment,
@@ -284,6 +285,23 @@ function DetailRow({ label, value }) {
       <p className="text-[13px] font-medium text-slate-900">{value}</p>
     </div>
   )
+}
+
+function getRecordEstimatedHours(record) {
+  const retailHours = Number(record?.hoursRequired)
+  if (Number.isFinite(retailHours) && retailHours > 0) return retailHours
+  const total = Array.isArray(record?.projectDetails)
+    ? record.projectDetails.reduce(
+        (sum, detail) =>
+          sum +
+          (Number(detail?.artworkHours) || 0) +
+          (Number(detail?.technicalHours) || 0) +
+          (Number(detail?.locationHours) || 0) +
+          (Number(detail?.asBuiltHours) || 0),
+        0,
+      )
+    : 0
+  return total > 0 ? total : ''
 }
 
 function TabButton({ active, onClick, label }) {
@@ -785,6 +803,7 @@ function mapTaskToRecord(task) {
     businessUnit: project.category ?? 'Project',
     salesPerson: project.salesPerson ?? 'Unassigned',
     created: formatDdMmYyyy(task.createdAt),
+    dueDate: task.dueDate ?? null,
     deadline: formatDdMmYyyy(task.dueDate ?? task.createdAt),
     clientName: null,
     client: null,
@@ -1254,6 +1273,9 @@ export function TaskDetailsPage() {
   const today = new Date()
   const tomorrow = new Date()
   tomorrow.setDate(tomorrow.getDate() + 1)
+  const [hoursDraft, setHoursDraft] = useState('')
+  const [hoursSaving, setHoursSaving] = useState(false)
+  const [hoursError, setHoursError] = useState('')
   const [dateSubmission, setDateSubmission] = useState(tomorrow)
   const [technicalHead, setTechnicalHead] = useState('')
   const [teamLead, setTeamLead] = useState('')
@@ -1632,6 +1654,52 @@ export function TaskDetailsPage() {
   const isDesignerWorkMode =
     isDesigner || (isHod && sessionRole !== 'HOD' && from === FROM_DESIGNER_QUEUE)
   const isHodManagementMode = isHod && !isDesignerWorkMode && !isSales
+  const canEditTaskHours = sessionRole === 'HOD' && !isCreationRoute && hasExistingTask
+  const savedEstimatedHours = getRecordEstimatedHours(record)
+
+  useEffect(() => {
+    setHoursDraft(savedEstimatedHours === '' ? '' : String(savedEstimatedHours))
+    setHoursError('')
+  }, [record?.id, savedEstimatedHours])
+
+  const handleSaveTaskHours = useCallback(async () => {
+    const targetId = taskId || record?.taskId || record?.id
+    if (!targetId || !canEditTaskHours) return
+    const parsedHours = Number(hoursDraft)
+    if (!hoursDraft || Number.isNaN(parsedHours) || parsedHours < 1) {
+      setHoursError('Hours Required must be a number (min 1)')
+      return
+    }
+    const deadline = record?.dueDate
+      ?? record?.projectDetails?.[0]?.deadline
+      ?? record?.retailDetails?.[0]?.deadline
+      ?? null
+    const hoursCheck = assertHoursWithinDeadline(parsedHours, deadline)
+    if (!hoursCheck.ok && hoursCheck.workingDays > 0) {
+      setHoursError(hoursCheck.message)
+      toast.error(hoursCheck.message)
+      return
+    }
+    setHoursSaving(true)
+    setHoursError('')
+    try {
+      const updated = await apiClient.patch(`/tasks/${encodeURIComponent(targetId)}`, {
+        hoursRequired: parsedHours,
+      })
+      const mapped = mapTaskToRecord(updated)
+      setRecord((prev) => {
+        if (!mapped) return prev
+        return prev ? { ...prev, ...mapped, schedulerHours: prev.schedulerHours } : mapped
+      })
+      toast.success('Task time updated.')
+    } catch (error) {
+      const message = toUserFacingError(error, 'Failed to update task time')
+      setHoursError(message)
+      toast.error(message)
+    } finally {
+      setHoursSaving(false)
+    }
+  }, [canEditTaskHours, hoursDraft, record, taskId])
   const normalizedQsStatus = String(qsStatus?.status ?? '').trim().toLowerCase()
   const isQsCompleted = normalizedQsStatus === 'completed'
   const isQs = _session?.role === 'QS'
@@ -2684,24 +2752,61 @@ export function TaskDetailsPage() {
                           <DetailRow label="Revision" value={record.revisionCode ?? '-'} />
                           <DetailRow label="Task Status" value={record.status ?? '-'} />
                           <DetailRow label="Priority Level" value={record.priority ?? '-'} />
-                          <DetailRow
-                            label="Assigned Time"
-                            value={(() => {
-                              const viewerId = _session?.designerId ?? _session?.id ?? null;
-                              const fromScheduler = formatSchedulerAssignedHours(record.schedulerHours, {
-                                isHod: isHodManagementMode,
-                                viewerUserId: viewerId,
-                              });
-                              if (fromScheduler) return fromScheduler;
-                              if (record.hoursRequired > 0) return formatHoursAsHm(record.hoursRequired);
-                              const total = Array.isArray(record.projectDetails)
-                                ? record.projectDetails.reduce((sum, d) =>
-                                    sum + (Number(d.artworkHours) || 0) + (Number(d.technicalHours) || 0) +
-                                    (Number(d.locationHours) || 0) + (Number(d.asBuiltHours) || 0), 0)
-                                : 0;
-                              return total > 0 ? formatHoursAsHm(total) : '-';
-                            })()}
-                          />
+                          {canEditTaskHours ? (
+                            <div className="grid grid-cols-[125px_1fr] gap-2 py-0.5">
+                              <p className="text-[11px] text-slate-500">Assigned Time</p>
+                              <div>
+                                <div className="flex flex-wrap items-center gap-2">
+                                  <input
+                                    id="hod-task-hours"
+                                    type="number"
+                                    min={1}
+                                    value={hoursDraft}
+                                    onChange={(e) => {
+                                      setHoursDraft(e.target.value)
+                                      setHoursError('')
+                                    }}
+                                    aria-label="Hours required"
+                                    className={`w-24 rounded-md border bg-white px-2 py-1 text-[13px] font-medium text-slate-900 outline-none focus:ring-2 focus:ring-blue-500/20 ${
+                                      hoursError ? 'border-red-400 focus:border-red-400' : 'border-slate-300 focus:border-blue-500'
+                                    }`}
+                                  />
+                                  <button
+                                    type="button"
+                                    onClick={handleSaveTaskHours}
+                                    disabled={hoursSaving}
+                                    className="rounded-md bg-[#10a6e3] px-3 py-1 text-[11px] font-semibold text-white shadow-sm transition hover:bg-[#0f96cd] disabled:cursor-not-allowed disabled:opacity-50"
+                                  >
+                                    {hoursSaving ? 'Saving…' : 'Save'}
+                                  </button>
+                                </div>
+                                {hoursError ? (
+                                  <p className="mt-1 text-xs text-red-600">{hoursError}</p>
+                                ) : (
+                                  <p className="mt-1 text-[10px] text-slate-400">Hours entered by Sales. Save to update.</p>
+                                )}
+                              </div>
+                            </div>
+                          ) : (
+                            <DetailRow
+                              label="Assigned Time"
+                              value={(() => {
+                                const viewerId = _session?.designerId ?? _session?.id ?? null;
+                                const fromScheduler = formatSchedulerAssignedHours(record.schedulerHours, {
+                                  isHod: isHodManagementMode,
+                                  viewerUserId: viewerId,
+                                });
+                                if (fromScheduler) return fromScheduler;
+                                if (record.hoursRequired > 0) return formatHoursAsHm(record.hoursRequired);
+                                const total = Array.isArray(record.projectDetails)
+                                  ? record.projectDetails.reduce((sum, d) =>
+                                      sum + (Number(d.artworkHours) || 0) + (Number(d.technicalHours) || 0) +
+                                      (Number(d.locationHours) || 0) + (Number(d.asBuiltHours) || 0), 0)
+                                  : 0;
+                                return total > 0 ? formatHoursAsHm(total) : '-';
+                              })()}
+                            />
+                          )}
                           <DetailRow
                             label="Logged Time"
                             value={(() => {
