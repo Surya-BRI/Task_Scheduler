@@ -341,6 +341,14 @@ export class ChatterPostsService implements OnModuleInit {
       for (const id of participants) addEligibleId(id);
     }
 
+    // Sales users are globally mentionable in Project Chatter, regardless of
+    // project/task assignment. Existing HOD/designer/assignee rules stay intact.
+    for (const user of allUsers) {
+      if (user.role?.name === UserRole.SALESPERSON) {
+        addEligibleId(user.id);
+      }
+    }
+
     return [...eligibleIds]
       .map((id) => byId.get(id))
       .filter((user): user is NonNullable<typeof user> => Boolean(user))
