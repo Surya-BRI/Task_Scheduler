@@ -46,7 +46,7 @@ describe('TasksService', () => {
   };
 
   const prisma: any = {
-    task: { findUnique: jest.fn(), update: jest.fn(), create: jest.fn(), findMany: jest.fn(), count: jest.fn(), findUniqueOrThrow: jest.fn() },
+    task: { findUnique: jest.fn(), findFirst: jest.fn(), update: jest.fn(), create: jest.fn(), findMany: jest.fn(), count: jest.fn(), findUniqueOrThrow: jest.fn() },
     taskDesigner: { findUnique: jest.fn(), findMany: jest.fn(), create: jest.fn(), deleteMany: jest.fn() },
     schedulerAssignment: { findMany: jest.fn(), deleteMany: jest.fn() },
     user: { findMany: jest.fn(), findUnique: jest.fn() },
@@ -983,6 +983,15 @@ describe('TasksService', () => {
       await expect(
         service.updateStatus(TASK_ID, 'designer-1', UserRole.DESIGNER, { status: 'CLIENT_REJECTED' } as any),
       ).rejects.toThrow('Only SALESPERSON or ADMIN can mark client rejected');
+    });
+
+    it('forbids designers from updating status on tasks they are not involved in', async () => {
+      prisma.task.findUnique.mockResolvedValue({ ...existingTask, assigneeId: 'other-designer' });
+      prisma.task.findFirst.mockResolvedValue(null);
+
+      await expect(
+        service.updateStatus(TASK_ID, 'designer-1', UserRole.DESIGNER, { status: 'IN_PROGRESS' } as any),
+      ).rejects.toThrow('Designers can only access tasks they have worked on or been assigned to');
     });
   });
 

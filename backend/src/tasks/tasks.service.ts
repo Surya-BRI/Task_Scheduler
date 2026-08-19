@@ -32,6 +32,7 @@ import { assertHoursWithinDeadline } from '../common/utils/task-deadline-hours.u
 import { summarizeViewerOvertimeHours } from './scheduler-overtime-hours.util';
 import { taskViewPath } from '../common/utils/design-type.util';
 import { matchSalesUsersToProject } from '../common/utils/sales-notification-recipients.util';
+import { designerInvolvementWhere, parseStatusList } from './designer-involvement.util';
 
 const TASK_ATTACHMENT_SELECT = {
   id: true,
@@ -294,6 +295,8 @@ export type TaskFilters = {
   status?: string;
   /** Comma-separated statuses to exclude, e.g. callers that only need outstanding work. */
   excludeStatuses?: string;
+  /** Comma-separated statuses to include (transaction Kanban views). Ignored when `status` is set. */
+  statuses?: string;
   priority?: string;
   assigneeId?: string;
   search?: string;
@@ -1481,6 +1484,7 @@ export class TasksService {
       projectId,
       status,
       excludeStatuses,
+      statuses,
       priority,
       assigneeId,
       search,
@@ -1526,13 +1530,7 @@ export class TasksService {
     };
 
     if (role === UserRole.DESIGNER) {
-      // Include tasks assigned directly OR via the junction table (split tasks)
-      addAndFilter({
-        OR: [
-          { assigneeId: userId },
-          { taskDesigners: { some: { designerId: userId } } },
-        ],
-      });
+      addAndFilter(designerInvolvementWhere(userId));
     }
 
     if (role === UserRole.QS) {
@@ -1550,7 +1548,19 @@ export class TasksService {
     }
 
     if (projectId) baseWhere.projectId = projectId;
-    if (status) baseWhere.status = toDbTaskStatus(status);
+    if (status) {
+      baseWhere.status = toDbTaskStatus(status);
+    } else if (statuses) {
+      const included = parseStatusList(statuses)
+        .map((value) => toDbTaskStatus(value))
+        .filter(Boolean);
+      const unique = [...new Set(included)];
+      if (unique.length === 1) {
+        baseWhere.status = unique[0];
+      } else if (unique.length > 1) {
+        addAndFilter({ status: { in: unique } });
+      }
+    }
     if (excludeStatuses) {
       const excluded = excludeStatuses
         .split(',')
@@ -1746,6 +1756,7 @@ export class TasksService {
     });
     if (!task) throw new NotFoundException('Task not found');
     await this.assertQsTaskAccess(id, userId, role);
+    await this.assertDesignerTaskAccess(id, userId, role, { assigneeId: (task as { assigneeId?: string | null }).assigneeId });
 
     if (view === 'core') {
       const people = await this.getTaskPeopleLabels(id, task);
@@ -1863,6 +1874,7 @@ export class TasksService {
     });
     if (!task) throw new NotFoundException('Task not found');
     await this.assertQsTaskAccess(id, userId, role);
+    await this.assertDesignerTaskAccess(id, userId, role, { assigneeId: task.assigneeId });
 
     const [withUrls, schedulerHours, pendingReallocation, viewerRemainingHours] =
       await Promise.all([
@@ -2441,12 +2453,7 @@ export class TasksService {
     }
     const existing = await this.prisma.task.findUnique({ where: { id } });
     if (!existing) throw new NotFoundException('Task not found');
-    if (role === UserRole.DESIGNER && existing.assigneeId !== userId) {
-      const inJunction = await this.prisma.taskDesigner.findUnique({
-        where: { taskId_designerId: { taskId: id, designerId: userId } },
-      });
-      if (!inJunction) throw new ForbiddenException('Designers can only update status on their own tasks');
-    }
+    await this.assertDesignerTaskAccess(id, userId, role, { assigneeId: existing.assigneeId });
 
     // REWORK = same revision (HOD internal or Sales). CLIENT_REJECTED = new Rn (Sales/Admin only).
     const newStatusApi = toApiTaskStatus(dto.status);
@@ -3137,10 +3144,12 @@ export class TasksService {
     userId: string,
     dto: SubmitWorkDto,
     files: Express.Multer.File[],
+    role?: UserRole,
   ) {
     if (!this.isUuid(taskId)) throw new BadRequestException('Invalid task id');
     const task = await this.prisma.task.findUnique({ where: { id: taskId }, select: TASK_SELECT });
     if (!task) throw new NotFoundException('Task not found');
+    await this.assertDesignerTaskAccess(taskId, userId, role, { assigneeId: task.assigneeId });
 
     // Upload files in parallel (sequential uploads were the main submit delay).
     const fileList = files ?? [];
@@ -3359,8 +3368,9 @@ export class TasksService {
     }
   }
 
-  async getSubmittedSession(taskId: string) {
+  async getSubmittedSession(taskId: string, userId?: string, role?: UserRole) {
     if (!this.isUuid(taskId)) throw new BadRequestException('Invalid task id');
+    await this.assertDesignerTaskAccess(taskId, userId, role);
     const session = await this.prisma.taskWorkSession.findFirst({
       where: { taskId, status: 'Submitted' },
       orderBy: { submittedAt: 'desc' },
@@ -3481,10 +3491,11 @@ export class TasksService {
     };
   }
 
-  async saveTimerState(taskId: string, userId: string, dto: SaveTimerStateDto) {
+  async saveTimerState(taskId: string, userId: string, dto: SaveTimerStateDto, role?: UserRole) {
     if (!this.isUuid(taskId)) throw new BadRequestException('Invalid task id');
     const task = await this.prisma.task.findUnique({ where: { id: taskId } });
     if (!task) throw new NotFoundException('Task not found');
+    await this.assertDesignerTaskAccess(taskId, userId, role, { assigneeId: task.assigneeId });
 
     const runStartedAt = this.resolveRunStartedAtFromDto(dto);
 
@@ -3752,6 +3763,28 @@ export class TasksService {
           },
         },
       });
+    }
+  }
+
+  private async assertDesignerTaskAccess(
+    taskId: string,
+    userId?: string,
+    role?: UserRole,
+    known?: { assigneeId?: string | null },
+  ) {
+    if (role !== UserRole.DESIGNER) return;
+    if (!userId) {
+      throw new ForbiddenException('Designer access requires an authenticated user');
+    }
+    if (known?.assigneeId === userId) return;
+    const involved = await this.prisma.task.findFirst({
+      where: { id: taskId, ...designerInvolvementWhere(userId) },
+      select: { id: true },
+    });
+    if (!involved) {
+      throw new ForbiddenException(
+        'Designers can only access tasks they have worked on or been assigned to',
+      );
     }
   }
 
