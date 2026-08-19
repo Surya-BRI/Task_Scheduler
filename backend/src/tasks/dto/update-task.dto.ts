@@ -1,4 +1,5 @@
-import { IsDateString, IsIn, IsOptional, IsString, MinLength } from 'class-validator';
+import { Type } from 'class-transformer';
+import { IsDateString, IsIn, IsNumber, IsOptional, IsString, Min, MinLength } from 'class-validator';
 
 export class UpdateTaskDto {
   @IsString()
@@ -23,4 +24,11 @@ export class UpdateTaskDto {
   @IsString() @IsOptional() teamLead?: string;
   @IsString() @IsOptional() subTeamLead?: string;
   @IsString() @IsOptional() designers?: string;
+
+  /** Estimated hours entered at creation. Only Design HOD may persist this after create. */
+  @Type(() => Number)
+  @IsNumber()
+  @Min(1)
+  @IsOptional()
+  hoursRequired?: number;
 }

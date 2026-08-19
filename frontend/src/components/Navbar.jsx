@@ -2,7 +2,7 @@
 
 import { useEffect, useRef, useState } from 'react'
 import { usePathname, useRouter } from 'next/navigation'
-import { Bell, Calendar, ClipboardList, Clock, Home, LayoutList, LogOut, MessageSquareText, Users, Volume2, VolumeX } from 'lucide-react'
+import { Bell, Calendar, ChevronDown, ClipboardList, Clock, Home, LayoutList, LogOut, MessageSquareText, Users, Volume2, VolumeX } from 'lucide-react'
 import { SalesReviewIcon } from '@/features/sales/components/SalesReviewIcon'
 import { getSession, mockLogout } from '@/lib/mock-auth'
 import {
@@ -14,6 +14,7 @@ import { connectDashboardRealtime } from '@/lib/realtime'
 import { hasDepartmentManagerAccess } from '@/lib/workflow-roles'
 import { apiClient } from '@/lib/api-client'
 import { applyRemoteTimerPause, applyServerTimerState } from '@/components/design-list-task-timer-storage'
+import { canAccessTransactions, TRANSACTION_VIEWS } from '@/features/transactions/transaction-views'
 import { toast } from 'sonner'
 
 const NAV_ITEMS = [
@@ -26,6 +27,73 @@ const NAV_ITEMS = [
   'Setup',
   'Support',
 ]
+
+function TransactionsNavDropdown({ pathname, onNavigate }) {
+  const [open, setOpen] = useState(false)
+  const rootRef = useRef(null)
+  const active = pathname.startsWith('/transactions')
+
+  useEffect(() => {
+    if (!open) return undefined
+    function handlePointerDown(e) {
+      if (rootRef.current && !rootRef.current.contains(e.target)) setOpen(false)
+    }
+    function handleKey(e) {
+      if (e.key === 'Escape') setOpen(false)
+    }
+    document.addEventListener('mousedown', handlePointerDown)
+    document.addEventListener('keydown', handleKey)
+    return () => {
+      document.removeEventListener('mousedown', handlePointerDown)
+      document.removeEventListener('keydown', handleKey)
+    }
+  }, [open])
+
+  return (
+    <div className="relative" ref={rootRef}>
+      <button
+        type="button"
+        onClick={() => setOpen((value) => !value)}
+        className={`inline-flex items-center gap-1 rounded-lg px-3 py-1.5 text-sm font-semibold transition-colors hover:bg-white/50 ${
+          active ? 'bg-white text-slate-900 shadow-sm' : 'text-slate-700'
+        }`}
+        aria-expanded={open}
+        aria-haspopup="menu"
+        aria-current={active ? 'page' : undefined}
+      >
+        Transactions
+        <ChevronDown className={`h-3.5 w-3.5 transition-transform ${open ? 'rotate-180' : ''}`} aria-hidden />
+      </button>
+      {open ? (
+        <div
+          className="absolute left-1/2 z-50 mt-2 w-64 -translate-x-1/2 origin-top rounded-xl border border-slate-200 bg-white py-1 shadow-xl ring-1 ring-black/5"
+          role="menu"
+          aria-label="Transactions"
+        >
+          {TRANSACTION_VIEWS.map((item) => {
+            const itemActive = pathname === item.path || pathname.startsWith(`${item.path}/`)
+            return (
+              <button
+                key={item.id}
+                type="button"
+                role="menuitem"
+                onClick={() => {
+                  setOpen(false)
+                  onNavigate(item.path)
+                }}
+                className={`w-full px-4 py-2.5 text-left text-sm transition ${
+                  itemActive ? 'bg-blue-50 font-semibold text-blue-800' : 'text-slate-700 hover:bg-slate-50'
+                }`}
+              >
+                {item.label}
+              </button>
+            )
+          })}
+        </div>
+      ) : null}
+    </div>
+  )
+}
 
 const DEADLINE_ALERT_SOUND_KEY = 'br_deadline_alert_sound_enabled'
 
@@ -708,6 +776,15 @@ export function Navbar({ currentDate, onCalendarChange, dateRangeText }) {
                 const active = href
                   ? pathname === href.split('#')[0]
                   : false
+                if (label === 'Transactions' && canAccessTransactions(session?.role)) {
+                  return (
+                    <TransactionsNavDropdown
+                      key="Transactions"
+                      pathname={pathname}
+                      onNavigate={(path) => router.push(path)}
+                    />
+                  )
+                }
                 return (
                   <button
                     key={label}

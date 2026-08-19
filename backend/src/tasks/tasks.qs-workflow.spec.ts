@@ -8,6 +8,7 @@ function createService(prismaOverrides: Record<string, unknown> = {}) {
     $queryRaw: jest.fn().mockResolvedValue([]),
     task: {
       findUnique: jest.fn(),
+      findFirst: jest.fn(),
       findMany: jest.fn().mockResolvedValue([]),
       count: jest.fn().mockResolvedValue(0),
     },
@@ -26,6 +27,74 @@ function createService(prismaOverrides: Record<string, unknown> = {}) {
 }
 
 
+
+describe('TasksService designer involvement and transaction status filters', () => {
+  it('scopes designer lists to assignee, junction, scheduler, and work-session involvement', async () => {
+    const { service, prisma } = createService();
+    const designerId = '22222222-2222-4222-8222-222222222222';
+
+    prisma.task.findMany.mockResolvedValue([]);
+    prisma.task.count.mockResolvedValue(0);
+
+    await service.findAll(designerId, UserRole.DESIGNER, { limit: 100 });
+
+    expect(prisma.task.findMany).toHaveBeenCalledWith(
+      expect.objectContaining({
+        where: expect.objectContaining({
+          AND: expect.arrayContaining([
+            {
+              OR: [
+                { assigneeId: designerId },
+                { taskDesigners: { some: { designerId } } },
+                { schedulerAssignments: { some: { designerId } } },
+                { workSessions: { some: { designerId } } },
+              ],
+            },
+          ]),
+        }),
+      }),
+    );
+  });
+
+  it('filters transaction views with a statuses list', async () => {
+    const { service, prisma } = createService();
+    prisma.task.findMany.mockResolvedValue([]);
+    prisma.task.count.mockResolvedValue(0);
+
+    await service.findAll('hod-1', UserRole.HOD, {
+      statuses: 'DESIGN_NEW,IN_PROGRESS,DESIGN_COMPLETED',
+      limit: 100,
+    });
+
+    expect(prisma.task.findMany).toHaveBeenCalledWith(
+      expect.objectContaining({
+        where: expect.objectContaining({
+          AND: expect.arrayContaining([
+            { status: { in: ['DESIGN_NEW', 'IN_PROGRESS', 'DESIGN_COMPLETED'] } },
+          ]),
+        }),
+      }),
+    );
+  });
+
+  it('blocks designers from reading another designer task by id', async () => {
+    const { service, prisma } = createService();
+    prisma.task.findUnique.mockResolvedValue({
+      id: 'aaaaaaaa-bbbb-4ccc-8ddd-eeeeeeeeeeee',
+      assigneeId: 'other-designer',
+    });
+    prisma.task.findFirst.mockResolvedValue(null);
+
+    await expect(
+      service.findOne(
+        'aaaaaaaa-bbbb-4ccc-8ddd-eeeeeeeeeeee',
+        '22222222-2222-4222-8222-222222222222',
+        UserRole.DESIGNER,
+        { view: 'core' },
+      ),
+    ).rejects.toThrow('Designers can only access tasks they have worked on or been assigned to');
+  });
+});
 
 describe('TasksService findAll assignment filtering', () => {
   it('includes direct and split task designer assignments for assignee filters', async () => {

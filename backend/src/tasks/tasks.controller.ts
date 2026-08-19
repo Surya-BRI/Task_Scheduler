@@ -77,6 +77,7 @@ export class TasksController {
     @Query('projectId') projectId?: string,
     @Query('status') status?: string,
     @Query('excludeStatuses') excludeStatuses?: string,
+    @Query('statuses') statuses?: string,
     @Query('priority') priority?: string,
     @Query('assigneeId') assigneeId?: string,
     @Query('search') search?: string,
@@ -93,6 +94,7 @@ export class TasksController {
       projectId,
       status,
       excludeStatuses,
+      statuses,
       priority,
       assigneeId,
       search,
@@ -171,11 +173,15 @@ export class TasksController {
     });
   }
 
-  /** PATCH /tasks/:id — HOD/Sales department managers */
+  /** PATCH /tasks/:id — HOD/Sales department managers. Hours edits are HOD-only in the service. */
   @Patch(':id')
   @Roles(UserRole.HOD, UserRole.SALESPERSON)
-  update(@Param('id') id: string, @Body() dto: UpdateTaskDto) {
-    return this.tasksService.update(id, dto);
+  update(
+    @Param('id') id: string,
+    @Body() dto: UpdateTaskDto,
+    @CurrentUser() user: JwtPayload,
+  ) {
+    return this.tasksService.update(id, dto, user.sub, user.role);
   }
 
   /** PATCH /tasks/:id/assign — HOD/Sales department managers */
@@ -206,8 +212,8 @@ export class TasksController {
   /** GET /tasks/:id/submitted-session — fetch the most recent submitted work session */
   @Get(':id/submitted-session')
   @Roles(UserRole.HOD, UserRole.DESIGNER, UserRole.SALESPERSON)
-  getSubmittedSession(@Param('id') id: string) {
-    return this.tasksService.getSubmittedSession(id);
+  getSubmittedSession(@Param('id') id: string, @CurrentUser() user: JwtPayload) {
+    return this.tasksService.getSubmittedSession(id, user.sub, user.role);
   }
 
   /** GET /tasks/:id/timer-state — fetch draft session for cold-start restore */
@@ -225,7 +231,7 @@ export class TasksController {
     @CurrentUser() user: JwtPayload,
     @Body() dto: SaveTimerStateDto,
   ) {
-    return this.tasksService.saveTimerState(id, user.sub, dto);
+    return this.tasksService.saveTimerState(id, user.sub, dto, user.role);
   }
 
   /** POST /tasks/:id/freeze-draft-session — finalize draft timer before scheduler handoff */
@@ -266,7 +272,7 @@ export class TasksController {
     @Body() dto: SubmitWorkDto,
     @UploadedFiles() files: Express.Multer.File[],
   ) {
-    return this.tasksService.submitWork(id, user.sub, dto, files ?? []);
+    return this.tasksService.submitWork(id, user.sub, dto, files ?? [], user.role);
   }
 
   /** DELETE /tasks/:id — HOD/Sales department managers */

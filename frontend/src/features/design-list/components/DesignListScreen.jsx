@@ -20,7 +20,7 @@ import { Navbar } from "@/components/Navbar";
 import { apiClient } from "@/lib/api-client";
 import { useTaskLifecycleRefresh } from "@/hooks/use-task-lifecycle-refresh";
 import { FROM_DESIGN_LIST, taskSummaryPath, taskViewPathForRecord } from "@/lib/design-list-routes";
-import { getStatusLabel, mapTaskToDesignRow } from "../task-view-model";
+import { DESIGN_LIST_BOARD_COLUMNS, getStatusLabel, mapTaskToDesignRow } from "../task-view-model";
 import { TypeOfDesignChip } from "@/lib/ui/TypeOfDesignChip";
 import { ReallocationQueuePanel } from "./ReallocationQueuePanel";
 
@@ -87,7 +87,16 @@ const TYPE_OPTIONS = [
   { value: "Project", label: "Project" },
 ];
 
-const Toolbar = ({ viewMode, setViewMode, filters, setFilters, salesPersons }) => {
+const Toolbar = ({
+  title = "Design List",
+  viewMode,
+  setViewMode,
+  filters,
+  setFilters,
+  salesPersons,
+  statusOptions,
+  showViewToggle = true,
+}) => {
   const [showFilters, setShowFilters] = useState(false);
   const [typeMenuOpen, setTypeMenuOpen] = useState(false);
   const filtersPanelRef = useRef(null);
@@ -98,7 +107,7 @@ const Toolbar = ({ viewMode, setViewMode, filters, setFilters, salesPersons }) =
     filters.startDate,
     filters.endDate,
   ].filter(Boolean).length;
-  const designStatuses = [
+  const designStatuses = statusOptions ?? [
     "DESIGN_NEW", "DESIGN_PLANNED", "IN_PROGRESS", "DESIGN_COMPLETED",
     "HOD_REVIEW", "SALES_REVIEW", "REWORK", "CLIENT_ACCEPTED", "CLIENT_REJECTED", "ON_HOLD",
   ];
@@ -128,7 +137,7 @@ const Toolbar = ({ viewMode, setViewMode, filters, setFilters, salesPersons }) =
 
   return (
     <div className="mb-4 mt-4 flex flex-col gap-4 px-4 sm:px-6 md:flex-row md:items-center md:justify-between">
-      <h1 className="text-2xl font-semibold tracking-tight text-slate-900 leading-none shrink-0">Design List</h1>
+      <h1 className="text-2xl font-semibold tracking-tight text-slate-900 leading-none shrink-0">{title}</h1>
 
       <div className="relative flex flex-wrap items-center justify-end gap-2 sm:gap-3 md:ml-auto">
         <div className="relative mr-2 hidden md:block">
@@ -230,10 +239,12 @@ const Toolbar = ({ viewMode, setViewMode, filters, setFilters, salesPersons }) =
           )}
         </div>
 
+        {showViewToggle ? (
         <div className="ml-0 flex rounded-md border border-slate-200 bg-slate-100 p-1 sm:ml-1">
           <button type="button" onClick={() => setViewMode("list")} title="List View" className={`p-1.5 rounded transition-colors cursor-pointer ${viewMode === "list" ? "bg-white shadow text-slate-900" : "text-slate-500 hover:text-slate-700"}`}><List size={16} /></button>
           <button type="button" onClick={() => setViewMode("board")} title="Board View" className={`p-1.5 rounded transition-colors cursor-pointer ${viewMode === "board" ? "bg-white shadow text-slate-900" : "text-slate-500 hover:text-slate-700"}`}><LayoutGrid size={16} /></button>
         </div>
+        ) : null}
       </div>
     </div>
   );
@@ -246,20 +257,8 @@ const Table = ({ data, workflowFrom }) => {
   );
 };
 
-const Board = ({ data, workflowFrom }) => {
+const Board = ({ data, workflowFrom, columns = DESIGN_LIST_BOARD_COLUMNS }) => {
   const router = useRouter();
-  const columns = [
-    { title: "Design Task New",  status: "DESIGN_NEW" },
-    { title: "Design Planned",   status: "DESIGN_PLANNED" },
-    { title: "In Progress",      status: "IN_PROGRESS" },
-    { title: "Design Completed", status: "DESIGN_COMPLETED" },
-    { title: "HOD Review",       status: "HOD_REVIEW" },
-    { title: "Sales Review",     status: "SALES_REVIEW" },
-    { title: "Rework / Error",   status: "REWORK" },
-    { title: "Client Accepted",  status: "CLIENT_ACCEPTED" },
-    { title: "Client Rejected",  status: "CLIENT_REJECTED" },
-    { title: "On Hold",          status: "ON_HOLD" },
-  ];
 
   return (
     <div className="flex min-h-0 flex-1 items-start gap-4 overflow-auto px-4 pb-6 sm:px-6">
@@ -348,18 +347,27 @@ const Board = ({ data, workflowFrom }) => {
   );
 };
 
-export function DesignListScreen({ workflowFrom = FROM_DESIGN_LIST }) {
+export function DesignListScreen({
+  workflowFrom = FROM_DESIGN_LIST,
+  title = "Design List",
+  defaultViewMode = "list",
+  boardColumns = DESIGN_LIST_BOARD_COLUMNS,
+  allowedStatuses = null,
+  hideReallocation = false,
+  lockBoardView = false,
+}) {
   const PAGE_SIZE = 100;
   const searchParams = useSearchParams();
   const viewParam = searchParams.get("view");
   const highlightReallocationId = searchParams.get("reallocationId")?.trim() || "";
   const [listMode, setListMode] = useState(
-    viewParam === "reallocation" ? "reallocation" : "all",
+    hideReallocation ? "all" : viewParam === "reallocation" ? "reallocation" : "all",
   );
-  const isReallocation = listMode === "reallocation";
+  const isReallocation = !hideReallocation && listMode === "reallocation";
   const [allDesigns, setAllDesigns] = useState([]);
   const [serverTotal, setServerTotal] = useState(0);
-  const [viewMode, setViewMode] = useState("list");
+  const [listError, setListError] = useState("");
+  const [viewMode, setViewMode] = useState(lockBoardView ? "board" : defaultViewMode);
   const [page, setPage] = useState(1);
   const [filters, setFilters] = useState({ type: "", status: "", salesPerson: "", startDate: "", endDate: "", searchQuery: "" });
   const [debouncedSearchQuery, setDebouncedSearchQuery] = useState("");
@@ -367,15 +375,17 @@ export function DesignListScreen({ workflowFrom = FROM_DESIGN_LIST }) {
   const [listLoading, setListLoading] = useState(true);
 
   useEffect(() => {
+    if (hideReallocation) return;
     if (viewParam === "reallocation") setListMode("reallocation");
-  }, [viewParam]);
+  }, [viewParam, hideReallocation]);
 
   useEffect(() => {
     const timer = setTimeout(() => setDebouncedSearchQuery(filters.searchQuery), 350);
     return () => clearTimeout(timer);
   }, [filters.searchQuery]);
 
-  const filterKey = `${debouncedSearchQuery}|${filters.status}|${filters.type}|${filters.salesPerson}|${filters.startDate}|${filters.endDate}|${viewMode}|${listMode}`;
+  const allowedStatusKey = Array.isArray(allowedStatuses) ? allowedStatuses.join(",") : "";
+  const filterKey = `${debouncedSearchQuery}|${filters.status}|${filters.type}|${filters.salesPerson}|${filters.startDate}|${filters.endDate}|${viewMode}|${listMode}|${allowedStatusKey}`;
   const prevFilterKeyRef = useRef(filterKey);
 
   const reloadList = useCallback(() => {
@@ -395,11 +405,16 @@ export function DesignListScreen({ workflowFrom = FROM_DESIGN_LIST }) {
     }
     let mounted = true;
     setListLoading(true);
+    setListError("");
     const params = new URLSearchParams();
     params.set("page", String(Math.max(1, page)));
     params.set("limit", String(PAGE_SIZE));
     if (debouncedSearchQuery.trim()) params.set("search", debouncedSearchQuery.trim());
-    if (filters.status) params.set("status", filters.status);
+    if (filters.status) {
+      params.set("status", filters.status);
+    } else if (Array.isArray(allowedStatuses) && allowedStatuses.length > 0 && allowedStatuses.length < DESIGN_LIST_BOARD_COLUMNS.length) {
+      params.set("statuses", allowedStatuses.join(","));
+    }
     if (filters.type) params.set("type", filters.type);
     if (filters.salesPerson) params.set("salesPerson", filters.salesPerson);
     if (filters.startDate) params.set("startDate", filters.startDate);
@@ -413,11 +428,12 @@ export function DesignListScreen({ workflowFrom = FROM_DESIGN_LIST }) {
       if (!mounted) return;
       setAllDesigns([]);
       setServerTotal(0);
+      setListError("Unable to load tasks. Please try again.");
     }).finally(() => {
       if (mounted) setListLoading(false);
     });
     return () => { mounted = false; };
-  }, [filterKey, debouncedSearchQuery, filters.status, filters.type, filters.salesPerson, filters.startDate, filters.endDate, listRefreshTick, isReallocation, page]);
+  }, [filterKey, debouncedSearchQuery, filters.status, filters.type, filters.salesPerson, filters.startDate, filters.endDate, listRefreshTick, isReallocation, page, allowedStatuses]);
 
   const filteredDesigns = useMemo(() => allDesigns.filter((d) => {
     if (
@@ -438,14 +454,19 @@ export function DesignListScreen({ workflowFrom = FROM_DESIGN_LIST }) {
   const endShown = total === 0 ? 0 : start + designs.length;
   const uniqueSalesPersons = Array.from(new Set(allDesigns.map((d) => d.salesPerson).filter(Boolean))).sort();
 
+  const statusOptions = Array.isArray(allowedStatuses) && allowedStatuses.length > 0
+    ? allowedStatuses
+    : null;
+
   return (
     <div className="app-shell h-screen flex flex-col overflow-hidden font-sans">
       <Navbar />
       <div className="flex-1 flex flex-col min-h-0">
+        {!hideReallocation ? (
         <div className="shrink-0 border-b border-slate-200 bg-white px-4 py-2 sm:px-6">
           <div className="flex flex-col gap-2 sm:flex-row sm:items-center sm:justify-between">
             <div className="flex flex-col gap-2 sm:flex-row sm:items-center sm:gap-4">
-              <h1 className="text-lg font-semibold tracking-tight text-slate-900">Design List</h1>
+              <h1 className="text-lg font-semibold tracking-tight text-slate-900">{title}</h1>
               <div className="inline-flex rounded-md border border-slate-300 bg-slate-50 p-0.5 text-xs font-semibold">
                 <button
                   type="button"
@@ -469,11 +490,23 @@ export function DesignListScreen({ workflowFrom = FROM_DESIGN_LIST }) {
             </div>
           </div>
         </div>
+        ) : null}
         {isReallocation ? (
           <ReallocationQueuePanel highlightId={highlightReallocationId} />
         ) : (
           <>
-            <div className="shrink-0"><Toolbar viewMode={viewMode} setViewMode={setViewMode} filters={filters} setFilters={setFilters} salesPersons={uniqueSalesPersons} /></div>
+            <div className="shrink-0">
+              <Toolbar
+                title={title}
+                viewMode={viewMode}
+                setViewMode={setViewMode}
+                filters={filters}
+                setFilters={setFilters}
+                salesPersons={uniqueSalesPersons}
+                statusOptions={statusOptions}
+                showViewToggle={!lockBoardView}
+              />
+            </div>
             {listLoading ? (
               <div className="flex min-h-0 flex-1 flex-col px-4 pb-6 sm:px-6" aria-busy="true" aria-label="Loading tasks">
                 <div className="ui-surface h-full overflow-hidden p-3">
@@ -489,10 +522,25 @@ export function DesignListScreen({ workflowFrom = FROM_DESIGN_LIST }) {
                   ))}
                 </div>
               </div>
+            ) : listError ? (
+              <div className="flex min-h-0 flex-1 items-center justify-center px-4 pb-6 text-sm text-red-600 sm:px-6">
+                {listError}
+              </div>
             ) : viewMode === "list" ? (
-              <Table data={designs} workflowFrom={workflowFrom} />
+              designs.length === 0 ? (
+                <div className="flex min-h-0 flex-1 items-center justify-center px-4 pb-6 text-sm text-slate-500 sm:px-6">
+                  No tasks to display.
+                </div>
+              ) : (
+                <Table data={designs} workflowFrom={workflowFrom} />
+              )
             ) : (
-              <Board data={designs} workflowFrom={workflowFrom} />
+              <>
+                {designs.length === 0 ? (
+                  <p className="px-4 pb-2 text-sm text-slate-500 sm:px-6">No tasks to display.</p>
+                ) : null}
+                <Board data={designs} workflowFrom={workflowFrom} columns={boardColumns} />
+              </>
             )}
             <div className="shrink-0 flex items-center justify-between border-t border-slate-200 bg-white px-4 py-2.5 sm:px-6 text-xs text-slate-600"><span className="font-medium">{listLoading ? "Loading…" : <>Showing {total === 0 ? 0 : start + 1}–{endShown} of {total}</>}</span><div className="flex items-center gap-2"><button type="button" onClick={() => setPage((p) => Math.max(1, p - 1))} disabled={listLoading || currentPage === 1} className="rounded-md border border-slate-300 px-2.5 py-1 text-xs font-medium disabled:cursor-not-allowed disabled:opacity-50 hover:bg-slate-50">Prev</button><span className="min-w-[7rem] text-center text-xs font-medium text-slate-700">Page {currentPage} / {totalPages}</span><button type="button" onClick={() => setPage((p) => Math.min(totalPages, p + 1))} disabled={listLoading || currentPage === totalPages} className="rounded-md border border-slate-300 px-2.5 py-1 text-xs font-medium disabled:cursor-not-allowed disabled:opacity-50 hover:bg-slate-50">Next</button></div></div>
           </>

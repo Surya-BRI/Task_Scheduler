@@ -28,9 +28,11 @@ import {
   workedHoursFromSeconds,
 } from '../common/utils/task-work-session-time.util';
 import { utcDateOnlyString } from '../common/utils/date-window.util';
+import { assertHoursWithinDeadline } from '../common/utils/task-deadline-hours.util';
 import { summarizeViewerOvertimeHours } from './scheduler-overtime-hours.util';
 import { taskViewPath } from '../common/utils/design-type.util';
 import { matchSalesUsersToProject } from '../common/utils/sales-notification-recipients.util';
+import { designerInvolvementWhere, parseStatusList } from './designer-involvement.util';
 
 const TASK_ATTACHMENT_SELECT = {
   id: true,
@@ -293,6 +295,8 @@ export type TaskFilters = {
   status?: string;
   /** Comma-separated statuses to exclude, e.g. callers that only need outstanding work. */
   excludeStatuses?: string;
+  /** Comma-separated statuses to include (transaction Kanban views). Ignored when `status` is set. */
+  statuses?: string;
   priority?: string;
   assigneeId?: string;
   search?: string;
@@ -1480,6 +1484,7 @@ export class TasksService {
       projectId,
       status,
       excludeStatuses,
+      statuses,
       priority,
       assigneeId,
       search,
@@ -1525,13 +1530,7 @@ export class TasksService {
     };
 
     if (role === UserRole.DESIGNER) {
-      // Include tasks assigned directly OR via the junction table (split tasks)
-      addAndFilter({
-        OR: [
-          { assigneeId: userId },
-          { taskDesigners: { some: { designerId: userId } } },
-        ],
-      });
+      addAndFilter(designerInvolvementWhere(userId));
     }
 
     if (role === UserRole.QS) {
@@ -1549,7 +1548,19 @@ export class TasksService {
     }
 
     if (projectId) baseWhere.projectId = projectId;
-    if (status) baseWhere.status = toDbTaskStatus(status);
+    if (status) {
+      baseWhere.status = toDbTaskStatus(status);
+    } else if (statuses) {
+      const included = parseStatusList(statuses)
+        .map((value) => toDbTaskStatus(value))
+        .filter(Boolean);
+      const unique = [...new Set(included)];
+      if (unique.length === 1) {
+        baseWhere.status = unique[0];
+      } else if (unique.length > 1) {
+        addAndFilter({ status: { in: unique } });
+      }
+    }
     if (excludeStatuses) {
       const excluded = excludeStatuses
         .split(',')
@@ -1745,6 +1756,7 @@ export class TasksService {
     });
     if (!task) throw new NotFoundException('Task not found');
     await this.assertQsTaskAccess(id, userId, role);
+    await this.assertDesignerTaskAccess(id, userId, role, { assigneeId: (task as { assigneeId?: string | null }).assigneeId });
 
     if (view === 'core') {
       const people = await this.getTaskPeopleLabels(id, task);
@@ -1862,6 +1874,7 @@ export class TasksService {
     });
     if (!task) throw new NotFoundException('Task not found');
     await this.assertQsTaskAccess(id, userId, role);
+    await this.assertDesignerTaskAccess(id, userId, role, { assigneeId: task.assigneeId });
 
     const [withUrls, schedulerHours, pendingReallocation, viewerRemainingHours] =
       await Promise.all([
@@ -2141,12 +2154,38 @@ export class TasksService {
     return { totalSeconds: normalizeWorkSeconds(totalSeconds), hadRunningTimer };
   }
 
-  async update(id: string, dto: UpdateTaskDto) {
+  async update(id: string, dto: UpdateTaskDto, _actingUserId: string, role: UserRole | string) {
     if (!this.isUuid(id)) {
       throw new BadRequestException('Invalid task id');
     }
-    const existing = await this.prisma.task.findUnique({ where: { id } });
+    const existing = await this.prisma.task.findUnique({
+      where: { id },
+      include: {
+        retailDetails: { select: { id: true, hoursRequired: true, deadline: true } },
+        projectDetails: {
+          select: {
+            id: true,
+            artwork: true,
+            artworkHours: true,
+            technical: true,
+            technicalHours: true,
+            location: true,
+            locationHours: true,
+            asBuilt: true,
+            asBuiltHours: true,
+            deadline: true,
+          },
+        },
+      },
+    });
     if (!existing) throw new NotFoundException('Task not found');
+
+    if (dto.hoursRequired !== undefined) {
+      if (role !== UserRole.HOD) {
+        throw new ForbiddenException('Only the Design HOD can edit task hours');
+      }
+      await this.applyHodHoursUpdate(existing, dto.hoursRequired);
+    }
 
     const updated = await this.prisma.task.update({
       where: { id },
@@ -2164,6 +2203,104 @@ export class TasksService {
     });
     const withUrls = await this.withSignedAttachmentUrls(updated);
     return this.normalizeTaskForApi(withUrls);
+  }
+
+  private assertEditableTaskHours(hours: number, deadline?: Date | string | null) {
+    if (!Number.isFinite(hours) || hours < 1) {
+      throw new BadRequestException('Hours Required must be a number (min 1)');
+    }
+    if (!deadline) return;
+    const check = assertHoursWithinDeadline(hours, deadline);
+    if (!check.ok && check.workingDays > 0) {
+      throw new BadRequestException(check.message);
+    }
+  }
+
+  private projectHoursPatch(
+    detail: {
+      artwork?: boolean | null;
+      artworkHours?: number | null;
+      technical?: boolean | null;
+      technicalHours?: number | null;
+      location?: boolean | null;
+      locationHours?: number | null;
+      asBuilt?: boolean | null;
+      asBuiltHours?: number | null;
+    },
+    disciplineType: string | null,
+    hours: number,
+  ): {
+    artworkHours?: number;
+    technicalHours?: number;
+    locationHours?: number;
+    asBuiltHours?: number;
+  } {
+    const disc = String(disciplineType ?? '').trim().toLowerCase();
+    if (disc === 'artwork' || detail.artwork) return { artworkHours: hours };
+    if (disc === 'technical' || detail.technical) return { technicalHours: hours };
+    if (disc === 'location' || detail.location) return { locationHours: hours };
+    if (disc === 'as-built' || disc === 'as built' || disc === 'asbuilt' || detail.asBuilt) {
+      return { asBuiltHours: hours };
+    }
+    if ((Number(detail.artworkHours) || 0) > 0) return { artworkHours: hours };
+    if ((Number(detail.technicalHours) || 0) > 0) return { technicalHours: hours };
+    if ((Number(detail.locationHours) || 0) > 0) return { locationHours: hours };
+    if ((Number(detail.asBuiltHours) || 0) > 0) return { asBuiltHours: hours };
+    return { artworkHours: hours };
+  }
+
+  private async applyHodHoursUpdate(
+    existing: {
+      dueDate?: Date | null;
+      disciplineType?: string | null;
+      retailDetails?: Array<{ id: string; hoursRequired?: number | null; deadline?: Date | null }>;
+      projectDetails?: Array<{
+        id: string;
+        artwork?: boolean | null;
+        artworkHours?: number | null;
+        technical?: boolean | null;
+        technicalHours?: number | null;
+        location?: boolean | null;
+        locationHours?: number | null;
+        asBuilt?: boolean | null;
+        asBuiltHours?: number | null;
+        deadline?: Date | null;
+      }>;
+    },
+    rawHours: number,
+  ) {
+    const hours = Math.round(Number(rawHours));
+    const retailLines = existing.retailDetails ?? [];
+    const projectLines = existing.projectDetails ?? [];
+    const deadline =
+      retailLines[0]?.deadline ?? projectLines[0]?.deadline ?? existing.dueDate ?? null;
+    this.assertEditableTaskHours(hours, deadline);
+
+    if (retailLines.length > 0) {
+      await this.prisma.retailTaskDetail.update({
+        where: { id: retailLines[0].id },
+        data: { hoursRequired: hours },
+      });
+      for (const line of retailLines.slice(1)) {
+        if ((Number(line.hoursRequired) || 0) === 0) continue;
+        await this.prisma.retailTaskDetail.update({
+          where: { id: line.id },
+          data: { hoursRequired: 0 },
+        });
+      }
+      return;
+    }
+
+    if (projectLines.length > 0) {
+      const detail = projectLines[0];
+      await this.prisma.projectTaskDetail.update({
+        where: { id: detail.id },
+        data: this.projectHoursPatch(detail, existing.disciplineType ?? null, hours),
+      });
+      return;
+    }
+
+    throw new BadRequestException('This task has no hours to update');
   }
 
   async assign(id: string, actingUserId: string, dto: AssignTaskDto) {
@@ -2316,12 +2453,7 @@ export class TasksService {
     }
     const existing = await this.prisma.task.findUnique({ where: { id } });
     if (!existing) throw new NotFoundException('Task not found');
-    if (role === UserRole.DESIGNER && existing.assigneeId !== userId) {
-      const inJunction = await this.prisma.taskDesigner.findUnique({
-        where: { taskId_designerId: { taskId: id, designerId: userId } },
-      });
-      if (!inJunction) throw new ForbiddenException('Designers can only update status on their own tasks');
-    }
+    await this.assertDesignerTaskAccess(id, userId, role, { assigneeId: existing.assigneeId });
 
     // REWORK = same revision (HOD internal or Sales). CLIENT_REJECTED = new Rn (Sales/Admin only).
     const newStatusApi = toApiTaskStatus(dto.status);
@@ -3012,10 +3144,12 @@ export class TasksService {
     userId: string,
     dto: SubmitWorkDto,
     files: Express.Multer.File[],
+    role?: UserRole,
   ) {
     if (!this.isUuid(taskId)) throw new BadRequestException('Invalid task id');
     const task = await this.prisma.task.findUnique({ where: { id: taskId }, select: TASK_SELECT });
     if (!task) throw new NotFoundException('Task not found');
+    await this.assertDesignerTaskAccess(taskId, userId, role, { assigneeId: task.assigneeId });
 
     // Upload files in parallel (sequential uploads were the main submit delay).
     const fileList = files ?? [];
@@ -3234,8 +3368,9 @@ export class TasksService {
     }
   }
 
-  async getSubmittedSession(taskId: string) {
+  async getSubmittedSession(taskId: string, userId?: string, role?: UserRole) {
     if (!this.isUuid(taskId)) throw new BadRequestException('Invalid task id');
+    await this.assertDesignerTaskAccess(taskId, userId, role);
     const session = await this.prisma.taskWorkSession.findFirst({
       where: { taskId, status: 'Submitted' },
       orderBy: { submittedAt: 'desc' },
@@ -3356,10 +3491,11 @@ export class TasksService {
     };
   }
 
-  async saveTimerState(taskId: string, userId: string, dto: SaveTimerStateDto) {
+  async saveTimerState(taskId: string, userId: string, dto: SaveTimerStateDto, role?: UserRole) {
     if (!this.isUuid(taskId)) throw new BadRequestException('Invalid task id');
     const task = await this.prisma.task.findUnique({ where: { id: taskId } });
     if (!task) throw new NotFoundException('Task not found');
+    await this.assertDesignerTaskAccess(taskId, userId, role, { assigneeId: task.assigneeId });
 
     const runStartedAt = this.resolveRunStartedAtFromDto(dto);
 
@@ -3627,6 +3763,28 @@ export class TasksService {
           },
         },
       });
+    }
+  }
+
+  private async assertDesignerTaskAccess(
+    taskId: string,
+    userId?: string,
+    role?: UserRole,
+    known?: { assigneeId?: string | null },
+  ) {
+    if (role !== UserRole.DESIGNER) return;
+    if (!userId) {
+      throw new ForbiddenException('Designer access requires an authenticated user');
+    }
+    if (known?.assigneeId === userId) return;
+    const involved = await this.prisma.task.findFirst({
+      where: { id: taskId, ...designerInvolvementWhere(userId) },
+      select: { id: true },
+    });
+    if (!involved) {
+      throw new ForbiddenException(
+        'Designers can only access tasks they have worked on or been assigned to',
+      );
     }
   }
 
