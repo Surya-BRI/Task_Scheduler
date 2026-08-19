@@ -12,6 +12,10 @@ export const FROM_SALES_QUEUE = "sales-queue";
 export const FROM_SALES_DESIGN_LIST = "sales-design-list";
 export const FROM_SALES_PROJECTS_LIST = "sales-projects-list";
 export const FROM_SALES_PROJECT_DESIGN = "sales-project-design";
+export const FROM_TRANSACTIONS_WIP = "transactions-design-wip";
+export const FROM_TRANSACTIONS_COMPLETED = "transactions-design-completed";
+export const FROM_TRANSACTIONS_REWORK = "transactions-design-rework";
+export const FROM_TRANSACTIONS_APPROVAL = "transactions-design-approval";
 
 /** @param {string | null | undefined} from */
 export function isProjectsListWorkflow(from) {
@@ -58,6 +62,14 @@ export function resolveWorkflowBackPath(from) {
     case "designer-design-list":
     case "alex-design-list":
       return "/design-list/tasks";
+    case FROM_TRANSACTIONS_WIP:
+      return "/transactions/design-wip";
+    case FROM_TRANSACTIONS_COMPLETED:
+      return "/transactions/design-completed";
+    case FROM_TRANSACTIONS_REWORK:
+      return "/transactions/design-rework";
+    case FROM_TRANSACTIONS_APPROVAL:
+      return "/transactions/design-approval";
     case FROM_DESIGN_LIST:
     default:
       return "/design-list";

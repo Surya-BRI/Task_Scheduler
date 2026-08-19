@@ -65,6 +65,7 @@ import {
 } from '@/lib/design-list-routes'
 import { getSession } from '@/lib/mock-auth'
 import { hasHodWorkflowAccess } from '@/lib/workflow-roles'
+import { isTransactionsWorkflow } from '@/features/transactions/transaction-views'
 import { useDesignListStore } from '@/state/DesignListContext'
 import {
   formatHoursAsHm,
@@ -1490,6 +1491,7 @@ export function TaskDetailsPage() {
 
   const handleStatusChange = useCallback(async (newStatus, reworkNote, reworkFileArg, reworkLinkArg) => {
     if (!taskId) return
+    if (getSession()?.role === 'SALESPERSON' && isTransactionsWorkflow(from)) return
     try {
       const res = await apiClient.patch(`/tasks/${taskId}/status`, {
         status: newStatus,
@@ -1542,7 +1544,7 @@ export function TaskDetailsPage() {
       toast.error(msg)
       setTaskRefreshCounter((c) => c + 1)
     }
-  }, [taskId])
+  }, [taskId, from])
 
   const openSalesActionDialog = useCallback((mode) => {
     setReworkDialogMode(mode)
@@ -1643,7 +1645,7 @@ export function TaskDetailsPage() {
   const isHod = hasHodWorkflowAccess(sessionRole)
   const isSales = sessionRole === 'SALESPERSON'
   const isAdmin = sessionRole === 'ADMIN'
-  const canSalesReview = isSales || isAdmin
+  const canSalesReview = ((isSales && !isTransactionsWorkflow(from)) || isAdmin)
   const isDesigner = sessionRole === 'DESIGNER'
   // Project Files: designers view-only; Sales/HOD can add; only HOD can delete.
   const canAddProjectFiles = sessionRole === 'HOD' || sessionRole === 'SALESPERSON'
@@ -1746,6 +1748,7 @@ export function TaskDetailsPage() {
   )
   const showWorkflowStatusBlocks =
     DESIGN_WORKFLOW_SOURCES.has(from) ||
+    isTransactionsWorkflow(from) ||
     Boolean(pathname?.startsWith('/task-summary/')) ||
     // Task view pages should always show the stage strip, even if `from` is missing
     // (e.g. Sales opened View from create without forwarding the workflow source).

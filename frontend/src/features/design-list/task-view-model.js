@@ -42,6 +42,19 @@ export const DESIGNER_QUEUE_FILTER_STATUSES = [
   "ON_HOLD",
 ];
 
+export const DESIGN_LIST_BOARD_COLUMNS = [
+  { title: "Design Task New", status: "DESIGN_NEW" },
+  { title: "Design Planned", status: "DESIGN_PLANNED" },
+  { title: "In Progress", status: "IN_PROGRESS" },
+  { title: "Design Completed", status: "DESIGN_COMPLETED" },
+  { title: "HOD Review", status: "HOD_REVIEW" },
+  { title: "Sales Review", status: "SALES_REVIEW" },
+  { title: "Rework / Error", status: "REWORK" },
+  { title: "Client Accepted", status: "CLIENT_ACCEPTED" },
+  { title: "Client Rejected", status: "CLIENT_REJECTED" },
+  { title: "On Hold", status: "ON_HOLD" },
+];
+
 export const DESIGNER_BOARD_COLUMNS = [
   { title: "Design Task New", status: "DESIGN_NEW" },
   { title: "Design Planned", status: "DESIGN_PLANNED" },
