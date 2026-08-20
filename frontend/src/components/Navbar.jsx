@@ -14,7 +14,7 @@ import { connectDashboardRealtime } from '@/lib/realtime'
 import { hasDepartmentManagerAccess } from '@/lib/workflow-roles'
 import { apiClient } from '@/lib/api-client'
 import { applyRemoteTimerPause, applyServerTimerState } from '@/components/design-list-task-timer-storage'
-import { canAccessTransactions, TRANSACTION_VIEWS } from '@/features/transactions/transaction-views'
+import { canAccessTransactions, getTransactionDropdownItems, isTransactionNavItemActive } from '@/features/transactions/transaction-views'
 import { toast } from 'sonner'
 
 const NAV_ITEMS = [
@@ -28,10 +28,11 @@ const NAV_ITEMS = [
   'Support',
 ]
 
-function TransactionsNavDropdown({ pathname, onNavigate }) {
+function TransactionsNavDropdown({ pathname, role, onNavigate }) {
   const [open, setOpen] = useState(false)
   const rootRef = useRef(null)
-  const active = pathname.startsWith('/transactions')
+  const items = getTransactionDropdownItems(role)
+  const active = pathname.startsWith('/transactions') || items.some((item) => isTransactionNavItemActive(pathname, item))
 
   useEffect(() => {
     if (!open) return undefined
@@ -66,15 +67,15 @@ function TransactionsNavDropdown({ pathname, onNavigate }) {
       </button>
       {open ? (
         <div
-          className="absolute left-1/2 z-50 mt-2 w-64 -translate-x-1/2 origin-top rounded-xl border border-slate-200 bg-white py-1 shadow-xl ring-1 ring-black/5"
+          className="absolute left-1/2 z-50 mt-2 max-h-[min(70vh,32rem)] w-72 -translate-x-1/2 origin-top overflow-y-auto rounded-xl border border-slate-200 bg-white py-1 shadow-xl ring-1 ring-black/5"
           role="menu"
           aria-label="Transactions"
         >
-          {TRANSACTION_VIEWS.map((item) => {
-            const itemActive = pathname === item.path || pathname.startsWith(`${item.path}/`)
+          {items.map((item) => {
+            const itemActive = isTransactionNavItemActive(pathname, item)
             return (
               <button
-                key={item.id}
+                key={item.path}
                 type="button"
                 role="menuitem"
                 onClick={() => {
@@ -718,8 +719,6 @@ export function Navbar({ currentDate, onCalendarChange, dateRangeText }) {
               </button>
             )}
 
-
-
             {/* Chatter */}
             <button
               type="button"
@@ -781,6 +780,7 @@ export function Navbar({ currentDate, onCalendarChange, dateRangeText }) {
                     <TransactionsNavDropdown
                       key="Transactions"
                       pathname={pathname}
+                      role={session?.role}
                       onNavigate={(path) => router.push(path)}
                     />
                   )

@@ -2,7 +2,9 @@ import { describe, expect, it } from 'vitest'
 import {
   canAccessTransactions,
   getTransactionBoardColumns,
+  getTransactionDropdownItems,
   getTransactionView,
+  isTransactionNavItemActive,
   isTransactionsWorkflow,
   TRANSACTION_VIEWS,
 } from './transaction-views'
@@ -31,9 +33,6 @@ describe('transaction views', () => {
       'On Hold',
     ])
     expect(getTransactionBoardColumns('design-completed').map((col) => col.status)).toEqual([
-      'DESIGN_NEW',
-      'DESIGN_PLANNED',
-      'IN_PROGRESS',
       'DESIGN_COMPLETED',
     ])
     expect(getTransactionBoardColumns('design-rework')).toHaveLength(7)
@@ -51,5 +50,51 @@ describe('transaction views', () => {
   it('detects transactions workflow back-nav tokens', () => {
     expect(isTransactionsWorkflow(getTransactionView('design-wip').from)).toBe(true)
     expect(isTransactionsWorkflow('sales-queue')).toBe(false)
+  })
+
+  it('builds role-specific flat dropdown lists without cross-role leakage', () => {
+    expect(getTransactionDropdownItems('HOD').map((item) => item.label)).toEqual([
+      'Design WIP',
+      'Design Completed',
+      'Design Rework / Error List',
+      'Design Approval List',
+      'Projects List',
+      'Master Scheduler',
+      'Projects Overview',
+      'Chatter',
+      'Team Activity Feed',
+    ])
+
+    expect(getTransactionDropdownItems('DESIGNER').map((item) => item.label)).toEqual([
+      'Design WIP',
+      'Design Completed',
+      'Design Rework / Error List',
+      'Design Approval List',
+      'Design List',
+      'Scheduler Dashboard',
+      'Chatter',
+      'Team Activity Feed',
+    ])
+
+    expect(getTransactionDropdownItems('SALESPERSON').map((item) => item.label)).toEqual([
+      'Design WIP',
+      'Design Completed',
+      'Design Rework / Error List',
+      'Design Approval List',
+      'Projects List',
+      'Sales Review',
+      'Projects Overview',
+      'Chatter',
+      'Team Activity Feed',
+    ])
+
+    expect(getTransactionDropdownItems('SALESPERSON').map((item) => item.path)).not.toContain('/design-scheduler')
+  })
+
+  it('marks design completed view as active only on its route', () => {
+    const completed = getTransactionView('design-completed')
+    const item = { label: completed.label, path: completed.path, match: (pathname) => pathname === completed.path }
+    expect(isTransactionNavItemActive('/transactions/design-completed', item)).toBe(true)
+    expect(isTransactionNavItemActive('/transactions/design-wip', item)).toBe(false)
   })
 })
