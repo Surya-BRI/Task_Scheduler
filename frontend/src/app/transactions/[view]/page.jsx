@@ -36,7 +36,6 @@ export default function TransactionsViewPage() {
       title={view.label}
       workflowFrom={view.from}
       defaultViewMode="board"
-      lockBoardView
       hideReallocation
       boardColumns={getTransactionBoardColumns(view.id)}
       allowedStatuses={view.statuses}
