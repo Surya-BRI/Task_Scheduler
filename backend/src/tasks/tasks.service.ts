@@ -3428,15 +3428,25 @@ export class TasksService {
 
   async getTimerState(taskId: string, userId: string) {
     if (!this.isUuid(taskId)) throw new BadRequestException('Invalid task id');
-    const draft = await this.prisma.taskWorkSession.findFirst({
+    const sessions = await this.prisma.taskWorkSession.findMany({
       where: { taskId, designerId: userId, status: { in: ['Draft', 'HandedOff'] } },
       orderBy: { createdAt: 'desc' },
     });
-    if (!draft) return null;
-    const handedOff = draft.status === 'HandedOff';
-    let runStartedAt: string | null = handedOff ? null : (draft.runStartedAt?.toISOString() ?? null);
+    const draft = sessions.find((row) => row.status === 'Draft') ?? null;
+    const handedOffRow = sessions.find((row) => row.status === 'HandedOff') ?? null;
+    const row = draft ?? handedOffRow;
+    if (!row) return null;
 
-    if (runStartedAt) {
+    // Prefer a live Draft. A HandedOff row only locks Play when the designer no longer
+    // owns remaining work — otherwise Start must reopen the existing session.
+    let handedOff = !draft && Boolean(handedOffRow);
+    if (handedOff && await this.designerCanRestartTimer(taskId, userId)) {
+      handedOff = false;
+    }
+
+    let runStartedAt: string | null = handedOff ? null : (draft?.runStartedAt?.toISOString() ?? null);
+
+    if (runStartedAt && draft) {
       const active = await this.getRunningTimerForDesigner(userId);
       if (!active || active.taskId !== taskId) {
         runStartedAt = null;
@@ -3450,8 +3460,8 @@ export class TasksService {
     }
 
     return {
-      accumulatedSeconds: draft.durationSeconds,
-      pauseLog: draft.pauseLog ?? null,
+      accumulatedSeconds: row.durationSeconds,
+      pauseLog: row.pauseLog ?? null,
       runStartedAt,
       locked: handedOff,
       handedOff,
@@ -3500,15 +3510,6 @@ export class TasksService {
     const runStartedAt = this.resolveRunStartedAtFromDto(dto);
 
     const saved = await this.prisma.$transaction(async (tx) => {
-      const handedOff = await tx.taskWorkSession.findFirst({
-        where: { taskId, designerId: userId, status: 'HandedOff' },
-      });
-      if (handedOff) {
-        throw new ForbiddenException(
-          'Your work on this task was handed off to another designer — the timer is closed for your slice.',
-        );
-      }
-
       if (runStartedAt) {
         const otherRunning = await tx.taskWorkSession.findFirst({
           where: {
@@ -3580,6 +3581,41 @@ export class TasksService {
           },
         });
         return tx.taskWorkSession.findUnique({ where: { id: existing.id } });
+      }
+
+      // No Draft: a prior slice may have been marked HandedOff. If the designer is
+      // still assigned/scheduled on this task, reopen that same session instead of
+      // creating a second timer row.
+      if (runStartedAt) {
+        const handedOff = await tx.taskWorkSession.findFirst({
+          where: { taskId, designerId: userId, status: 'HandedOff' },
+          orderBy: { createdAt: 'desc' },
+        });
+        if (handedOff) {
+          const canRestart = await this.designerCanRestartTimer(taskId, userId, {
+            assigneeId: task.assigneeId,
+            db: tx,
+          });
+          if (!canRestart) {
+            throw new ForbiddenException(
+              'Your work on this task was handed off to another designer — the timer is closed for your slice.',
+            );
+          }
+          const durationSeconds = Math.max(
+            normalizeWorkSeconds(dto.accumulatedSeconds),
+            normalizeWorkSeconds(handedOff.durationSeconds),
+          );
+          await tx.taskWorkSession.update({
+            where: { id: handedOff.id },
+            data: {
+              status: 'Draft',
+              durationSeconds,
+              pauseLog: dto.pauseLog ?? handedOff.pauseLog,
+              runStartedAt,
+            },
+          });
+          return tx.taskWorkSession.findUnique({ where: { id: handedOff.id } });
+        }
       }
 
       return tx.taskWorkSession.create({
@@ -3764,6 +3800,31 @@ export class TasksService {
         },
       });
     }
+  }
+
+  /**
+   * True when the designer still has live ownership on the task (assignee, junction,
+   * or scheduler row). Historical workSessions alone do not count — those stay HandedOff.
+   */
+  private async designerCanRestartTimer(
+    taskId: string,
+    userId: string,
+    opts?: { assigneeId?: string | null; db?: { task: { findFirst: Function } } },
+  ): Promise<boolean> {
+    if (opts?.assigneeId === userId) return true;
+    const db = opts?.db ?? this.prisma;
+    const involved = await db.task.findFirst({
+      where: {
+        id: taskId,
+        OR: [
+          { assigneeId: userId },
+          { taskDesigners: { some: { designerId: userId } } },
+          { schedulerAssignments: { some: { designerId: userId } } },
+        ],
+      },
+      select: { id: true },
+    });
+    return Boolean(involved);
   }
 
   private async assertDesignerTaskAccess(
