@@ -77,6 +77,25 @@ describe('TasksService designer involvement and transaction status filters', () 
     );
   });
 
+  it('filters Design Completed transaction view to DESIGN_COMPLETED only', async () => {
+    const { service, prisma } = createService();
+    prisma.task.findMany.mockResolvedValue([]);
+    prisma.task.count.mockResolvedValue(0);
+
+    await service.findAll('hod-1', UserRole.HOD, {
+      statuses: 'DESIGN_COMPLETED',
+      limit: 100,
+    });
+
+    expect(prisma.task.findMany).toHaveBeenCalledWith(
+      expect.objectContaining({
+        where: expect.objectContaining({
+          status: 'DESIGN_COMPLETED',
+        }),
+      }),
+    );
+  });
+
   it('blocks designers from reading another designer task by id', async () => {
     const { service, prisma } = createService();
     prisma.task.findUnique.mockResolvedValue({

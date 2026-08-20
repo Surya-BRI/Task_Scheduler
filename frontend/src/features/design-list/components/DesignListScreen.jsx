@@ -20,9 +20,23 @@ import { Navbar } from "@/components/Navbar";
 import { apiClient } from "@/lib/api-client";
 import { useTaskLifecycleRefresh } from "@/hooks/use-task-lifecycle-refresh";
 import { FROM_DESIGN_LIST, taskSummaryPath, taskViewPathForRecord } from "@/lib/design-list-routes";
+import { isTransactionsWorkflow } from "@/features/transactions/transaction-views";
 import { DESIGN_LIST_BOARD_COLUMNS, getStatusLabel, mapTaskToDesignRow } from "../task-view-model";
 import { TypeOfDesignChip } from "@/lib/ui/TypeOfDesignChip";
 import { ReallocationQueuePanel } from "./ReallocationQueuePanel";
+
+const TRANSACTIONS_VIEW_MODE_KEY = "transactions-view-mode";
+
+function readTransactionsViewMode(defaultMode) {
+  if (typeof window === "undefined") return defaultMode;
+  try {
+    const saved = window.sessionStorage.getItem(TRANSACTIONS_VIEW_MODE_KEY);
+    if (saved === "list" || saved === "board") return saved;
+  } catch {
+    // ignore
+  }
+  return defaultMode;
+}
 
 const getStatusColor = (status) => {
   switch (status) {
@@ -367,12 +381,28 @@ export function DesignListScreen({
   const [allDesigns, setAllDesigns] = useState([]);
   const [serverTotal, setServerTotal] = useState(0);
   const [listError, setListError] = useState("");
-  const [viewMode, setViewMode] = useState(lockBoardView ? "board" : defaultViewMode);
+  const [viewMode, setViewMode] = useState(() => {
+    if (lockBoardView) return "board";
+    if (isTransactionsWorkflow(workflowFrom)) {
+      return readTransactionsViewMode(defaultViewMode);
+    }
+    return defaultViewMode;
+  });
   const [page, setPage] = useState(1);
   const [filters, setFilters] = useState({ type: "", status: "", salesPerson: "", startDate: "", endDate: "", searchQuery: "" });
   const [debouncedSearchQuery, setDebouncedSearchQuery] = useState("");
   const [listRefreshTick, setListRefreshTick] = useState(0);
   const [listLoading, setListLoading] = useState(true);
+
+  useEffect(() => {
+    if (!isTransactionsWorkflow(workflowFrom)) return undefined;
+    try {
+      window.sessionStorage.setItem(TRANSACTIONS_VIEW_MODE_KEY, viewMode);
+    } catch {
+      // ignore
+    }
+    return undefined;
+  }, [viewMode, workflowFrom]);
 
   useEffect(() => {
     if (hideReallocation) return;
