@@ -284,7 +284,8 @@ describe('TasksService', () => {
     const DESIGNER_ID = 'ffffffff-1111-4222-8333-444444444444';
 
     beforeEach(() => {
-      prisma.task.findUnique.mockResolvedValue({ id: TASK_ID });
+      prisma.task.findUnique.mockResolvedValue({ id: TASK_ID, assigneeId: DESIGNER_ID });
+      prisma.task.findFirst.mockResolvedValue({ id: TASK_ID });
       prisma.taskWorkSession.findFirst.mockResolvedValue(null);
       prisma.taskWorkSession.create.mockImplementation(async ({ data }: any) => ({
         id: 'session-new',
@@ -326,7 +327,6 @@ describe('TasksService', () => {
 
     it('rejects starting when another task is already running', async () => {
       prisma.taskWorkSession.findFirst
-        .mockResolvedValueOnce(null) // handedOff check
         .mockResolvedValueOnce({ taskId: 'other-task' }); // other running
 
       await expect(
@@ -350,7 +350,6 @@ describe('TasksService', () => {
         status: 'Draft',
       };
       prisma.taskWorkSession.findFirst
-        .mockResolvedValueOnce(null) // handedOff
         .mockResolvedValueOnce(draft) // existing
         .mockResolvedValueOnce({ ...draft, durationSeconds: 130, runStartedAt: null }); // latest after pause
 
@@ -385,7 +384,6 @@ describe('TasksService', () => {
         status: 'Draft',
       };
       prisma.taskWorkSession.findFirst
-        .mockResolvedValueOnce(null) // handedOff
         .mockResolvedValueOnce(null) // other running
         .mockResolvedValueOnce(draft); // existing
       prisma.taskWorkSession.findUnique.mockResolvedValue({
@@ -406,6 +404,140 @@ describe('TasksService', () => {
           }),
         }),
       );
+    });
+
+    it('reopens the existing HandedOff session when the designer is still assigned', async () => {
+      const handedOff = {
+        id: 'session-ho',
+        taskId: TASK_ID,
+        designerId: DESIGNER_ID,
+        durationSeconds: 500,
+        pauseLog: null,
+        runStartedAt: null,
+        status: 'HandedOff',
+      };
+      prisma.taskWorkSession.findFirst
+        .mockResolvedValueOnce(null) // other running
+        .mockResolvedValueOnce(null) // existing draft
+        .mockResolvedValueOnce(handedOff); // handedOff
+      prisma.taskWorkSession.findUnique.mockResolvedValue({
+        ...handedOff,
+        status: 'Draft',
+        runStartedAt: new Date(),
+      });
+
+      const result = await service.saveTimerState(TASK_ID, DESIGNER_ID, {
+        accumulatedSeconds: 500,
+        runStartedAt: '2026-07-24T10:00:00.000Z',
+      } as any);
+
+      expect(prisma.taskWorkSession.update).toHaveBeenCalledWith(
+        expect.objectContaining({
+          where: { id: 'session-ho' },
+          data: expect.objectContaining({
+            status: 'Draft',
+            durationSeconds: 500,
+          }),
+        }),
+      );
+      expect(prisma.taskWorkSession.create).not.toHaveBeenCalled();
+      expect(result.handedOff).toBe(false);
+      expect(result.locked).toBe(false);
+      expect(result.runStartedAt).toEqual(expect.any(String));
+      expect(result.accumulatedSeconds).toBe(500);
+    });
+
+    it('rejects restarting a HandedOff session when the designer is no longer assigned', async () => {
+      prisma.task.findUnique.mockResolvedValue({ id: TASK_ID, assigneeId: 'other-designer' });
+      prisma.task.findFirst.mockResolvedValue(null);
+      prisma.taskWorkSession.findFirst
+        .mockResolvedValueOnce(null) // other running
+        .mockResolvedValueOnce(null) // existing draft
+        .mockResolvedValueOnce({
+          id: 'session-ho',
+          status: 'HandedOff',
+          durationSeconds: 10,
+          pauseLog: null,
+          runStartedAt: null,
+        });
+
+      await expect(
+        service.saveTimerState(TASK_ID, DESIGNER_ID, {
+          accumulatedSeconds: 10,
+          runStartedAt: '2026-07-24T10:00:00.000Z',
+        } as any),
+      ).rejects.toThrow('handed off');
+      expect(prisma.taskWorkSession.create).not.toHaveBeenCalled();
+      expect(dashboardRealtime.notifyTimerUpdated).not.toHaveBeenCalled();
+    });
+  });
+
+  describe('getTimerState', () => {
+    const DESIGNER_ID = 'ffffffff-1111-4222-8333-444444444444';
+
+    it('prefers a Draft session over HandedOff so Play can resume', async () => {
+      prisma.taskWorkSession.findMany.mockResolvedValue([
+        {
+          id: 'ho',
+          status: 'HandedOff',
+          durationSeconds: 100,
+          runStartedAt: null,
+          pauseLog: null,
+          createdAt: new Date('2026-01-02'),
+        },
+        {
+          id: 'dr',
+          status: 'Draft',
+          durationSeconds: 40,
+          runStartedAt: null,
+          pauseLog: null,
+          createdAt: new Date('2026-01-01'),
+        },
+      ]);
+
+      const result = await service.getTimerState(TASK_ID, DESIGNER_ID);
+
+      expect(result?.handedOff).toBe(false);
+      expect(result?.locked).toBe(false);
+      expect(result?.accumulatedSeconds).toBe(40);
+    });
+
+    it('unlocks a HandedOff timer when the designer is still assigned', async () => {
+      prisma.taskWorkSession.findMany.mockResolvedValue([
+        {
+          id: 'ho',
+          status: 'HandedOff',
+          durationSeconds: 500,
+          runStartedAt: null,
+          pauseLog: null,
+        },
+      ]);
+      prisma.task.findFirst.mockResolvedValue({ id: TASK_ID });
+
+      const result = await service.getTimerState(TASK_ID, DESIGNER_ID);
+
+      expect(result?.handedOff).toBe(false);
+      expect(result?.locked).toBe(false);
+      expect(result?.accumulatedSeconds).toBe(500);
+      expect(result?.runStartedAt).toBeNull();
+    });
+
+    it('keeps HandedOff locked when the designer is no longer assigned', async () => {
+      prisma.taskWorkSession.findMany.mockResolvedValue([
+        {
+          id: 'ho',
+          status: 'HandedOff',
+          durationSeconds: 500,
+          runStartedAt: null,
+          pauseLog: null,
+        },
+      ]);
+      prisma.task.findFirst.mockResolvedValue(null);
+
+      const result = await service.getTimerState(TASK_ID, DESIGNER_ID);
+
+      expect(result?.handedOff).toBe(true);
+      expect(result?.locked).toBe(true);
     });
   });
 
