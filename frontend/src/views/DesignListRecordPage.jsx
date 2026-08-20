@@ -109,6 +109,7 @@ export function DesignListRecordPage() {
     from === FROM_SALES_PROJECT_DESIGN ||
     from === FROM_SALES_PROJECTS_LIST ||
     from === 'designer-queue' ||
+    from === 'designer-design-list' ||
     from === 'alex-design-list'
   const backPath = resolveWorkflowBackPath(from)
 

@@ -816,11 +816,16 @@ function mapTaskToRecord(task) {
       || (task.taskDesigners?.length > 0 ? task.taskDesigners.map(d => d.designer.fullName).join(', ') : 'Unassigned'),
     assigneeId: task.assigneeId ?? task.assignee?.id ?? null,
     assignedDesignerIds: [
-      task.assigneeId ?? task.assignee?.id ?? null,
-      ...(Array.isArray(task.taskDesigners)
-        ? task.taskDesigners.map((d) => d.designerId ?? d.designer?.id ?? null)
-        : []),
-    ].filter(Boolean),
+      ...new Set([
+        task.assigneeId ?? task.assignee?.id ?? null,
+        ...(Array.isArray(task.taskDesigners)
+          ? task.taskDesigners.map((d) => d.designerId ?? d.designer?.id ?? null)
+          : []),
+        ...(Array.isArray(task.schedulerHours?.parts)
+          ? task.schedulerHours.parts.map((part) => part?.designerId ?? null)
+          : []),
+      ].filter(Boolean)),
+    ],
     projectDetails: task.projectDetails ?? [],
     disciplineType: task.disciplineType ?? null,
     signType: task.signType ?? null,
@@ -886,6 +891,14 @@ function applyTaskExtrasToRecord(prev, extras) {
   return {
     ...prev,
     schedulerHours: extras.schedulerHours ?? prev.schedulerHours ?? null,
+    assignedDesignerIds: [
+      ...new Set([
+        ...(Array.isArray(prev.assignedDesignerIds) ? prev.assignedDesignerIds : []),
+        ...(Array.isArray(extras.schedulerHours?.parts)
+          ? extras.schedulerHours.parts.map((part) => part?.designerId ?? null)
+          : []),
+      ].filter(Boolean)),
+    ],
     pendingReallocation: extras.pendingReallocation ?? null,
     viewerCanRequestReallocation: Boolean(extras.viewerCanRequestReallocation),
     viewerRemainingScheduledHours: Number(extras.viewerRemainingScheduledHours ?? 0) || 0,
@@ -1633,7 +1646,9 @@ export function TaskDetailsPage() {
     (
       String(record?.assigneeId ?? '') === sessionUserId ||
       (Array.isArray(record?.assignedDesignerIds) &&
-        record.assignedDesignerIds.some((id) => String(id) === sessionUserId))
+        record.assignedDesignerIds.some((id) => String(id) === sessionUserId)) ||
+      (Array.isArray(record?.schedulerHours?.parts) &&
+        record.schedulerHours.parts.some((part) => String(part?.designerId ?? '') === sessionUserId))
     ),
   )
   const canUseWorkTimer =
