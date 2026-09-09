@@ -40,13 +40,13 @@ export function LoginForm() {
     <form onSubmit={handleSubmit} className="space-y-5">
       {/* Email */}
       <div className="space-y-1.5">
-        <label className="text-sm font-semibold text-slate-700" htmlFor="email">Email address</label>
+        <label className="text-sm font-semibold text-slate-700" htmlFor="email">Email or username</label>
         <div className="relative">
           <Mail className="absolute left-3 top-1/2 -translate-y-1/2 h-4 w-4 text-slate-400 pointer-events-none" />
           <input
             id="email"
-            type="email"
-            autoComplete="email"
+            type="text"
+            autoComplete="username"
             value={email}
             onChange={(e) => setEmail(e.target.value)}
             placeholder="you@bluerhine.com"

@@ -25,15 +25,23 @@ export class AuthService {
   async login(dto: LoginDto) {
     const user = await this.usersService.findByEmail(dto.email);
 
-    if (!user) {
-      throw new UnauthorizedException('Invalid credentials');
+    if (user) {
+      const passwordMatches = await bcrypt.compare(dto.password, user.passwordHash);
+      if (!passwordMatches) {
+        throw new UnauthorizedException('Invalid credentials');
+      }
+      return this.issueSession(user);
     }
 
-    const passwordMatches = await bcrypt.compare(dto.password, user.passwordHash);
-    if (!passwordMatches) {
+    // Not a native Scheduler account — try bridging an ERP-side (ErpAuthUsers) login.
+    const bridgedUser = await this.usersService.findOrCreateFromErpAuth(dto.email, dto.password);
+    if (!bridgedUser) {
       throw new UnauthorizedException('Invalid credentials');
     }
+    return this.issueSession(bridgedUser);
+  }
 
+  private async issueSession(user: { id: string; email: string; fullName: string; role: { name: string } }) {
     const payload = {
       sub: user.id,
       email: user.email,

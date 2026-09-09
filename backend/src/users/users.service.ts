@@ -16,9 +16,69 @@ const USER_SELECT = {
   updatedAt: true,
 };
 
+// ERP roleName -> Scheduler role bucket. ERP has dozens of granular roles; only
+// the ones with a real Scheduler equivalent can bridge a login.
+const ERP_ROLE_MAP: Record<string, UserRole> = {
+  'Design HOD': UserRole.HOD,
+  'Design Head': UserRole.HOD,
+  SalesRep: UserRole.SALESPERSON,
+  'Sales Coordinator': UserRole.SALESPERSON,
+  Designer: UserRole.DESIGNER,
+  QS: UserRole.QS,
+};
+
+type ErpAuthRow = { userId: bigint; userName: string; password: string; roleName: string };
+
 @Injectable()
 export class UsersService {
   constructor(private readonly prisma: PrismaService) {}
+
+  /**
+   * Bridges the ERP's own auth tables (ErpAuthUsers/ErpAuthUserRoleMap/ErpMasterRole)
+   * into a Scheduler ErpTSUser: validates the password against ErpAuthUsers directly,
+   * then finds or provisions the matching ErpTSUser so the rest of the app (tasks,
+   * projects, etc., all keyed off ErpTSUser.id) works unchanged. Returns null if the
+   * ERP account doesn't exist, the password doesn't match, or its role has no mapping.
+   */
+  async findOrCreateFromErpAuth(userName: string, password: string) {
+    const rows = await this.prisma.$queryRaw<ErpAuthRow[]>`
+      SELECT TOP 1 u.userId, u.userName, u.password, r.roleName
+      FROM ErpAuthUsers u
+      JOIN ErpAuthUserRoleMap m ON m.userId = u.userId AND m.isActive = 1
+      JOIN ErpMasterRole r ON r.roleId = m.roleId AND r.isActive = 1 AND r.isDeleted = 0
+      WHERE u.userName = ${userName} AND u.isActive = 1 AND u.isDeleted = 0
+      ORDER BY m.mapId DESC
+    `;
+    const erpUser = rows[0];
+    if (!erpUser) return null;
+
+    const passwordMatches = await bcrypt.compare(password, erpUser.password);
+    if (!passwordMatches) return null;
+
+    const mappedRole = ERP_ROLE_MAP[erpUser.roleName];
+    if (!mappedRole) return null;
+
+    const role = await this.prisma.role.findUnique({ where: { name: mappedRole } });
+    if (!role) return null;
+
+    const bridgedEmail = `${erpUser.userName.toLowerCase()}@erp-dev.local`;
+    const existing = await this.prisma.user.findUnique({
+      where: { email: bridgedEmail },
+      include: { role: true, department: true },
+    });
+    if (existing) return existing;
+
+    const passwordHash = await bcrypt.hash(password, 10);
+    return this.prisma.user.create({
+      data: {
+        email: bridgedEmail,
+        fullName: erpUser.userName,
+        passwordHash,
+        roleId: role.id,
+      },
+      include: { role: true, department: true },
+    });
+  }
 
   async create(dto: CreateUserDto) {
     const existing = await this.prisma.user.findUnique({ where: { email: dto.email } });
