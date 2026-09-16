@@ -39,13 +39,13 @@ export class JwtAuthGuard extends AuthGuard('jwt') {
     if (devBypassEnabled) {
       const hasAuthHeader = !!(request.headers['authorization'] ?? request.headers['Authorization']);
       const devId = request.headers['x-dev-user-id'];
-      const devEmail = request.headers['x-dev-user-email'];
+      const devUsername = request.headers['x-dev-user-email'];
       const devRole = request.headers['x-dev-user-role'];
 
-      if (!hasAuthHeader && devId && devEmail && devRole) {
+      if (!hasAuthHeader && devId && devUsername && devRole) {
         request.user = {
           sub: devId,
-          email: devEmail,
+          username: devUsername,
           role: devRole as UserRole,
         };
         return true;

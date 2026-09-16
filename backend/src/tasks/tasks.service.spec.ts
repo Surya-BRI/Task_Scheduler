@@ -7,7 +7,7 @@ describe('TasksService', () => {
   const existingTask = {
     id: TASK_ID,
     status: 'IN_PROGRESS',
-    assigneeId: 'designer-1',
+    assigneeId: '9001',
     startedAt: new Date('2026-07-01T00:00:00.000Z'),
     holdPreviousStatus: null,
     projectId: 'project-1',
@@ -33,7 +33,7 @@ describe('TasksService', () => {
     title: 'Facade',
     status: 'ON_HOLD',
     designType: 'Project',
-    assigneeId: 'designer-1',
+    assigneeId: '9001',
     project: {
       id: 'project-1',
       projectNo: 'P-1',
@@ -50,6 +50,7 @@ describe('TasksService', () => {
     taskDesigner: { findUnique: jest.fn(), findMany: jest.fn(), create: jest.fn(), deleteMany: jest.fn() },
     schedulerAssignment: { findMany: jest.fn(), deleteMany: jest.fn() },
     user: { findMany: jest.fn(), findUnique: jest.fn() },
+    erpUser: { findMany: jest.fn(), findUnique: jest.fn() },
     activityLog: { findFirst: jest.fn() },
     taskWorkSession: {
       findFirst: jest.fn(),
@@ -80,22 +81,24 @@ describe('TasksService', () => {
 
   const service = new TasksService(prisma, taskFilesService, activityLogger, notificationsService, dashboardRealtime);
 
-  /** Route user.findMany by role — scoped notify helpers issue separate manager vs sales queries. */
+  /**
+   * Backs findErpUsersByRoleBuckets' single $queryRaw (ErpAuthUsers/ErpAuthUserRoleMap/
+   * ErpMasterRole join) with fake role rows. Note: ERP has no role that maps to the
+   * `ADMIN` bucket (see ERP_ROLE_BUCKET in tasks.service.ts) — admin-only notify lists
+   * are now always empty; there is no `admins` option here.
+   */
   const mockNotifyUsersByRole = (opts: {
     managers?: Array<{ id: string }>;
-    admins?: Array<{ id: string }>;
     sales?: Array<{ id: string; fullName: string }>;
   }) => {
-    prisma.user.findMany.mockImplementation(({ where }: any) => {
-      const roles: string[] = where?.role?.name?.in ?? (where?.role?.name ? [where.role.name] : []);
-      if (roles.includes('SALESPERSON') && !roles.includes('HOD') && !roles.includes('ADMIN')) {
-        return Promise.resolve(opts.sales ?? []);
-      }
-      if (roles.length === 1 && roles[0] === 'ADMIN') {
-        return Promise.resolve(opts.admins ?? opts.managers ?? []);
-      }
-      if (roles.includes('HOD') || roles.includes('ADMIN')) {
-        return Promise.resolve(opts.managers ?? []);
+    const roleRows = [
+      ...(opts.managers ?? []).map((m) => ({ userId: BigInt(m.id), userName: 'Manager', roleName: 'Design HOD' })),
+      ...(opts.sales ?? []).map((s) => ({ userId: BigInt(s.id), userName: s.fullName, roleName: 'SalesRep' })),
+    ];
+    prisma.$queryRaw.mockImplementation((strings: any) => {
+      const text = Array.isArray(strings) ? strings.join('') : String(strings);
+      if (text.includes('ErpAuthUserRoleMap')) {
+        return Promise.resolve(roleRows);
       }
       return Promise.resolve([]);
     });
@@ -137,7 +140,7 @@ describe('TasksService', () => {
     });
 
     it('deletes unconditionally when no expectedAssignmentIds given (back-compat)', async () => {
-      await service.updateStatus(TASK_ID, 'hod-1', UserRole.HOD, { status: 'ON_HOLD' } as any);
+      await service.updateStatus(TASK_ID, '9002', UserRole.HOD, { status: 'ON_HOLD' } as any);
 
       expect(prisma.$transaction).toHaveBeenCalled();
       expect(prisma.schedulerAssignment.findMany).not.toHaveBeenCalled();
@@ -151,7 +154,7 @@ describe('TasksService', () => {
     it('proceeds when every live row is in expectedAssignmentIds', async () => {
       prisma.schedulerAssignment.findMany.mockResolvedValue([{ id: 'row-a' }]);
 
-      await service.updateStatus(TASK_ID, 'hod-1', UserRole.HOD, {
+      await service.updateStatus(TASK_ID, '9002', UserRole.HOD, {
         status: 'ON_HOLD',
         expectedAssignmentIds: ['row-a'],
       } as any);
@@ -168,7 +171,7 @@ describe('TasksService', () => {
       prisma.schedulerAssignment.findMany.mockResolvedValue([{ id: 'row-a' }, { id: 'row-unknown' }]);
 
       await expect(
-        service.updateStatus(TASK_ID, 'hod-1', UserRole.HOD, {
+        service.updateStatus(TASK_ID, '9002', UserRole.HOD, {
           status: 'ON_HOLD',
           expectedAssignmentIds: ['row-a'],
         } as any),
@@ -189,15 +192,15 @@ describe('TasksService', () => {
       expect(result).toEqual({ partCount: 0, designers: [] });
       expect(prisma.schedulerAssignment.findMany).toHaveBeenCalledWith({
         where: { taskId: TASK_ID, weekStartDate: { gte: expect.any(Date) } },
-        select: { designerId: true, designer: { select: { fullName: true } } },
+        select: { designerId: true, designer: { select: { userName: true } } },
       });
     });
 
     it('groups current/future parts by designer, largest first', async () => {
       prisma.schedulerAssignment.findMany.mockResolvedValue([
-        { designerId: 'alex', designer: { fullName: 'Alex Johnson' } },
-        { designerId: 'ben', designer: { fullName: 'Benjamin' } },
-        { designerId: 'alex', designer: { fullName: 'Alex Johnson' } },
+        { designerId: 9004n, designer: { userName: 'Alex Johnson' } },
+        { designerId: 9005n, designer: { userName: 'Benjamin' } },
+        { designerId: 9004n, designer: { userName: 'Alex Johnson' } },
       ]);
 
       const result = await service.getHoldImpact(TASK_ID);
@@ -205,8 +208,8 @@ describe('TasksService', () => {
       expect(result).toEqual({
         partCount: 3,
         designers: [
-          { designerId: 'alex', designerName: 'Alex Johnson', partCount: 2 },
-          { designerId: 'ben', designerName: 'Benjamin', partCount: 1 },
+          { designerId: '9004', designerName: 'Alex Johnson', partCount: 2 },
+          { designerId: '9005', designerName: 'Benjamin', partCount: 1 },
         ],
       });
     });
@@ -217,7 +220,7 @@ describe('TasksService', () => {
   });
 
   describe('freezeDraftWorkSession', () => {
-    const DESIGNER_ID = 'ffffffff-1111-4222-8333-444444444444';
+    const DESIGNER_ID = '9010';
     const draftSession = {
       id: 'session-1',
       taskId: TASK_ID,
@@ -281,7 +284,7 @@ describe('TasksService', () => {
   });
 
   describe('saveTimerState', () => {
-    const DESIGNER_ID = 'ffffffff-1111-4222-8333-444444444444';
+    const DESIGNER_ID = '9010';
 
     beforeEach(() => {
       prisma.task.findUnique.mockResolvedValue({ id: TASK_ID, assigneeId: DESIGNER_ID });
@@ -473,7 +476,7 @@ describe('TasksService', () => {
   });
 
   describe('getTimerState', () => {
-    const DESIGNER_ID = 'ffffffff-1111-4222-8333-444444444444';
+    const DESIGNER_ID = '9010';
 
     it('prefers a Draft session over HandedOff so Play can resume', async () => {
       prisma.taskWorkSession.findMany.mockResolvedValue([
@@ -542,7 +545,7 @@ describe('TasksService', () => {
   });
 
   describe('submitWork', () => {
-    const DESIGNER_ID = 'ffffffff-1111-4222-8333-444444444444';
+    const DESIGNER_ID = '9010';
 
     beforeEach(() => {
       prisma.task.findUnique.mockResolvedValue({
@@ -916,14 +919,14 @@ describe('TasksService', () => {
 
   describe('updateStatus — previously-silent transitions now notify', () => {
     it('HOD_REVIEW notifies HOD/ADMIN users', async () => {
-      prisma.user.findMany.mockResolvedValue([{ id: 'hod-1' }]);
+      mockNotifyUsersByRole({ managers: [{ id: '9002' }] });
 
-      await service.updateStatus(TASK_ID, 'designer-1', UserRole.DESIGNER, { status: 'HOD_REVIEW' } as any);
+      await service.updateStatus(TASK_ID, '9001', UserRole.DESIGNER, { status: 'HOD_REVIEW' } as any);
 
       expect(notificationsService.create).toHaveBeenCalledWith(
-        expect.objectContaining({ userId: 'hod-1', title: expect.stringContaining('HOD Review') }),
+        expect.objectContaining({ userId: '9002', title: expect.stringContaining('HOD Review') }),
       );
-      expect(dashboardRealtime.notifyUserNotificationRefresh).toHaveBeenCalledWith('hod-1');
+      expect(dashboardRealtime.notifyUserNotificationRefresh).toHaveBeenCalledWith('9002');
     });
 
     it('CLIENT_REJECTED creates the next revision, notifies designers with the new-task link, and notifies stakeholders once', async () => {
@@ -937,14 +940,14 @@ describe('TasksService', () => {
       prisma.task.create.mockResolvedValue(revisionTask);
       prisma.task.findMany.mockResolvedValue([{ revisionCode: 'R0' }]);
       mockNotifyUsersByRole({
-        managers: [{ id: 'hod-1' }],
+        managers: [{ id: '9002' }],
         sales: [
-          { id: 'sales-1', fullName: 'Fahad Quazi' },
-          { id: 'sales-other', fullName: 'Sithara Sukumaran' },
+          { id: '9003', fullName: 'Fahad Quazi' },
+          { id: '9004', fullName: 'Sithara Sukumaran' },
         ],
       });
 
-      const result = await service.updateStatus(TASK_ID, 'sales-1', UserRole.SALESPERSON, {
+      const result = await service.updateStatus(TASK_ID, '9003', UserRole.SALESPERSON, {
         status: 'CLIENT_REJECTED',
         reworkNote: 'Client wants new pack',
       } as any);
@@ -970,7 +973,7 @@ describe('TasksService', () => {
       );
       expect(notificationsService.create).toHaveBeenCalledWith(
         expect.objectContaining({
-          userId: 'designer-1',
+          userId: '9001',
           title: 'Client Rejected Task',
           linkUrl: expect.stringContaining(revisionTask.id),
           message: expect.stringContaining(revisionTask.taskNo),
@@ -980,27 +983,27 @@ describe('TasksService', () => {
         ([payload]: any[]) => payload?.title === `New Revision Created — ${revisionTask.taskNo}`,
       );
       expect(newRevisionNotifs).toHaveLength(2);
-      expect(newRevisionNotifs.map(([p]: any[]) => p.userId).sort()).toEqual(['hod-1', 'sales-1']);
-      expect(newRevisionNotifs.map(([p]: any[]) => p.userId)).not.toContain('sales-other');
+      expect(newRevisionNotifs.map(([p]: any[]) => p.userId).sort()).toEqual(['9002', '9003']);
+      expect(newRevisionNotifs.map(([p]: any[]) => p.userId)).not.toContain('9004');
       expect(result.newRevisionTaskId).toBe(revisionTask.id);
       expect(result.newRevisionTaskNo).toBe(revisionTask.taskNo);
     });
 
     it('entering ON_HOLD notifies the assignee that the task was put on hold', async () => {
-      await service.updateStatus(TASK_ID, 'hod-1', UserRole.HOD, { status: 'ON_HOLD' } as any);
+      await service.updateStatus(TASK_ID, '9002', UserRole.HOD, { status: 'ON_HOLD' } as any);
 
       expect(notificationsService.create).toHaveBeenCalledWith(
-        expect.objectContaining({ userId: 'designer-1', title: 'Task Put On Hold' }),
+        expect.objectContaining({ userId: '9001', title: 'Task Put On Hold' }),
       );
     });
 
     it('resuming from ON_HOLD notifies the assignee that the task resumed', async () => {
       prisma.task.findUnique.mockResolvedValue({ ...existingTask, status: 'ON_HOLD', holdPreviousStatus: 'IN_PROGRESS' });
 
-      await service.updateStatus(TASK_ID, 'hod-1', UserRole.HOD, { status: 'IN_PROGRESS' } as any);
+      await service.updateStatus(TASK_ID, '9002', UserRole.HOD, { status: 'IN_PROGRESS' } as any);
 
       expect(notificationsService.create).toHaveBeenCalledWith(
-        expect.objectContaining({ userId: 'designer-1', title: 'Task Resumed' }),
+        expect.objectContaining({ userId: '9001', title: 'Task Resumed' }),
       );
     });
   });
@@ -1011,18 +1014,18 @@ describe('TasksService', () => {
       prisma.task.update.mockResolvedValue({
         ...updatedTask,
         status: 'REWORK',
-        assigneeId: 'designer-1',
+        assigneeId: '9001',
         reworkNote: 'Fix sheet 3',
       });
       mockNotifyUsersByRole({
-        managers: [{ id: 'hod-1' }],
+        managers: [{ id: '9002' }],
         sales: [
-          { id: 'sales-1', fullName: 'Fahad Quazi' },
-          { id: 'sales-other', fullName: 'Sithara Sukumaran' },
+          { id: '9003', fullName: 'Fahad Quazi' },
+          { id: '9004', fullName: 'Sithara Sukumaran' },
         ],
       });
 
-      const result = await service.updateStatus(TASK_ID, 'sales-1', UserRole.SALESPERSON, {
+      const result = await service.updateStatus(TASK_ID, '9003', UserRole.SALESPERSON, {
         status: 'REWORK',
         reworkNote: 'Fix sheet 3',
       } as any);
@@ -1039,17 +1042,17 @@ describe('TasksService', () => {
       expect(prisma.task.create).not.toHaveBeenCalled();
       expect(result.newRevisionTaskId).toBeUndefined();
       expect(notificationsService.create).toHaveBeenCalledWith(
-        expect.objectContaining({ userId: 'designer-1', title: expect.stringContaining('Rework Issued') }),
+        expect.objectContaining({ userId: '9001', title: expect.stringContaining('Rework Issued') }),
       );
       expect(notificationsService.create).toHaveBeenCalledWith(
-        expect.objectContaining({ userId: 'hod-1', title: expect.stringContaining('Rework Issued') }),
+        expect.objectContaining({ userId: '9002', title: expect.stringContaining('Rework Issued') }),
       );
       // Unmatched salesperson is not flooded; matched actor is not re-notified
       expect(notificationsService.create).not.toHaveBeenCalledWith(
-        expect.objectContaining({ userId: 'sales-other', title: expect.stringContaining('Rework Issued') }),
+        expect.objectContaining({ userId: '9004', title: expect.stringContaining('Rework Issued') }),
       );
       expect(notificationsService.create).not.toHaveBeenCalledWith(
-        expect.objectContaining({ userId: 'sales-1', title: expect.stringContaining('Rework Issued') }),
+        expect.objectContaining({ userId: '9003', title: expect.stringContaining('Rework Issued') }),
       );
       expect(prisma.chatterPost.create).toHaveBeenCalledWith(
         expect.objectContaining({
@@ -1058,24 +1061,26 @@ describe('TasksService', () => {
       );
     });
 
-    it('SALES_REVIEW notifies matched project sales + admin only (not every salesperson)', async () => {
+    it('SALES_REVIEW notifies matched project sales only (not every salesperson)', async () => {
+      // ERP has no role that maps to the ADMIN bucket (ERP_ROLE_BUCKET in tasks.service.ts),
+      // so admin-only notify lists are now always empty — genuine, unavoidable behavior
+      // change from the migration, not a fixture bug.
       prisma.task.update.mockResolvedValue({ ...updatedTask, status: 'SALES_REVIEW' });
       mockNotifyUsersByRole({
-        admins: [{ id: 'admin-1' }],
         sales: [
-          { id: 'sales-1', fullName: 'Fahad Quazi' },
-          { id: 'sales-other', fullName: 'Sithara Sukumaran' },
+          { id: '9003', fullName: 'Fahad Quazi' },
+          { id: '9004', fullName: 'Sithara Sukumaran' },
         ],
       });
 
-      await service.updateStatus(TASK_ID, 'hod-1', UserRole.HOD, { status: 'SALES_REVIEW' } as any);
+      await service.updateStatus(TASK_ID, '9002', UserRole.HOD, { status: 'SALES_REVIEW' } as any);
 
       const reviewNotifs = notificationsService.create.mock.calls
         .filter(([p]: any[]) => String(p?.title ?? '').includes('Ready for Review'))
         .map(([p]: any[]) => p.userId)
         .sort();
-      expect(reviewNotifs).toEqual(['admin-1', 'sales-1']);
-      expect(reviewNotifs).not.toContain('sales-other');
+      expect(reviewNotifs).toEqual(['9003']);
+      expect(reviewNotifs).not.toContain('9004');
     });
 
     it('allows HOD to issue REWORK without creating a revision', async () => {
@@ -1083,15 +1088,15 @@ describe('TasksService', () => {
       prisma.task.update.mockResolvedValue({
         ...updatedTask,
         status: 'REWORK',
-        assigneeId: 'designer-1',
+        assigneeId: '9001',
         reworkNote: 'Fix dimensions',
       });
       mockNotifyUsersByRole({
-        managers: [{ id: 'hod-1' }],
-        sales: [{ id: 'sales-1', fullName: 'Fahad Quazi' }],
+        managers: [{ id: '9002' }],
+        sales: [{ id: '9003', fullName: 'Fahad Quazi' }],
       });
 
-      const result = await service.updateStatus(TASK_ID, 'hod-1', UserRole.HOD, {
+      const result = await service.updateStatus(TASK_ID, '9002', UserRole.HOD, {
         status: 'REWORK',
         reworkNote: 'Fix dimensions',
       } as any);
@@ -1107,13 +1112,13 @@ describe('TasksService', () => {
 
     it('forbids designers from issuing REWORK', async () => {
       await expect(
-        service.updateStatus(TASK_ID, 'designer-1', UserRole.DESIGNER, { status: 'REWORK' } as any),
+        service.updateStatus(TASK_ID, '9001', UserRole.DESIGNER, { status: 'REWORK' } as any),
       ).rejects.toThrow('Only HOD, SALESPERSON, or ADMIN can issue rework');
     });
 
     it('forbids designers from marking CLIENT_REJECTED', async () => {
       await expect(
-        service.updateStatus(TASK_ID, 'designer-1', UserRole.DESIGNER, { status: 'CLIENT_REJECTED' } as any),
+        service.updateStatus(TASK_ID, '9001', UserRole.DESIGNER, { status: 'CLIENT_REJECTED' } as any),
       ).rejects.toThrow('Only SALESPERSON or ADMIN can mark client rejected');
     });
 
@@ -1122,7 +1127,7 @@ describe('TasksService', () => {
       prisma.task.findFirst.mockResolvedValue(null);
 
       await expect(
-        service.updateStatus(TASK_ID, 'designer-1', UserRole.DESIGNER, { status: 'IN_PROGRESS' } as any),
+        service.updateStatus(TASK_ID, '9001', UserRole.DESIGNER, { status: 'IN_PROGRESS' } as any),
       ).rejects.toThrow('Designers can only access tasks they have worked on or been assigned to');
     });
   });
@@ -1131,33 +1136,33 @@ describe('TasksService', () => {
     it('recognizes reassigning a split task (assigneeId=null) as a real reassignment and notifies removed designers', async () => {
       prisma.task.findUnique.mockResolvedValue({ id: TASK_ID, assigneeId: null, status: 'DESIGN_PLANNED' });
       prisma.taskDesigner.findMany.mockResolvedValue([
-        { designerId: 'designer-a' },
-        { designerId: 'designer-b' },
+        { designerId: '9007' },
+        { designerId: '9008' },
       ]);
-      prisma.user.findUnique.mockResolvedValue({ id: 'designer-d', fullName: 'Designer D' });
-      prisma.task.update.mockResolvedValue({ ...updatedTask, assigneeId: 'designer-d' });
+      prisma.erpUser.findUnique.mockResolvedValue({ userId: 9006n, userName: 'Designer D' });
+      prisma.task.update.mockResolvedValue({ ...updatedTask, assigneeId: '9006' });
 
-      await service.assign(TASK_ID, 'hod-1', { assigneeId: 'designer-d' } as any);
+      await service.assign(TASK_ID, '9002', { assigneeId: '9006' } as any);
 
       expect(dashboardRealtime.notifyOverviewRefresh).toHaveBeenCalledWith(
         'task_reassigned',
         expect.objectContaining({ taskId: TASK_ID }),
       );
       expect(notificationsService.create).toHaveBeenCalledWith(
-        expect.objectContaining({ userId: 'designer-a', title: 'Removed from Task' }),
+        expect.objectContaining({ userId: '9007', title: 'Removed from Task' }),
       );
       expect(notificationsService.create).toHaveBeenCalledWith(
-        expect.objectContaining({ userId: 'designer-b', title: 'Removed from Task' }),
+        expect.objectContaining({ userId: '9008', title: 'Removed from Task' }),
       );
     });
 
     it('does not treat assigning an already-sole-designer task to the same person as a reassignment', async () => {
-      prisma.task.findUnique.mockResolvedValue({ id: TASK_ID, assigneeId: 'designer-a', status: 'IN_PROGRESS' });
-      prisma.taskDesigner.findMany.mockResolvedValue([{ designerId: 'designer-a' }]);
-      prisma.user.findUnique.mockResolvedValue({ id: 'designer-a', fullName: 'Designer A' });
-      prisma.task.update.mockResolvedValue({ ...updatedTask, assigneeId: 'designer-a' });
+      prisma.task.findUnique.mockResolvedValue({ id: TASK_ID, assigneeId: '9007', status: 'IN_PROGRESS' });
+      prisma.taskDesigner.findMany.mockResolvedValue([{ designerId: '9007' }]);
+      prisma.erpUser.findUnique.mockResolvedValue({ userId: 9007n, userName: 'Designer A' });
+      prisma.task.update.mockResolvedValue({ ...updatedTask, assigneeId: '9007' });
 
-      await service.assign(TASK_ID, 'hod-1', { assigneeId: 'designer-a' } as any);
+      await service.assign(TASK_ID, '9002', { assigneeId: '9007' } as any);
 
       expect(dashboardRealtime.notifyOverviewRefresh).not.toHaveBeenCalledWith(
         'task_reassigned',
@@ -1171,12 +1176,12 @@ describe('TasksService', () => {
     it('rejects reassignment when task status is DESIGN_COMPLETED', async () => {
       prisma.task.findUnique.mockResolvedValue({
         id: TASK_ID,
-        assigneeId: 'designer-a',
+        assigneeId: '9007',
         status: 'DESIGN_COMPLETED',
       });
 
       await expect(
-        service.assign(TASK_ID, 'hod-1', { assigneeId: 'designer-b' } as any),
+        service.assign(TASK_ID, '9002', { assigneeId: '9008' } as any),
       ).rejects.toThrow('Completed tasks cannot be reassigned. Reopen the task before reassigning.');
 
       expect(prisma.task.update).not.toHaveBeenCalled();
@@ -1186,11 +1191,11 @@ describe('TasksService', () => {
       for (const status of ['HOD_REVIEW', 'SALES_REVIEW', 'CLIENT_ACCEPTED', 'CLIENT_REJECTED']) {
         prisma.task.findUnique.mockResolvedValue({
           id: TASK_ID,
-          assigneeId: 'designer-a',
+          assigneeId: '9007',
           status,
         });
         await expect(
-          service.assign(TASK_ID, 'hod-1', { assigneeId: 'designer-b' } as any),
+          service.assign(TASK_ID, '9002', { assigneeId: '9008' } as any),
         ).rejects.toThrow(/cannot be reassigned/i);
       }
       expect(prisma.task.update).not.toHaveBeenCalled();
@@ -1205,7 +1210,7 @@ describe('TasksService', () => {
       prisma.task.count.mockResolvedValue(0);
       prisma.taskWorkSession.findMany.mockResolvedValue([]);
 
-      await service.findAll('sales-1', UserRole.SALESPERSON, {
+      await service.findAll('9003', UserRole.SALESPERSON, {
         salesHistory: true,
         page: 2,
         limit: 100,
@@ -1246,7 +1251,7 @@ describe('TasksService', () => {
         projectDetails: [],
       });
 
-      await service.update(TASK_ID, { hoursRequired: 8 }, 'hod-1', UserRole.HOD);
+      await service.update(TASK_ID, { hoursRequired: 8 }, '9002', UserRole.HOD);
 
       expect(prisma.retailTaskDetail.update).toHaveBeenCalledWith({
         where: { id: 'retail-1' },
@@ -1281,7 +1286,7 @@ describe('TasksService', () => {
         projectDetails: [{ artworkHours: 6, artwork: true }],
       });
 
-      await service.update(TASK_ID, { hoursRequired: 6 }, 'hod-1', UserRole.HOD);
+      await service.update(TASK_ID, { hoursRequired: 6 }, '9002', UserRole.HOD);
 
       expect(prisma.projectTaskDetail.update).toHaveBeenCalledWith({
         where: { id: 'proj-detail-1' },
@@ -1293,7 +1298,7 @@ describe('TasksService', () => {
       prisma.task.findUnique.mockResolvedValue(retailExisting);
 
       await expect(
-        service.update(TASK_ID, { hoursRequired: 8 }, 'sales-1', UserRole.SALESPERSON),
+        service.update(TASK_ID, { hoursRequired: 8 }, '9003', UserRole.SALESPERSON),
       ).rejects.toBeInstanceOf(ForbiddenException);
       expect(prisma.retailTaskDetail.update).not.toHaveBeenCalled();
       expect(prisma.projectTaskDetail.update).not.toHaveBeenCalled();
@@ -1303,7 +1308,7 @@ describe('TasksService', () => {
       prisma.task.findUnique.mockResolvedValue(retailExisting);
 
       await expect(
-        service.update(TASK_ID, { hoursRequired: 200 }, 'hod-1', UserRole.HOD),
+        service.update(TASK_ID, { hoursRequired: 200 }, '9002', UserRole.HOD),
       ).rejects.toBeInstanceOf(BadRequestException);
       expect(prisma.retailTaskDetail.update).not.toHaveBeenCalled();
     });

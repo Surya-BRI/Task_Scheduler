@@ -49,9 +49,16 @@ import { buildDesignSchedulerPath } from "@/features/scheduler/utils/schedulerNa
 
 import { toUserFacingError } from "@/lib/api-error"
 const UUID_RE = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
+const NUMERIC_ID_RE = /^\d+$/;
 
+// Task/project/request ids are still GUIDs.
 function isUuidString(value) {
   return UUID_RE.test(String(value ?? "").trim());
+}
+
+// User ids (designer/session/approver) are now decimal bigint strings from ERP.
+function isNumericIdString(value) {
+  return NUMERIC_ID_RE.test(String(value ?? "").trim());
 }
 
 function formatTaskOptionLabel(task) {
@@ -73,8 +80,8 @@ function displayTaskName(req) {
 
 function userToEmployeeOption(user, fallbackDesignation = "Designer") {
   const id = String(user?.id ?? "").trim();
-  const name = String(user?.fullName ?? user?.name ?? "").trim();
-  if (!isUuidString(id) || !name) return null;
+  const name = String(user?.fullName ?? user?.userName ?? user?.username ?? user?.name ?? "").trim();
+  if (!isNumericIdString(id) || !name) return null;
   return {
     id,
     name,
@@ -214,9 +221,9 @@ export default function RequestsClient() {
       if (session?.role === "HOD" || session?.role === "SALESPERSON") setIsHOD(true);
       if (session?.name) setSessionName(session.name);
       if (session) setSessionUser(session);
-      if (session?.erpDesignerId && isUuidString(session.erpDesignerId)) {
+      if (session?.erpDesignerId && isNumericIdString(session.erpDesignerId)) {
         setSessionErpId(String(session.erpDesignerId).trim());
-      } else if (session?.id && isUuidString(session.id)) {
+      } else if (session?.id && isNumericIdString(session.id)) {
         setSessionErpId(String(session.id).trim());
       }
     });
@@ -233,7 +240,7 @@ export default function RequestsClient() {
         const rows = Array.isArray(res) ? res : (Array.isArray(res?.data) ? res.data : []);
         setDesignerList(rows.map((u) => ({
           id: u.id,
-          name: u.fullName,
+          name: u.fullName ?? u.userName,
           email: u.email ?? "",
           designation: u.department?.name ?? u.role?.name ?? "Designer",
         })));
@@ -242,10 +249,10 @@ export default function RequestsClient() {
   }, [isHOD]);
 
   const erpDesignerIdRaw = sessionErpId ?? '';
-  const erpDesignerId = isUuidString(erpDesignerIdRaw) ? erpDesignerIdRaw : null;
+  const erpDesignerId = isNumericIdString(erpDesignerIdRaw) ? erpDesignerIdRaw : null;
   const forDesignerParam = searchParams.get("forDesignerId")?.trim() ?? "";
   const activeDesignerId = isHOD
-    ? (isUuidString(forDesignerParam) ? forDesignerParam : null)
+    ? (isNumericIdString(forDesignerParam) ? forDesignerParam : null)
     : erpDesignerId;
   const employeeSelectionList = useMemo(() => {
     const options = new Map();
@@ -335,7 +342,7 @@ export default function RequestsClient() {
       params.delete("overtimeId");
       params.delete("regularizationId");
     }
-    if (isUuidString(designerId)) {
+    if (isNumericIdString(designerId)) {
       params.set("forDesignerId", designerId);
     } else {
       params.delete("forDesignerId");
@@ -442,7 +449,7 @@ export default function RequestsClient() {
 
   const loadAssignedTasks = async (designerId = activeDesignerId, dateStr = utcDateOnlyString()) => {
     const normalizedDesignerId = String(designerId ?? "").trim();
-    if (!isUuidString(normalizedDesignerId)) {
+    if (!isNumericIdString(normalizedDesignerId)) {
       setAssignedTasks([]);
       setProjects([]);
       setProjectTasks([]);
@@ -552,7 +559,7 @@ export default function RequestsClient() {
   };
 
   const loadDesignerStats = async (designerId = activeDesignerId) => {
-    if (!isUuidString(String(designerId ?? "").trim())) {
+    if (!isNumericIdString(String(designerId ?? "").trim())) {
       setStats(DEFAULT_STATS);
       return;
     }
@@ -664,7 +671,7 @@ export default function RequestsClient() {
   }, [isHOD, activeTab]);
 
   useEffect(() => {
-    if (!isHOD || isUuidString(forDesignerParam) || employeeSelectionList.length === 0) return;
+    if (!isHOD || isNumericIdString(forDesignerParam) || employeeSelectionList.length === 0) return;
     const overtimeId = searchParams.get("overtimeId")?.trim() ?? "";
     const regularizationId = searchParams.get("regularizationId")?.trim() ?? "";
     if (isUuidString(overtimeId) || isUuidString(regularizationId)) return;
@@ -685,13 +692,13 @@ export default function RequestsClient() {
     document.getElementById("regularization")?.scrollIntoView({ behavior: "smooth", block: "start" });
 
     if (!isHOD) return;
-    if (resolvedInboxRegularizationRef.current === targetId && isUuidString(forDesignerParam)) return;
+    if (resolvedInboxRegularizationRef.current === targetId && isNumericIdString(forDesignerParam)) return;
 
     void (async () => {
       try {
         const request = await getRegularizationRequest(targetId);
         const requestDesignerId = String(request?.designerId ?? "").trim();
-        if (isUuidString(requestDesignerId)) {
+        if (isNumericIdString(requestDesignerId)) {
           if (requestDesignerId !== forDesignerParam) {
             setActiveDesigner(requestDesignerId, { preserveInboxParams: true });
           }
@@ -858,17 +865,17 @@ export default function RequestsClient() {
     document.getElementById("overtime")?.scrollIntoView({ behavior: "smooth", block: "start" });
 
     if (!isHOD) return;
-    if (resolvedInboxOvertimeRef.current === overtimeId && isUuidString(forDesignerParam)) return;
+    if (resolvedInboxOvertimeRef.current === overtimeId && isNumericIdString(forDesignerParam)) return;
 
     void (async () => {
       try {
         const pending = hodOvertimePending.find((r) => r.id === overtimeId);
         let requestDesignerId = String(pending?.designerId ?? "").trim();
-        if (!isUuidString(requestDesignerId)) {
+        if (!isNumericIdString(requestDesignerId)) {
           const request = await getOvertimeRequest(overtimeId);
           requestDesignerId = String(request?.designerId ?? request?.designer?.id ?? "").trim();
         }
-        if (isUuidString(requestDesignerId)) {
+        if (isNumericIdString(requestDesignerId)) {
           if (requestDesignerId !== forDesignerParam) {
             setActiveDesigner(requestDesignerId, { preserveInboxParams: true });
           }

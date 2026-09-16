@@ -1,5 +1,8 @@
 import { Transform } from 'class-transformer';
-import { IsArray, IsIn, IsNotEmpty, IsOptional, IsString, IsUUID, MaxLength, ValidateIf } from 'class-validator';
+import { IsArray, IsIn, IsNotEmpty, IsOptional, IsString, IsUUID, Matches, MaxLength, ValidateIf } from 'class-validator';
+
+// User ids are ERP ErpAuthUsers.userId — decimal bigints, not GUIDs.
+const NUMERIC_ID_RE = /^\d+$/;
 
 function emptyToUndefined(value: unknown): unknown {
   if (value === null || value === undefined) return undefined;
@@ -36,7 +39,7 @@ export class CreateChatterPostDto {
   @IsOptional()
   @Transform(({ value }) => emptyToUndefined(value))
   @ValidateIf((_, v) => v !== undefined)
-  @IsUUID()
+  @Matches(NUMERIC_ID_RE)
   mentionUserId?: string;
 
   @IsOptional()
@@ -56,7 +59,7 @@ export class CreateChatterPostDto {
     return undefined;
   })
   @IsArray()
-  @IsUUID('4', { each: true })
+  @Matches(NUMERIC_ID_RE, { each: true })
   mentionUserIds?: string[];
 
   @IsOptional()

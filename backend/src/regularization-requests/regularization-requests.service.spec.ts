@@ -11,12 +11,12 @@ const todayRegDate = () => new Date().toISOString().split('T')[0];
 describe('RegularizationRequestsService', () => {
   let service: RegularizationRequestsService;
 
-  const designerId = '11111111-1111-1111-1111-111111111111';
+  const designerId = '5001';
   const taskId = '22222222-2222-2222-2222-222222222222';
-  const hodId = '33333333-3333-3333-3333-333333333333';
+  const hodId = '5002';
 
   const mockPrismaService: any = {
-    user: {
+    erpUser: {
       findUnique: jest.fn(),
       findMany: jest.fn(),
     },
@@ -47,6 +47,7 @@ describe('RegularizationRequestsService', () => {
     leaveRequest: {
       findMany: jest.fn(),
     },
+    $queryRaw: jest.fn(),
   };
 
   const mockActivityLogger = {
@@ -64,13 +65,12 @@ describe('RegularizationRequestsService', () => {
 
     service = module.get<RegularizationRequestsService>(RegularizationRequestsService);
     jest.clearAllMocks();
-    mockPrismaService.user.findUnique.mockResolvedValue({
-      id: designerId,
-      fullName: 'Designer One',
-      departmentId: 'dept1',
+    mockPrismaService.erpUser.findUnique.mockResolvedValue({
+      userId: BigInt(designerId),
+      userName: 'Designer One',
     });
-    mockPrismaService.user.findMany.mockResolvedValue([
-      { id: hodId, fullName: 'HOD One', email: 'hod@example.com' },
+    mockPrismaService.$queryRaw.mockResolvedValue([
+      { userId: BigInt(hodId), userName: 'HOD One', roleName: 'Design HOD' },
     ]);
     mockPrismaService.task.findUnique.mockResolvedValue({
       id: taskId,
@@ -82,22 +82,20 @@ describe('RegularizationRequestsService', () => {
     mockPrismaService.leaveRequest.findMany.mockResolvedValue([]);
     mockPrismaService.regularizationRequest.create.mockResolvedValue({
       id: '44444444-4444-4444-4444-444444444444',
-      designerId,
+      designerId: BigInt(designerId),
       taskId,
       date: new Date(`${todayRegDate()}T00:00:00.000Z`),
       duration: '30 mins',
       reason: 'System Issue',
       notes: null,
       status: 'Pending',
-      approverId: hodId,
+      approverId: BigInt(hodId),
       approverRemarks: null,
       reviewedAt: null,
       createdAt: new Date(),
       designer: {
-        id: designerId,
-        fullName: 'Designer One',
-        departmentId: 'dept1',
-        department: { name: 'Design' },
+        userId: BigInt(designerId),
+        userName: 'Designer One',
       },
       task: {
         id: taskId,
@@ -105,7 +103,7 @@ describe('RegularizationRequestsService', () => {
         title: 'Task 1',
         opNo: null,
       },
-      approver: { id: hodId, fullName: 'HOD One' },
+      approver: { userId: BigInt(hodId), userName: 'HOD One' },
     });
   });
 
@@ -136,7 +134,7 @@ describe('RegularizationRequestsService', () => {
       expect(mockPrismaService.schedulerAssignment.findFirst).toHaveBeenCalledWith(
         expect.objectContaining({
           where: expect.objectContaining({
-            designerId,
+            designerId: BigInt(designerId),
             taskId,
           }),
         }),
@@ -177,7 +175,7 @@ describe('RegularizationRequestsService', () => {
       expect(mockPrismaService.schedulerAssignment.findMany).toHaveBeenCalledWith(
         expect.objectContaining({
           where: expect.objectContaining({
-            designerId,
+            designerId: BigInt(designerId),
             dayIndex: 4,
           }),
         }),

@@ -279,9 +279,9 @@ function ProjectTaskList({ tasks, loading, onView }) {
                     </span>
                   </span>
                   <span className="truncate">
-                    {task.assignee?.fullName ||
+                    {(task.assignee?.fullName ?? task.assignee?.userName) ||
                       (task.taskDesigners?.length > 0
-                        ? task.taskDesigners.map(d => d.designer.fullName).join(', ')
+                        ? task.taskDesigners.map(d => d.designer.fullName ?? d.designer.userName).join(', ')
                         : 'Unassigned')}
                   </span>
                   <span className="text-slate-500">{task.dueDate ? new Date(task.dueDate).toLocaleDateString('en-GB') : '—'}</span>

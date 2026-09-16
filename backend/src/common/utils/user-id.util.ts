@@ -1,12 +1,12 @@
-const UUID_RE =
-  /^[0-9a-f]{8}-[0-9a-f]{4}-[1-5][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i;
+// User ids are ERP ErpAuthUsers.userId — decimal bigints, not GUIDs.
+const NUMERIC_ID_RE = /^\d+$/;
 
-/** Normalize ERP user UUIDs for stable comparisons (case-insensitive). */
+/** Normalize ERP user ids for stable comparisons. */
 export function normalizeUserId(value?: string | null): string | null {
   if (value == null) return null;
   const trimmed = String(value).trim();
-  if (!trimmed || !UUID_RE.test(trimmed)) return null;
-  return trimmed.toLowerCase();
+  if (!trimmed || !NUMERIC_ID_RE.test(trimmed)) return null;
+  return trimmed;
 }
 
 export function isSameUserId(

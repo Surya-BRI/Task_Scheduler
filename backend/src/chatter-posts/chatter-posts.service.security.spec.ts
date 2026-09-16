@@ -3,7 +3,8 @@ import { UserRole } from '../common/constants/roles.enum';
 import { expectInputParameterized, extractPrismaSqlParts } from '../common/utils/prisma-sql-test.util';
 
 const POST_ID = '550e8400-e29b-41d4-a716-446655440000';
-const USER_ID = '660e8400-e29b-41d4-a716-446655440001';
+// User ids are ERP ErpAuthUsers.userId — decimal bigints, not GUIDs.
+const USER_ID = '2001';
 
 const FILTER_EDGE_CASES = [
   { label: 'single quote', value: "test' OR '1'='1" },
@@ -90,7 +91,8 @@ describe('ChatterPostsService SQL security', () => {
     expect(executeRaw).toHaveBeenCalled();
     const insertOrDeleteQuery = executeRaw.mock.calls[0][0];
     const { values } = extractPrismaSqlParts(insertOrDeleteQuery);
-    expect(values).toEqual(expect.arrayContaining([POST_ID, USER_ID]));
+    // userId binds as a real bigint now (ErpTSChatterPostLike.userId is BigInt post-migration).
+    expect(values).toEqual(expect.arrayContaining([POST_ID, BigInt(USER_ID)]));
   });
 
   it('parameterizes updateComment message content', async () => {

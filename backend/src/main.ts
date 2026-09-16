@@ -40,12 +40,33 @@ async function bootstrap() {
   const corsOrigin = configService.get<string>('app.corsOrigin') ?? 'http://localhost:5000';
   const nodeEnv = configService.get<string>('app.nodeEnv') ?? process.env.NODE_ENV;
   const requestTimeoutMs = Number(process.env.HTTP_REQUEST_TIMEOUT_MS ?? 30_000);
+  const slowRouteTimeoutMs = Number(process.env.HTTP_SLOW_ROUTE_TIMEOUT_MS ?? 90_000);
   const shutdownTimeoutMs = Number(process.env.SHUTDOWN_TIMEOUT_MS ?? 15_000);
 
   app.setGlobalPrefix(prefix);
   app.use(cookieParser());
   app.use(requestIdMiddleware);
-  app.use(requestTimeoutMiddleware(requestTimeoutMs));
+  app.use(
+    requestTimeoutMiddleware(requestTimeoutMs, [
+      // Each of these makes many sequential round-trips to the remote SQL
+      // Server inside one transaction (scheduler handoff/repack, or a status
+      // change that triggers one) — batched where possible, but latency still
+      // adds up faster than the default budget allows. See
+      // TESTING_PROGRESS.md "Known but unresolved — session 2".
+      {
+        test: (req) => /\/reallocation-requests(\/[^/]+\/review)?$/.test(req.path) && req.method === 'POST',
+        timeoutMs: slowRouteTimeoutMs,
+      },
+      {
+        test: (req) => /\/regularization-requests(\/[^/]+\/review)?$/.test(req.path) && req.method === 'POST',
+        timeoutMs: slowRouteTimeoutMs,
+      },
+      {
+        test: (req) => /\/tasks\/[^/]+\/status$/.test(req.path) && req.method === 'PATCH',
+        timeoutMs: slowRouteTimeoutMs,
+      },
+    ]),
+  );
   app.use(helmet());
   app.use(compression());
   app.enableCors({

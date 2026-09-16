@@ -53,6 +53,7 @@ describe('OvertimeRequestsService', () => {
       upsert: jest.fn(),
     },
     $transaction: jest.fn((cb: (tx: any) => any) => cb(mockPrismaService)),
+    $queryRaw: jest.fn(),
   };
 
   const mockTaskFilesService: any = {
@@ -79,7 +80,7 @@ describe('OvertimeRequestsService', () => {
     jest.clearAllMocks();
     mockPrismaService.task.findUnique.mockResolvedValue({
       id: 't1',
-      assigneeId: 'd1',
+      assigneeId: '4001',
       title: 'Task 1',
       taskNo: 'T-001',
       opNo: 'OP-100',
@@ -89,6 +90,9 @@ describe('OvertimeRequestsService', () => {
     mockPrismaService.leaveRequest.findMany.mockResolvedValue([]);
     mockPrismaService.schedulerAssignment.findFirst.mockResolvedValue({ id: 'sa1' });
     mockPrismaService.schedulerAssignment.findMany.mockResolvedValue([]);
+    mockPrismaService.$queryRaw.mockResolvedValue([
+      { userId: BigInt('4003'), userName: 'HOD 1', roleName: 'Design HOD' },
+    ]);
   });
 
   it('should be defined', () => {
@@ -96,7 +100,7 @@ describe('OvertimeRequestsService', () => {
   });
 
   describe('listTaskOptions', () => {
-    const designerId = '11111111-1111-1111-1111-111111111111';
+    const designerId = '4010';
     const taskId = '22222222-2222-2222-2222-222222222222';
 
     it('returns scheduler-backed task options for the selected date', async () => {
@@ -131,7 +135,7 @@ describe('OvertimeRequestsService', () => {
       expect(mockPrismaService.schedulerAssignment.findMany).toHaveBeenCalledWith(
         expect.objectContaining({
           where: expect.objectContaining({
-            designerId,
+            designerId: BigInt(designerId),
             dayIndex: 4,
           }),
         }),
@@ -169,7 +173,7 @@ describe('OvertimeRequestsService', () => {
   // ────────────────────────────────────────────────────────────────────────
   describe('create', () => {
     const baseDto: CreateOvertimeRequestDto = {
-      designerId: 'd1',
+      designerId: '4001',
       taskId: 't1',
       date: todayOtDate(),
       startTime: '17:00',
@@ -180,62 +184,62 @@ describe('OvertimeRequestsService', () => {
 
     it('should throw BadRequestException if end time <= start time', async () => {
       const dto = { ...baseDto, startTime: '17:00', endTime: '16:00' };
-      await expect(service.create('d1', UserRole.DESIGNER, dto)).rejects.toThrow(BadRequestException);
+      await expect(service.create('4001', UserRole.DESIGNER, dto)).rejects.toThrow(BadRequestException);
     });
 
     it('should throw BadRequestException if end time equals start time', async () => {
       const dto = { ...baseDto, startTime: '17:00', endTime: '17:00' };
-      await expect(service.create('d1', UserRole.DESIGNER, dto)).rejects.toThrow(BadRequestException);
+      await expect(service.create('4001', UserRole.DESIGNER, dto)).rejects.toThrow(BadRequestException);
     });
 
     it('should throw BadRequestException if daily limit (8 hours) is exceeded', async () => {
       const dto = { ...baseDto, startTime: '08:00', endTime: '17:00', requestedHours: '9.0' };
-      await expect(service.create('d1', UserRole.DESIGNER, dto)).rejects.toThrow(BadRequestException);
+      await expect(service.create('4001', UserRole.DESIGNER, dto)).rejects.toThrow(BadRequestException);
     });
 
     it('should throw ForbiddenException if user tries to create request for another user without HOD/Admin role', async () => {
-      const dto = { ...baseDto, designerId: 'd2' };
-      await expect(service.create('d1', UserRole.DESIGNER, dto)).rejects.toThrow(ForbiddenException);
+      const dto = { ...baseDto, designerId: '4002' };
+      await expect(service.create('4001', UserRole.DESIGNER, dto)).rejects.toThrow(ForbiddenException);
     });
 
     it('should throw ForbiddenException if task is not scheduled for the designer on the request date', async () => {
       mockPrismaService.schedulerAssignment.findFirst.mockResolvedValue(null);
 
-      await expect(service.create('d1', UserRole.DESIGNER, baseDto)).rejects.toThrow(ForbiddenException);
+      await expect(service.create('4001', UserRole.DESIGNER, baseDto)).rejects.toThrow(ForbiddenException);
       expect(mockPrismaService.overtimeRequest.create).not.toHaveBeenCalled();
     });
 
     it('should allow HOD to create request on behalf of another user', async () => {
-      const dto = { ...baseDto, designerId: 'd2' };
+      const dto = { ...baseDto, designerId: '4002' };
 
       mockPrismaService.overtimeRequest.findFirst.mockResolvedValue(null);
       mockPrismaService.overtimeRequest.findMany.mockResolvedValue([]);
 
       const mockResult = {
         id: 'r1',
-        designerId: 'd2',
+        designerId: '4002',
         taskId: 't1',
         date: new Date(`${todayOtDate()}T00:00:00.000Z`),
         startTime: '17:00',
         endTime: '19:00',
         totalHours: new Decimal(2.0),
         status: 'DRAFT',
-        designer: { id: 'd2', fullName: 'Designer 2', email: 'd2@x.com', departmentId: 'dept1' },
+        designer: { id: '4002', fullName: 'Designer 2', email: 'd2@x.com', departmentId: 'dept1' },
         task: { id: 't1', title: 'Task 1', taskNo: 'T-001' },
         attachments: [],
       };
       mockPrismaService.overtimeRequest.create.mockResolvedValue(mockResult);
 
-      const result = await service.create('hod1', UserRole.HOD, dto);
-      expect(result.designerId).toBe('d2');
+      const result = await service.create('4004', UserRole.HOD, dto);
+      expect(result.designerId).toBe('4002');
     });
 
     it('should auto-approve HOD self-overtime', async () => {
-      const dto = { ...baseDto, designerId: 'hod1', status: 'Pending' as const };
+      const dto = { ...baseDto, designerId: '4004', status: 'Pending' as const };
 
       mockPrismaService.task.findUnique.mockResolvedValue({
         id: 't1',
-        assigneeId: 'hod1',
+        assigneeId: '4004',
         title: 'Task 1',
         taskNo: 'T-001',
         opNo: 'OP-100',
@@ -245,13 +249,13 @@ describe('OvertimeRequestsService', () => {
       mockPrismaService.overtimeRequest.findMany.mockResolvedValue([]);
       mockPrismaService.overtimeRequest.create.mockResolvedValue({
         id: 'r1',
-        designerId: 'hod1',
+        designerId: '4004',
         taskId: 't1',
         date: new Date(`${todayOtDate()}T00:00:00.000Z`),
         requestedHours: new Decimal(2.0),
         totalHours: new Decimal(2.0),
         status: 'APPROVED',
-        designer: { id: 'hod1', fullName: 'HOD User', departmentId: 'dept1' },
+        designer: { id: '4004', fullName: 'HOD User', departmentId: 'dept1' },
         task: {
           id: 't1',
           title: 'Task 1',
@@ -261,17 +265,17 @@ describe('OvertimeRequestsService', () => {
         },
         attachments: [],
       });
-      mockPrismaService.user.findMany.mockResolvedValue([{ id: 'hod2' }]);
+      mockPrismaService.user.findMany.mockResolvedValue([{ id: '4005' }]);
 
-      const result = await service.create('hod1', UserRole.HOD, dto);
+      const result = await service.create('4004', UserRole.HOD, dto);
 
       expect(result.status).toBe('APPROVED');
       expect(mockPrismaService.overtimeRequest.create).toHaveBeenCalledWith(
         expect.objectContaining({
           data: expect.objectContaining({
-            designerId: 'hod1',
+            designerId: BigInt('4004'),
             status: 'APPROVED',
-            approvedById: 'hod1',
+            approvedById: BigInt('4004'),
             managerComments: 'Auto-approved by system (HOD submission)',
           }),
         }),
@@ -279,7 +283,7 @@ describe('OvertimeRequestsService', () => {
       expect(mockActivityLogger.log).toHaveBeenCalledWith(
         expect.objectContaining({
           action: 'OVERTIME_AUTO_APPROVED',
-          userId: 'hod1',
+          userId: '4004',
           taskId: 't1',
         }),
       );
@@ -290,7 +294,7 @@ describe('OvertimeRequestsService', () => {
       mockPrismaService.overtimeRequest.findFirst.mockResolvedValue({ id: 'existing' });
       mockPrismaService.overtimeRequest.findMany.mockResolvedValue([]);
 
-      await expect(service.create('d1', UserRole.DESIGNER, baseDto)).rejects.toThrow(
+      await expect(service.create('4001', UserRole.DESIGNER, baseDto)).rejects.toThrow(
         BadRequestException,
       );
     });
@@ -304,7 +308,7 @@ describe('OvertimeRequestsService', () => {
         ]) // overlap check
         .mockResolvedValueOnce([]); // weekly check
 
-      await expect(service.create('d1', UserRole.DESIGNER, baseDto)).rejects.toThrow(
+      await expect(service.create('4001', UserRole.DESIGNER, baseDto)).rejects.toThrow(
         BadRequestException,
       );
     });
@@ -320,7 +324,7 @@ describe('OvertimeRequestsService', () => {
         },
       ]);
 
-      await expect(service.create('d1', UserRole.DESIGNER, baseDto)).rejects.toThrow(
+      await expect(service.create('4001', UserRole.DESIGNER, baseDto)).rejects.toThrow(
         'Cannot allocate overtime because the designer has approved full-day or second-half leave for this date.',
       );
       expect(mockPrismaService.overtimeRequest.create).not.toHaveBeenCalled();
@@ -334,20 +338,20 @@ describe('OvertimeRequestsService', () => {
 
       const mockResult = {
         id: 'r1',
-        designerId: 'd1',
+        designerId: '4001',
         taskId: 't1',
         date: new Date(`${todayOtDate()}T00:00:00.000Z`),
         startTime: '17:00',
         endTime: '19:00',
         totalHours: new Decimal(2.0),
         status: 'DRAFT',
-        designer: { id: 'd1', fullName: 'Designer 1', email: 'd1@x.com', departmentId: 'dept1' },
+        designer: { id: '4001', fullName: 'Designer 1', email: 'd1@x.com', departmentId: 'dept1' },
         task: { id: 't1', title: 'Task 1', taskNo: 'T-001' },
         attachments: [],
       };
       mockPrismaService.overtimeRequest.create.mockResolvedValue(mockResult);
 
-      const result = await service.create('d1', UserRole.DESIGNER, dto);
+      const result = await service.create('4001', UserRole.DESIGNER, dto);
       expect(result).toEqual(mockResult);
       expect(mockPrismaService.overtimeRequest.create).toHaveBeenCalled();
       expect(mockPrismaService.overtimeApprovalHistory.create).toHaveBeenCalled();
@@ -358,7 +362,7 @@ describe('OvertimeRequestsService', () => {
 
       mockPrismaService.task.findUnique.mockResolvedValue({
         id: 't1',
-        assigneeId: 'd1',
+        assigneeId: '4001',
         title: 'Task 1',
         taskNo: 'T-001',
         opNo: 'OP-100',
@@ -369,13 +373,13 @@ describe('OvertimeRequestsService', () => {
 
       const mockResult = {
         id: 'r1',
-        designerId: 'd1',
+        designerId: '4001',
         taskId: 't1',
         date: new Date(`${todayOtDate()}T00:00:00.000Z`),
         requestedHours: new Decimal(2.0),
         totalHours: new Decimal(2.0),
         status: 'SUBMITTED',
-        designer: { id: 'd1', fullName: 'Designer 1', departmentId: 'dept1' },
+        designer: { id: '4001', fullName: 'Designer 1', departmentId: 'dept1' },
         task: {
           id: 't1',
           title: 'Task 1',
@@ -386,15 +390,15 @@ describe('OvertimeRequestsService', () => {
         attachments: [],
       };
       mockPrismaService.overtimeRequest.create.mockResolvedValue(mockResult);
-      mockPrismaService.user.findMany.mockResolvedValue([{ id: 'h1', fullName: 'HOD 1' }]);
+      mockPrismaService.user.findMany.mockResolvedValue([{ id: '4003', fullName: 'HOD 1' }]);
 
-      const result = await service.create('d1', UserRole.DESIGNER, dto);
+      const result = await service.create('4001', UserRole.DESIGNER, dto);
       expect(result.status).toBe('SUBMITTED');
       expect(mockPrismaService.notification.create).toHaveBeenCalled();
       expect(mockActivityLogger.log).toHaveBeenCalledWith(
         expect.objectContaining({
           action: 'OVERTIME_REQUEST_SUBMITTED',
-          userId: 'd1',
+          userId: '4001',
           taskId: 't1',
         }),
       );
@@ -405,7 +409,7 @@ describe('OvertimeRequestsService', () => {
 
       mockPrismaService.task.findUnique.mockResolvedValue({
         id: 't1',
-        assigneeId: 'd1',
+        assigneeId: '4001',
         title: 'Task 1',
         taskNo: 'T-001',
         opNo: 'OP-100',
@@ -415,13 +419,13 @@ describe('OvertimeRequestsService', () => {
       mockPrismaService.overtimeRequest.findMany.mockResolvedValue([]);
       mockPrismaService.overtimeRequest.create.mockResolvedValue({
         id: 'r1',
-        designerId: 'd1',
+        designerId: '4001',
         taskId: 't1',
         date: new Date(`${todayOtDate()}T00:00:00.000Z`),
         requestedHours: new Decimal(2.0),
         totalHours: new Decimal(2.0),
         status: 'SUBMITTED',
-        designer: { id: 'd1', fullName: 'Designer 1', departmentId: 'dept1' },
+        designer: { id: '4001', fullName: 'Designer 1', departmentId: 'dept1' },
         task: {
           id: 't1',
           title: 'Task 1',
@@ -433,7 +437,7 @@ describe('OvertimeRequestsService', () => {
       });
       mockPrismaService.user.findMany.mockResolvedValue([]);
 
-      await service.create('d1', UserRole.DESIGNER, dto);
+      await service.create('4001', UserRole.DESIGNER, dto);
 
       expect(mockActivityLogger.log).toHaveBeenCalledWith(
         expect.objectContaining({ action: 'OVERTIME_REQUEST_SUBMITTED' }),
@@ -449,40 +453,40 @@ describe('OvertimeRequestsService', () => {
       mockPrismaService.overtimeRequest.findUnique.mockResolvedValue(null);
 
       await expect(
-        service.update('r-missing', 'd1', UserRole.DESIGNER, { reason: 'Updated' }),
+        service.update('r-missing', '4001', UserRole.DESIGNER, { reason: 'Updated' }),
       ).rejects.toThrow(NotFoundException);
     });
 
     it('should throw ForbiddenException if non-owner/non-admin tries to update', async () => {
       mockPrismaService.overtimeRequest.findUnique.mockResolvedValue({
         id: 'r1',
-        designerId: 'd1',
+        designerId: '4001',
         status: 'DRAFT',
         attachments: [],
       });
 
       await expect(
-        service.update('r1', 'd2', UserRole.DESIGNER, { reason: 'hack' }),
+        service.update('r1', '4002', UserRole.DESIGNER, { reason: 'hack' }),
       ).rejects.toThrow(ForbiddenException);
     });
 
     it('should throw BadRequestException if request is already submitted', async () => {
       mockPrismaService.overtimeRequest.findUnique.mockResolvedValue({
         id: 'r1',
-        designerId: 'd1',
+        designerId: '4001',
         status: 'SUBMITTED',
         attachments: [],
       });
 
       await expect(
-        service.update('r1', 'd1', UserRole.DESIGNER, { reason: 'late update' }),
+        service.update('r1', '4001', UserRole.DESIGNER, { reason: 'late update' }),
       ).rejects.toThrow(BadRequestException);
     });
 
     it('should allow updating a DRAFT request successfully', async () => {
       const existing = {
         id: 'r1',
-        designerId: 'd1',
+        designerId: '4001',
         status: 'DRAFT',
         date: new Date(`${todayOtDate()}T00:00:00.000Z`),
         startTime: '17:00',
@@ -499,7 +503,7 @@ describe('OvertimeRequestsService', () => {
       mockPrismaService.overtimeRequest.update.mockResolvedValue(updatedResult);
 
       const dto: UpdateOvertimeRequestDto = { reason: 'New reason' };
-      const result = await service.update('r1', 'd1', UserRole.DESIGNER, dto);
+      const result = await service.update('r1', '4001', UserRole.DESIGNER, dto);
       expect(result.reason).toBe('New reason');
       expect(mockPrismaService.overtimeApprovalHistory.create).toHaveBeenCalled();
     });
@@ -507,7 +511,7 @@ describe('OvertimeRequestsService', () => {
     it('should allow admin to update any request', async () => {
       const existing = {
         id: 'r1',
-        designerId: 'd1',
+        designerId: '4001',
         status: 'DRAFT',
         date: new Date(`${todayOtDate()}T00:00:00.000Z`),
         startTime: '17:00',
@@ -523,7 +527,7 @@ describe('OvertimeRequestsService', () => {
 
       // HOD updating someone else's request should not throw
       await expect(
-        service.update('r1', 'hod1', UserRole.HOD, { reason: 'HOD fix' }),
+        service.update('r1', '4004', UserRole.HOD, { reason: 'HOD fix' }),
       ).resolves.toBeDefined();
     });
   });
@@ -534,34 +538,34 @@ describe('OvertimeRequestsService', () => {
   describe('submit', () => {
     it('should throw NotFoundException if request does not exist', async () => {
       mockPrismaService.overtimeRequest.findUnique.mockResolvedValue(null);
-      await expect(service.submit('r-missing', 'd1')).rejects.toThrow(NotFoundException);
+      await expect(service.submit('r-missing', '4001')).rejects.toThrow(NotFoundException);
     });
 
     it('should throw ForbiddenException if user is not the owner', async () => {
       mockPrismaService.overtimeRequest.findUnique.mockResolvedValue({
         id: 'r1',
-        designerId: 'd1',
+        designerId: '4001',
         status: 'DRAFT',
       });
-      await expect(service.submit('r1', 'd2')).rejects.toThrow(ForbiddenException);
+      await expect(service.submit('r1', '4002')).rejects.toThrow(ForbiddenException);
     });
 
     it('should throw BadRequestException if request is not in DRAFT status', async () => {
       mockPrismaService.overtimeRequest.findUnique.mockResolvedValue({
         id: 'r1',
-        designerId: 'd1',
+        designerId: '4001',
         status: 'SUBMITTED',
       });
-      await expect(service.submit('r1', 'd1')).rejects.toThrow(BadRequestException);
+      await expect(service.submit('r1', '4001')).rejects.toThrow(BadRequestException);
     });
 
     it('should submit draft request and notify approvers', async () => {
       const mockRequest = {
         id: 'r1',
-        designerId: 'd1',
+        designerId: '4001',
         taskId: 't1',
         status: 'DRAFT',
-        designer: { id: 'd1', fullName: 'Designer 1', email: 'd1@x.com', departmentId: 'dept1' },
+        designer: { id: '4001', fullName: 'Designer 1', email: 'd1@x.com', departmentId: 'dept1' },
         task: { id: 't1', title: 'Task 1', taskNo: 'T-001' },
         totalHours: new Decimal(2.0),
         date: new Date(`${todayOtDate()}T00:00:00.000Z`),
@@ -570,11 +574,11 @@ describe('OvertimeRequestsService', () => {
 
       mockPrismaService.overtimeRequest.findUnique.mockResolvedValue(mockRequest);
       mockPrismaService.overtimeRequest.update.mockResolvedValue({ ...mockRequest, status: 'SUBMITTED' });
-      mockPrismaService.user.findMany.mockResolvedValue([{ id: 'h1', fullName: 'HOD 1' }]);
+      mockPrismaService.user.findMany.mockResolvedValue([{ id: '4003', fullName: 'HOD 1' }]);
       mockPrismaService.schedulerAssignment.findFirst.mockResolvedValue({ id: 'assign-1' });
       mockPrismaService.leaveRequest.findMany.mockResolvedValue([]);
 
-      const result = await service.submit('r1', 'd1');
+      const result = await service.submit('r1', '4001');
       expect(result.status).toBe('SUBMITTED');
       expect(mockPrismaService.overtimeRequest.update).toHaveBeenCalledWith({
         where: { id: 'r1' },
@@ -592,42 +596,42 @@ describe('OvertimeRequestsService', () => {
   describe('withdraw', () => {
     it('should throw NotFoundException for missing request', async () => {
       mockPrismaService.overtimeRequest.findUnique.mockResolvedValue(null);
-      await expect(service.withdraw('r-x', 'd1')).rejects.toThrow(NotFoundException);
+      await expect(service.withdraw('r-x', '4001')).rejects.toThrow(NotFoundException);
     });
 
     it('should throw ForbiddenException if non-owner withdraws', async () => {
       mockPrismaService.overtimeRequest.findUnique.mockResolvedValue({
         id: 'r1',
-        designerId: 'd1',
+        designerId: '4001',
         status: 'SUBMITTED',
       });
-      await expect(service.withdraw('r1', 'd2')).rejects.toThrow(ForbiddenException);
+      await expect(service.withdraw('r1', '4002')).rejects.toThrow(ForbiddenException);
     });
 
     it('should throw BadRequestException for non-withdrawable status', async () => {
       mockPrismaService.overtimeRequest.findUnique.mockResolvedValue({
         id: 'r1',
-        designerId: 'd1',
+        designerId: '4001',
         status: 'APPROVED',
       });
-      await expect(service.withdraw('r1', 'd1')).rejects.toThrow(BadRequestException);
+      await expect(service.withdraw('r1', '4001')).rejects.toThrow(BadRequestException);
     });
 
     it('should withdraw a SUBMITTED request successfully', async () => {
       mockPrismaService.overtimeRequest.findUnique.mockResolvedValue({
         id: 'r1',
-        designerId: 'd1',
+        designerId: '4001',
         status: 'SUBMITTED',
       });
       mockPrismaService.overtimeRequest.update.mockResolvedValue({
         id: 'r1',
-        designerId: 'd1',
+        designerId: '4001',
         status: 'WITHDRAWN',
-        designer: { id: 'd1', fullName: 'D1', email: 'd1@x.com' },
+        designer: { id: '4001', fullName: 'D1', email: 'd1@x.com' },
         task: { id: 't1', title: 'T1', taskNo: 'T-001' },
       });
 
-      const result = await service.withdraw('r1', 'd1');
+      const result = await service.withdraw('r1', '4001');
       expect(result.status).toBe('WITHDRAWN');
       expect(mockPrismaService.overtimeApprovalHistory.create).toHaveBeenCalledWith(
         expect.objectContaining({
@@ -639,16 +643,16 @@ describe('OvertimeRequestsService', () => {
     it('should withdraw an APPROVED_BY_MANAGER request successfully', async () => {
       mockPrismaService.overtimeRequest.findUnique.mockResolvedValue({
         id: 'r1',
-        designerId: 'd1',
+        designerId: '4001',
         status: 'APPROVED_BY_MANAGER',
       });
       mockPrismaService.overtimeRequest.update.mockResolvedValue({
         id: 'r1',
         status: 'WITHDRAWN',
-        designer: { id: 'd1', fullName: 'D1', email: 'd1@x.com' },
+        designer: { id: '4001', fullName: 'D1', email: 'd1@x.com' },
       });
 
-      const result = await service.withdraw('r1', 'd1');
+      const result = await service.withdraw('r1', '4001');
       expect(result.status).toBe('WITHDRAWN');
     });
   });
@@ -659,33 +663,33 @@ describe('OvertimeRequestsService', () => {
   describe('delete', () => {
     it('should throw NotFoundException for missing request', async () => {
       mockPrismaService.overtimeRequest.findUnique.mockResolvedValue(null);
-      await expect(service.delete('r-x', 'd1')).rejects.toThrow(NotFoundException);
+      await expect(service.delete('r-x', '4001')).rejects.toThrow(NotFoundException);
     });
 
     it('should throw ForbiddenException if non-owner deletes', async () => {
       mockPrismaService.overtimeRequest.findUnique.mockResolvedValue({
         id: 'r1',
-        designerId: 'd1',
+        designerId: '4001',
         status: 'DRAFT',
         attachments: [],
       });
-      await expect(service.delete('r1', 'd2')).rejects.toThrow(ForbiddenException);
+      await expect(service.delete('r1', '4002')).rejects.toThrow(ForbiddenException);
     });
 
     it('should throw BadRequestException if request is not DRAFT', async () => {
       mockPrismaService.overtimeRequest.findUnique.mockResolvedValue({
         id: 'r1',
-        designerId: 'd1',
+        designerId: '4001',
         status: 'SUBMITTED',
         attachments: [],
       });
-      await expect(service.delete('r1', 'd1')).rejects.toThrow(BadRequestException);
+      await expect(service.delete('r1', '4001')).rejects.toThrow(BadRequestException);
     });
 
     it('should delete draft request and clean up S3 attachments', async () => {
       mockPrismaService.overtimeRequest.findUnique.mockResolvedValue({
         id: 'r1',
-        designerId: 'd1',
+        designerId: '4001',
         status: 'DRAFT',
         attachments: [
           { id: 'a1', filePath: 's3://bucket/file1.pdf' },
@@ -695,7 +699,7 @@ describe('OvertimeRequestsService', () => {
       mockTaskFilesService.deleteObjectByKey.mockResolvedValue(undefined);
       mockPrismaService.overtimeRequest.delete.mockResolvedValue(undefined);
 
-      const result = await service.delete('r1', 'd1');
+      const result = await service.delete('r1', '4001');
       expect(result.success).toBe(true);
       expect(mockTaskFilesService.deleteObjectByKey).toHaveBeenCalledTimes(2);
       expect(mockPrismaService.overtimeRequest.delete).toHaveBeenCalledWith({ where: { id: 'r1' } });
@@ -704,14 +708,14 @@ describe('OvertimeRequestsService', () => {
     it('should continue deletion even if S3 cleanup fails', async () => {
       mockPrismaService.overtimeRequest.findUnique.mockResolvedValue({
         id: 'r1',
-        designerId: 'd1',
+        designerId: '4001',
         status: 'DRAFT',
         attachments: [{ id: 'a1', filePath: 's3://bucket/file1.pdf' }],
       });
       mockTaskFilesService.deleteObjectByKey.mockRejectedValue(new Error('S3 error'));
       mockPrismaService.overtimeRequest.delete.mockResolvedValue(undefined);
 
-      const result = await service.delete('r1', 'd1');
+      const result = await service.delete('r1', '4001');
       expect(result.success).toBe(true);
       expect(mockPrismaService.overtimeRequest.delete).toHaveBeenCalled();
     });
@@ -723,37 +727,40 @@ describe('OvertimeRequestsService', () => {
   describe('findOne', () => {
     it('should throw NotFoundException for non-existent request', async () => {
       mockPrismaService.overtimeRequest.findUnique.mockResolvedValue(null);
-      await expect(service.findOne('r-x', 'd1', UserRole.DESIGNER)).rejects.toThrow(NotFoundException);
+      await expect(service.findOne('r-x', '4001', UserRole.DESIGNER)).rejects.toThrow(NotFoundException);
     });
 
     it('should throw ForbiddenException for non-owner non-admin designer', async () => {
       mockPrismaService.overtimeRequest.findUnique.mockResolvedValue({
         id: 'r1',
-        designerId: 'd1',
+        designerId: '4001',
         designer: { departmentId: 'dept1' },
         attachments: [],
         history: [],
       });
-      await expect(service.findOne('r1', 'd2', UserRole.DESIGNER)).rejects.toThrow(ForbiddenException);
+      await expect(service.findOne('r1', '4002', UserRole.DESIGNER)).rejects.toThrow(ForbiddenException);
     });
 
-    it('should throw ForbiddenException for HOD from different department', async () => {
+    // Department-scoped HOD access no longer applies: ERP has no department
+    // concept on ErpAuthUsers, so any HOD may view any overtime request
+    // regardless of the designer's department (see overtime-requests.service.ts
+    // around line 1047).
+    it('should allow HOD from a different department to view the request', async () => {
       mockPrismaService.overtimeRequest.findUnique.mockResolvedValue({
         id: 'r1',
-        designerId: 'd1',
+        designerId: '4001',
         designer: { departmentId: 'dept1' },
         attachments: [],
         history: [],
       });
-      mockPrismaService.user.findUnique.mockResolvedValue({ departmentId: 'dept2' });
 
-      await expect(service.findOne('r1', 'hod2', UserRole.HOD)).rejects.toThrow(ForbiddenException);
+      await expect(service.findOne('r1', '4005', UserRole.HOD)).resolves.toBeDefined();
     });
 
     it('should allow owner to view their own request with signed attachment URLs', async () => {
       mockPrismaService.overtimeRequest.findUnique.mockResolvedValue({
         id: 'r1',
-        designerId: 'd1',
+        designerId: '4001',
         designer: { departmentId: 'dept1' },
         attachments: [
           { id: 'a1', fileName: 'proof.pdf', filePath: 's3://key', sizeBytes: BigInt(1024) },
@@ -762,7 +769,7 @@ describe('OvertimeRequestsService', () => {
       });
       mockTaskFilesService.createSignedReadUrl.mockResolvedValue('https://signed-url');
 
-      const result = await service.findOne('r1', 'd1', UserRole.DESIGNER);
+      const result = await service.findOne('r1', '4001', UserRole.DESIGNER);
       expect(result.attachments[0].url).toBe('https://signed-url');
       expect(result.attachments[0].sizeBytes).toBe(1024);
     });
@@ -770,14 +777,14 @@ describe('OvertimeRequestsService', () => {
     it('should allow HOD to view team request', async () => {
       mockPrismaService.overtimeRequest.findUnique.mockResolvedValue({
         id: 'r1',
-        designerId: 'd1',
+        designerId: '4001',
         designer: { departmentId: 'dept1' },
         attachments: [],
         history: [],
       });
       mockPrismaService.user.findUnique.mockResolvedValue({ departmentId: 'dept1' });
 
-      const result = await service.findOne('r1', 'hod1', UserRole.HOD);
+      const result = await service.findOne('r1', '4004', UserRole.HOD);
       expect(result).toBeDefined();
     });
   });
@@ -792,11 +799,11 @@ describe('OvertimeRequestsService', () => {
         { id: 'r2', status: 'DRAFT' },
       ]);
 
-      const result = await service.findOwnRequests('d1', { status: 'DRAFT' });
+      const result = await service.findOwnRequests('4001', { status: 'DRAFT' });
       expect(result).toHaveLength(2);
       expect(mockPrismaService.overtimeRequest.findMany).toHaveBeenCalledWith(
         expect.objectContaining({
-          where: expect.objectContaining({ designerId: 'd1', status: 'DRAFT' }),
+          where: expect.objectContaining({ designerId: BigInt('4001'), status: 'DRAFT' }),
         }),
       );
     });
@@ -804,7 +811,7 @@ describe('OvertimeRequestsService', () => {
     it('should apply date range filters', async () => {
       mockPrismaService.overtimeRequest.findMany.mockResolvedValue([]);
 
-      await service.findOwnRequests('d1', {
+      await service.findOwnRequests('4001', {
         startDate: '2026-06-01',
         endDate: '2026-06-30',
       });
@@ -829,7 +836,7 @@ describe('OvertimeRequestsService', () => {
     it('should throw NotFoundException for missing request', async () => {
       mockPrismaService.overtimeRequest.findUnique.mockResolvedValue(null);
       await expect(
-        service.review('r-x', 'h1', UserRole.HOD, { status: 'APPROVED_BY_MANAGER', comments: 'ok' }),
+        service.review('r-x', '4003', UserRole.HOD, { status: 'APPROVED_BY_MANAGER', comments: 'ok' }),
       ).rejects.toThrow(NotFoundException);
     });
 
@@ -837,7 +844,7 @@ describe('OvertimeRequestsService', () => {
       mockPrismaService.overtimeRequest.findUnique.mockResolvedValue({
         id: 'r1',
         status: 'SUBMITTED',
-        designer: { id: 'd1', fullName: 'D1', departmentId: 'dept1' },
+        designer: { id: '4001', fullName: 'D1', departmentId: 'dept1' },
       });
 
       const reviewDto: ReviewOvertimeRequestDto = {
@@ -846,7 +853,7 @@ describe('OvertimeRequestsService', () => {
       };
 
       await expect(
-        service.review('r1', 'h1', UserRole.HOD, reviewDto),
+        service.review('r1', '4003', UserRole.HOD, reviewDto),
       ).rejects.toThrow(BadRequestException);
     });
 
@@ -854,11 +861,11 @@ describe('OvertimeRequestsService', () => {
       mockPrismaService.overtimeRequest.findUnique.mockResolvedValue({
         id: 'r1',
         status: 'SUBMITTED',
-        designer: { id: 'd1', fullName: 'D1', departmentId: 'dept1' },
+        designer: { id: '4001', fullName: 'D1', departmentId: 'dept1' },
       });
 
       await expect(
-        service.review('r1', 'h1', UserRole.HOD, { status: 'REJECTED_BY_MANAGER', comments: '   ' }),
+        service.review('r1', '4003', UserRole.HOD, { status: 'REJECTED_BY_MANAGER', comments: '   ' }),
       ).rejects.toThrow(BadRequestException);
     });
 
@@ -866,11 +873,11 @@ describe('OvertimeRequestsService', () => {
       mockPrismaService.overtimeRequest.findUnique.mockResolvedValue({
         id: 'r1',
         status: 'SUBMITTED',
-        designer: { id: 'd1', fullName: 'D1', departmentId: 'dept1' },
+        designer: { id: '4001', fullName: 'D1', departmentId: 'dept1' },
       });
 
       await expect(
-        service.review('r1', 'd2', UserRole.DESIGNER, { status: 'APPROVED_BY_MANAGER', comments: 'ok' }),
+        service.review('r1', '4002', UserRole.DESIGNER, { status: 'APPROVED_BY_MANAGER', comments: 'ok' }),
       ).rejects.toThrow(ForbiddenException);
     });
 
@@ -878,11 +885,11 @@ describe('OvertimeRequestsService', () => {
       mockPrismaService.overtimeRequest.findUnique.mockResolvedValue({
         id: 'r1',
         status: 'DRAFT',
-        designer: { id: 'd1', fullName: 'D1', departmentId: 'dept1' },
+        designer: { id: '4001', fullName: 'D1', departmentId: 'dept1' },
       });
 
       await expect(
-        service.review('r1', 'h1', UserRole.HOD, { status: 'APPROVED_BY_MANAGER', comments: 'ok' }),
+        service.review('r1', '4003', UserRole.HOD, { status: 'APPROVED_BY_MANAGER', comments: 'ok' }),
       ).rejects.toThrow(BadRequestException);
     });
 
@@ -890,18 +897,18 @@ describe('OvertimeRequestsService', () => {
       const mockRequest = {
         id: 'r1',
         status: 'SUBMITTED',
-        designerId: 'd1',
+        designerId: '4001',
         totalHours: new Decimal(2.0),
         date: new Date(`${todayOtDate()}T00:00:00.000Z`),
-        designer: { id: 'd1', fullName: 'Designer 1', departmentId: 'dept1' },
+        designer: { id: '4001', fullName: 'Designer 1', departmentId: 'dept1' },
       };
       mockPrismaService.overtimeRequest.findUnique.mockResolvedValue(mockRequest);
       mockPrismaService.overtimeRequest.update.mockResolvedValue({
         ...mockRequest,
         status: 'APPROVED',
-        designerId: 'd1',
+        designerId: '4001',
         date: new Date(`${todayOtDate()}T00:00:00.000Z`),
-        designer: { id: 'd1', fullName: 'Designer 1', email: 'd1@x.com' },
+        designer: { id: '4001', fullName: 'Designer 1', email: 'd1@x.com' },
       });
 
       const reviewDto: ReviewOvertimeRequestDto = {
@@ -909,7 +916,7 @@ describe('OvertimeRequestsService', () => {
         comments: 'Looks good',
       };
 
-      const result = await service.review('r1', 'h1', UserRole.HOD, reviewDto);
+      const result = await service.review('r1', '4003', UserRole.HOD, reviewDto);
       expect(result.status).toBe('APPROVED');
       expect(mockPrismaService.overtimeRequest.update).toHaveBeenCalled();
       expect(mockPrismaService.overtimeApprovalHistory.create).toHaveBeenCalled();
@@ -918,7 +925,7 @@ describe('OvertimeRequestsService', () => {
         expect.objectContaining({
           update: expect.objectContaining({
             version: { increment: 1 },
-            updatedBy: 'h1',
+            updatedBy: BigInt('4003'),
             lastPayloadHash: null,
           }),
         }),
@@ -929,10 +936,10 @@ describe('OvertimeRequestsService', () => {
       const mockRequest = {
         id: 'r1',
         status: 'SUBMITTED',
-        designerId: 'd1',
+        designerId: '4001',
         totalHours: new Decimal(2.0),
         date: new Date(`${todayOtDate()}T00:00:00.000Z`),
-        designer: { id: 'd1', fullName: 'Designer 1', departmentId: 'dept1' },
+        designer: { id: '4001', fullName: 'Designer 1', departmentId: 'dept1' },
       };
       mockPrismaService.overtimeRequest.findUnique.mockResolvedValue(mockRequest);
       mockPrismaService.leaveRequest.findMany.mockResolvedValue([
@@ -945,7 +952,7 @@ describe('OvertimeRequestsService', () => {
       ]);
 
       await expect(
-        service.review('r1', 'h1', UserRole.HOD, {
+        service.review('r1', '4003', UserRole.HOD, {
           status: 'APPROVED_BY_MANAGER',
           comments: 'Looks good',
         }),
@@ -959,21 +966,21 @@ describe('OvertimeRequestsService', () => {
       const mockRequest = {
         id: 'r1',
         status: 'SUBMITTED',
-        designerId: 'd1',
+        designerId: '4001',
         totalHours: new Decimal(2.0),
         date: new Date(`${todayOtDate()}T00:00:00.000Z`),
-        designer: { id: 'd1', fullName: 'Designer 1', departmentId: 'dept1' },
+        designer: { id: '4001', fullName: 'Designer 1', departmentId: 'dept1' },
       };
       mockPrismaService.overtimeRequest.findUnique.mockResolvedValue(mockRequest);
       mockPrismaService.overtimeRequest.update.mockResolvedValue({
         ...mockRequest,
         status: 'REJECTED_BY_MANAGER',
-        designerId: 'd1',
+        designerId: '4001',
         date: new Date(`${todayOtDate()}T00:00:00.000Z`),
-        designer: { id: 'd1', fullName: 'Designer 1', email: 'd1@x.com' },
+        designer: { id: '4001', fullName: 'Designer 1', email: 'd1@x.com' },
       });
 
-      const result = await service.review('r1', 'h1', UserRole.HOD, {
+      const result = await service.review('r1', '4003', UserRole.HOD, {
         status: 'REJECTED_BY_MANAGER',
         comments: 'Not justified',
       });
@@ -984,11 +991,11 @@ describe('OvertimeRequestsService', () => {
       mockPrismaService.overtimeRequest.findUnique.mockResolvedValue({
         id: 'r1',
         status: 'SUBMITTED',
-        designer: { id: 'd1', fullName: 'D1', departmentId: 'dept1' },
+        designer: { id: '4001', fullName: 'D1', departmentId: 'dept1' },
       });
 
       await expect(
-        service.review('r1', 'h1', UserRole.HOD, { status: 'INVALID_STATUS' as any, comments: 'ok' }),
+        service.review('r1', '4003', UserRole.HOD, { status: 'INVALID_STATUS' as any, comments: 'ok' }),
       ).rejects.toThrow(BadRequestException);
     });
   });
@@ -997,26 +1004,29 @@ describe('OvertimeRequestsService', () => {
   // FIND PENDING APPROVALS
   // ────────────────────────────────────────────────────────────────────────
   describe('findPendingApprovals', () => {
-    it('should filter by department for HOD role', async () => {
-      mockPrismaService.user.findUnique.mockResolvedValue({ departmentId: 'dept1' });
+    // Department-scoped HOD filtering no longer applies: ERP has no department
+    // concept on ErpAuthUsers, so every HOD sees all pending requests
+    // company-wide (see overtime-requests.service.ts around line 1209).
+    it('should not filter by department for HOD role (no department concept on ERP users)', async () => {
       mockPrismaService.overtimeRequest.findMany.mockResolvedValue([]);
 
-      await service.findPendingApprovals('hod1', UserRole.HOD);
+      await service.findPendingApprovals('4004', UserRole.HOD);
       expect(mockPrismaService.overtimeRequest.findMany).toHaveBeenCalledWith(
         expect.objectContaining({
           where: expect.objectContaining({
             status: 'SUBMITTED',
-            designer: { departmentId: 'dept1' },
           }),
         }),
       );
+      const callArgs = mockPrismaService.overtimeRequest.findMany.mock.calls[0][0];
+      expect(callArgs.where.designer).toBeUndefined();
     });
 
     it('should return submitted requests for HOD without department filter', async () => {
       mockPrismaService.user.findUnique.mockResolvedValue({ departmentId: null });
       mockPrismaService.overtimeRequest.findMany.mockResolvedValue([{ id: 'r1' }, { id: 'r2' }]);
 
-      const result = await service.findPendingApprovals('hod1', UserRole.HOD);
+      const result = await service.findPendingApprovals('4004', UserRole.HOD);
       expect(result).toHaveLength(2);
     });
   });
@@ -1047,7 +1057,7 @@ describe('OvertimeRequestsService', () => {
           where: expect.objectContaining({
             OR: expect.arrayContaining([
               { reason: { contains: 'urgent' } },
-              { designer: { fullName: { contains: 'urgent' } } },
+              { designer: { userName: { contains: 'urgent' } } },
               { task: { title: { contains: 'urgent' } } },
             ]),
           }),
@@ -1059,10 +1069,10 @@ describe('OvertimeRequestsService', () => {
       mockPrismaService.overtimeRequest.findMany.mockResolvedValue([]);
       mockPrismaService.overtimeRequest.count.mockResolvedValue(0);
 
-      await service.findAllRequests({ status: 'APPROVED', designerId: 'd1' });
+      await service.findAllRequests({ status: 'APPROVED', designerId: '4001' });
       expect(mockPrismaService.overtimeRequest.findMany).toHaveBeenCalledWith(
         expect.objectContaining({
-          where: expect.objectContaining({ status: 'APPROVED', designerId: 'd1' }),
+          where: expect.objectContaining({ status: 'APPROVED', designerId: BigInt('4001') }),
         }),
       );
     });
@@ -1075,24 +1085,24 @@ describe('OvertimeRequestsService', () => {
     it('should throw NotFoundException for non-existent request', async () => {
       mockPrismaService.overtimeRequest.findUnique.mockResolvedValue(null);
       await expect(
-        service.uploadAttachment('r-x', {} as any, 'd1'),
+        service.uploadAttachment('r-x', {} as any, '4001'),
       ).rejects.toThrow(NotFoundException);
     });
 
     it('should throw ForbiddenException if non-owner uploads', async () => {
       mockPrismaService.overtimeRequest.findUnique.mockResolvedValue({
         id: 'r1',
-        designerId: 'd1',
+        designerId: '4001',
       });
       await expect(
-        service.uploadAttachment('r1', {} as any, 'd2'),
+        service.uploadAttachment('r1', {} as any, '4002'),
       ).rejects.toThrow(ForbiddenException);
     });
 
     it('should upload attachment and create record', async () => {
       mockPrismaService.overtimeRequest.findUnique.mockResolvedValue({
         id: 'r1',
-        designerId: 'd1',
+        designerId: '4001',
       });
       mockTaskFilesService.uploadTaskFile.mockResolvedValue({
         fileName: 'proof.pdf',
@@ -1109,9 +1119,9 @@ describe('OvertimeRequestsService', () => {
       mockPrismaService.overtimeAttachment.create.mockResolvedValue(mockAttachment);
 
       const file = { originalname: 'proof.pdf', size: 2048 } as Express.Multer.File;
-      const result = await service.uploadAttachment('r1', file, 'd1');
+      const result = await service.uploadAttachment('r1', file, '4001');
       expect(result).toEqual(mockAttachment);
-      expect(mockTaskFilesService.uploadTaskFile).toHaveBeenCalledWith(file, 'd1');
+      expect(mockTaskFilesService.uploadTaskFile).toHaveBeenCalledWith(file, '4001');
     });
   });
 

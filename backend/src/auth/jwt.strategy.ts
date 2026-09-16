@@ -29,7 +29,7 @@ export class JwtStrategy extends PassportStrategy(Strategy) {
   private readonly logger = new Logger(JwtStrategy.name);
   private readonly authMode: string;
   private readonly subField: string;
-  private readonly emailField: string;
+  private readonly usernameField: string;
   private readonly roleField: string;
 
   constructor(private readonly configService: ConfigService) {
@@ -49,21 +49,21 @@ export class JwtStrategy extends PassportStrategy(Strategy) {
     });
 
     this.authMode = authMode;
-    this.subField   = configService.get<string>('auth.externalSubField')   ?? 'sub';
-    this.emailField = configService.get<string>('auth.externalEmailField') ?? 'email';
-    this.roleField  = configService.get<string>('auth.externalRoleField')  ?? 'role';
+    this.subField      = configService.get<string>('auth.externalSubField')   ?? 'sub';
+    this.usernameField = configService.get<string>('auth.externalEmailField') ?? 'email';
+    this.roleField     = configService.get<string>('auth.externalRoleField')  ?? 'role';
   }
 
   validate(rawPayload: Record<string, unknown>): JwtPayload {
     if (this.authMode === 'external') {
       return this.normaliseExternalPayload(rawPayload);
     }
-    // Demo / internal mode — our own format: { sub, email, role }
-    const { sub, email, role } = rawPayload as unknown as JwtPayload;
-    if (!sub || !email || !role) {
+    // Demo / internal mode — our own format: { sub, username, role }
+    const { sub, username, role } = rawPayload as unknown as JwtPayload;
+    if (!sub || !username || !role) {
       throw new UnauthorizedException('Invalid token payload');
     }
-    return { sub, email, role };
+    return { sub, username, role };
   }
 
   /**
@@ -82,18 +82,18 @@ export class JwtStrategy extends PassportStrategy(Strategy) {
 
   private normaliseExternalPayload(payload: Record<string, unknown>): JwtPayload {
     const sub = this.readClaim(payload, this.subField);
-    const email = this.readClaim(payload, this.emailField);
+    const username = this.readClaim(payload, this.usernameField);
     const rawRole = this.readClaim(payload, this.roleField).toUpperCase();
 
     if (!sub) {
-      this.logger.warn('External JWT missing sub field; using email as sub');
+      this.logger.warn('External JWT missing sub field; using username as sub');
     }
 
     // Map external role labels to our internal UserRole enum values
     const roleMap = this.buildExternalRoleMap();
     const role = (roleMap[rawRole] ?? rawRole) as UserRole;
 
-    return { sub: sub || email, email, role };
+    return { sub: sub || username, username, role };
   }
 
   /**

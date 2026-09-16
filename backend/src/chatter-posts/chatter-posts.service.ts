@@ -27,12 +27,13 @@ import {
   parseMentionUserIdsFromMessage,
   resolveProjectNo,
   resolveTaskOpNo,
+  uniqueUserIds,
   uniqueUuids,
   weekRangeContaining,
 } from './chatter-mentions.util';
 import { DashboardRealtimeService } from '../dashboard/dashboard-realtime.service';
 import { UserRole } from '../common/constants/roles.enum';
-import { buildWhere, filterValidUuids, optionalUuid } from '../common/utils/sql-param.util';
+import { buildWhere, filterValidUuids, optionalUserId, optionalUuid } from '../common/utils/sql-param.util';
 import { isSameUserId, normalizeUserId } from '../common/utils/user-id.util';
 
 function optionalPaginationCursor(value?: string | null): string | null {
@@ -224,7 +225,7 @@ export class ChatterPostsService implements OnModuleInit {
 
   /** Stable lowercase UUID key for maps keyed by post/comment ids. */
   private entityIdKey(value?: string | null): string | null {
-    return normalizeUserId(value);
+    return optionalUuid(value)?.toLowerCase() ?? null;
   }
 
   private async loadChatterParticipantUserIds(
@@ -237,19 +238,19 @@ export class ChatterPostsService implements OnModuleInit {
 
     const rows = resolvedTaskId
       ? await this.prisma.$queryRaw<Array<{ userId: string }>>(Prisma.sql`
-          SELECT DISTINCT CONVERT(varchar(36), u.id) AS userId
+          SELECT DISTINCT u.userId AS userId
           FROM ErpTSChatterPost p
           LEFT JOIN ErpTSTask t ON t.id = p.taskId
           LEFT JOIN ErpTSChatterComment c ON c.postId = p.id
-          INNER JOIN ErpTSUser u ON u.id = p.authorId OR u.id = c.authorId
+          INNER JOIN ErpAuthUsers u ON u.userId = p.authorId OR u.userId = c.authorId
           WHERE p.taskId = ${resolvedTaskId}
         `)
       : await this.prisma.$queryRaw<Array<{ userId: string }>>(Prisma.sql`
-          SELECT DISTINCT CONVERT(varchar(36), u.id) AS userId
+          SELECT DISTINCT u.userId AS userId
           FROM ErpTSChatterPost p
           LEFT JOIN ErpTSTask t ON t.id = p.taskId
           LEFT JOIN ErpTSChatterComment c ON c.postId = p.id
-          INNER JOIN ErpTSUser u ON u.id = p.authorId OR u.id = c.authorId
+          INNER JOIN ErpAuthUsers u ON u.userId = p.authorId OR u.userId = c.authorId
           WHERE (p.projectId = ${resolvedProjectId} OR t.projectId = ${resolvedProjectId})
         `);
     return rows.map((row) => String(row.userId)).filter(Boolean);
@@ -273,43 +274,36 @@ export class ChatterPostsService implements OnModuleInit {
       const key = normalizeUserId(id);
       if (key) eligibleIds.add(key);
     };
-    const resolveUserDepartmentId = (user: (typeof allUsers)[number]) =>
-      user.department?.id ?? null;
+    // ErpUser no longer carries a department, so department-based mention
+    // gating is a no-op (isDesignerDepartmentMentionable treats null as mentionable).
+    const resolveUserDepartmentId = (_user: (typeof allUsers)[number]) => null;
 
     if (role === UserRole.HOD) {
-      const hod = await this.prisma.user.findUnique({
-        where: { id: viewerId },
-        select: { departmentId: true },
-      });
       for (const user of allUsers) {
         if (isSameUserId(user.id, viewerId)) {
           addEligibleId(user.id);
           continue;
         }
-        const userRole = user.role?.name;
+        const userRole = user.role;
         if (userRole === UserRole.HOD) {
           addEligibleId(user.id);
           continue;
         }
         if (userRole === UserRole.DESIGNER) {
-          if (isDesignerDepartmentMentionable(hod?.departmentId, resolveUserDepartmentId(user))) {
+          if (isDesignerDepartmentMentionable(null, resolveUserDepartmentId(user))) {
             addEligibleId(user.id);
           }
         }
       }
     } else {
       addEligibleId(viewerId);
-      const viewer = await this.prisma.user.findUnique({
-        where: { id: viewerId },
-        select: { departmentId: true },
-      });
       for (const user of allUsers) {
-        if (user.role?.name === UserRole.HOD) {
+        if (user.role === UserRole.HOD) {
           addEligibleId(user.id);
           continue;
         }
-        if (user.role?.name === UserRole.DESIGNER) {
-          if (isDesignerDepartmentMentionable(viewer?.departmentId, resolveUserDepartmentId(user))) {
+        if (user.role === UserRole.DESIGNER) {
+          if (isDesignerDepartmentMentionable(null, resolveUserDepartmentId(user))) {
             addEligibleId(user.id);
           }
         }
@@ -322,8 +316,8 @@ export class ChatterPostsService implements OnModuleInit {
           where: { id: resolvedTaskId },
           select: { assigneeId: true, projectId: true, taskDesigners: { select: { designerId: true } } },
         });
-        addEligibleId(task?.assigneeId);
-        task?.taskDesigners?.forEach((td) => addEligibleId(td.designerId));
+        addEligibleId(task?.assigneeId != null ? String(task.assigneeId) : null);
+        task?.taskDesigners?.forEach((td) => addEligibleId(String(td.designerId)));
         if (task?.projectId) resolvedProjectId = task.projectId;
       }
       if (resolvedProjectId) {
@@ -332,8 +326,8 @@ export class ChatterPostsService implements OnModuleInit {
           select: { assigneeId: true, taskDesigners: { select: { designerId: true } } },
         });
         for (const row of projectTasks) {
-          addEligibleId(row.assigneeId);
-          row.taskDesigners?.forEach((td) => addEligibleId(td.designerId));
+          addEligibleId(row.assigneeId != null ? String(row.assigneeId) : null);
+          row.taskDesigners?.forEach((td) => addEligibleId(String(td.designerId)));
         }
       }
 
@@ -344,7 +338,7 @@ export class ChatterPostsService implements OnModuleInit {
     // Sales users are globally mentionable in Project Chatter, regardless of
     // project/task assignment. Existing HOD/designer/assignee rules stay intact.
     for (const user of allUsers) {
-      if (user.role?.name === UserRole.SALESPERSON) {
+      if (user.role === UserRole.SALESPERSON) {
         addEligibleId(user.id);
       }
     }
@@ -352,15 +346,15 @@ export class ChatterPostsService implements OnModuleInit {
     return [...eligibleIds]
       .map((id) => byId.get(id))
       .filter((user): user is NonNullable<typeof user> => Boolean(user))
-      .map((user) => ({ id: user.id, fullName: user.fullName }))
+      .map((user) => ({ id: user.id, fullName: user.userName }))
       .sort((a, b) => a.fullName.localeCompare(b.fullName));
   }
 
   private async resolveExistingUserIds(ids: string[]): Promise<string[]> {
-    const valid = uniqueUuids(ids);
+    const valid = uniqueUserIds(ids);
     if (!valid.length) return [];
     const rows = await this.prisma.$queryRaw<Array<{ id: string }>>(Prisma.sql`
-      SELECT CONVERT(varchar(36), id) AS id FROM ErpTSUser WHERE id IN (${Prisma.join(valid)})
+      SELECT userId AS id FROM ErpAuthUsers WHERE userId IN (${Prisma.join(valid.map((v) => BigInt(v)))})
     `);
     const existing = new Set(
       rows.map((row) => normalizeUserId(String(row.id))).filter(Boolean) as string[],
@@ -378,7 +372,7 @@ export class ChatterPostsService implements OnModuleInit {
   ): Promise<string[]> {
     const directory = await this.resolveEligibleMentionUsers(authorId, role, taskId, projectId);
     const eligible = new Set(directory.map((user) => user.id));
-    const explicitIds = uniqueUuids([dto.mentionUserId, ...(dto.mentionUserIds ?? [])]);
+    const explicitIds = uniqueUserIds([dto.mentionUserId, ...(dto.mentionUserIds ?? [])]);
     const validatedExplicit = await this.resolveExistingUserIds(explicitIds);
     const parsed = parseMentionUserIdsFromMessage(message, directory);
     return mergeCollectedMentionUserIds({
@@ -398,7 +392,7 @@ export class ChatterPostsService implements OnModuleInit {
   ): Promise<string[]> {
     const directory = await this.resolveEligibleMentionUsers(authorId, role, taskId, projectId);
     const eligible = new Set(directory.map((user) => user.id));
-    const explicitIds = uniqueUuids([dto.mentionUserId, ...(dto.mentionUserIds ?? [])]);
+    const explicitIds = uniqueUserIds([dto.mentionUserId, ...(dto.mentionUserIds ?? [])]);
     const validatedExplicit = await this.resolveExistingUserIds(explicitIds);
     const parsed = parseMentionUserIdsFromMessage(message, directory);
     return mergeCollectedMentionUserIds({
@@ -430,22 +424,22 @@ export class ChatterPostsService implements OnModuleInit {
   }
 
   private async insertPostMentions(postId: string, userIds: string[]): Promise<void> {
-    const ids = uniqueUuids(userIds);
+    const ids = uniqueUserIds(userIds);
     if (!ids.length) return;
     await this.prisma.$executeRaw(Prisma.sql`
       MERGE INTO ErpTSChatterPostMention AS target
-      USING (VALUES ${Prisma.join(ids.map((uid) => Prisma.sql`(${postId}, ${uid})`))}) AS src(postId, userId)
+      USING (VALUES ${Prisma.join(ids.map((uid) => Prisma.sql`(${postId}, ${BigInt(uid)})`))}) AS src(postId, userId)
       ON target.postId = src.postId AND target.userId = src.userId
       WHEN NOT MATCHED THEN INSERT (postId, userId) VALUES (src.postId, src.userId);
     `);
   }
 
   private async insertCommentMentions(commentId: string, userIds: string[]): Promise<void> {
-    const ids = uniqueUuids(userIds);
+    const ids = uniqueUserIds(userIds);
     if (!ids.length) return;
     await this.prisma.$executeRaw(Prisma.sql`
       MERGE INTO ErpTSChatterCommentMention AS target
-      USING (VALUES ${Prisma.join(ids.map((uid) => Prisma.sql`(${commentId}, ${uid})`))}) AS src(commentId, userId)
+      USING (VALUES ${Prisma.join(ids.map((uid) => Prisma.sql`(${commentId}, ${BigInt(uid)})`))}) AS src(commentId, userId)
       ON target.commentId = src.commentId AND target.userId = src.userId
       WHEN NOT MATCHED THEN INSERT (commentId, userId) VALUES (src.commentId, src.userId);
     `);
@@ -464,11 +458,11 @@ export class ChatterPostsService implements OnModuleInit {
       SELECT
         CONVERT(varchar(36), pm.postId) AS postId,
         CONVERT(varchar(36), pm.userId) AS userId,
-        u.fullName
+        u.userName AS fullName
       FROM ErpTSChatterPostMention pm
-      INNER JOIN ErpTSUser u ON u.id = pm.userId
+      INNER JOIN ErpAuthUsers u ON u.userId = pm.userId
       WHERE pm.postId IN (${Prisma.join(validIds)})
-      ORDER BY u.fullName ASC
+      ORDER BY u.userName ASC
     `);
 
     for (const row of rows) {
@@ -496,11 +490,11 @@ export class ChatterPostsService implements OnModuleInit {
       SELECT
         CONVERT(varchar(36), cm.commentId) AS commentId,
         CONVERT(varchar(36), cm.userId) AS userId,
-        u.fullName
+        u.userName AS fullName
       FROM ErpTSChatterCommentMention cm
-      INNER JOIN ErpTSUser u ON u.id = cm.userId
+      INNER JOIN ErpAuthUsers u ON u.userId = cm.userId
       WHERE cm.commentId IN (${Prisma.join(validIds)})
-      ORDER BY u.fullName ASC
+      ORDER BY u.userName ASC
     `);
 
     for (const row of rows) {
@@ -528,11 +522,11 @@ export class ChatterPostsService implements OnModuleInit {
       SELECT
         CONVERT(varchar(36), ps.postId) AS postId,
         CONVERT(varchar(36), ps.userId) AS userId,
-        u.fullName
+        u.userName AS fullName
       FROM ErpTSChatterPostSeen ps
-      INNER JOIN ErpTSUser u ON u.id = ps.userId
+      INNER JOIN ErpAuthUsers u ON u.userId = ps.userId
       WHERE ps.postId IN (${Prisma.join(validIds)})
-      ORDER BY ps.seenAt ASC, u.fullName ASC
+      ORDER BY ps.seenAt ASC, u.userName ASC
     `);
 
     for (const row of rows) {
@@ -661,13 +655,13 @@ export class ChatterPostsService implements OnModuleInit {
       projectId: params.projectId,
     });
 
-    for (const userId of uniqueUuids(params.mentionedUserIds)) {
+    for (const userId of uniqueUserIds(params.mentionedUserIds)) {
       if (userId === params.authorId) continue;
       try {
         await this.prisma.notification.create({
           data: {
             id: randomUUID(),
-            userId,
+            userId: BigInt(userId),
             title: 'You were mentioned in Chatter',
             message: `${params.authorName} mentioned you in a ${kind} about ${ref}${snippet ? `: "${snippet}"` : '.'}`,
             linkUrl: link,
@@ -690,13 +684,14 @@ export class ChatterPostsService implements OnModuleInit {
         c.postId,
         c.authorId,
         c.mentionUserId,
-        u.fullName AS authorName,
-        r.name AS authorRole,
+        u.userName AS authorName,
+        r.roleName AS authorRole,
         c.message,
         c.createdAt
       FROM ErpTSChatterComment c
-      LEFT JOIN ErpTSUser u ON u.id = c.authorId
-      LEFT JOIN ErpTSRole r ON r.id = u.roleId
+      LEFT JOIN ErpAuthUsers u ON u.userId = c.authorId
+      LEFT JOIN ErpAuthUserRoleMap m ON m.userId = u.userId AND m.isActive = 1
+      LEFT JOIN ErpMasterRole r ON r.roleId = m.roleId AND r.isActive = 1 AND r.isDeleted = 0
       WHERE c.id = ${id}
     `);
 
@@ -733,7 +728,7 @@ export class ChatterPostsService implements OnModuleInit {
     );
     return {
       id: normalizeUserId(String(row.id)) ?? String(row.id),
-      postId: normalizeUserId(row.postId != null ? String(row.postId) : null),
+      postId: row.postId != null ? String(row.postId) : null,
       authorId: normalizeUserId(row.authorId != null ? String(row.authorId) : null),
       authorName: row.authorName != null ? String(row.authorName) : null,
       authorRole: row.authorRole != null ? String(row.authorRole) : null,
@@ -754,13 +749,14 @@ export class ChatterPostsService implements OnModuleInit {
         c.postId,
         c.authorId,
         c.mentionUserId,
-        u.fullName AS authorName,
-        r.name AS authorRole,
+        u.userName AS authorName,
+        r.roleName AS authorRole,
         c.message,
         c.createdAt
       FROM ErpTSChatterComment c
-      LEFT JOIN ErpTSUser u ON u.id = c.authorId
-      LEFT JOIN ErpTSRole r ON r.id = u.roleId
+      LEFT JOIN ErpAuthUsers u ON u.userId = c.authorId
+      LEFT JOIN ErpAuthUserRoleMap m ON m.userId = u.userId AND m.isActive = 1
+      LEFT JOIN ErpMasterRole r ON r.roleId = m.roleId AND r.isActive = 1 AND r.isDeleted = 0
       WHERE c.postId IN (${Prisma.join(validIds)})
       ORDER BY c.createdAt DESC`);
 
@@ -997,13 +993,13 @@ export class ChatterPostsService implements OnModuleInit {
   private postSelectColumns(alias = 'p'): string {
     return `
       ${alias}.id, ${alias}.taskId, ${alias}.authorId,
-      u.fullName AS authorName, r.name AS authorRole,
-      mu.fullName AS mentionUserName,
+      u.userName AS authorName, r.roleName AS authorRole,
+      mu.userName AS mentionUserName,
       COALESCE(pr.name, prDirect.name) AS projectName,
       COALESCE(pr.projectNo, prDirect.projectNo) AS projectNo,
       CONVERT(varchar(36), COALESCE(t.projectId, ${alias}.projectId)) AS projectId,
       t.title AS taskTitle, t.taskNo AS taskNo, t.opNo AS taskOpNo,
-      assignee.fullName AS assigneeName,
+      assignee.userName AS assigneeName,
       ${alias}.title, ${alias}.message, ${alias}.postType, ${alias}.mentionUserId, ${alias}.priority,
       ${alias}.seenByCount, ${alias}.attachmentCount, ${alias}.isPinned, ${alias}.editedAt, ${alias}.visibility,
       ${alias}.createdAt, ${alias}.updatedAt
@@ -1013,13 +1009,14 @@ export class ChatterPostsService implements OnModuleInit {
   private postJoinSql(alias = 'p'): string {
     return `
       FROM ErpTSChatterPost ${alias}
-      LEFT JOIN ErpTSUser u ON u.id = ${alias}.authorId
-      LEFT JOIN ErpTSRole r ON r.id = u.roleId
-      LEFT JOIN ErpTSUser mu ON mu.id = ${alias}.mentionUserId
+      LEFT JOIN ErpAuthUsers u ON u.userId = ${alias}.authorId
+      LEFT JOIN ErpAuthUserRoleMap m ON m.userId = u.userId AND m.isActive = 1
+      LEFT JOIN ErpMasterRole r ON r.roleId = m.roleId AND r.isActive = 1 AND r.isDeleted = 0
+      LEFT JOIN ErpAuthUsers mu ON mu.userId = ${alias}.mentionUserId
       LEFT JOIN ErpTSTask t ON t.id = ${alias}.taskId
       LEFT JOIN ErpTSProject pr ON pr.id = t.projectId
       LEFT JOIN ErpTSProject prDirect ON prDirect.id = ${alias}.projectId
-      LEFT JOIN ErpTSUser assignee ON assignee.id = t.assigneeId
+      LEFT JOIN ErpAuthUsers assignee ON assignee.userId = t.assigneeId
     `;
   }
 
@@ -1322,9 +1319,9 @@ export class ChatterPostsService implements OnModuleInit {
       await this.insertCommentMentions(newCommentId, mentionUserIds);
     }
 
-    const author = await this.prisma.user.findUnique({
-      where: { id: authorId },
-      select: { fullName: true },
+    const author = await this.prisma.erpUser.findUnique({
+      where: { userId: BigInt(authorId) },
+      select: { userName: true },
     });
     const postMeta = await this.loadPostById(normalizedPostId);
 
@@ -1366,7 +1363,7 @@ export class ChatterPostsService implements OnModuleInit {
       await this.notifyMentionedUsers({
         mentionedUserIds: mentionUserIds,
         authorId,
-        authorName: author?.fullName?.trim() || 'Someone',
+        authorName: author?.userName?.trim() || 'Someone',
         postId: normalizedPostId,
         commentId: newCommentId,
         isComment: true,
@@ -1494,8 +1491,8 @@ export class ChatterPostsService implements OnModuleInit {
           visibility: dto.visibility || null,
           taskId: taskId || null,
           projectId: resolvedProjectId,
-          authorId: authorId,
-          mentionUserId: primaryMentionUserId,
+          authorId: BigInt(authorId),
+          mentionUserId: primaryMentionUserId != null ? BigInt(primaryMentionUserId) : null,
           attachmentCount: totalAttachments > 0 ? totalAttachments : undefined,
           attachments: uploadResults.length > 0 ? {
             create: uploadResults.map((r) => ({
@@ -1537,9 +1534,9 @@ export class ChatterPostsService implements OnModuleInit {
       await this.insertPostMentions(newPost.id, mentionUserIds);
     }
 
-    const author = await this.prisma.user.findUnique({
-      where: { id: authorId },
-      select: { fullName: true },
+    const author = await this.prisma.erpUser.findUnique({
+      where: { userId: BigInt(authorId) },
+      select: { userName: true },
     });
 
     const [attachmentsMap, linksMap] = await Promise.all([
@@ -1556,7 +1553,7 @@ export class ChatterPostsService implements OnModuleInit {
       await this.notifyMentionedUsers({
         mentionedUserIds: mentionUserIds,
         authorId,
-        authorName: author?.fullName?.trim() || 'Someone',
+        authorName: author?.userName?.trim() || 'Someone',
         postId: newPost.id,
         isComment: false,
         messageText: dto.message,
@@ -1750,7 +1747,7 @@ export class ChatterPostsService implements OnModuleInit {
   ): Promise<{
     updates: Array<{ postId: string; seenByCount: number; seenByUsers: ChatterSeenByUserDto[] }>;
   }> {
-    const uid = optionalUuid(userId);
+    const uid = optionalUserId(userId);
     if (!uid) throw new BadRequestException('Invalid userId');
 
     const ids = uniqueUuids(postIds);
@@ -1801,7 +1798,7 @@ export class ChatterPostsService implements OnModuleInit {
 
   async likePost(postId: string, userId: string): Promise<{ likeCount: number; liked: boolean }> {
     const id = optionalUuid(postId);
-    const uid = optionalUuid(userId);
+    const uid = optionalUserId(userId);
     if (!id || !uid) throw new BadRequestException('Invalid postId or userId');
 
     const existing = await this.prisma.$queryRaw<Array<{ id: string }>>(Prisma.sql`
@@ -1833,11 +1830,8 @@ export class ChatterPostsService implements OnModuleInit {
     const id = optionalUuid(postId);
     if (!id) throw new BadRequestException('postId must be a valid UUID');
 
-    const requester = await this.prisma.user.findUnique({
-      where: { id: requesterId },
-      select: { role: { select: { name: true } } },
-    });
-    const roleName = requester?.role?.name ?? '';
+    const requester = await this.usersService.findById(requesterId);
+    const roleName = requester?.role ?? '';
     if (!['HOD', 'ADMIN'].includes(roleName)) throw new ForbiddenException('Only HOD or ADMIN can pin posts');
 
     await this.prisma.$executeRaw(Prisma.sql`

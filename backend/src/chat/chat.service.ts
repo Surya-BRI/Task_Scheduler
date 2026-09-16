@@ -23,7 +23,7 @@ export class ChatService {
       where: {
         conversationId_userId: {
           conversationId,
-          userId,
+          userId: BigInt(userId),
         },
       },
     });
@@ -59,7 +59,7 @@ export class ChatService {
           isGroup: false,
           AND: uniqueIds.map((userId) => ({
             participants: {
-              some: { userId },
+              some: { userId: BigInt(userId) },
             },
           })),
         },
@@ -68,10 +68,8 @@ export class ChatService {
             include: {
               user: {
                 select: {
-                  id: true,
-                  fullName: true,
-                  email: true,
-                  role: { select: { name: true } },
+                  userId: true,
+                  userName: true,
                 },
               },
             },
@@ -92,7 +90,7 @@ export class ChatService {
           isGroup,
           participants: {
             create: uniqueIds.map((userId) => ({
-              userId,
+              userId: BigInt(userId),
             })),
           },
         },
@@ -101,10 +99,8 @@ export class ChatService {
             include: {
               user: {
                 select: {
-                  id: true,
-                  fullName: true,
-                  email: true,
-                  role: { select: { name: true } },
+                  userId: true,
+                  userName: true,
                 },
               },
             },
@@ -122,7 +118,7 @@ export class ChatService {
   async findAllConversations(userId: string) {
     // Find all participant records for this user
     const userParticipations = await this.prisma.conversationParticipant.findMany({
-      where: { userId },
+      where: { userId: BigInt(userId) },
       select: { conversationId: true },
     });
 
@@ -138,10 +134,8 @@ export class ChatService {
           include: {
             user: {
               select: {
-                id: true,
-                fullName: true,
-                email: true,
-                role: { select: { name: true } },
+                userId: true,
+                userName: true,
               },
             },
           },
@@ -152,9 +146,8 @@ export class ChatService {
           include: {
             sender: {
               select: {
-                id: true,
-                fullName: true,
-                role: { select: { name: true } },
+                userId: true,
+                userName: true,
               },
             },
           },
@@ -166,13 +159,13 @@ export class ChatService {
     // Compute unread message counts in parallel for all conversations
     const results = await Promise.all(
       conversations.map(async (conv) => {
-        const myParticipantRecord = conv.participants.find((p) => p.userId === userId);
+        const myParticipantRecord = conv.participants.find((p) => p.userId === BigInt(userId));
         const lastReadAt = myParticipantRecord?.lastReadAt || new Date(0);
 
         const unreadCount = await this.prisma.message.count({
           where: {
             conversationId: conv.id,
-            senderId: { not: userId },
+            senderId: { not: BigInt(userId) },
             createdAt: { gt: lastReadAt },
           },
         });
@@ -211,10 +204,8 @@ export class ChatService {
       include: {
         sender: {
           select: {
-            id: true,
-            fullName: true,
-            email: true,
-            role: { select: { name: true } },
+            userId: true,
+            userName: true,
           },
         },
       },
@@ -234,16 +225,14 @@ export class ChatService {
       const msg = await tx.message.create({
         data: {
           conversationId,
-          senderId: userId,
+          senderId: BigInt(userId),
           content: dto.content,
         },
         include: {
           sender: {
             select: {
-              id: true,
-              fullName: true,
-              email: true,
-              role: { select: { name: true } },
+              userId: true,
+              userName: true,
             },
           },
         },
@@ -274,30 +263,30 @@ export class ChatService {
    */
   private async notifyOtherParticipants(
     conversationId: string,
-    message: { id: string; senderId: string; content: string; sender: { fullName: string } },
+    message: { id: string; senderId: bigint; content: string; sender: { userName: string } },
   ): Promise<void> {
     const participants = await this.prisma.conversationParticipant.findMany({
       where: { conversationId, userId: { not: message.senderId } },
-      select: { userId: true, user: { select: { id: true, fullName: true } } },
+      select: { userId: true, user: { select: { userId: true, userName: true } } },
     });
     if (participants.length === 0) return;
 
-    const directory = participants.map((p) => ({ id: p.userId, fullName: p.user.fullName ?? '' }));
+    const directory = participants.map((p) => ({ id: String(p.userId), fullName: p.user.userName ?? '' }));
     const mentionedIds = new Set(parseMentionUserIdsFromMessage(message.content, directory));
     const snippet = messageSnippet(message.content);
     const linkUrl = `/chat?conversationId=${conversationId}`;
 
     for (const participant of participants) {
-      const isMentioned = mentionedIds.has(participant.userId);
+      const isMentioned = mentionedIds.has(String(participant.userId));
       const title = isMentioned ? 'You were mentioned in a chat message' : 'New Message';
       const body = isMentioned
-        ? `${message.sender.fullName} mentioned you: "${snippet}"`
-        : `${message.sender.fullName}: ${snippet}`;
+        ? `${message.sender.userName} mentioned you: "${snippet}"`
+        : `${message.sender.userName}: ${snippet}`;
       try {
         await this.prisma.notification.create({
           data: { id: randomUUID(), userId: participant.userId, title, message: body, linkUrl },
         });
-        this.dashboardRealtime?.notifyUserNotificationRefresh(participant.userId);
+        this.dashboardRealtime?.notifyUserNotificationRefresh(String(participant.userId));
       } catch (err) {
         this.logger.warn(`Chat message notification failed for ${participant.userId}: ${err}`);
       }

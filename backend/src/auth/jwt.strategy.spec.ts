@@ -14,18 +14,18 @@ function makeConfig(overrides: Record<string, string> = {}) {
 }
 
 describe('JwtStrategy', () => {
-  it('validates demo-mode tokens with sub, email, and role', () => {
+  it('validates demo-mode tokens with sub, username, and role', () => {
     const strategy = new JwtStrategy(makeConfig());
-    expect(strategy.validate({ sub: 'u1', email: 'a@b.com', role: 'HOD' })).toEqual({
+    expect(strategy.validate({ sub: 'u1', username: 'a@b.com', role: 'HOD' })).toEqual({
       sub: 'u1',
-      email: 'a@b.com',
+      username: 'a@b.com',
       role: 'HOD',
     });
   });
 
   it('rejects demo-mode tokens missing required claims', () => {
     const strategy = new JwtStrategy(makeConfig());
-    expect(() => strategy.validate({ sub: 'u1', email: 'a@b.com' })).toThrow(UnauthorizedException);
+    expect(() => strategy.validate({ sub: 'u1', username: 'a@b.com' })).toThrow(UnauthorizedException);
   });
 
   it('normalises external-mode tokens using configured field names', () => {
@@ -48,12 +48,12 @@ describe('JwtStrategy', () => {
       }),
     ).toEqual({
       sub: 'ext-1',
-      email: 'ext@example.com',
+      username: 'ext@example.com',
       role: 'HOD',
     });
   });
 
-  it('falls back to email as sub when external sub is missing', () => {
+  it('falls back to username as sub when external sub is missing', () => {
     const strategy = new JwtStrategy(
       makeConfig({
         'auth.mode': 'external',
@@ -69,7 +69,7 @@ describe('JwtStrategy', () => {
       }),
     ).toEqual({
       sub: 'fallback@example.com',
-      email: 'fallback@example.com',
+      username: 'fallback@example.com',
       role: 'DESIGNER',
     });
   });

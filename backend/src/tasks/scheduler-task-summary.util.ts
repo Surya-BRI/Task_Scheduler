@@ -110,7 +110,7 @@ export function mapSchedulerTaskSummary(task: SchedulerTaskSummaryRow): Schedule
     disciplineType: task.disciplineType,
     status: mapStatusForApi(task.status),
     priority: task.priority,
-    assigneeId: task.assigneeId,
+    assigneeId: task.assigneeId != null ? String(task.assigneeId) : null,
     holdPreviousStatus: task.holdPreviousStatus,
     projectId: task.projectId ?? project?.id ?? null,
     updatedAt: task.updatedAt.toISOString(),

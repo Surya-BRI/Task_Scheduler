@@ -1,11 +1,13 @@
 import { IsOptional, IsString, Matches, MaxLength, MinLength } from 'class-validator';
 
 const UUID_RE = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
+// ERP ErpAuthUsers.userId is a decimal bigint, not a GUID.
+const NUMERIC_ID_RE = /^\d+$/;
 
 export class UpdateOvertimeRequestDto {
   @IsOptional()
   @IsString()
-  @Matches(UUID_RE, { message: 'designerId must be a UUID string' })
+  @Matches(NUMERIC_ID_RE, { message: 'designerId must be numeric' })
   designerId?: string;
 
   @IsOptional()

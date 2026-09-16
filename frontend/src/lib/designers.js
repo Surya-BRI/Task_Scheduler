@@ -22,11 +22,11 @@ export const DESIGNER_PROFILES = [
   { id: 'd20', name: 'Designer 20' },
 ];
 
-const UUID_RE =
-  /^[0-9a-f]{8}-[0-9a-f]{4}-[1-5][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i;
+// User ids are now ERP ErpAuthUsers.userId — decimal bigints, not GUIDs.
+const NUMERIC_ID_RE = /^\d+$/;
 
 export function isUuidString(value) {
-  return UUID_RE.test(String(value ?? '').trim());
+  return NUMERIC_ID_RE.test(String(value ?? '').trim());
 }
 
 export function slugForDesignerEmail(email) {
@@ -46,12 +46,13 @@ export function profileForRouteId(routeId) {
 
 export function buildSessionForUser(user) {
   const role = user.role;
+  const displayName = user.userName ?? user.fullName ?? user.username ?? '';
   const session = {
     id: user.id,
-    email: user.email,
-    name: user.fullName,
+    username: user.username ?? user.userName,
+    name: displayName,
     role,
-    initials: user.fullName
+    initials: displayName
       .split(' ')
       .map((n) => n[0])
       .join('')

@@ -2,10 +2,10 @@ import { DeadlineAlertsService } from './deadline-alerts.service';
 import { NotificationsService } from '../notifications/notifications.service';
 import { ActivityLoggerService } from '../activities/activity-logger.service';
 import { CronLockService, LOCK_NOT_ACQUIRED } from '../common/services/cron-lock.service';
+import { UsersService } from '../users/users.service';
 
 describe('DeadlineAlertsService', () => {
   const prisma = {
-    user: { findMany: jest.fn() },
     task: { findMany: jest.fn() },
     $queryRaw: jest.fn(),
   };
@@ -17,21 +17,23 @@ describe('DeadlineAlertsService', () => {
   const cronLockService = {
     withLock: jest.fn((_resource: string, fn: () => Promise<unknown>) => fn()),
   } as unknown as CronLockService;
+  const usersService = { findAll: jest.fn() } as unknown as UsersService;
 
   const service = new DeadlineAlertsService(
     prisma as never,
     notificationsService,
     activityLogger,
     cronLockService,
+    usersService,
   );
 
   beforeEach(() => {
     jest.clearAllMocks();
     jest.useRealTimers();
-    prisma.user.findMany.mockResolvedValue([
-      { id: 'hod-1', fullName: 'HOD User', role: { name: 'HOD' } },
-      { id: 'sales-1', fullName: 'Sithara Sukumaran', role: { name: 'SALESPERSON' } },
-      { id: 'sales-2', fullName: 'Fahad', role: { name: 'SALESPERSON' } },
+    (usersService.findAll as jest.Mock).mockResolvedValue([
+      { id: 'hod-1', userName: 'HOD User', role: 'HOD' },
+      { id: 'sales-1', userName: 'Sithara Sukumaran', role: 'SALESPERSON' },
+      { id: 'sales-2', userName: 'Fahad', role: 'SALESPERSON' },
     ]);
     prisma.task.findMany.mockResolvedValue([]);
     prisma.$queryRaw.mockResolvedValue([]);
@@ -53,7 +55,7 @@ describe('DeadlineAlertsService', () => {
   });
 
   it('skips deadline scan when no HOD/Admin/Sales users exist', async () => {
-    prisma.user.findMany.mockResolvedValue([]);
+    (usersService.findAll as jest.Mock).mockResolvedValue([]);
     await service.checkDeadlines();
     expect(prisma.task.findMany).not.toHaveBeenCalled();
   });

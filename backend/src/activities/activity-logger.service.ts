@@ -17,7 +17,7 @@ export class ActivityLoggerService {
       await this.prisma.activityLog.create({
         data: {
           action,
-          userId,
+          userId: BigInt(userId),
           taskId: taskId ?? null,
           details: JSON.stringify(details),
         },

@@ -122,8 +122,8 @@ const TASK_SELECT = {
     },
   },
   assigneeId: true,
-  assignee: { select: { id: true, fullName: true, email: true } },
-  taskDesigners: { select: { designer: { select: { id: true, fullName: true, email: true } } } },
+  assignee: { select: { userId: true, userName: true } },
+  taskDesigners: { select: { designer: { select: { userId: true, userName: true } } } },
   retailDetails: {
     select: {
       ...TASK_RETAIL_DETAIL_CORE_SELECT,
@@ -184,8 +184,8 @@ const TASK_CORE_SELECT = {
     },
   },
   assigneeId: true,
-  assignee: { select: { id: true, fullName: true, email: true } },
-  taskDesigners: { select: { designer: { select: { id: true, fullName: true, email: true } } } },
+  assignee: { select: { userId: true, userName: true } },
+  taskDesigners: { select: { designer: { select: { userId: true, userName: true } } } },
   retailDetails: { select: TASK_RETAIL_DETAIL_CORE_SELECT },
   projectDetails: { select: TASK_PROJECT_DETAIL_CORE_SELECT },
   createdAt: true,
@@ -280,8 +280,8 @@ const TASK_LIST_SELECT = {
     },
   },
   assigneeId: true,
-  assignee: { select: { id: true, fullName: true, email: true } },
-  taskDesigners: { select: { designer: { select: { id: true, fullName: true, email: true } } } },
+  assignee: { select: { userId: true, userName: true } },
+  taskDesigners: { select: { designer: { select: { userId: true, userName: true } } } },
   retailDetails: { select: { hoursRequired: true, designTypes: true } },
   projectDetails: { select: { artworkHours: true, technicalHours: true, locationHours: true, asBuiltHours: true } },
   createdAt: true,
@@ -329,6 +329,19 @@ export type NextPhaseQuery = {
 
 type PhaseContext = { maxPhase: number; bySignType: Map<string, number> };
 
+// ERP roleName -> Scheduler role bucket, mirrored from users.service.ts (the local
+// Role table is gone; role membership now only exists via ERP's own role tables).
+const ERP_ROLE_BUCKET: Record<string, UserRole> = {
+  'Design HOD': UserRole.HOD,
+  'Design Head': UserRole.HOD,
+  SalesRep: UserRole.SALESPERSON,
+  'Sales Coordinator': UserRole.SALESPERSON,
+  Designer: UserRole.DESIGNER,
+  QS: UserRole.QS,
+};
+
+type ErpRoleRow = { userId: bigint; userName: string; roleName: string | null };
+
 @Injectable()
 export class TasksService {
   private readonly logger = new Logger(TasksService.name);
@@ -340,25 +353,47 @@ export class TasksService {
     @Optional() private readonly dashboardRealtime?: DashboardRealtimeService,
   ) {}
 
+  /** Raw ERP role join — the local Role table is gone, so bucket membership must be
+   * resolved against ERP's own ErpAuthUserRoleMap/ErpMasterRole tables. */
+  private async findErpUsersByRoleBuckets(buckets: UserRole[]): Promise<{ id: string; userName: string }[]> {
+    const rows = await this.prisma.$queryRaw<ErpRoleRow[]>`
+      SELECT u.userId, u.userName, r.roleName
+      FROM ErpAuthUsers u
+      JOIN ErpAuthUserRoleMap m ON m.userId = u.userId AND m.isActive = 1
+      JOIN ErpMasterRole r ON r.roleId = m.roleId AND r.isActive = 1 AND r.isDeleted = 0
+      WHERE u.isActive = 1 AND u.isDeleted = 0
+    `;
+    const bucketSet = new Set(buckets);
+    const seen = new Set<string>();
+    const result: { id: string; userName: string }[] = [];
+    for (const row of rows) {
+      const bucket = row.roleName ? ERP_ROLE_BUCKET[row.roleName] : undefined;
+      if (!bucket || !bucketSet.has(bucket)) continue;
+      const id = row.userId.toString();
+      if (seen.has(id)) continue;
+      seen.add(id);
+      result.push({ id, userName: row.userName });
+    }
+    return result;
+  }
+
   /**
    * HOD + Admin (org-wide) plus sales users matched to the project — never every salesperson.
    */
   private async resolveHodAdminAndSalesNotifyIds(
-    project: { salesPerson?: string | null; createdById?: string | null } | null | undefined,
+    project: { salesPerson?: string | null; createdById?: bigint | string | null } | null | undefined,
     options?: { taskId?: string },
   ): Promise<string[]> {
-    const [managers, salesUsers] = await Promise.all([
-      this.prisma.user.findMany({
-        where: { role: { name: { in: ['HOD', 'ADMIN'] } } },
-        select: { id: true },
-      }),
-      this.prisma.user.findMany({
-        where: { role: { name: 'SALESPERSON' } },
-        select: { id: true, fullName: true },
-      }),
+    const [managers, salesUsersRaw] = await Promise.all([
+      this.findErpUsersByRoleBuckets([UserRole.HOD, UserRole.ADMIN]),
+      this.findErpUsersByRoleBuckets([UserRole.SALESPERSON]),
     ]);
+    const salesUsers = salesUsersRaw.map((u) => ({ id: u.id, fullName: u.userName }));
+    const projectRef = project
+      ? { salesPerson: project.salesPerson, createdById: project.createdById != null ? String(project.createdById) : null }
+      : project;
 
-    let matched = matchSalesUsersToProject(project, salesUsers);
+    let matched = matchSalesUsersToProject(projectRef, salesUsers);
     if (matched.length === 0 && options?.taskId) {
       const created = await this.prisma.activityLog.findFirst({
         where: { taskId: options.taskId, action: ActivityAction.TASK_CREATED },
@@ -366,8 +401,8 @@ export class TasksService {
         select: { userId: true },
       });
       if (created?.userId) {
-        matched = matchSalesUsersToProject(project, salesUsers, {
-          extraUserIds: [created.userId],
+        matched = matchSalesUsersToProject(projectRef, salesUsers, {
+          extraUserIds: [created.userId.toString()],
         });
       }
     }
@@ -377,21 +412,19 @@ export class TasksService {
 
   /** Admin + project-matched sales only (SALES_REVIEW queue). */
   private async resolveSalesReviewNotifyIds(
-    project: { salesPerson?: string | null; createdById?: string | null } | null | undefined,
+    project: { salesPerson?: string | null; createdById?: bigint | string | null } | null | undefined,
     options?: { taskId?: string },
   ): Promise<string[]> {
-    const [admins, salesUsers] = await Promise.all([
-      this.prisma.user.findMany({
-        where: { role: { name: 'ADMIN' } },
-        select: { id: true },
-      }),
-      this.prisma.user.findMany({
-        where: { role: { name: 'SALESPERSON' } },
-        select: { id: true, fullName: true },
-      }),
+    const [admins, salesUsersRaw] = await Promise.all([
+      this.findErpUsersByRoleBuckets([UserRole.ADMIN]),
+      this.findErpUsersByRoleBuckets([UserRole.SALESPERSON]),
     ]);
+    const salesUsers = salesUsersRaw.map((u) => ({ id: u.id, fullName: u.userName }));
+    const projectRef = project
+      ? { salesPerson: project.salesPerson, createdById: project.createdById != null ? String(project.createdById) : null }
+      : project;
 
-    let matched = matchSalesUsersToProject(project, salesUsers);
+    let matched = matchSalesUsersToProject(projectRef, salesUsers);
     if (matched.length === 0 && options?.taskId) {
       const created = await this.prisma.activityLog.findFirst({
         where: { taskId: options.taskId, action: ActivityAction.TASK_CREATED },
@@ -399,8 +432,8 @@ export class TasksService {
         select: { userId: true },
       });
       if (created?.userId) {
-        matched = matchSalesUsersToProject(project, salesUsers, {
-          extraUserIds: [created.userId],
+        matched = matchSalesUsersToProject(projectRef, salesUsers, {
+          extraUserIds: [created.userId.toString()],
         });
       }
     }
@@ -424,6 +457,11 @@ export class TasksService {
     return /^[0-9a-f]{8}-[0-9a-f]{4}-[1-5][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i.test(
       String(value ?? '').trim(),
     );
+  }
+
+  /** ERP user ids are bigints carried as decimal strings — no longer GUIDs. */
+  private isValidBigIntId(value: string) {
+    return /^[0-9]+$/.test(String(value ?? '').trim());
   }
 
   private isAbsoluteHttpUrl(value: string) {
@@ -947,7 +985,7 @@ export class TasksService {
     const normalizedDesignType = this.normalizeDesignType(dto.designType);
 
     if (dto.assigneeId) {
-      const assignee = await this.prisma.user.findUnique({ where: { id: dto.assigneeId } });
+      const assignee = await this.prisma.erpUser.findUnique({ where: { userId: BigInt(dto.assigneeId) } });
       if (!assignee) throw new NotFoundException('Assignee not found');
     }
 
@@ -987,7 +1025,7 @@ export class TasksService {
                 priority: dto.priority ?? 'Medium',
                 dueDate: dto.dueDate ? new Date(dto.dueDate) : undefined,
                 projectId: project.id,
-                assigneeId: dto.assigneeId ?? null,
+                assigneeId: dto.assigneeId ? BigInt(dto.assigneeId) : null,
               },
               select: { id: true },
             });
@@ -1087,7 +1125,7 @@ export class TasksService {
     });
 
     if (dto.task.assigneeId) {
-      const assignee = await this.prisma.user.findUnique({ where: { id: dto.task.assigneeId } });
+      const assignee = await this.prisma.erpUser.findUnique({ where: { userId: BigInt(dto.task.assigneeId) } });
       if (!assignee) throw new NotFoundException('Assignee not found');
     }
 
@@ -1145,7 +1183,7 @@ export class TasksService {
                   priority: dto.task.priority ?? 'Medium',
                   dueDate: dto.task.dueDate ? new Date(dto.task.dueDate) : undefined,
                   projectId: project.id,
-                  assigneeId: dto.task.assigneeId ?? null,
+                  assigneeId: dto.task.assigneeId ? BigInt(dto.task.assigneeId) : null,
                 },
                 select: { id: true },
               });
@@ -1236,20 +1274,21 @@ export class TasksService {
       });
 
       if (created.assigneeId) {
+        const assigneeIdStr = created.assigneeId.toString();
         const taskLink = `/retail-task-view/${created.id}`;
         const createMsg = `${created.taskNo} — ${created.project?.name ?? 'Unknown Project'} has been assigned to you.`;
         this.notificationsService
-          .create({ userId: created.assigneeId, title: 'Task Assigned to You', message: createMsg, linkUrl: taskLink })
+          .create({ userId: assigneeIdStr, title: 'Task Assigned to You', message: createMsg, linkUrl: taskLink })
           .then(() => this.logger.debug(`[NOTIFY] task created — designer notified`))
           .catch((err) => this.logger.error('Failed to notify designer on task create', err));
-        this.dashboardRealtime?.notifyUserNotificationRefresh(created.assigneeId);
+        this.dashboardRealtime?.notifyUserNotificationRefresh(assigneeIdStr);
 
         const stakeholderIds = await this.resolveHodAdminAndSalesNotifyIds(created.project, {
           taskId: created.id,
         });
-        const hodMsg = `${created.taskNo} — ${created.project?.name ?? 'Unknown Project'} created and assigned to ${created.assignee?.fullName ?? 'a designer'}.`;
+        const hodMsg = `${created.taskNo} — ${created.project?.name ?? 'Unknown Project'} created and assigned to ${created.assignee?.userName ?? 'a designer'}.`;
         for (const stakeholderId of stakeholderIds) {
-          if (stakeholderId !== created.assigneeId) {
+          if (stakeholderId !== assigneeIdStr) {
             this.notificationsService
               .create({ userId: stakeholderId, title: 'New Task Assigned', message: hodMsg, linkUrl: taskLink })
               .catch((err) => this.logger.error('Failed to notify HOD on task create', err));
@@ -1337,7 +1376,7 @@ export class TasksService {
                 priority: dto.task.priority ?? 'Medium',
                 dueDate: line.deadline ? new Date(line.deadline) : (dto.task.dueDate ? new Date(dto.task.dueDate) : undefined),
                 projectId: project.id,
-                assigneeId: dto.task.assigneeId ?? null,
+                assigneeId: dto.task.assigneeId ? BigInt(dto.task.assigneeId) : null,
               },
               select: { id: true },
             });
@@ -1425,19 +1464,20 @@ export class TasksService {
       if (!task) continue;
 
       if (task.assigneeId) {
+        const assigneeIdStr = task.assigneeId.toString();
         const taskLink = `/project-task-view/${task.id}`;
         const createMsg = `${task.taskNo} — ${task.project?.name ?? 'Unknown Project'} has been assigned to you.`;
         this.notificationsService
-          .create({ userId: task.assigneeId, title: 'Task Assigned to You', message: createMsg, linkUrl: taskLink })
+          .create({ userId: assigneeIdStr, title: 'Task Assigned to You', message: createMsg, linkUrl: taskLink })
           .catch((err) => this.logger.error('Failed to notify designer on task create', err));
-        this.dashboardRealtime?.notifyUserNotificationRefresh(task.assigneeId);
+        this.dashboardRealtime?.notifyUserNotificationRefresh(assigneeIdStr);
 
-        const hodMsg = `${task.taskNo} — ${task.project?.name ?? 'Unknown Project'} created and assigned to ${task.assignee?.fullName ?? 'a designer'}.`;
+        const hodMsg = `${task.taskNo} — ${task.project?.name ?? 'Unknown Project'} created and assigned to ${task.assignee?.userName ?? 'a designer'}.`;
         const stakeholderIds = await this.resolveHodAdminAndSalesNotifyIds(task.project, {
           taskId: task.id,
         });
         for (const stakeholderId of stakeholderIds) {
-          if (stakeholderId !== task.assigneeId) {
+          if (stakeholderId !== assigneeIdStr) {
             this.notificationsService
               .create({ userId: stakeholderId, title: 'New Task Assigned', message: hodMsg, linkUrl: taskLink })
               .catch((err) => this.logger.error('Failed to notify HOD on task create', err));
@@ -1625,11 +1665,11 @@ export class TasksService {
       !salesPerson &&
       !projectId
     ) {
-      const me = await this.prisma.user.findUnique({
-        where: { id: userId },
-        select: { fullName: true },
+      const me = await this.prisma.erpUser.findUnique({
+        where: { userId: BigInt(userId) },
+        select: { userName: true },
       });
-      const myName = String(me?.fullName ?? '').trim();
+      const myName = String(me?.userName ?? '').trim();
       if (!myName) {
         return { data: [], total: 0, page, limit, totalPages: 0 };
       }
@@ -1756,7 +1796,10 @@ export class TasksService {
     });
     if (!task) throw new NotFoundException('Task not found');
     await this.assertQsTaskAccess(id, userId, role);
-    await this.assertDesignerTaskAccess(id, userId, role, { assigneeId: (task as { assigneeId?: string | null }).assigneeId });
+    const taskAssigneeId = (task as { assigneeId?: bigint | null }).assigneeId;
+    await this.assertDesignerTaskAccess(id, userId, role, {
+      assigneeId: taskAssigneeId != null ? taskAssigneeId.toString() : null,
+    });
 
     if (view === 'core') {
       const people = await this.getTaskPeopleLabels(id, task);
@@ -1786,14 +1829,14 @@ export class TasksService {
             requesterId: true,
             suggestedDesignerId: true,
             reason: true,
-            requester: { select: { fullName: true } },
-            suggestedDesigner: { select: { fullName: true } },
+            requester: { select: { userName: true } },
+            suggestedDesigner: { select: { userName: true } },
           },
         }),
         userId
           ? this.prisma.schedulerAssignment
               .findMany({
-                where: { taskId: id, designerId: userId, isLocked: { not: true } },
+                where: { taskId: id, designerId: BigInt(userId), isLocked: { not: true } },
                 select: { assignedHours: true },
               })
               .then(
@@ -1809,13 +1852,14 @@ export class TasksService {
       String(task.status ?? '').toUpperCase(),
     );
     const junctionDesignerIds = (task.taskDesigners ?? [])
-      .map((entry: { designer?: { id?: string } | null }) => entry.designer?.id ?? null)
-      .filter((id): id is string => Boolean(id));
+      .map((entry: { designer?: { userId?: bigint } | null }) => entry.designer?.userId ?? null)
+      .filter((id): id is bigint => id != null)
+      .map((id) => id.toString());
     const ownsTask = Boolean(
       userId &&
-        (task.assigneeId === userId || junctionDesignerIds.includes(userId)),
+        (task.assigneeId?.toString() === userId || junctionDesignerIds.includes(userId)),
     );
-    const myPending = Boolean(userId && pendingReallocation?.requesterId === userId);
+    const myPending = Boolean(userId && pendingReallocation?.requesterId?.toString() === userId);
     // Logged-remainder-only owners (post-reallocation) have 0 unlocked hours — hide CTA.
     const viewerCanRequestReallocation = Boolean(
       userId && statusOk && ownsTask && viewerRemainingHours >= 0.01 && !myPending,
@@ -1829,10 +1873,10 @@ export class TasksService {
       pendingReallocation: pendingReallocation
         ? {
             id: pendingReallocation.id,
-            requesterId: pendingReallocation.requesterId,
-            requesterName: pendingReallocation.requester.fullName,
-            suggestedDesignerId: pendingReallocation.suggestedDesignerId,
-            suggestedDesignerName: pendingReallocation.suggestedDesigner.fullName,
+            requesterId: pendingReallocation.requesterId.toString(),
+            requesterName: pendingReallocation.requester.userName,
+            suggestedDesignerId: pendingReallocation.suggestedDesignerId.toString(),
+            suggestedDesignerName: pendingReallocation.suggestedDesigner.userName,
             reason: pendingReallocation.reason,
           }
         : null,
@@ -1856,7 +1900,7 @@ export class TasksService {
         status: true,
         assigneeId: true,
         reworkAttachmentUrl: true,
-        taskDesigners: { select: { designer: { select: { id: true } } } },
+        taskDesigners: { select: { designer: { select: { userId: true } } } },
         retailDetails: {
           select: {
             id: true,
@@ -1874,7 +1918,9 @@ export class TasksService {
     });
     if (!task) throw new NotFoundException('Task not found');
     await this.assertQsTaskAccess(id, userId, role);
-    await this.assertDesignerTaskAccess(id, userId, role, { assigneeId: task.assigneeId });
+    await this.assertDesignerTaskAccess(id, userId, role, {
+      assigneeId: task.assigneeId != null ? task.assigneeId.toString() : null,
+    });
 
     const [withUrls, schedulerHours, pendingReallocation, viewerRemainingHours] =
       await Promise.all([
@@ -1888,14 +1934,14 @@ export class TasksService {
             requesterId: true,
             suggestedDesignerId: true,
             reason: true,
-            requester: { select: { fullName: true } },
-            suggestedDesigner: { select: { fullName: true } },
+            requester: { select: { userName: true } },
+            suggestedDesigner: { select: { userName: true } },
           },
         }),
         userId
           ? this.prisma.schedulerAssignment
               .findMany({
-                where: { taskId: id, designerId: userId, isLocked: { not: true } },
+                where: { taskId: id, designerId: BigInt(userId), isLocked: { not: true } },
                 select: { assignedHours: true },
               })
               .then(
@@ -1911,13 +1957,14 @@ export class TasksService {
       String(task.status ?? '').toUpperCase(),
     );
     const junctionDesignerIds = (task.taskDesigners ?? [])
-      .map((entry: { designer?: { id?: string } | null }) => entry.designer?.id ?? null)
-      .filter((designerId): designerId is string => Boolean(designerId));
+      .map((entry: { designer?: { userId?: bigint } | null }) => entry.designer?.userId ?? null)
+      .filter((designerId): designerId is bigint => designerId != null)
+      .map((designerId) => designerId.toString());
     const ownsTask = Boolean(
       userId &&
-        (task.assigneeId === userId || junctionDesignerIds.includes(userId)),
+        (task.assigneeId?.toString() === userId || junctionDesignerIds.includes(userId)),
     );
-    const myPending = Boolean(userId && pendingReallocation?.requesterId === userId);
+    const myPending = Boolean(userId && pendingReallocation?.requesterId?.toString() === userId);
     const viewerCanRequestReallocation = Boolean(
       userId && statusOk && ownsTask && viewerRemainingHours >= 0.01 && !myPending,
     );
@@ -1927,10 +1974,10 @@ export class TasksService {
       pendingReallocation: pendingReallocation
         ? {
             id: pendingReallocation.id,
-            requesterId: pendingReallocation.requesterId,
-            requesterName: pendingReallocation.requester.fullName,
-            suggestedDesignerId: pendingReallocation.suggestedDesignerId,
-            suggestedDesignerName: pendingReallocation.suggestedDesigner.fullName,
+            requesterId: pendingReallocation.requesterId.toString(),
+            requesterName: pendingReallocation.requester.userName,
+            suggestedDesignerId: pendingReallocation.suggestedDesignerId.toString(),
+            suggestedDesignerName: pendingReallocation.suggestedDesigner.userName,
             reason: pendingReallocation.reason,
           }
         : null,
@@ -1957,39 +2004,36 @@ export class TasksService {
       this.prisma.activityLog.findFirst({
         where: { taskId, action: ActivityAction.TASK_CREATED },
         orderBy: { createdAt: 'asc' },
-        select: { user: { select: { fullName: true } } },
+        select: { user: { select: { userName: true } } },
       }),
       this.prisma.activityLog.findMany({
         where: { taskId, action: ActivityAction.ASSIGNED_TASK },
         orderBy: { createdAt: 'asc' },
         take: 20,
         select: {
-          user: {
-            select: {
-              fullName: true,
-              role: { select: { name: true } },
-            },
-          },
+          userId: true,
+          user: { select: { userName: true } },
         },
       }),
     ]);
 
-    const createdByName = created?.user?.fullName?.trim() || null;
+    const createdByName = created?.user?.userName?.trim() || null;
 
     const retailHod =
       (task.retailDetails ?? [])
         .map((line) => String(line?.hodName ?? '').trim())
         .find((name) => name.length > 0) || null;
 
-    const hodAssigner = assignedRows.find((row) => {
-      const roleName = String(row.user?.role?.name ?? '').toUpperCase();
-      return roleName === 'HOD' || roleName === 'ADMIN';
-    });
-    const anyAssigner = assignedRows[0]?.user?.fullName?.trim() || null;
+    const hodAdminUsers = assignedRows.length > 0
+      ? await this.findErpUsersByRoleBuckets([UserRole.HOD, UserRole.ADMIN])
+      : [];
+    const hodAdminIds = new Set(hodAdminUsers.map((u) => u.id));
+    const hodAssigner = assignedRows.find((row) => hodAdminIds.has(row.userId.toString()));
+    const anyAssigner = assignedRows[0]?.user?.userName?.trim() || null;
     const technicalHead = String(task.technicalHead ?? '').trim() || null;
 
     const reviewerHodName =
-      hodAssigner?.user?.fullName?.trim() ||
+      hodAssigner?.user?.userName?.trim() ||
       retailHod ||
       technicalHead ||
       anyAssigner ||
@@ -2007,7 +2051,7 @@ export class TasksService {
           dayIndex: true,
           assignedHours: true,
           isLocked: true,
-          designer: { select: { fullName: true } },
+          designer: { select: { userName: true } },
         },
         orderBy: [{ designerId: 'asc' }, { dayIndex: 'asc' }],
       }),
@@ -2022,7 +2066,7 @@ export class TasksService {
 
     const loggedSecondsByDesigner = new Map<string, number>();
     for (const session of sessions) {
-      const key = session.designerId;
+      const key = session.designerId.toString();
       const seconds =
         session.status === 'Draft'
           ? effectiveWorkSessionSeconds(session.durationSeconds, session.runStartedAt)
@@ -2036,16 +2080,17 @@ export class TasksService {
     >();
     for (const row of rows) {
       if (!row.designerId) continue;
+      const designerIdStr = row.designerId.toString();
       const hours = Number(row.assignedHours) || 0;
       if (hours <= 0) continue;
-      const existing = partsByDesigner.get(row.designerId);
+      const existing = partsByDesigner.get(designerIdStr);
       if (existing) {
         existing.assignedHours += hours;
         existing.sliceCount += 1;
       } else {
-        partsByDesigner.set(row.designerId, {
-          designerId: row.designerId,
-          designerName: row.designer?.fullName?.trim() || 'Designer',
+        partsByDesigner.set(designerIdStr, {
+          designerId: designerIdStr,
+          designerName: row.designer?.userName?.trim() || 'Designer',
           assignedHours: hours,
           loggedHours: 0,
           sliceCount: 1,
@@ -2092,7 +2137,7 @@ export class TasksService {
       const overtimeRows = await this.prisma.overtimeRequest.findMany({
         where: {
           taskId,
-          designerId: viewerUserId,
+          designerId: BigInt(viewerUserId),
           date: todayDate,
         },
         select: {
@@ -2125,7 +2170,7 @@ export class TasksService {
 
   async peekDraftWorkSession(taskId: string, designerId: string) {
     if (!this.isUuid(taskId)) throw new BadRequestException('Invalid task id');
-    if (!this.isUuid(designerId)) throw new BadRequestException('Invalid designer id');
+    if (!this.isValidBigIntId(designerId)) throw new BadRequestException('Invalid designer id');
     const peek = await this.readDesignerWorkSeconds(taskId, designerId);
     return {
       workedSeconds: peek.totalSeconds,
@@ -2136,7 +2181,7 @@ export class TasksService {
 
   private async readDesignerWorkSeconds(taskId: string, designerId: string) {
     const sessions = await this.prisma.taskWorkSession.findMany({
-      where: { taskId, designerId, status: { in: ['Draft', 'HandedOff'] } },
+      where: { taskId, designerId: BigInt(designerId), status: { in: ['Draft', 'HandedOff'] } },
       select: { durationSeconds: true, runStartedAt: true, status: true },
       orderBy: { createdAt: 'desc' },
     });
@@ -2314,9 +2359,12 @@ export class TasksService {
       throw new BadRequestException(TASK_REASSIGNMENT_BLOCKED_MESSAGE);
     }
 
+    const assigneeIdBig = BigInt(dto.assigneeId);
     const [assignee, oldAssignee, existingSplitDesigners] = await Promise.all([
-      this.prisma.user.findUnique({ where: { id: dto.assigneeId } }),
-      existing.assigneeId ? this.prisma.user.findUnique({ where: { id: existing.assigneeId }, select: { fullName: true } }) : null,
+      this.prisma.erpUser.findUnique({ where: { userId: assigneeIdBig } }),
+      existing.assigneeId
+        ? this.prisma.erpUser.findUnique({ where: { userId: existing.assigneeId }, select: { userName: true } })
+        : null,
       this.prisma.taskDesigner.findMany({ where: { taskId: id }, select: { designerId: true } }),
     ]);
     if (!assignee) throw new NotFoundException('Assignee not found');
@@ -2325,9 +2373,9 @@ export class TasksService {
     // read both so reassigning a split task is recognized as a reassignment and the designers
     // being removed are notified, not just whoever happened to hold the single assigneeId field.
     const previousDesignerIds = new Set(
-      [existing.assigneeId, ...existingSplitDesigners.map((d) => d.designerId)].filter(
-        (value): value is string => !!value,
-      ),
+      [existing.assigneeId, ...existingSplitDesigners.map((d) => d.designerId)]
+        .filter((value): value is bigint => value != null)
+        .map((value) => value.toString()),
     );
     const isReassignment =
       previousDesignerIds.size > 0 && !(previousDesignerIds.size === 1 && previousDesignerIds.has(dto.assigneeId));
@@ -2337,13 +2385,13 @@ export class TasksService {
     const shouldPromote = rawStatus === 'DESIGN_NEW';
     const updatedTask = await this.prisma.task.update({
       where: { id },
-      data: { assigneeId: dto.assigneeId, ...(shouldPromote ? { status: 'DESIGN_PLANNED' } : {}) },
+      data: { assigneeId: assigneeIdBig, ...(shouldPromote ? { status: 'DESIGN_PLANNED' } : {}) },
       select: TASK_SELECT,
     });
 
     // Keep junction table in sync with direct assignment
     await this.prisma.taskDesigner.deleteMany({ where: { taskId: id } });
-    await this.prisma.taskDesigner.create({ data: { taskId: id, designerId: dto.assigneeId } });
+    await this.prisma.taskDesigner.create({ data: { taskId: id, designerId: assigneeIdBig } });
 
     await this.activityLogger.log({
       action: ActivityAction.ASSIGNED_TASK,
@@ -2366,9 +2414,9 @@ export class TasksService {
         },
         changes: {
           assigneeId: dto.assigneeId,
-          newAssigneeName: assignee.fullName,
-          oldAssigneeId: existing.assigneeId ?? null,
-          oldAssigneeName: oldAssignee?.fullName ?? null,
+          newAssigneeName: assignee.userName,
+          oldAssigneeId: existing.assigneeId?.toString() ?? null,
+          oldAssigneeName: oldAssignee?.userName ?? null,
         },
         context: { source: 'tasks.assign' },
       },
@@ -2383,7 +2431,7 @@ export class TasksService {
 
     const linkUrlAssign =
       taskViewPath(id, updatedTask.designType);
-    const assignMessage = `${updatedTask.taskNo} — ${updatedTask.project?.name ?? 'Unknown Project'} has been assigned to ${assignee.fullName}`;
+    const assignMessage = `${updatedTask.taskNo} — ${updatedTask.project?.name ?? 'Unknown Project'} has been assigned to ${assignee.userName}`;
     const stakeholderIdsAssign = await this.resolveHodAdminAndSalesNotifyIds(updatedTask.project, {
       taskId: id,
     });
@@ -2401,7 +2449,7 @@ export class TasksService {
     }
     // Tell every designer removed from this task (including former split designers) that
     // they no longer have it — they'd otherwise get no signal at all.
-    const removedMessage = `${updatedTask.taskNo} — ${updatedTask.project?.name ?? 'Unknown Project'} has been reassigned to ${assignee.fullName}; you are no longer assigned to it.`;
+    const removedMessage = `${updatedTask.taskNo} — ${updatedTask.project?.name ?? 'Unknown Project'} has been reassigned to ${assignee.userName}; you are no longer assigned to it.`;
     for (const removedDesignerId of removedDesignerIds) {
       this.notificationsService
         .create({ userId: removedDesignerId, title: 'Removed from Task', message: removedMessage, linkUrl: linkUrlAssign })
@@ -2423,19 +2471,20 @@ export class TasksService {
     const todayMidnight = new Date(new Date().toISOString().split('T')[0] + 'T00:00:00.000Z');
     const rows = await this.prisma.schedulerAssignment.findMany({
       where: { taskId, weekStartDate: { gte: todayMidnight } },
-      select: { designerId: true, designer: { select: { fullName: true } } },
+      select: { designerId: true, designer: { select: { userName: true } } },
     });
 
     const countByDesigner = new Map<string, { designerId: string; designerName: string; partCount: number }>();
     for (const row of rows) {
       if (!row.designerId) continue;
-      const existing = countByDesigner.get(row.designerId);
+      const designerIdStr = row.designerId.toString();
+      const existing = countByDesigner.get(designerIdStr);
       if (existing) {
         existing.partCount += 1;
       } else {
-        countByDesigner.set(row.designerId, {
-          designerId: row.designerId,
-          designerName: row.designer?.fullName?.trim() || 'Designer',
+        countByDesigner.set(designerIdStr, {
+          designerId: designerIdStr,
+          designerName: row.designer?.userName?.trim() || 'Designer',
           partCount: 1,
         });
       }
@@ -2453,7 +2502,9 @@ export class TasksService {
     }
     const existing = await this.prisma.task.findUnique({ where: { id } });
     if (!existing) throw new NotFoundException('Task not found');
-    await this.assertDesignerTaskAccess(id, userId, role, { assigneeId: existing.assigneeId });
+    await this.assertDesignerTaskAccess(id, userId, role, {
+      assigneeId: existing.assigneeId != null ? existing.assigneeId.toString() : null,
+    });
 
     // REWORK = same revision (HOD internal or Sales). CLIENT_REJECTED = new Rn (Sales/Admin only).
     const newStatusApi = toApiTaskStatus(dto.status);
@@ -2650,10 +2701,11 @@ export class TasksService {
         select: { designerId: true },
       });
       for (const { designerId } of splitDesignersComplete) {
+        const designerIdStr = designerId.toString();
         this.notificationsService
-          .create({ userId: designerId, title: 'Task Marked Complete', message: statusMessage, linkUrl: linkUrlStatus })
+          .create({ userId: designerIdStr, title: 'Task Marked Complete', message: statusMessage, linkUrl: linkUrlStatus })
           .catch((err) => this.logger.error('Failed to send complete notification to split designer', err));
-        this.dashboardRealtime?.notifyUserNotificationRefresh(designerId);
+        this.dashboardRealtime?.notifyUserNotificationRefresh(designerIdStr);
       }
       for (const stakeholderId of stakeholderIdsStatus) {
         if (stakeholderId !== (updatedTask as any).assigneeId) {
@@ -2670,10 +2722,7 @@ export class TasksService {
       const linkUrlHodReview =
         taskViewPath(id, (updatedTask as any).designType);
       const hodReviewMessage = `${(updatedTask as any).taskNo} — ${(updatedTask as any).project?.name ?? 'Unknown Project'} is ready for HOD review.`;
-      const hodReviewers = await this.prisma.user.findMany({
-        where: { role: { name: { in: ['HOD', 'ADMIN'] } } },
-        select: { id: true },
-      });
+      const hodReviewers = await this.findErpUsersByRoleBuckets([UserRole.HOD, UserRole.ADMIN]);
       for (const hod of hodReviewers) {
         this.notificationsService
           .create({ userId: hod.id, title: `Task Ready for HOD Review — ${(updatedTask as any).taskNo}`, message: hodReviewMessage, linkUrl: linkUrlHodReview })
@@ -2726,10 +2775,11 @@ export class TasksService {
         select: { designerId: true },
       });
       for (const { designerId } of splitDesignersRejected) {
+        const designerIdStr = designerId.toString();
         this.notificationsService
-          .create({ userId: designerId, title: 'Client Rejected Task', message: clientRejectedMessage, linkUrl: linkUrlClientRejected })
+          .create({ userId: designerIdStr, title: 'Client Rejected Task', message: clientRejectedMessage, linkUrl: linkUrlClientRejected })
           .catch((err) => this.logger.error('Failed to send client-rejected notification to split designer', err));
-        this.dashboardRealtime?.notifyUserNotificationRefresh(designerId);
+        this.dashboardRealtime?.notifyUserNotificationRefresh(designerIdStr);
       }
     }
 
@@ -2759,10 +2809,11 @@ export class TasksService {
         select: { designerId: true },
       });
       for (const { designerId } of splitDesignersHold) {
+        const designerIdStr = designerId.toString();
         this.notificationsService
-          .create({ userId: designerId, title: holdTitle, message: holdMessage, linkUrl: linkUrlHold })
+          .create({ userId: designerIdStr, title: holdTitle, message: holdMessage, linkUrl: linkUrlHold })
           .catch((err) => this.logger.error('Failed to send hold-transition notification to split designer', err));
-        this.dashboardRealtime?.notifyUserNotificationRefresh(designerId);
+        this.dashboardRealtime?.notifyUserNotificationRefresh(designerIdStr);
       }
     }
 
@@ -2813,16 +2864,17 @@ export class TasksService {
         select: { designerId: true },
       });
       for (const { designerId } of splitDesignersRework) {
+        const designerIdStr = designerId.toString();
         this.notificationsService
           .create({
-            userId: designerId,
+            userId: designerIdStr,
             title: reworkTitle,
             message: reworkMessage,
             linkUrl: taskLink,
           })
           .catch((err) => this.logger.error('Failed to send rework notification to split designer', err));
-        this.dashboardRealtime?.notifyUserNotificationRefresh(designerId);
-        notifiedUserIds.add(designerId);
+        this.dashboardRealtime?.notifyUserNotificationRefresh(designerIdStr);
+        notifiedUserIds.add(designerIdStr);
       }
 
       // HOD / Admin / matched sales (skip actor + anyone already notified as designer)
@@ -2854,7 +2906,7 @@ export class TasksService {
             title: isHodInternal ? 'Internal Rework Instructions' : 'Rework Instructions',
             message: `${isHodInternal ? 'Internal Rework Required' : 'Rework Required'}:\n${note}`,
             postType: 'REWORK',
-            authorId: userId,
+            authorId: BigInt(userId),
           },
         }).catch((err) => this.logger.error('Failed to create rework chatter post', err));
       }
@@ -3060,7 +3112,7 @@ export class TasksService {
           title: 'Client Reject Instructions',
           message: `Client Rejected — next revision:\n${note}`,
           postType: 'CLIENT_REJECT',
-          authorId: userId,
+          authorId: BigInt(userId),
         },
       }).catch((err) => this.logger.error('Failed to create client-reject chatter post', err));
     }
@@ -3108,11 +3160,11 @@ export class TasksService {
 
     if (role === UserRole.DESIGNER) {
       const junctionTaskIds = await this.prisma.taskDesigner.findMany({
-        where: { designerId: userId },
+        where: { designerId: BigInt(userId) },
         select: { taskId: true },
       });
       const splitIds = junctionTaskIds.map((r) => r.taskId);
-      where.OR = [{ assigneeId: userId }, ...(splitIds.length > 0 ? [{ id: { in: splitIds } }] : [])];
+      where.OR = [{ assigneeId: BigInt(userId) }, ...(splitIds.length > 0 ? [{ id: { in: splitIds } }] : [])];
     }
 
     const tasks = await this.prisma.task.groupBy({
@@ -3149,7 +3201,9 @@ export class TasksService {
     if (!this.isUuid(taskId)) throw new BadRequestException('Invalid task id');
     const task = await this.prisma.task.findUnique({ where: { id: taskId }, select: TASK_SELECT });
     if (!task) throw new NotFoundException('Task not found');
-    await this.assertDesignerTaskAccess(taskId, userId, role, { assigneeId: task.assigneeId });
+    await this.assertDesignerTaskAccess(taskId, userId, role, {
+      assigneeId: task.assigneeId != null ? task.assigneeId.toString() : null,
+    });
 
     // Upload files in parallel (sequential uploads were the main submit delay).
     const fileList = files ?? [];
@@ -3168,7 +3222,7 @@ export class TasksService {
     // Create/promote work session + files in a transaction, then update task status
     const session = await this.prisma.$transaction(async (tx) => {
       const draft = await tx.taskWorkSession.findFirst({
-        where: { taskId, designerId: userId, status: { in: ['Draft', 'HandedOff'] } },
+        where: { taskId, designerId: BigInt(userId), status: { in: ['Draft', 'HandedOff'] } },
         orderBy: { createdAt: 'desc' },
       });
 
@@ -3200,7 +3254,7 @@ export class TasksService {
         session = await tx.taskWorkSession.create({
           data: {
             taskId,
-            designerId: userId,
+            designerId: BigInt(userId),
             durationSeconds,
             submissionLink: dto.submissionLink?.trim() || null,
             pauseLog: dto.pauseLog || null,
@@ -3333,23 +3387,20 @@ export class TasksService {
           taskNo: true,
           designType: true,
           project: { select: { name: true } },
-          assignee: { select: { fullName: true } },
-          taskDesigners: { select: { designer: { select: { fullName: true } } } },
+          assignee: { select: { userName: true } },
+          taskDesigners: { select: { designer: { select: { userName: true } } } },
         },
       });
       if (!submittedTask) return;
 
       const taskLink = taskViewPath(taskId, submittedTask.designType);
       const submitterName =
-        submittedTask.assignee?.fullName ??
-        ((submittedTask as any).taskDesigners?.length > 0
-          ? (submittedTask as any).taskDesigners.map((d: any) => d.designer.fullName).join(', ')
+        submittedTask.assignee?.userName ??
+        (submittedTask.taskDesigners?.length > 0
+          ? submittedTask.taskDesigners.map((d) => d.designer.userName).join(', ')
           : 'Designer');
       const submitMsg = `${submittedTask.taskNo} — ${submittedTask.project?.name ?? 'Unknown Project'} work submitted by ${submitterName}. Ready for review.`;
-      const hodUsers = await this.prisma.user.findMany({
-        where: { role: { name: { in: ['HOD', 'ADMIN'] } } },
-        select: { id: true },
-      });
+      const hodUsers = await this.findErpUsersByRoleBuckets([UserRole.HOD, UserRole.ADMIN]);
       await Promise.all(
         hodUsers.map((hod) =>
           this.notificationsService
@@ -3376,7 +3427,7 @@ export class TasksService {
       orderBy: { submittedAt: 'desc' },
       include: {
         files: true,
-        designer: { select: { fullName: true } },
+        designer: { select: { userName: true } },
       },
     });
     if (!session) return null;
@@ -3384,7 +3435,7 @@ export class TasksService {
       durationSeconds: session.durationSeconds,
       submittedAt: session.submittedAt,
       submissionLink: session.submissionLink,
-      submittedBy: session.designer?.fullName ?? null,
+      submittedBy: session.designer?.userName ?? null,
       files: await Promise.all(session.files.map(async (f) => ({
         fileName: f.fileName,
         mimeType: f.mimeType,
@@ -3395,10 +3446,11 @@ export class TasksService {
   }
 
   async getRunningTimerForDesigner(designerId: string) {
-    if (!this.isUuid(designerId)) throw new BadRequestException('Invalid designer id');
+    if (!this.isValidBigIntId(designerId)) throw new BadRequestException('Invalid designer id');
+    const designerIdBig = BigInt(designerId);
     const drafts = await this.prisma.taskWorkSession.findMany({
       where: {
-        designerId,
+        designerId: designerIdBig,
         status: 'Draft',
         runStartedAt: { not: null },
       },
@@ -3411,7 +3463,7 @@ export class TasksService {
     if (drafts.length > 1) {
       await this.prisma.taskWorkSession.updateMany({
         where: {
-          designerId,
+          designerId: designerIdBig,
           status: 'Draft',
           runStartedAt: { not: null },
           NOT: { id: canonical.id },
@@ -3429,7 +3481,7 @@ export class TasksService {
   async getTimerState(taskId: string, userId: string) {
     if (!this.isUuid(taskId)) throw new BadRequestException('Invalid task id');
     const sessions = await this.prisma.taskWorkSession.findMany({
-      where: { taskId, designerId: userId, status: { in: ['Draft', 'HandedOff'] } },
+      where: { taskId, designerId: BigInt(userId), status: { in: ['Draft', 'HandedOff'] } },
       orderBy: { createdAt: 'desc' },
     });
     const draft = sessions.find((row) => row.status === 'Draft') ?? null;
@@ -3505,15 +3557,18 @@ export class TasksService {
     if (!this.isUuid(taskId)) throw new BadRequestException('Invalid task id');
     const task = await this.prisma.task.findUnique({ where: { id: taskId } });
     if (!task) throw new NotFoundException('Task not found');
-    await this.assertDesignerTaskAccess(taskId, userId, role, { assigneeId: task.assigneeId });
+    await this.assertDesignerTaskAccess(taskId, userId, role, {
+      assigneeId: task.assigneeId != null ? task.assigneeId.toString() : null,
+    });
 
     const runStartedAt = this.resolveRunStartedAtFromDto(dto);
+    const userIdBig = BigInt(userId);
 
     const saved = await this.prisma.$transaction(async (tx) => {
       if (runStartedAt) {
         const otherRunning = await tx.taskWorkSession.findFirst({
           where: {
-            designerId: userId,
+            designerId: userIdBig,
             status: 'Draft',
             runStartedAt: { not: null },
             NOT: { taskId },
@@ -3529,7 +3584,7 @@ export class TasksService {
       }
 
       const existing = await tx.taskWorkSession.findFirst({
-        where: { taskId, designerId: userId, status: 'Draft' },
+        where: { taskId, designerId: userIdBig, status: 'Draft' },
         orderBy: { createdAt: 'desc' },
       });
 
@@ -3546,7 +3601,7 @@ export class TasksService {
         }
 
         await tx.taskWorkSession.updateMany({
-          where: { taskId, designerId: userId, status: 'Draft' },
+          where: { taskId, designerId: userIdBig, status: 'Draft' },
           data: {
             runStartedAt: null,
             durationSeconds,
@@ -3554,7 +3609,7 @@ export class TasksService {
           },
         });
         const latest = await tx.taskWorkSession.findFirst({
-          where: { taskId, designerId: userId, status: 'Draft' },
+          where: { taskId, designerId: userIdBig, status: 'Draft' },
           orderBy: { createdAt: 'desc' },
         });
         return latest;
@@ -3588,12 +3643,12 @@ export class TasksService {
       // creating a second timer row.
       if (runStartedAt) {
         const handedOff = await tx.taskWorkSession.findFirst({
-          where: { taskId, designerId: userId, status: 'HandedOff' },
+          where: { taskId, designerId: userIdBig, status: 'HandedOff' },
           orderBy: { createdAt: 'desc' },
         });
         if (handedOff) {
           const canRestart = await this.designerCanRestartTimer(taskId, userId, {
-            assigneeId: task.assigneeId,
+            assigneeId: task.assigneeId != null ? task.assigneeId.toString() : null,
             db: tx,
           });
           if (!canRestart) {
@@ -3621,7 +3676,7 @@ export class TasksService {
       return tx.taskWorkSession.create({
         data: {
           taskId,
-          designerId: userId,
+          designerId: userIdBig,
           durationSeconds: normalizeWorkSeconds(dto.accumulatedSeconds),
           pauseLog: dto.pauseLog ?? null,
           runStartedAt: runStartedAt ?? null,
@@ -3643,21 +3698,22 @@ export class TasksService {
 
   async freezeDraftWorkSession(taskId: string, designerId: string, closeSession = true) {
     if (!this.isUuid(taskId)) throw new BadRequestException('Invalid task id');
-    if (!this.isUuid(designerId)) throw new BadRequestException('Invalid designer id');
+    if (!this.isValidBigIntId(designerId)) throw new BadRequestException('Invalid designer id');
 
     const task = await this.prisma.task.findUnique({
       where: { id: taskId },
       select: { id: true, taskNo: true, designType: true },
     });
     if (!task) throw new NotFoundException('Task not found');
+    const designerIdBig = BigInt(designerId);
 
     const draft = await this.prisma.taskWorkSession.findFirst({
-      where: { taskId, designerId, status: 'Draft' },
+      where: { taskId, designerId: designerIdBig, status: 'Draft' },
       orderBy: { createdAt: 'desc' },
     });
 
     const handedOff = await this.prisma.taskWorkSession.findMany({
-      where: { taskId, designerId, status: 'HandedOff' },
+      where: { taskId, designerId: designerIdBig, status: 'HandedOff' },
       select: { durationSeconds: true },
     });
     const handedOffSeconds = handedOff.reduce((sum, row) => sum + row.durationSeconds, 0);
@@ -3738,7 +3794,7 @@ export class TasksService {
     const rows = await this.prisma.$queryRaw<Array<{ projectId: string }>>(Prisma.sql`
       SELECT [projectId] AS [projectId]
       FROM [ErpTSProjectQsAssignment]
-      WHERE [qsUserId] = ${userId}
+      WHERE [qsUserId] = ${BigInt(userId)}
     `);
     return rows.map((row) => row.projectId);
   }
@@ -3748,16 +3804,14 @@ export class TasksService {
     actingUserId: string | null,
     project: { name: string; projectNo?: string | null },
   ) {
-    const qsUsers = await this.prisma.user.findMany({
-      where: { role: { name: UserRole.QS } },
-      select: { id: true },
-    });
+    const qsUsersRaw = await this.findErpUsersByRoleBuckets([UserRole.QS]);
+    const qsUsers = qsUsersRaw.map((u) => ({ id: u.id, idBig: BigInt(u.id) }));
     if (qsUsers.length === 0) return;
 
     const assignedCount = await this.prisma.$executeRaw(Prisma.sql`
       INSERT INTO [ErpTSProjectQsAssignment] ([projectId], [qsUserId])
       SELECT ${projectId}, [incoming].[qsUserId]
-      FROM (VALUES ${Prisma.join(qsUsers.map((user) => Prisma.sql`(${user.id})`))}) AS [incoming]([qsUserId])
+      FROM (VALUES ${Prisma.join(qsUsers.map((user) => Prisma.sql`(${user.idBig})`))}) AS [incoming]([qsUserId])
       WHERE NOT EXISTS (
         SELECT 1
         FROM [ErpTSProjectQsAssignment] [existing]
@@ -3813,13 +3867,14 @@ export class TasksService {
   ): Promise<boolean> {
     if (opts?.assigneeId === userId) return true;
     const db = opts?.db ?? this.prisma;
+    const userIdBig = BigInt(userId);
     const involved = await db.task.findFirst({
       where: {
         id: taskId,
         OR: [
-          { assigneeId: userId },
-          { taskDesigners: { some: { designerId: userId } } },
-          { schedulerAssignments: { some: { designerId: userId } } },
+          { assigneeId: userIdBig },
+          { taskDesigners: { some: { designerId: userIdBig } } },
+          { schedulerAssignments: { some: { designerId: userIdBig } } },
         ],
       },
       select: { id: true },
@@ -3839,7 +3894,7 @@ export class TasksService {
     }
     if (known?.assigneeId === userId) return;
     const involved = await this.prisma.task.findFirst({
-      where: { id: taskId, ...designerInvolvementWhere(userId) },
+      where: { id: taskId, ...designerInvolvementWhere(userId) } as Prisma.TaskWhereInput,
       select: { id: true },
     });
     if (!involved) {
