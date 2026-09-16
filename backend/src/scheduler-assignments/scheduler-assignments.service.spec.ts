@@ -28,6 +28,7 @@ describe('SchedulerAssignmentsService', () => {
     schedulerWeek: {
       create: jest.fn(),
       findUnique: jest.fn(),
+      findMany: jest.fn(),
       update: jest.fn(),
       upsert: jest.fn(),
     },
@@ -988,6 +989,7 @@ describe('SchedulerAssignmentsService', () => {
         { id: TASK_ID, status: 'DESIGN_PLANNED', assigneeId: DESIGNER_ID, projectId: null, project: null },
       ]);
       prisma.schedulerWeek.findUnique.mockResolvedValue({ version: 1 });
+      prisma.schedulerWeek.findMany.mockResolvedValue([]);
       prisma.schedulerWeek.update.mockResolvedValue({
         version: 1,
         isLocked: false,

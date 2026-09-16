@@ -78,7 +78,7 @@ describe('DashboardService', () => {
       expect(result.completedTasks).toBe(2);
     });
 
-    it('scopes HOD metrics to department assignees, junction designers, and unassigned backlog', async () => {
+    it('does not scope HOD metrics by department — ERP has no department concept on ErpAuthUsers', async () => {
       prisma.user.findUnique.mockResolvedValue({ departmentId: 'dept-1' });
       prisma.task.count.mockResolvedValue(10);
       prisma.project.count.mockResolvedValue(5);
@@ -86,15 +86,7 @@ describe('DashboardService', () => {
 
       await service.getMetrics('5002', UserRole.HOD);
 
-      expect(prisma.task.count).toHaveBeenCalledWith({
-        where: {
-          OR: [
-            { assignee: { departmentId: 'dept-1' } },
-            { taskDesigners: { some: { designer: { departmentId: 'dept-1' } } } },
-            { AND: [{ assigneeId: null }, { taskDesigners: { none: {} } }] },
-          ],
-        },
-      });
+      expect(prisma.task.count).toHaveBeenCalledWith({ where: {} });
     });
 
     it('falls back to all tasks for HOD without department', async () => {
@@ -116,7 +108,7 @@ describe('DashboardService', () => {
       prisma.user.findUnique.mockResolvedValue({ departmentId: 'dept-1' });
     });
 
-    it('returns unassigned ON_HOLD + fragment holds with task links; scopes scheduled by dept', async () => {
+    it('returns unassigned ON_HOLD + fragment holds with task links (no department scoping — ERP has no department concept)', async () => {
       prisma.task.findMany
         .mockResolvedValueOnce([]) // completed
         .mockResolvedValueOnce([
@@ -156,12 +148,9 @@ describe('DashboardService', () => {
 
       expect(prisma.schedulerAssignment.findMany).toHaveBeenCalledWith(
         expect.objectContaining({
-          where: expect.objectContaining({
+          where: {
             weekStartDate: expect.any(Date),
-            task: expect.objectContaining({
-              OR: expect.any(Array),
-            }),
-          }),
+          },
         }),
       );
       expect(result.onHoldTasks).toHaveLength(2);
