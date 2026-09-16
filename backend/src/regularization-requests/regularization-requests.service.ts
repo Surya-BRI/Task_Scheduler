@@ -16,7 +16,7 @@ import { hasHrApproverAccess } from '../common/utils/workflow-roles.util';
 import { assertRegularizationDateAllowed } from '../common/utils/date-window.util';
 import { CreateRegularizationRequestDto } from './dto/create-regularization-request.dto';
 import { ReviewRegularizationRequestDto } from './dto/review-regularization-request.dto';
-import { isUuidString } from './sql-uuid.util';
+import { isUuidString, isPositiveIntegerString } from './sql-uuid.util';
 import type { RegularizationRequestsContract } from './regularization-requests.contract';
 import { DashboardRealtimeService } from '../dashboard/dashboard-realtime.service';
 
@@ -48,14 +48,12 @@ export type RegularizationRequestView = {
 const INCLUDE = {
   designer: {
     select: {
-      id: true,
-      fullName: true,
-      departmentId: true,
-      department: { select: { name: true } },
+      userId: true,
+      userName: true,
     },
   },
   task: { select: { id: true, title: true, taskNo: true, opNo: true } },
-  approver: { select: { id: true, fullName: true } },
+  approver: { select: { userId: true, userName: true } },
 } satisfies Prisma.RegularizationRequestInclude;
 
 type RegularizationRequestFull = Prisma.RegularizationRequestGetPayload<{
@@ -137,7 +135,7 @@ export class RegularizationRequestsService implements RegularizationRequestsCont
     const { dayStart, dayEnd } = this.getDayWindow(date);
     const leaves = await this.prisma.leaveRequest.findMany({
       where: {
-        userId: designerId,
+        userId: BigInt(designerId),
         status: { in: ['Approved', 'APPROVED', 'approved'] },
         revokedAt: null,
         startDate: { lte: dayEnd },
@@ -167,7 +165,7 @@ export class RegularizationRequestsService implements RegularizationRequestsCont
     const dayIndex = this.dayIndexForDate(requestDate, weekStartDate);
     return this.prisma.schedulerAssignment.findFirst({
       where: {
-        designerId,
+        designerId: BigInt(designerId),
         taskId,
         weekStartDate,
         dayIndex,
@@ -203,12 +201,12 @@ export class RegularizationRequestsService implements RegularizationRequestsCont
         weekStartDate,
         version: 1,
         isLocked: false,
-        updatedBy: userId,
+        updatedBy: BigInt(userId),
         lastPayloadHash: null,
       },
       update: {
         version: { increment: 1 },
-        updatedBy: userId,
+        updatedBy: BigInt(userId),
         lastPayloadHash: null,
       },
     });
@@ -240,10 +238,10 @@ export class RegularizationRequestsService implements RegularizationRequestsCont
   private mapRow(row: RegularizationRequestFull): RegularizationRequestView {
     return {
       id: row.id,
-      designerId: row.designerId ?? '',
-      designerName: row.designer?.fullName?.trim() || 'Unknown',
-      employeeId: row.designerId ?? '',
-      departmentName: row.designer?.department?.name?.trim() || '—',
+      designerId: row.designerId != null ? String(row.designerId) : '',
+      designerName: row.designer?.userName?.trim() || 'Unknown',
+      employeeId: row.designerId != null ? String(row.designerId) : '',
+      departmentName: '—',
       taskId: row.taskId ?? '',
       taskName: this.formatTaskDisplay({
         title: row.task?.title,
@@ -255,8 +253,8 @@ export class RegularizationRequestsService implements RegularizationRequestsCont
       reason: row.reason ?? '',
       notes: row.notes ?? '',
       status: this.mapStatus(row.status),
-      approverId: row.approverId?.trim() || null,
-      approverName: row.approver?.fullName?.trim() || null,
+      approverId: row.approverId != null ? String(row.approverId) : null,
+      approverName: row.approver?.userName?.trim() || null,
       approverRemarks: row.approverRemarks?.trim() || null,
       reviewedAt: row.reviewedAt ? new Date(row.reviewedAt).toISOString() : null,
       createdAt: row.createdAt ? new Date(row.createdAt).toISOString() : new Date(0).toISOString(),
@@ -272,15 +270,29 @@ export class RegularizationRequestsService implements RegularizationRequestsCont
     return this.mapRow(row);
   }
 
-  private async findDepartmentHods(departmentId: string | null | undefined) {
-    if (!departmentId?.trim()) return [];
-    return this.prisma.user.findMany({
-      where: {
-        departmentId: departmentId.trim(),
-        role: { name: UserRole.HOD },
-      },
-      select: { id: true, fullName: true, email: true },
-    });
+  /** Raw ERP role join — the local Role/Department tables are gone, so HOD
+   * membership must be resolved against ERP's own ErpAuthUserRoleMap/ErpMasterRole
+   * tables, and (since ERP has no department concept on ErpAuthUsers) HOD lookups
+   * are no longer department-scoped — every HOD is returned. */
+  private async findHodUsers(): Promise<Array<{ id: bigint; userName: string }>> {
+    const rows = await this.prisma.$queryRaw<Array<{ userId: bigint; userName: string; roleName: string | null }>>`
+      SELECT u.userId, u.userName, r.roleName
+      FROM ErpAuthUsers u
+      JOIN ErpAuthUserRoleMap m ON m.userId = u.userId AND m.isActive = 1
+      JOIN ErpMasterRole r ON r.roleId = m.roleId AND r.isActive = 1 AND r.isDeleted = 0
+      WHERE u.isActive = 1 AND u.isDeleted = 0
+    `;
+    const hodRoleNames = new Set(['Design HOD', 'Design Head']);
+    const seen = new Set<string>();
+    const result: Array<{ id: bigint; userName: string }> = [];
+    for (const row of rows) {
+      if (!row.roleName || !hodRoleNames.has(row.roleName)) continue;
+      const key = row.userId.toString();
+      if (seen.has(key)) continue;
+      seen.add(key);
+      result.push({ id: row.userId, userName: row.userName });
+    }
+    return result;
   }
 
   private regularizationLink(id: string, designerId?: string, forManager = false): string {
@@ -291,24 +303,12 @@ export class RegularizationRequestsService implements RegularizationRequestsCont
   }
 
   private async notifyHods(request: RegularizationRequestView, designerName: string) {
-    const designer = await this.prisma.user.findUnique({
-      where: { id: request.designerId },
-      select: { departmentId: true },
-    });
-
-    let targets = await this.findDepartmentHods(designer?.departmentId);
-
-    if (targets.length === 0) {
-      targets = await this.prisma.user.findMany({
-        where: { role: { name: { in: [UserRole.HOD] } } },
-        select: { id: true, fullName: true, email: true },
-      });
-    }
+    let targets = await this.findHodUsers();
 
     if (targets.length === 0) {
       const fallback = process.env.REGULARIZATION_DEFAULT_APPROVER_ID?.trim();
-      if (fallback && isUuidString(fallback)) {
-        targets = [{ id: fallback, fullName: 'HOD', email: '' }];
+      if (fallback && isPositiveIntegerString(fallback)) {
+        targets = [{ id: BigInt(fallback), userName: 'HOD' }];
       }
     }
 
@@ -323,7 +323,7 @@ export class RegularizationRequestsService implements RegularizationRequestsCont
             linkUrl: this.regularizationLink(request.id, request.designerId, true),
           },
         });
-        this.dashboardRealtime?.notifyUserNotificationRefresh(hod.id);
+        this.dashboardRealtime?.notifyUserNotificationRefresh(String(hod.id));
       } catch (err) {
         this.logger.warn(
           `Failed to notify HOD ${hod.id}: ${err instanceof Error ? err.message : err}`,
@@ -342,7 +342,7 @@ export class RegularizationRequestsService implements RegularizationRequestsCont
       await this.prisma.notification.create({
         data: {
           id: randomUUID(),
-          userId: request.designerId,
+          userId: BigInt(request.designerId),
           title: `Regularization Request ${action}`,
           message: `Your regularization request for ${request.date} has been ${actionLabel}.${
             remarks?.trim() ? ` Remarks: "${remarks.trim()}"` : ''
@@ -363,35 +363,21 @@ export class RegularizationRequestsService implements RegularizationRequestsCont
   }
 
   private async assertReviewerAccess(
-    reviewerId: string,
+    _reviewerId: string,
     role: UserRole,
-    request: RegularizationRequestView,
+    _request: RegularizationRequestView,
   ) {
     if (!hasHrApproverAccess(role)) {
       throw new ForbiddenException('Only department managers can review regularization requests');
     }
-
-    const [reviewer, designer] = await Promise.all([
-      this.prisma.user.findUnique({ where: { id: reviewerId }, select: { departmentId: true } }),
-      this.prisma.user.findUnique({
-        where: { id: request.designerId },
-        select: { departmentId: true },
-      }),
-    ]);
-
-    if (
-      reviewer?.departmentId &&
-      designer?.departmentId &&
-      reviewer.departmentId !== designer.departmentId
-    ) {
-      throw new ForbiddenException('You can only review requests from your department');
-    }
+    // Department-scoped access is no longer possible — ERP has no department
+    // concept on ErpAuthUsers — any HOD may review any request.
   }
 
   async listTaskOptions(designerId: string, dateStr: string): Promise<RegularizationTaskOption[]> {
-    if (!isUuidString(designerId)) {
+    if (!isPositiveIntegerString(designerId)) {
       throw new BadRequestException(
-        'designerId must be a UUID matching ErpTSRegularizationRequest.designerId (uniqueidentifier).',
+        'designerId must be numeric, matching ErpTSRegularizationRequest.designerId (bigint).',
       );
     }
 
@@ -401,7 +387,7 @@ export class RegularizationRequestsService implements RegularizationRequestsCont
 
     const rows = await this.prisma.schedulerAssignment.findMany({
       where: {
-        designerId,
+        designerId: BigInt(designerId),
         weekStartDate,
         dayIndex,
         taskId: { not: null },
@@ -432,13 +418,13 @@ export class RegularizationRequestsService implements RegularizationRequestsCont
   }
 
   async findByDesigner(designerId: string): Promise<RegularizationRequestView[]> {
-    if (!isUuidString(designerId)) {
+    if (!isPositiveIntegerString(designerId)) {
       throw new BadRequestException(
-        'designerId must be a UUID matching ErpTSRegularizationRequest.designerId (uniqueidentifier).',
+        'designerId must be numeric, matching ErpTSRegularizationRequest.designerId (bigint).',
       );
     }
     const rows = await this.prisma.regularizationRequest.findMany({
-      where: { designerId },
+      where: { designerId: BigInt(designerId) },
       include: INCLUDE,
       orderBy: { createdAt: 'desc' },
       take: 1000,
@@ -473,15 +459,9 @@ export class RegularizationRequestsService implements RegularizationRequestsCont
       throw new ForbiddenException('Only department managers can view pending approvals');
     }
 
+    // Department-scoped filtering is no longer possible — ERP has no department
+    // concept on ErpAuthUsers, so every HOD sees all pending requests company-wide.
     const where: Prisma.RegularizationRequestWhereInput = { status: 'Pending' };
-
-    const manager = await this.prisma.user.findUnique({
-      where: { id: managerId },
-      select: { departmentId: true },
-    });
-    if (manager?.departmentId) {
-      where.designer = { departmentId: manager.departmentId };
-    }
 
     const rows = await this.prisma.regularizationRequest.findMany({
       where,
@@ -493,7 +473,7 @@ export class RegularizationRequestsService implements RegularizationRequestsCont
   }
 
   async findTeamRequests(
-    managerId: string,
+    _managerId: string,
     role: UserRole,
     filters: { status?: string; designerId?: string },
   ): Promise<RegularizationRequestView[]> {
@@ -506,20 +486,8 @@ export class RegularizationRequestsService implements RegularizationRequestsCont
     if (filters.status?.trim()) {
       where.status = filters.status.trim();
     }
-    if (filters.designerId?.trim() && isUuidString(filters.designerId)) {
-      where.designerId = filters.designerId.trim();
-    }
-    {
-      const manager = await this.prisma.user.findUnique({
-        where: { id: managerId },
-        select: { departmentId: true },
-      });
-      if (manager?.departmentId) {
-        where.designer = {
-          ...((where.designer as Prisma.UserWhereInput | undefined) ?? {}),
-          departmentId: manager.departmentId,
-        };
-      }
+    if (filters.designerId?.trim() && isPositiveIntegerString(filters.designerId)) {
+      where.designerId = BigInt(filters.designerId.trim());
     }
 
     const rows = await this.prisma.regularizationRequest.findMany({
@@ -547,8 +515,12 @@ export class RegularizationRequestsService implements RegularizationRequestsCont
       if (byId) return byId;
     }
 
+    // `id` is a SQL Server uniqueidentifier column — comparing it against a
+    // non-UUID key (the common case: callers pass a projectNo) throws P2023
+    // instead of just not matching, so only include it in the OR when it's
+    // actually a UUID we haven't already checked above.
     return this.prisma.project.findFirst({
-      where: { OR: [{ projectNo: key }, { id: key }] },
+      where: isUuidString(key) ? { id: key } : { projectNo: key },
       select,
     });
   }
@@ -572,9 +544,9 @@ export class RegularizationRequestsService implements RegularizationRequestsCont
     const regType = dto.regularizationType ?? 'task';
     const isNonTask = regType === 'non-task';
 
-    const designer = await this.prisma.user.findUnique({
-      where: { id: dto.designerId },
-      select: { id: true, fullName: true, departmentId: true },
+    const designer = await this.prisma.erpUser.findUnique({
+      where: { userId: BigInt(dto.designerId) },
+      select: { userId: true, userName: true },
     });
     if (!designer) throw new BadRequestException('Designer not found');
 
@@ -606,7 +578,7 @@ export class RegularizationRequestsService implements RegularizationRequestsCont
       await this.assertTaskScheduledForDate(dto.designerId, dto.taskId, dto.date);
     }
 
-    const hods = await this.findDepartmentHods(designer.departmentId);
+    const hods = await this.findHodUsers();
     const assignedHodId = hods[0]?.id ?? null;
     const hodAutoApprove = hasHrApproverAccess(role);
     const hodOnBehalf = hodAutoApprove && submitterId !== dto.designerId;
@@ -620,14 +592,14 @@ export class RegularizationRequestsService implements RegularizationRequestsCont
 
     const newRow = await this.prisma.regularizationRequest.create({
       data: {
-        designerId: dto.designerId,
+        designerId: BigInt(dto.designerId),
         taskId: isNonTask ? null : dto.taskId,
         date: new Date(dto.date),
         duration: dto.duration.trim(),
         reason: dto.reason,
         notes: storedNotes,
         status,
-        approverId: hodAutoApprove ? submitterId : assignedHodId,
+        approverId: hodAutoApprove ? BigInt(submitterId) : assignedHodId,
         approverRemarks: approverRemarks ?? null,
         reviewedAt,
       },
@@ -669,11 +641,11 @@ export class RegularizationRequestsService implements RegularizationRequestsCont
           : undefined,
         context: {
           designerId: dto.designerId,
-          departmentId: designer.departmentId ?? null,
-          designerName: designer.fullName,
-          requesterName: designer.fullName,
-          recipientName: hodAutoApprove ? designer.fullName : hods[0]?.fullName ?? 'HOD',
-          approverName: hodAutoApprove ? undefined : hods[0]?.fullName ?? undefined,
+          departmentId: null,
+          designerName: designer.userName,
+          requesterName: designer.userName,
+          recipientName: hodAutoApprove ? designer.userName : hods[0]?.userName ?? 'HOD',
+          approverName: hodAutoApprove ? undefined : hods[0]?.userName ?? undefined,
           submitterId,
           submitterRole: role,
         },
@@ -692,7 +664,7 @@ export class RegularizationRequestsService implements RegularizationRequestsCont
         this.dashboardRealtime?.notifyUserNotificationRefresh(dto.designerId);
       }
     } else {
-      await this.notifyHods(request, designer.fullName);
+      await this.notifyHods(request, designer.userName);
     }
 
     return request;
@@ -744,7 +716,7 @@ export class RegularizationRequestsService implements RegularizationRequestsCont
       where: { id },
       data: {
         status: dto.status,
-        approverId: reviewerId,
+        approverId: BigInt(reviewerId),
         approverRemarks: remarks || null,
         reviewedAt: new Date(),
       },

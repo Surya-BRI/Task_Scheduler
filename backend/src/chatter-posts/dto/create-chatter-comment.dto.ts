@@ -1,5 +1,8 @@
 import { Transform } from 'class-transformer';
-import { IsArray, IsNotEmpty, IsOptional, IsString, IsUUID, MaxLength, ValidateIf } from 'class-validator';
+import { IsArray, IsNotEmpty, IsOptional, IsString, Matches, MaxLength, ValidateIf } from 'class-validator';
+
+// User ids are ERP ErpAuthUsers.userId — decimal bigints, not GUIDs.
+const NUMERIC_ID_RE = /^\d+$/;
 
 function emptyToUndefined(value: unknown): unknown {
   if (value === null || value === undefined) return undefined;
@@ -14,7 +17,7 @@ export class CreateChatterCommentDto {
   message!: string;
 
   @IsOptional()
-  @IsUUID()
+  @Matches(NUMERIC_ID_RE)
   @ValidateIf((_, v) => v !== undefined && v !== null && String(v).trim() !== '')
   mentionUserId?: string;
 
@@ -35,6 +38,6 @@ export class CreateChatterCommentDto {
     return undefined;
   })
   @IsArray()
-  @IsUUID('4', { each: true })
+  @Matches(NUMERIC_ID_RE, { each: true })
   mentionUserIds?: string[];
 }

@@ -23,7 +23,7 @@ describe('SchedulerAssignmentsService', () => {
     regularizationRequest: { findMany: jest.fn() },
     taskWorkSession: { findMany: jest.fn() },
     schedulerTaskFragment: { findMany: jest.fn() },
-    user: { findMany: jest.fn(), findFirst: jest.fn() },
+    erpUser: { findMany: jest.fn(), findFirst: jest.fn(), findUnique: jest.fn() },
     task: { findMany: jest.fn(), update: jest.fn() },
     schedulerWeek: {
       create: jest.fn(),
@@ -63,7 +63,9 @@ describe('SchedulerAssignmentsService', () => {
     prisma.regularizationRequest.findMany.mockResolvedValue([]);
     prisma.taskWorkSession.findMany.mockResolvedValue([]);
     prisma.schedulerTaskFragment.findMany.mockResolvedValue([]);
-    prisma.user.findMany.mockResolvedValue([]);
+    prisma.erpUser.findMany.mockResolvedValue([]);
+    prisma.erpUser.findFirst.mockResolvedValue(null);
+    prisma.erpUser.findUnique.mockResolvedValue(null);
     prisma.task.findMany.mockResolvedValue([]);
     prisma.schedulerWeek.create.mockResolvedValue({});
     prisma.schedulerWeek.findUnique.mockResolvedValue({ version: 0 });
@@ -87,19 +89,19 @@ describe('SchedulerAssignmentsService', () => {
     prisma.leaveRequest.findMany.mockResolvedValue([
       {
         id: 'leave-1',
-        userId: 'designer-1',
+        userId: '2001',
         type: 'Full Day',
         startDate: new Date('2026-06-09T00:00:00.000Z'),
         endDate: new Date('2026-06-09T00:00:00.000Z'),
         halfDaySession: null,
         status: 'Approved',
-        user: { fullName: 'Alex Johnson' },
+        user: { userName: 'Alex Johnson' },
       },
     ]);
     prisma.regularizationRequest.findMany.mockResolvedValue([
       {
         id: 'reg-1',
-        designerId: 'designer-1',
+        designerId: '2001',
         taskId: 'task-1',
         date: new Date('2026-06-10T00:00:00.000Z'),
         duration: '2.5 hours',
@@ -109,7 +111,7 @@ describe('SchedulerAssignmentsService', () => {
       },
       {
         id: 'reg-2',
-        designerId: 'designer-1',
+        designerId: '2001',
         taskId: 'task-2',
         date: new Date('2026-06-11T00:00:00.000Z'),
         duration: '30 mins',
@@ -119,7 +121,7 @@ describe('SchedulerAssignmentsService', () => {
       },
     ]);
 
-    const weekPayload = await service.findForWeekStart('2026-06-08', 'designer-1');
+    const weekPayload = await service.findForWeekStart('2026-06-08', '2001');
 
     expect(weekPayload.assignments).toEqual(
       expect.arrayContaining([
@@ -127,7 +129,7 @@ describe('SchedulerAssignmentsService', () => {
           id: 'leave-leave-1-1',
           requestType: 'LEAVE',
           isSystemBlock: true,
-          designerId: 'designer-1',
+          designerId: '2001',
           dayIndex: 1,
           scheduledHours: 8,
           leaveHours: 8,
@@ -138,7 +140,7 @@ describe('SchedulerAssignmentsService', () => {
           id: 'regularization-reg-1',
           requestType: 'REGULARIZATION',
           isSystemBlock: true,
-          designerId: 'designer-1',
+          designerId: '2001',
           taskId: 'task-1',
           dayIndex: 2,
           scheduledHours: 2.5,
@@ -149,7 +151,7 @@ describe('SchedulerAssignmentsService', () => {
           id: 'regularization-reg-2',
           requestType: 'REGULARIZATION',
           isSystemBlock: true,
-          designerId: 'designer-1',
+          designerId: '2001',
           taskId: 'task-2',
           dayIndex: 3,
           scheduledHours: 0.5,
@@ -166,7 +168,7 @@ describe('SchedulerAssignmentsService', () => {
     prisma.schedulerAssignment.findMany.mockResolvedValue([
       {
         id: 'assignment-1',
-        designerId: 'designer-1',
+        designerId: '2001',
         taskId: taskUuid,
         dayIndex: 0,
         assignedHours: '6',
@@ -177,7 +179,7 @@ describe('SchedulerAssignmentsService', () => {
         weekEndDate: new Date('2026-06-14T00:00:00.000Z'),
         notes: null,
         isLocked: false,
-        assignedBy: 'hod-1',
+        assignedBy: '3001',
         createdAt: new Date('2026-06-01T00:00:00.000Z'),
         updatedAt: new Date('2026-06-01T00:00:00.000Z'),
       },
@@ -193,7 +195,7 @@ describe('SchedulerAssignmentsService', () => {
         disciplineType: null,
         status: 'IN_PROGRESS',
         priority: null,
-        assigneeId: 'designer-1',
+        assigneeId: '2001',
         holdPreviousStatus: null,
         projectId: null,
         updatedAt: new Date('2026-06-01T00:00:00.000Z'),
@@ -204,7 +206,7 @@ describe('SchedulerAssignmentsService', () => {
       },
     ]);
 
-    const weekPayload = await service.findForWeekStart('2026-06-08', 'designer-1');
+    const weekPayload = await service.findForWeekStart('2026-06-08', '2001');
 
     const summaryCall = prisma.task.findMany.mock.calls.find(
       (call: [{ where?: { id?: { in?: string[] } } }]) =>
@@ -219,7 +221,7 @@ describe('SchedulerAssignmentsService', () => {
     prisma.schedulerAssignment.findMany.mockResolvedValue([
       {
         id: 'assignment-week2',
-        designerId: 'designer-b',
+        designerId: '2002',
         taskId: taskUuid,
         dayIndex: 0,
         assignedHours: '4',
@@ -230,7 +232,7 @@ describe('SchedulerAssignmentsService', () => {
         weekEndDate: new Date('2026-06-21T00:00:00.000Z'),
         notes: null,
         isLocked: false,
-        assignedBy: 'hod-1',
+        assignedBy: '3001',
         createdAt: new Date('2026-06-01T00:00:00.000Z'),
         updatedAt: new Date('2026-06-01T00:00:00.000Z'),
       },
@@ -257,7 +259,7 @@ describe('SchedulerAssignmentsService', () => {
     prisma.schedulerAssignment.findMany.mockResolvedValue([
       {
         id: 'assignment-1',
-        designerId: 'designer-1',
+        designerId: '2001',
         taskId: 'task-1',
         dayIndex: 0,
         assignedHours: '6',
@@ -268,7 +270,7 @@ describe('SchedulerAssignmentsService', () => {
         weekEndDate: new Date('2026-06-14T00:00:00.000Z'),
         notes: null,
         isLocked: false,
-        assignedBy: 'hod-1',
+        assignedBy: '3001',
         createdAt: new Date('2026-06-01T00:00:00.000Z'),
         updatedAt: new Date('2026-06-01T00:00:00.000Z'),
       },
@@ -276,14 +278,14 @@ describe('SchedulerAssignmentsService', () => {
     prisma.overtimeRequest.findMany.mockResolvedValue([
       {
         id: 'ot-1',
-        designerId: 'designer-1',
+        designerId: '2001',
         taskId: 'task-1',
         date: new Date('2026-06-08T00:00:00.000Z'),
         approvedHours: '2',
       },
     ]);
 
-    const weekPayload = await service.findForWeekStart('2026-06-08', 'designer-1');
+    const weekPayload = await service.findForWeekStart('2026-06-08', '2001');
 
     expect(weekPayload.assignments).toEqual([
       expect.objectContaining({
@@ -297,7 +299,7 @@ describe('SchedulerAssignmentsService', () => {
   });
 
   it('rejects saving an assignment on approved full-day leave', async () => {
-    prisma.user.findMany.mockResolvedValue([{ id: 'designer-1' }]);
+    prisma.erpUser.findMany.mockResolvedValue([{ userId: BigInt('2001'), userName: 'Alex Johnson' }]);
     prisma.task.findMany.mockResolvedValue([{ id: 'task-1', status: 'DESIGN_NEW', assigneeId: null }]);
     prisma.schedulerAssignment.findMany.mockResolvedValue([]);
     prisma.$queryRaw.mockResolvedValue([
@@ -313,20 +315,20 @@ describe('SchedulerAssignmentsService', () => {
     prisma.leaveRequest.findMany.mockResolvedValue([
       {
         id: 'leave-1',
-        userId: 'designer-1',
+        userId: '2001',
         type: 'Full Day',
         startDate: new Date('2026-06-09T00:00:00.000Z'),
         endDate: new Date('2026-06-09T00:00:00.000Z'),
-        user: { fullName: 'Alex Johnson' },
+        user: { userName: 'Alex Johnson' },
       },
     ]);
 
     await expect(
-      service.saveWeekSnapshot('2026-06-08', 'hod-1', {
+      service.saveWeekSnapshot('2026-06-08', '3001', {
         version: 0,
         assignments: [
           {
-            designerId: 'designer-1',
+            designerId: '2001',
             taskId: 'task-1',
             dayIndex: 1,
             assignedHours: 2,
@@ -339,7 +341,7 @@ describe('SchedulerAssignmentsService', () => {
   it('incremental save replaces only affected task rows and merges when version is stale but tasks do not overlap', async () => {
     const taskA = 'aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa';
     const taskB = 'bbbbbbbb-bbbb-4bbb-8bbb-bbbbbbbbbbbb';
-    const designer1 = 'cccccccc-cccc-4ccc-8ccc-cccccccccccc';
+    const designer1 = '2003';
     const existingRows = [
       {
         id: 'row-a',
@@ -356,7 +358,7 @@ describe('SchedulerAssignmentsService', () => {
         position: 0,
         isLocked: false,
         isPinned: false,
-        assignedBy: 'hod-1',
+        assignedBy: '3001',
         createdAt: new Date('2026-06-01T00:00:00.000Z'),
         updatedAt: new Date('2026-06-01T00:00:00.000Z'),
       },
@@ -375,13 +377,13 @@ describe('SchedulerAssignmentsService', () => {
         position: 0,
         isLocked: false,
         isPinned: false,
-        assignedBy: 'hod-1',
+        assignedBy: '3001',
         createdAt: new Date('2026-06-01T00:00:00.000Z'),
         updatedAt: new Date('2026-06-01T00:00:00.000Z'),
       },
     ];
 
-    prisma.user.findMany.mockResolvedValue([{ id: designer1, fullName: 'Alex Johnson' }]);
+    prisma.erpUser.findMany.mockResolvedValue([{ userId: BigInt(designer1), userName: 'Alex Johnson' }]);
     prisma.task.findMany.mockImplementation(({ where }: { where: { id: { in: string[] } } }) =>
       Promise.resolve(
         where.id.in.map((id) => ({
@@ -403,14 +405,14 @@ describe('SchedulerAssignmentsService', () => {
         isLocked: false,
         lastPayloadHash: null,
         updatedAt: new Date('2026-06-08T00:00:00.000Z'),
-        updatedBy: 'hod-2',
+        updatedBy: '3002',
       },
     ]);
     prisma.schedulerWeek.update.mockResolvedValue({
       version: 3,
       isLocked: false,
       updatedAt: new Date('2026-06-08T01:00:00.000Z'),
-      updatedBy: 'hod-1',
+      updatedBy: '3001',
     });
     prisma.schedulerAssignmentHistory.findMany.mockResolvedValue([
       {
@@ -419,7 +421,7 @@ describe('SchedulerAssignmentsService', () => {
       },
     ]);
 
-    await service.saveWeekSnapshot('2026-06-08', 'hod-1', {
+    await service.saveWeekSnapshot('2026-06-08', '3001', {
       version: 1,
       affectedTaskIds: [taskA],
       assignments: [
@@ -453,12 +455,12 @@ describe('SchedulerAssignmentsService', () => {
   it('incremental cross-designer split save syncs junction via Prisma and nulls assigneeId', async () => {
     const taskMoved = '79bde5e5-d694-4728-88ab-33d71f238e11';
     const taskOther = 'bcf7f830-0a44-4e68-84a3-ea12317e0a5f';
-    const alex = 'cbfa197a-d2ca-463c-adf3-ea6f8457e2c3';
-    const benjamin = 'fb3aa354-5497-4d93-bd44-88c869b2281a';
+    const alex = '2004';
+    const benjamin = '2005';
 
-    prisma.user.findMany.mockResolvedValue([
-      { id: alex, fullName: 'Alex Johnson' },
-      { id: benjamin, fullName: 'Benjamin' },
+    prisma.erpUser.findMany.mockResolvedValue([
+      { userId: BigInt(alex), userName: 'Alex Johnson' },
+      { userId: BigInt(benjamin), userName: 'Benjamin' },
     ]);
     prisma.task.findMany.mockImplementation(({ where }: { where: { id: { in: string[] } } }) =>
       Promise.resolve(
@@ -481,17 +483,17 @@ describe('SchedulerAssignmentsService', () => {
         isLocked: false,
         lastPayloadHash: null,
         updatedAt: new Date('2026-07-06T00:00:00.000Z'),
-        updatedBy: 'hod-1',
+        updatedBy: '3001',
       },
     ]);
     prisma.schedulerWeek.update.mockResolvedValue({
       version: 158,
       isLocked: false,
       updatedAt: new Date('2026-07-06T01:00:00.000Z'),
-      updatedBy: 'hod-1',
+      updatedBy: '3001',
     });
 
-    await service.saveWeekSnapshot('2026-07-06', 'hod-1', {
+    await service.saveWeekSnapshot('2026-07-06', '3001', {
       version: 157,
       affectedTaskIds: [taskMoved, taskOther],
       assignments: [
@@ -507,9 +509,9 @@ describe('SchedulerAssignmentsService', () => {
     });
     expect(prisma.taskDesigner.createMany).toHaveBeenCalledWith({
       data: expect.arrayContaining([
-        { taskId: taskMoved, designerId: alex },
-        { taskId: taskMoved, designerId: benjamin },
-        { taskId: taskOther, designerId: alex },
+        { taskId: taskMoved, designerId: BigInt(alex) },
+        { taskId: taskMoved, designerId: BigInt(benjamin) },
+        { taskId: taskOther, designerId: BigInt(alex) },
       ]),
     });
     expect(prisma.task.update).toHaveBeenCalledWith({
@@ -520,10 +522,10 @@ describe('SchedulerAssignmentsService', () => {
 
   it('recomputes cross-week split labels via Prisma assignment updates', async () => {
     const taskId = '79bde5e5-d694-4728-88ab-33d71f238e11';
-    const alex = 'cbfa197a-d2ca-463c-adf3-ea6f8457e2c3';
+    const alex = '2004';
     const otherWeekRowId = 'other-week-row-1';
 
-    prisma.user.findMany.mockResolvedValue([{ id: alex, fullName: 'Alex Johnson' }]);
+    prisma.erpUser.findMany.mockResolvedValue([{ userId: BigInt(alex), userName: 'Alex Johnson' }]);
     prisma.task.findMany.mockResolvedValue([
       { id: taskId, status: 'DESIGN_PLANNED', assigneeId: alex, projectId: null, project: null },
     ]);
@@ -547,17 +549,17 @@ describe('SchedulerAssignmentsService', () => {
         isLocked: false,
         lastPayloadHash: null,
         updatedAt: new Date('2026-07-06T00:00:00.000Z'),
-        updatedBy: 'hod-1',
+        updatedBy: '3001',
       },
     ]);
     prisma.schedulerWeek.update.mockResolvedValue({
       version: 6,
       isLocked: false,
       updatedAt: new Date('2026-07-06T01:00:00.000Z'),
-      updatedBy: 'hod-1',
+      updatedBy: '3001',
     });
 
-    await service.saveWeekSnapshot('2026-07-06', 'hod-1', {
+    await service.saveWeekSnapshot('2026-07-06', '3001', {
       version: 5,
       assignments: [
         {
@@ -580,9 +582,9 @@ describe('SchedulerAssignmentsService', () => {
 
   it('incremental save rejects when stale version overlaps another editor task', async () => {
     const taskA = 'aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa';
-    const designer1 = 'cccccccc-cccc-4ccc-8ccc-cccccccccccc';
+    const designer1 = '2003';
 
-    prisma.user.findMany.mockResolvedValue([{ id: designer1, fullName: 'Alex Johnson' }]);
+    prisma.erpUser.findMany.mockResolvedValue([{ userId: BigInt(designer1), userName: 'Alex Johnson' }]);
     prisma.task.findMany.mockResolvedValue([
       { id: taskA, status: 'DESIGN_NEW', assigneeId: null, projectId: null, project: null },
     ]);
@@ -594,7 +596,7 @@ describe('SchedulerAssignmentsService', () => {
         isLocked: false,
         lastPayloadHash: null,
         updatedAt: new Date('2026-06-08T00:00:00.000Z'),
-        updatedBy: 'hod-2',
+        updatedBy: '3002',
       },
     ]);
     prisma.schedulerAssignmentHistory.findMany.mockResolvedValue([
@@ -605,7 +607,7 @@ describe('SchedulerAssignmentsService', () => {
     ]);
 
     await expect(
-      service.saveWeekSnapshot('2026-06-08', 'hod-1', {
+      service.saveWeekSnapshot('2026-06-08', '3001', {
         version: 1,
         affectedTaskIds: [taskA],
         assignments: [
@@ -623,7 +625,7 @@ describe('SchedulerAssignmentsService', () => {
   it('reschedules leave conflicts as an ordered chain around holidays, day-locks, and approved leave', async () => {
     const makeRow = (id: string, weekStartDate: string, dayIndex: number, taskId: string) => ({
       id,
-      designerId: 'designer-1',
+      designerId: '2001',
       taskId,
       dayIndex,
       assignedHours: '8',
@@ -635,7 +637,7 @@ describe('SchedulerAssignmentsService', () => {
       notes: null,
       position: 0,
       isLocked: false,
-      assignedBy: 'hod-old',
+      assignedBy: '3003',
       createdAt: new Date('2026-06-01T00:00:00.000Z'),
       updatedAt: new Date('2026-06-01T00:00:00.000Z'),
     });
@@ -667,12 +669,12 @@ describe('SchedulerAssignmentsService', () => {
     const result = await service.rescheduleForApprovedLeave(
       {
         id: 'leave-1',
-        userId: 'designer-1',
+        userId: '2001',
         type: 'Full Day',
         startDate: new Date('2026-06-12T00:00:00.000Z'),
         endDate: new Date('2026-06-12T00:00:00.000Z'),
       },
-      'hod-1',
+      '3001',
     );
 
     expect(result).toEqual({ movedCount: 2, affectedWeeks: ['2026-06-08', '2026-06-15'], cancelledOvertimeCount: 0 });
@@ -697,12 +699,12 @@ describe('SchedulerAssignmentsService', () => {
     const result = await service.rescheduleForApprovedLeave(
       {
         id: 'leave-1',
-        userId: 'designer-1',
+        userId: '2001',
         type: 'Full Day',
         startDate: new Date('2026-06-22T00:00:00.000Z'),
         endDate: new Date('2026-06-22T00:00:00.000Z'),
       },
-      'hod-1',
+      '3001',
     );
 
     expect(result).toEqual({ movedCount: 0, affectedWeeks: [], cancelledOvertimeCount: 1 });
@@ -711,7 +713,7 @@ describe('SchedulerAssignmentsService', () => {
       data: { status: 'CANCELLED' },
     });
     expect(notificationsService.create).toHaveBeenCalledWith(
-      expect.objectContaining({ userId: 'designer-1', title: 'Approved Overtime Cancelled' }),
+      expect.objectContaining({ userId: '2001', title: 'Approved Overtime Cancelled' }),
     );
   });
 
@@ -722,7 +724,7 @@ describe('SchedulerAssignmentsService', () => {
     // anything. Simulate that ordering by returning [] from the approved-leave query.
     const makeRow = (id: string, weekStartDate: string, dayIndex: number, taskId: string) => ({
       id,
-      designerId: 'designer-1',
+      designerId: '2001',
       taskId,
       dayIndex,
       assignedHours: '5',
@@ -734,7 +736,7 @@ describe('SchedulerAssignmentsService', () => {
       notes: null,
       position: 0,
       isLocked: false,
-      assignedBy: 'hod-old',
+      assignedBy: '3003',
       createdAt: new Date('2026-06-01T00:00:00.000Z'),
       updatedAt: new Date('2026-06-01T00:00:00.000Z'),
     });
@@ -749,12 +751,12 @@ describe('SchedulerAssignmentsService', () => {
     const result = await service.rescheduleForApprovedLeave(
       {
         id: 'leave-1',
-        userId: 'designer-1',
+        userId: '2001',
         type: 'Full Day',
         startDate: new Date('2026-06-23T00:00:00.000Z'),
         endDate: new Date('2026-06-23T00:00:00.000Z'),
       },
-      'hod-1',
+      '3001',
     );
 
     expect(result.movedCount).toBe(1);
@@ -766,7 +768,7 @@ describe('SchedulerAssignmentsService', () => {
   it('restores revoked leave displacement from the approval snapshot', async () => {
     const makeRow = (id: string, weekStartDate: string, dayIndex: number, taskId: string) => ({
       id,
-      designerId: 'designer-1',
+      designerId: '2001',
       taskId,
       dayIndex,
       assignedHours: '8',
@@ -778,7 +780,7 @@ describe('SchedulerAssignmentsService', () => {
       notes: null,
       position: 0,
       isLocked: false,
-      assignedBy: 'hod-old',
+      assignedBy: '3003',
       createdAt: new Date('2026-06-01T00:00:00.000Z'),
       updatedAt: new Date('2026-06-01T00:00:00.000Z'),
     });
@@ -808,12 +810,12 @@ describe('SchedulerAssignmentsService', () => {
     const result = await service.rescheduleAfterLeaveRevocation(
       {
         id: 'leave-1',
-        userId: 'designer-1',
+        userId: '2001',
         type: 'Full Day',
         startDate: new Date('2026-06-12T00:00:00.000Z'),
         endDate: new Date('2026-06-12T00:00:00.000Z'),
       },
-      'hod-1',
+      '3001',
     );
 
     expect(result).toEqual({ movedCount: 2, affectedWeeks: ['2026-06-08', '2026-06-15'] });
@@ -838,7 +840,7 @@ describe('SchedulerAssignmentsService', () => {
   it('records leave snapshots with insert-where-not-exists (does not overwrite existing originals)', async () => {
     const makeRow = (id: string, weekStartDate: string, dayIndex: number) => ({
       id,
-      designerId: 'designer-1',
+      designerId: '2001',
       taskId: 'task-1',
       dayIndex,
       assignedHours: '8',
@@ -850,7 +852,7 @@ describe('SchedulerAssignmentsService', () => {
       notes: null,
       position: 0,
       isLocked: false,
-      assignedBy: 'hod-old',
+      assignedBy: '3003',
       createdAt: new Date('2026-06-01T00:00:00.000Z'),
       updatedAt: new Date('2026-06-01T00:00:00.000Z'),
     });
@@ -864,12 +866,12 @@ describe('SchedulerAssignmentsService', () => {
     await service.rescheduleForApprovedLeave(
       {
         id: 'leave-1',
-        userId: 'designer-1',
+        userId: '2001',
         type: 'Full Day',
         startDate: new Date('2026-06-23T00:00:00.000Z'),
         endDate: new Date('2026-06-23T00:00:00.000Z'),
       },
-      'hod-1',
+      '3001',
     );
 
     const snapshotSql = prisma.$executeRaw.mock.calls
@@ -883,7 +885,7 @@ describe('SchedulerAssignmentsService', () => {
   it('builds leave history afterJson without a second week-wide assignment reload', async () => {
     const makeRow = (id: string, weekStartDate: string, dayIndex: number) => ({
       id,
-      designerId: 'designer-1',
+      designerId: '2001',
       taskId: 'task-1',
       dayIndex,
       assignedHours: '5',
@@ -895,7 +897,7 @@ describe('SchedulerAssignmentsService', () => {
       notes: null,
       position: 0,
       isLocked: false,
-      assignedBy: 'hod-old',
+      assignedBy: '3003',
       createdAt: new Date('2026-06-01T00:00:00.000Z'),
       updatedAt: new Date('2026-06-01T00:00:00.000Z'),
     });
@@ -909,12 +911,12 @@ describe('SchedulerAssignmentsService', () => {
     await service.rescheduleForApprovedLeave(
       {
         id: 'leave-1',
-        userId: 'designer-1',
+        userId: '2001',
         type: 'Full Day',
         startDate: new Date('2026-06-23T00:00:00.000Z'),
         endDate: new Date('2026-06-23T00:00:00.000Z'),
       },
-      'hod-1',
+      '3001',
     );
 
     expect(prisma.schedulerAssignment.findMany).toHaveBeenCalledTimes(2);
@@ -957,9 +959,9 @@ describe('SchedulerAssignmentsService', () => {
   });
 
   describe('saveWeekSnapshot â€” cross-week overflow placement', () => {
-    const DESIGNER_ID = 'cccccccc-cccc-4ccc-8ccc-cccccccccccc';
+    const DESIGNER_ID = '2003';
     const TASK_ID = '79bde5e5-d694-4728-88ab-33d71f238e11';
-    const HOD_ID = 'hod-1';
+    const HOD_ID = '3001';
     // 2026-07-06 is a Monday; 2026-07-13 (the following Monday) is the first overflow candidate.
 
     function mockQueryRaw(weekVersion = 0, holidayDates: string[] = []) {
@@ -981,7 +983,7 @@ describe('SchedulerAssignmentsService', () => {
     }
 
     beforeEach(() => {
-      prisma.user.findMany.mockResolvedValue([{ id: DESIGNER_ID, fullName: 'Alex Johnson' }]);
+      prisma.erpUser.findMany.mockResolvedValue([{ userId: BigInt(DESIGNER_ID), userName: 'Alex Johnson' }]);
       prisma.task.findMany.mockResolvedValue([
         { id: TASK_ID, status: 'DESIGN_PLANNED', assigneeId: DESIGNER_ID, projectId: null, project: null },
       ]);
@@ -1016,7 +1018,7 @@ describe('SchedulerAssignmentsService', () => {
 
       expect(prisma.schedulerAssignment.create).toHaveBeenCalledWith({
         data: expect.objectContaining({
-          designerId: DESIGNER_ID,
+          designerId: BigInt(DESIGNER_ID),
           taskId: TASK_ID,
           dayIndex: 0,
           weekStartDate: new Date('2026-07-13T00:00:00.000Z'),
@@ -1193,8 +1195,8 @@ describe('SchedulerAssignmentsService', () => {
     process.env.SCHEDULER_SPLIT_RECOMPUTE_WEEK_WINDOW = '4';
     try {
       const taskId = '79bde5e5-d694-4728-88ab-33d71f238e11';
-      const alex = 'cbfa197a-d2ca-463c-adf3-ea6f8457e2c3';
-      prisma.user.findMany.mockResolvedValue([{ id: alex, fullName: 'Alex Johnson' }]);
+      const alex = '2004';
+      prisma.erpUser.findMany.mockResolvedValue([{ userId: BigInt(alex), userName: 'Alex Johnson' }]);
       prisma.task.findMany.mockResolvedValue([
         { id: taskId, status: 'DESIGN_PLANNED', assigneeId: alex, projectId: null, project: null },
       ]);
@@ -1248,13 +1250,13 @@ describe('SchedulerAssignmentsService', () => {
   });
 
   describe('weekend day locks', () => {
-    const DESIGNER_ID = 'cccccccc-cccc-4ccc-8ccc-cccccccccccc';
+    const DESIGNER_ID = '2003';
     const TASK_ID = '79bde5e5-d694-4728-88ab-33d71f238e11';
-    const HOD_ID = 'hod-1';
+    const HOD_ID = '3001';
     // 2026-07-06 is Monday; dayIndex 5 = Saturday 2026-07-11
 
     it('allows Saturday assignment by default (no lock row)', async () => {
-      prisma.user.findMany.mockResolvedValue([{ id: DESIGNER_ID, fullName: 'Alex' }]);
+      prisma.erpUser.findMany.mockResolvedValue([{ userId: BigInt(DESIGNER_ID), userName: 'Alex' }]);
       prisma.task.findMany.mockResolvedValue([
         { id: TASK_ID, status: 'DESIGN_PLANNED', assigneeId: DESIGNER_ID, projectId: null, project: null },
       ]);
@@ -1289,7 +1291,7 @@ describe('SchedulerAssignmentsService', () => {
     });
 
     it('rejects Saturday assignment when a day-lock exists', async () => {
-      prisma.user.findMany.mockResolvedValue([{ id: DESIGNER_ID, fullName: 'Alex' }]);
+      prisma.erpUser.findMany.mockResolvedValue([{ userId: BigInt(DESIGNER_ID), userName: 'Alex' }]);
       prisma.task.findMany.mockResolvedValue([
         { id: TASK_ID, status: 'DESIGN_PLANNED', assigneeId: DESIGNER_ID, projectId: null, project: null },
       ]);
@@ -1334,7 +1336,7 @@ describe('SchedulerAssignmentsService', () => {
 
     it('createDayLock rejects when assignments remain', async () => {
       prisma.schedulerWeek.findUnique.mockResolvedValue({ isLocked: false });
-      prisma.user.findFirst.mockResolvedValue({ id: DESIGNER_ID });
+      prisma.erpUser.findFirst.mockResolvedValue({ userId: BigInt(DESIGNER_ID) });
       prisma.schedulerAssignment.count.mockResolvedValue(2);
 
       await expect(
@@ -1354,8 +1356,8 @@ describe('SchedulerAssignmentsService', () => {
 
   it('rejects reassigning a DESIGN_COMPLETED task to another designer via week save', async () => {
     const taskId = 'dddddddd-dddd-4ddd-8ddd-dddddddddddd';
-    const designerA = 'aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa';
-    const designerB = 'bbbbbbbb-bbbb-4bbb-8bbb-bbbbbbbbbbbb';
+    const designerA = '2006';
+    const designerB = '2007';
     const existingRows = [
       {
         id: 'row-1',
@@ -1372,17 +1374,17 @@ describe('SchedulerAssignmentsService', () => {
         position: 0,
         isLocked: false,
         isPinned: false,
-        assignedBy: 'hod-1',
+        assignedBy: '3001',
         createdAt: new Date('2026-06-01T00:00:00.000Z'),
         updatedAt: new Date('2026-06-01T00:00:00.000Z'),
       },
     ];
 
-    prisma.user.findMany.mockImplementation(({ where }: { where: { id: { in: string[] } } }) =>
+    prisma.erpUser.findMany.mockImplementation(({ where }: { where: { userId: { in: bigint[] } } }) =>
       Promise.resolve(
-        where.id.in.map((id) => ({
-          id,
-          fullName: id === designerA ? 'Alex' : 'Ben',
+        where.userId.in.map((userId) => ({
+          userId,
+          userName: userId === BigInt(designerA) ? 'Alex' : 'Ben',
         })),
       ),
     );
@@ -1397,12 +1399,12 @@ describe('SchedulerAssignmentsService', () => {
         isLocked: false,
         lastPayloadHash: null,
         updatedAt: new Date('2026-06-08T00:00:00.000Z'),
-        updatedBy: 'hod-1',
+        updatedBy: '3001',
       },
     ]);
 
     await expect(
-      service.saveWeekSnapshot('2026-06-08', 'hod-1', {
+      service.saveWeekSnapshot('2026-06-08', '3001', {
         version: 1,
         affectedTaskIds: [taskId],
         assignments: [
@@ -1422,8 +1424,8 @@ describe('SchedulerAssignmentsService', () => {
 
   it('allows REWORK tasks to be reassigned via week save', async () => {
     const taskId = 'eeeeeeee-eeee-4eee-8eee-eeeeeeeeeeee';
-    const designerA = 'aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa';
-    const designerB = 'bbbbbbbb-bbbb-4bbb-8bbb-bbbbbbbbbbbb';
+    const designerA = '2006';
+    const designerB = '2007';
     const existingRows = [
       {
         id: 'row-1',
@@ -1440,17 +1442,17 @@ describe('SchedulerAssignmentsService', () => {
         position: 0,
         isLocked: false,
         isPinned: false,
-        assignedBy: 'hod-1',
+        assignedBy: '3001',
         createdAt: new Date('2026-06-01T00:00:00.000Z'),
         updatedAt: new Date('2026-06-01T00:00:00.000Z'),
       },
     ];
 
-    prisma.user.findMany.mockImplementation(({ where }: { where: { id: { in: string[] } } }) =>
+    prisma.erpUser.findMany.mockImplementation(({ where }: { where: { userId: { in: bigint[] } } }) =>
       Promise.resolve(
-        where.id.in.map((id) => ({
-          id,
-          fullName: id === designerA ? 'Alex' : 'Ben',
+        where.userId.in.map((userId) => ({
+          userId,
+          userName: userId === BigInt(designerA) ? 'Alex' : 'Ben',
         })),
       ),
     );
@@ -1467,17 +1469,17 @@ describe('SchedulerAssignmentsService', () => {
         isLocked: false,
         lastPayloadHash: null,
         updatedAt: new Date('2026-06-08T00:00:00.000Z'),
-        updatedBy: 'hod-1',
+        updatedBy: '3001',
       },
     ]);
     prisma.schedulerWeek.update.mockResolvedValue({
       version: 2,
       isLocked: false,
       updatedAt: new Date('2026-06-08T01:00:00.000Z'),
-      updatedBy: 'hod-1',
+      updatedBy: '3001',
     });
 
-    const result = await service.saveWeekSnapshot('2026-06-08', 'hod-1', {
+    const result = await service.saveWeekSnapshot('2026-06-08', '3001', {
       version: 1,
       affectedTaskIds: [taskId],
       assignments: [

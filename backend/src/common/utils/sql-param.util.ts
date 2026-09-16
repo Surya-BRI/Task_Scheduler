@@ -15,6 +15,15 @@ export function filterValidUuids(ids: string[]): string[] {
   return [...new Set(ids.map((id) => optionalUuid(id)).filter(Boolean) as string[])];
 }
 
+const NUMERIC_ID_RE = /^\d+$/;
+
+/** Returns a bigint when `value` is a valid ERP user id (ErpAuthUsers.userId); otherwise null. */
+export function optionalUserId(value?: string | null): bigint | null {
+  if (!value?.trim()) return null;
+  const trimmed = value.trim();
+  return NUMERIC_ID_RE.test(trimmed) ? BigInt(trimmed) : null;
+}
+
 /** Wraps a search term for parameterized SQL LIKE comparisons. */
 export function likeContainsPattern(value: string): string {
   return `%${value}%`;

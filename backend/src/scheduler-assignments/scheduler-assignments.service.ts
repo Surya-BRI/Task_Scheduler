@@ -95,7 +95,7 @@ type SchedulerTaskFragmentRow = {
   parentId: string | null;
   hours: Prisma.Decimal | number | string;
   status: string;
-  sourceDesignerId: string | null;
+  sourceDesignerId: bigint | null;
   splitIndex: number | null;
   totalParts: number | null;
   createdAt: Date;
@@ -267,13 +267,13 @@ export class SchedulerAssignmentsService implements OnModuleInit {
         BEGIN
           CREATE TABLE dbo.ErpTSSchedulerDayUnlock (
             id UNIQUEIDENTIFIER NOT NULL CONSTRAINT PK_ErpTSSchedulerDayUnlock PRIMARY KEY DEFAULT (newid()),
-            designerId UNIQUEIDENTIFIER NOT NULL,
+            designerId BIGINT NOT NULL,
             [date] DATE NOT NULL,
-            unlockedById UNIQUEIDENTIFIER NOT NULL,
+            unlockedById BIGINT NOT NULL,
             reason NVARCHAR(500) NULL,
             createdAt DATETIME2 NOT NULL CONSTRAINT DF_ErpTSSchedulerDayUnlock_createdAt DEFAULT (sysutcdatetime()),
-            CONSTRAINT FK_ErpTSSchedulerDayUnlock_Designer FOREIGN KEY (designerId) REFERENCES dbo.ErpTSUser(id),
-            CONSTRAINT FK_ErpTSSchedulerDayUnlock_UnlockedBy FOREIGN KEY (unlockedById) REFERENCES dbo.ErpTSUser(id),
+            CONSTRAINT FK_ErpTSSchedulerDayUnlock_Designer FOREIGN KEY (designerId) REFERENCES dbo.ErpAuthUsers(userId),
+            CONSTRAINT FK_ErpTSSchedulerDayUnlock_UnlockedBy FOREIGN KEY (unlockedById) REFERENCES dbo.ErpAuthUsers(userId),
             CONSTRAINT UQ_ErpTSSchedulerDayUnlock_designer_date UNIQUE (designerId, [date])
           );
           CREATE INDEX IX_ErpTSSchedulerDayUnlock_date ON dbo.ErpTSSchedulerDayUnlock ([date]);
@@ -571,7 +571,7 @@ export class SchedulerAssignmentsService implements OnModuleInit {
     userId: string,
     input: { designerId: string; date: string; reason?: string },
   ): Promise<SchedulerDayLockDto> {
-    if (!this.isUuid(input.designerId)) {
+    if (!this.isNumericId(input.designerId)) {
       throw new BadRequestException('Invalid designerId.');
     }
     const date = this.startOfUtcDay(new Date(`${input.date.trim()}T00:00:00.000Z`));
@@ -586,9 +586,9 @@ export class SchedulerAssignmentsService implements OnModuleInit {
       throw new ForbiddenException('This scheduler week is locked.');
     }
 
-    const designer = await this.prisma.user.findFirst({
-      where: { id: input.designerId, role: { name: { in: [UserRole.DESIGNER, UserRole.HOD] } } },
-      select: { id: true },
+    const designer = await this.prisma.erpUser.findFirst({
+      where: { userId: BigInt(input.designerId), isDeleted: false },
+      select: { userId: true },
     });
     if (!designer) {
       throw new NotFoundException('Designer not found.');
@@ -596,7 +596,7 @@ export class SchedulerAssignmentsService implements OnModuleInit {
 
     const existingAssignments = await this.prisma.schedulerAssignment.count({
       where: {
-        designerId: input.designerId,
+        designerId: BigInt(input.designerId),
         weekStartDate,
         dayIndex: this.dayIndexForDate(date, weekStartDate),
       },
@@ -642,7 +642,7 @@ export class SchedulerAssignmentsService implements OnModuleInit {
     userId: string,
     input: { designerId: string; date: string },
   ): Promise<{ ok: true }> {
-    if (!this.isUuid(input.designerId)) {
+    if (!this.isNumericId(input.designerId)) {
       throw new BadRequestException('Invalid designerId.');
     }
     const date = this.startOfUtcDay(new Date(`${input.date.trim()}T00:00:00.000Z`));
@@ -679,12 +679,12 @@ export class SchedulerAssignmentsService implements OnModuleInit {
         weekStartDate,
         version: 1,
         isLocked: false,
-        updatedBy: userId,
+        updatedBy: BigInt(userId),
         lastPayloadHash: null,
       },
       update: {
         version: { increment: 1 },
-        updatedBy: userId,
+        updatedBy: BigInt(userId),
         lastPayloadHash: null,
       },
     });
@@ -694,6 +694,11 @@ export class SchedulerAssignmentsService implements OnModuleInit {
     return /^[0-9a-f]{8}-[0-9a-f]{4}-[1-5][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i.test(
       String(value ?? '').trim(),
     );
+  }
+
+  /** designerId (ERP ErpAuthUsers.userId) is now a decimal bigint, not a GUID. */
+  private isNumericId(value: string): boolean {
+    return /^\d+$/.test(String(value ?? '').trim());
   }
 
   private collectSchedulerChangedTaskIds(result: {
@@ -797,7 +802,7 @@ export class SchedulerAssignmentsService implements OnModuleInit {
 
   private mapRow(row: RawAssignmentRow): SchedulerAssignmentDto {
     const parentId = row.parentId?.trim() ? row.parentId.trim() : null;
-    const assignedBy = row.assignedBy?.trim() ? row.assignedBy.trim() : null;
+    const assignedBy = row.assignedBy != null ? String(row.assignedBy).trim() || null : null;
     const assignedHours = this.toHours(row.assignedHours);
     const scheduledHours = row.scheduledHours == null ? assignedHours : this.toHours(row.scheduledHours);
     const approvedOvertimeHours = this.toHours(row.approvedOvertimeHours);
@@ -908,7 +913,7 @@ export class SchedulerAssignmentsService implements OnModuleInit {
   private mapFragmentRow(fragment: SchedulerTaskFragmentRow): SchedulerAssignmentDto {
     return this.mapRow({
       id: `fragment-${fragment.id}`,
-      designerId: fragment.sourceDesignerId ?? '',
+      designerId: fragment.sourceDesignerId != null ? String(fragment.sourceDesignerId) : '',
       taskId: fragment.taskId,
       dayIndex: 0,
       assignedHours: Number(fragment.hours),
@@ -933,13 +938,13 @@ export class SchedulerAssignmentsService implements OnModuleInit {
   private buildLeaveSystemRows(
     leaves: Array<{
       id: string;
-      userId: string;
+      userId: bigint;
       type: string | null;
       startDate: Date;
       endDate: Date | null;
       halfDaySession: string | null;
       status: string | null;
-      user?: { fullName?: string | null } | null;
+      user?: { userName?: string | null } | null;
     }>,
     weekStartDate: Date,
     weekEndDate: Date,
@@ -961,7 +966,7 @@ export class SchedulerAssignmentsService implements OnModuleInit {
 
         rows.push(this.mapRow({
           id: `leave-${leave.id}-${dayIndex}`,
-          designerId: leave.userId,
+          designerId: String(leave.userId),
           taskId: `leave-${leave.id}`,
           dayIndex,
           assignedHours: hours,
@@ -993,7 +998,7 @@ export class SchedulerAssignmentsService implements OnModuleInit {
   private buildRegularizationSystemRows(
     requests: Array<{
       id: string;
-      designerId: string | null;
+      designerId: bigint | null;
       taskId: string | null;
       date: Date | null;
       duration: string | null;
@@ -1015,7 +1020,7 @@ export class SchedulerAssignmentsService implements OnModuleInit {
       const label = `Approved regularization${taskLabel ? ` - ${taskLabel}` : ''}`;
       rows.push(this.mapRow({
         id: `regularization-${request.id}`,
-        designerId: request.designerId,
+        designerId: String(request.designerId),
         taskId: request.taskId ?? `regularization-${request.id}`,
         dayIndex,
         assignedHours: hours,
@@ -1117,8 +1122,8 @@ export class SchedulerAssignmentsService implements OnModuleInit {
    */
   private assertNoBlockedTaskReassignment(
     scopeTaskIds: string[],
-    tasks: Array<{ id: string; status?: string | null; assigneeId?: string | null }>,
-    previousRows: Array<{ taskId?: string | null; designerId?: string | null }>,
+    tasks: Array<{ id: string; status?: string | null; assigneeId?: bigint | null }>,
+    previousRows: Array<{ taskId?: string | null; designerId?: bigint | null }>,
     assigneesByTask: Map<string, Set<string>>,
   ): void {
     if (scopeTaskIds.length === 0) return;
@@ -1130,12 +1135,13 @@ export class SchedulerAssignmentsService implements OnModuleInit {
 
       const designerSet = assigneesByTask.get(task.id) ?? new Set<string>();
       const assignedDesigner = designerSet.size === 1 ? [...designerSet][0] : null;
+      const taskAssigneeId = task.assigneeId != null ? String(task.assigneeId) : null;
       const previousDesignerSet = new Set(
         previousRows
-          .filter((r): r is { taskId: string; designerId: string } =>
+          .filter((r): r is { taskId: string; designerId: bigint } =>
             r.taskId === task.id && !!r.designerId,
           )
-          .map((r) => r.designerId),
+          .map((r) => String(r.designerId)),
       );
       const designersChanged =
         previousDesignerSet.size !== designerSet.size ||
@@ -1143,12 +1149,12 @@ export class SchedulerAssignmentsService implements OnModuleInit {
       const onlyAddingForCurrentAssignee =
         previousDesignerSet.size === 0 &&
         assignedDesigner != null &&
-        task.assigneeId === assignedDesigner &&
+        taskAssigneeId === assignedDesigner &&
         designerSet.size === 1;
       const assigneeFieldWouldChange =
-        (assignedDesigner != null && task.assigneeId !== assignedDesigner) ||
-        (designerSet.size === 0 && task.assigneeId != null) ||
-        (designerSet.size > 1 && task.assigneeId != null);
+        (assignedDesigner != null && taskAssigneeId !== assignedDesigner) ||
+        (designerSet.size === 0 && taskAssigneeId != null) ||
+        (designerSet.size > 1 && taskAssigneeId != null);
 
       if ((designersChanged && !onlyAddingForCurrentAssignee) || assigneeFieldWouldChange) {
         throw new BadRequestException(TASK_REASSIGNMENT_BLOCKED_MESSAGE);
@@ -1182,7 +1188,7 @@ export class SchedulerAssignmentsService implements OnModuleInit {
       } | null;
     }>,
     schedulableUsers: Array<{ id: string; fullName: string }>,
-    previousRows: Array<{ taskId: string | null; designerId: string | null }>,
+    previousRows: Array<{ taskId: string | null; designerId: bigint | null }>,
   ): void {
     const normalize = (value: string) => value.trim().toLowerCase();
     const taskById = new Map(tasks.map((task) => [task.id, task]));
@@ -1386,7 +1392,7 @@ export class SchedulerAssignmentsService implements OnModuleInit {
           where: { weekStartDate },
           data: {
             version: { increment: 1 },
-            updatedBy: params.actorUserId,
+            updatedBy: BigInt(params.actorUserId),
             lastPayloadHash: null,
           },
         });
@@ -1396,7 +1402,7 @@ export class SchedulerAssignmentsService implements OnModuleInit {
             weekStartDate,
             version: versionTo,
             isLocked: false,
-            updatedBy: params.actorUserId,
+            updatedBy: BigInt(params.actorUserId),
             lastPayloadHash: null,
           },
         });
@@ -1407,7 +1413,7 @@ export class SchedulerAssignmentsService implements OnModuleInit {
           weekStartDate,
           versionFrom,
           versionTo,
-          changedBy: params.actorUserId,
+          changedBy: BigInt(params.actorUserId),
           beforeJson: JSON.stringify(params.beforeByWeek.get(key) ?? []),
           afterJson: JSON.stringify(params.afterByWeek.get(key) ?? []),
         },
@@ -1592,7 +1598,7 @@ export class SchedulerAssignmentsService implements OnModuleInit {
       // to a day the designer is now on leave.
       const conflictingOvertimeRequests = await tx.overtimeRequest.findMany({
         where: {
-          designerId: leave.userId,
+          designerId: BigInt(leave.userId),
           status: 'APPROVED',
           date: { gte: leaveStart, lte: leaveEnd },
         },
@@ -1609,7 +1615,7 @@ export class SchedulerAssignmentsService implements OnModuleInit {
 
       const schedulerRows = await tx.schedulerAssignment.findMany({
         where: {
-          designerId: leave.userId,
+          designerId: BigInt(leave.userId),
           weekStartDate: { gte: this.weekStartForDate(leaveStart) },
         },
         orderBy: [
@@ -1641,7 +1647,7 @@ export class SchedulerAssignmentsService implements OnModuleInit {
       const [approvedLeaves, holidayKeys, dayLocks] = await Promise.all([
         tx.leaveRequest.findMany({
           where: {
-            userId: leave.userId,
+            userId: BigInt(leave.userId),
             status: { in: ['Approved', 'APPROVED', 'approved'] },
             revokedAt: null,
             startDate: { lte: horizonEnd },
@@ -2047,7 +2053,7 @@ export class SchedulerAssignmentsService implements OnModuleInit {
 
       const schedulerRows = await tx.schedulerAssignment.findMany({
         where: {
-          designerId: leave.userId,
+          designerId: BigInt(leave.userId),
           weekStartDate: { gte: this.weekStartForDate(leaveStart) },
         },
         orderBy: [
@@ -2079,7 +2085,7 @@ export class SchedulerAssignmentsService implements OnModuleInit {
       const [approvedLeaves, holidayKeys, dayLocks] = await Promise.all([
         tx.leaveRequest.findMany({
           where: {
-            userId: leave.userId,
+            userId: BigInt(leave.userId),
             status: { in: ['Approved', 'APPROVED', 'approved'] },
             revokedAt: null,
             startDate: { lte: horizonEnd },
@@ -2309,7 +2315,7 @@ export class SchedulerAssignmentsService implements OnModuleInit {
 
   private previousRowToAssignmentInput(
     row: {
-      designerId: string | null;
+      designerId: bigint | null;
       taskId: string | null;
       dayIndex: number | null;
       assignedHours: string | number | Prisma.Decimal | null;
@@ -2325,7 +2331,7 @@ export class SchedulerAssignmentsService implements OnModuleInit {
     const taskId = String(row.taskId ?? '').trim();
     const dayIndex = row.dayIndex;
     const assignedHours = Number(row.assignedHours);
-    if (!this.isUuid(designerId) || !this.isUuid(taskId)) return null;
+    if (!this.isNumericId(designerId) || !this.isUuid(taskId)) return null;
     if (dayIndex == null || !Number.isFinite(dayIndex) || dayIndex < 0 || dayIndex > 6) return null;
     if (!Number.isFinite(assignedHours) || assignedHours <= 0) return null;
     return {
@@ -2344,7 +2350,7 @@ export class SchedulerAssignmentsService implements OnModuleInit {
 
   private buildMergedAssignmentsForValidation(
     previousRows: Array<{
-      designerId: string | null;
+      designerId: bigint | null;
       taskId: string | null;
       dayIndex: number | null;
       assignedHours: string | number | Prisma.Decimal | null;
@@ -2391,7 +2397,7 @@ export class SchedulerAssignmentsService implements OnModuleInit {
 
     try {
       const rows = await this.prisma.schedulerAssignment.findMany({
-        where: { weekStartDate, ...(designerId ? { designerId } : {}) },
+        where: { weekStartDate, ...(designerId ? { designerId: BigInt(designerId) } : {}) },
         orderBy: [
           { designerId: 'asc' },
           { dayIndex: 'asc' },
@@ -2407,7 +2413,7 @@ export class SchedulerAssignmentsService implements OnModuleInit {
           where: {
             status: 'APPROVED',
             date: { gte: weekStartDate, lte: weekEndDate },
-            ...(designerId ? { designerId } : {}),
+            ...(designerId ? { designerId: BigInt(designerId) } : {}),
           },
           select: {
             id: true,
@@ -2424,7 +2430,7 @@ export class SchedulerAssignmentsService implements OnModuleInit {
             revokedAt: null,
             startDate: { lte: weekEndDate },
             OR: [{ endDate: null }, { endDate: { gte: weekStartDate } }],
-            ...(designerId ? { userId: designerId } : {}),
+            ...(designerId ? { userId: BigInt(designerId) } : {}),
           },
           select: {
             id: true,
@@ -2434,7 +2440,7 @@ export class SchedulerAssignmentsService implements OnModuleInit {
             endDate: true,
             halfDaySession: true,
             status: true,
-            user: { select: { fullName: true } },
+            user: { select: { userName: true } },
           },
           orderBy: { startDate: 'asc' },
         }),
@@ -2442,7 +2448,7 @@ export class SchedulerAssignmentsService implements OnModuleInit {
           where: {
             status: { in: ['Approved', 'APPROVED', 'approved'] },
             date: { gte: weekStartDate, lte: weekEndDate },
-            ...(designerId ? { designerId } : {}),
+            ...(designerId ? { designerId: BigInt(designerId) } : {}),
           },
           select: {
             id: true,
@@ -2479,7 +2485,7 @@ export class SchedulerAssignmentsService implements OnModuleInit {
       // designer, so the frontend can offer "hours actually remaining" when the HOD
       // reassigns a partially-worked task to a different designer via drag-and-drop.
       const taskIds = [...new Set(rows.map((r) => r.taskId).filter((id): id is string => Boolean(id)))];
-      const designerIdsForWork = [...new Set(rows.map((r) => r.designerId).filter((id): id is string => Boolean(id)))];
+      const designerIdsForWork = [...new Set(rows.map((r) => r.designerId).filter((id): id is bigint => id != null))];
       const workedSecondsByKey = new Map<string, number>();
       if (taskIds.length > 0 && designerIdsForWork.length > 0) {
         const draftSessions = await this.prisma.taskWorkSession.findMany({
@@ -2494,7 +2500,7 @@ export class SchedulerAssignmentsService implements OnModuleInit {
       }
 
       const mappedRows = rows.map((r) => {
-        const designerKey = r.designerId ?? '';
+        const designerKey = r.designerId != null ? String(r.designerId) : '';
         const taskKey = r.taskId ?? '';
         const dayKey = r.dayIndex ?? 0;
         const overtimeKey = `${designerKey}|${taskKey}|${dayKey}`;
@@ -2530,7 +2536,7 @@ export class SchedulerAssignmentsService implements OnModuleInit {
           approvedByAssignmentKey.delete(key);
           return this.mapRow({
             id: `overtime-${request.id}`,
-            designerId: request.designerId,
+            designerId: String(request.designerId),
             taskId: request.taskId,
             dayIndex,
             assignedHours: approvedOvertimeHours,
@@ -2556,7 +2562,7 @@ export class SchedulerAssignmentsService implements OnModuleInit {
       // browsing any other week too. So this isn't filtered by weekStartDate at all,
       // unlike every other query in this method.
       const fragments = await this.prisma.schedulerTaskFragment.findMany({
-        where: designerId ? { sourceDesignerId: designerId } : {},
+        where: designerId ? { sourceDesignerId: BigInt(designerId) } : {},
         orderBy: { createdAt: 'asc' },
       });
 
@@ -2583,7 +2589,7 @@ export class SchedulerAssignmentsService implements OnModuleInit {
         version: weekRow?.version ?? 0,
         isLocked: Boolean(weekRow?.isLocked ?? false),
         updatedAt: (weekRow?.updatedAt ?? new Date(0)).toISOString(),
-        updatedBy: weekRow?.updatedBy ?? null,
+        updatedBy: weekRow?.updatedBy != null ? String(weekRow.updatedBy) : null,
         dayLockKeys,
         dayUnlockKeys: dayLockKeys,
       };
@@ -2608,7 +2614,7 @@ export class SchedulerAssignmentsService implements OnModuleInit {
       version: row?.version ?? 0,
       isLocked: Boolean(row?.isLocked ?? false),
       updatedAt: (row?.updatedAt ?? new Date(0)).toISOString(),
-      updatedBy: row?.updatedBy ?? null,
+      updatedBy: row?.updatedBy != null ? String(row.updatedBy) : null,
       dayLockKeys,
       dayUnlockKeys: dayLockKeys,
     };
@@ -2651,7 +2657,7 @@ export class SchedulerAssignmentsService implements OnModuleInit {
         data: { status: nextStatus },
         include: {
           task: { select: { id: true, taskNo: true, title: true, status: true } },
-          designer: { select: { id: true, fullName: true } },
+          designer: { select: { userId: true, userName: true } },
         },
       });
 
@@ -2712,7 +2718,7 @@ export class SchedulerAssignmentsService implements OnModuleInit {
       updatedBy: userId,
     });
     if (updated.designerId) {
-      this.dashboardRealtime?.notifyUserNotificationRefresh(updated.designerId);
+      this.dashboardRealtime?.notifyUserNotificationRefresh(String(updated.designerId));
     }
 
     return updated;
@@ -2726,10 +2732,10 @@ export class SchedulerAssignmentsService implements OnModuleInit {
       const row = existing
         ? await tx.schedulerWeek.update({
             where: { weekStartDate },
-            data: { isLocked: locked, updatedBy: userId },
+            data: { isLocked: locked, updatedBy: BigInt(userId) },
           })
         : await tx.schedulerWeek.create({
-            data: { weekStartDate, version: 0, isLocked: locked, updatedBy: userId },
+            data: { weekStartDate, version: 0, isLocked: locked, updatedBy: BigInt(userId) },
           });
 
       return row;
@@ -2762,7 +2768,7 @@ export class SchedulerAssignmentsService implements OnModuleInit {
       version: result.version,
       isLocked: Boolean(result.isLocked),
       updatedAt: result.updatedAt.toISOString(),
-      updatedBy: result.updatedBy ?? null,
+      updatedBy: result.updatedBy != null ? String(result.updatedBy) : null,
       dayLockKeys,
       dayUnlockKeys: dayLockKeys,
     };
@@ -2856,14 +2862,17 @@ export class SchedulerAssignmentsService implements OnModuleInit {
           });
         }
       } else {
-        const total = remaining.length;
-        await Promise.all(
-          remaining.map((part, idx) =>
-            tx.schedulerAssignment.update({
-              where: { id: part.id },
-              data: { splitIndex: idx + 1, totalParts: total, parentId: part.parentId ?? row.taskId },
-            }),
-          ),
+        // One round-trip instead of N `.update()` calls — the same remote-latency
+        // concern as applyReallocationHandoff's split-index recompute; this loop
+        // was hitting P2028 (interactive-tx timeout) on tasks with several parts.
+        await this.batchUpdateSplitIndicesWithParents(
+          tx,
+          remaining.map((part, idx) => ({
+            id: part.id,
+            splitIndex: idx + 1,
+            totalParts: remaining.length,
+            parentId: part.parentId ?? row.taskId!,
+          })),
         );
       }
 
@@ -2920,11 +2929,11 @@ export class SchedulerAssignmentsService implements OnModuleInit {
     const rangeStart = this.addUtcDays(this.startOfUtcDay(params.afterDate), 1);
     const rangeEnd = this.addUtcDays(rangeStart, maxLookaheadDays);
 
-    const [holidayKeys, approvedLeaves, dayLocks] = await Promise.all([
+    const [holidayKeys, approvedLeaves, dayLocks, lockedWeeks] = await Promise.all([
       this.loadHolidayKeys(tx, rangeStart, rangeEnd),
       tx.leaveRequest.findMany({
         where: {
-          userId: designerId,
+          userId: BigInt(designerId),
           status: { in: ['Approved', 'APPROVED', 'approved'] },
           revokedAt: null,
           startDate: { lte: rangeEnd },
@@ -2933,8 +2942,19 @@ export class SchedulerAssignmentsService implements OnModuleInit {
         select: { type: true, startDate: true, endDate: true },
       }),
       this.loadDayLocksForRange(rangeStart, rangeEnd, designerId),
+      // Overflow must never write into a week-locked destination — mirrors the
+      // lockedWeekKeys guard in applyReallocationHandoff, which this loop
+      // previously lacked (a candidate week's isLocked flag was never even read).
+      tx.schedulerWeek.findMany({
+        where: {
+          weekStartDate: { gte: this.weekStartForDate(rangeStart), lte: this.weekStartForDate(rangeEnd) },
+          isLocked: true,
+        },
+        select: { weekStartDate: true },
+      }),
     ]);
     const lockedKeys = new Set(dayLocks.map((u) => this.dayLockKey(u.designerId, u.date)));
+    const lockedWeekKeys = new Set(lockedWeeks.map((w) => this.dateKey(new Date(w.weekStartDate))));
 
     const leaveHoursForCandidate = (date: Date): number => {
       let hours = 0;
@@ -2963,9 +2983,14 @@ export class SchedulerAssignmentsService implements OnModuleInit {
       const candidateWeekStart = this.weekStartForDate(cursor);
       const candidateDayIndex = this.dayIndexForDate(cursor, candidateWeekStart);
 
+      if (lockedWeekKeys.has(this.dateKey(candidateWeekStart))) {
+        cursor = this.addUtcDays(cursor, 1);
+        continue;
+      }
+
       // Live check — never trust a stale assumption about a week the caller never loaded.
       const existingRows = await tx.schedulerAssignment.findMany({
-        where: { designerId, weekStartDate: candidateWeekStart, dayIndex: candidateDayIndex },
+        where: { designerId: BigInt(designerId), weekStartDate: candidateWeekStart, dayIndex: candidateDayIndex },
         select: { assignedHours: true },
       });
       const alreadyUsed = existingRows.reduce((sum, row) => sum + this.toHours(row.assignedHours), 0);
@@ -2985,17 +3010,17 @@ export class SchedulerAssignmentsService implements OnModuleInit {
             weekStartDate: candidateWeekStart,
             version: 1,
             isLocked: false,
-            updatedBy: assignedBy,
+            updatedBy: BigInt(assignedBy),
             lastPayloadHash: null,
           },
-          update: { version: { increment: 1 }, updatedBy: assignedBy, lastPayloadHash: null },
+          update: { version: { increment: 1 }, updatedBy: BigInt(assignedBy), lastPayloadHash: null },
         });
         touchedWeekStarts.add(weekKey);
       }
 
       await tx.schedulerAssignment.create({
         data: {
-          designerId,
+          designerId: BigInt(designerId),
           taskId,
           dayIndex: candidateDayIndex,
           assignedHours: new Prisma.Decimal(placeHours),
@@ -3011,7 +3036,7 @@ export class SchedulerAssignmentsService implements OnModuleInit {
           notes: null,
           isLocked: false,
           isPinned: params.isPinned ?? false,
-          assignedBy,
+          assignedBy: BigInt(assignedBy),
         },
       });
 
@@ -3023,13 +3048,13 @@ export class SchedulerAssignmentsService implements OnModuleInit {
     for (const weekKey of touchedWeekStarts) {
       const weekStartDate = new Date(`${weekKey}T00:00:00.000Z`);
       const week = await tx.schedulerWeek.findUnique({ where: { weekStartDate } });
-      const afterRows = await tx.schedulerAssignment.findMany({ where: { weekStartDate, designerId, taskId } });
+      const afterRows = await tx.schedulerAssignment.findMany({ where: { weekStartDate, designerId: BigInt(designerId), taskId } });
       await tx.schedulerAssignmentHistory.create({
         data: {
           weekStartDate,
           versionFrom: (week?.version ?? 1) - 1,
           versionTo: week?.version ?? 1,
-          changedBy: assignedBy,
+          changedBy: BigInt(assignedBy),
           beforeJson: JSON.stringify([]),
           afterJson: JSON.stringify(afterRows),
         },
@@ -3062,11 +3087,11 @@ export class SchedulerAssignmentsService implements OnModuleInit {
         ...(dto.overflow ?? []).map((o) => o.taskId),
       ]));
 
-      const [schedulableUsers, tasks, previousRows, weekRows, approvedLeaves, approvedOvertimeRequests] = await Promise.all([
+      const [schedulableUsersRaw, tasks, previousRows, weekRows, approvedLeavesRaw, approvedOvertimeRequests] = await Promise.all([
         designerIds.length > 0
-          ? tx.user.findMany({
-              where: { id: { in: designerIds }, role: { name: { in: [UserRole.DESIGNER, UserRole.HOD] } } },
-              select: { id: true, fullName: true },
+          ? tx.erpUser.findMany({
+              where: { userId: { in: designerIds.map((id) => BigInt(id)) }, isDeleted: false },
+              select: { userId: true, userName: true },
             })
           : Promise.resolve([]),
         (lookupTaskIds.length > 0)
@@ -3083,7 +3108,7 @@ export class SchedulerAssignmentsService implements OnModuleInit {
           : Promise.resolve([] as Array<{
               id: string;
               status: string | null;
-              assigneeId: string | null;
+              assigneeId: bigint | null;
               projectId: string | null;
               project: {
                 technicalHead: string | null;
@@ -3107,7 +3132,7 @@ export class SchedulerAssignmentsService implements OnModuleInit {
             WHERE weekStartDate = ${weekStartDate}`,
         tx.leaveRequest.findMany({
           where: {
-            userId: { in: designerIds },
+            userId: { in: designerIds.map((id) => BigInt(id)) },
             status: { in: ['Approved', 'APPROVED', 'approved'] },
             revokedAt: null,
             startDate: { lte: weekEndDate },
@@ -3119,13 +3144,13 @@ export class SchedulerAssignmentsService implements OnModuleInit {
             type: true,
             startDate: true,
             endDate: true,
-            user: { select: { fullName: true } },
+            user: { select: { userName: true } },
           },
         }),
         designerIds.length > 0
           ? tx.overtimeRequest.findMany({
               where: {
-                designerId: { in: designerIds },
+                designerId: { in: designerIds.map((id) => BigInt(id)) },
                 status: 'APPROVED',
                 date: { gte: weekStartDate, lte: weekEndDate },
               },
@@ -3134,6 +3159,15 @@ export class SchedulerAssignmentsService implements OnModuleInit {
           : Promise.resolve([]),
       ]);
       const week = weekRows[0] ?? null;
+      const schedulableUsers = schedulableUsersRaw.map((u) => ({ id: String(u.userId), fullName: u.userName }));
+      const approvedLeaves = approvedLeavesRaw.map((l) => ({
+        id: l.id,
+        userId: String(l.userId),
+        type: l.type,
+        startDate: l.startDate,
+        endDate: l.endDate,
+        user: l.user ? { fullName: l.user.userName } : null,
+      }));
 
       const approvedOvertimeHoursByDesignerDay = new Map<string, number>();
       for (const request of approvedOvertimeRequests) {
@@ -3168,7 +3202,7 @@ export class SchedulerAssignmentsService implements OnModuleInit {
             weekStartDate,
             version: 0,
             isLocked: false,
-            updatedBy: userId,
+            updatedBy: BigInt(userId),
           },
         }));
 
@@ -3361,7 +3395,7 @@ export class SchedulerAssignmentsService implements OnModuleInit {
       if (dto.assignments.length > 0) {
         await tx.schedulerAssignment.createMany({
           data: dto.assignments.map((a) => ({
-            designerId: a.designerId,
+            designerId: BigInt(a.designerId),
             taskId: a.taskId,
             dayIndex: a.dayIndex,
             assignedHours: new Prisma.Decimal(a.assignedHours),
@@ -3374,7 +3408,7 @@ export class SchedulerAssignmentsService implements OnModuleInit {
             notes: a.notes ?? null,
             isLocked: a.isLocked ?? false,
             isPinned: a.isPinned ?? false,
-            assignedBy: userId,
+            assignedBy: BigInt(userId),
           })),
         });
       }
@@ -3440,6 +3474,7 @@ export class SchedulerAssignmentsService implements OnModuleInit {
         for (const task of affectedTasks) {
           const designerSet = assigneesByTask.get(task.id) ?? new Set<string>();
           const assignedDesigner = designerSet.size === 1 ? [...designerSet][0] : null;
+          const taskAssigneeId = task.assigneeId != null ? String(task.assigneeId) : null;
 
           const currentStatus = String(task.status ?? '').toUpperCase();
           const isTerminal = ['CLIENT_ACCEPTED', 'CLIENT_REJECTED'].includes(currentStatus);
@@ -3449,34 +3484,34 @@ export class SchedulerAssignmentsService implements OnModuleInit {
             const shouldPlan = !isTerminal && currentStatus === 'DESIGN_NEW';
             if (shouldPlan) {
               pushGroupedTask(assignPlannedByDesigner, assignedDesigner, task.id);
-            } else if (task.assigneeId !== assignedDesigner) {
+            } else if (taskAssigneeId !== assignedDesigner) {
               pushGroupedTask(assignOnlyByDesigner, assignedDesigner, task.id);
             }
           } else if (designerSet.size === 0) {
             // When unassigned, revert to DESIGN_NEW unless terminal or on hold.
             if (!isTerminal && currentStatus !== 'ON_HOLD') {
               unassignNewIds.push(task.id);
-            } else if (task.assigneeId !== null) {
+            } else if (taskAssigneeId !== null) {
               unassignOnlyIds.push(task.id);
             }
-            if (task.assigneeId) {
-              unassignedFormerAssignees.push({ taskId: task.id, formerAssigneeId: task.assigneeId });
+            if (taskAssigneeId) {
+              unassignedFormerAssignees.push({ taskId: task.id, formerAssigneeId: taskAssigneeId });
             }
           } else {
             // Split across multiple designers — null out assigneeId so the task
             // doesn't falsely appear assigned to only one person.
-            if (task.assigneeId !== null) {
+            if (taskAssigneeId !== null) {
               splitAssigneeNullIds.push(task.id);
             }
           }
 
-          if (assignedDesigner && assignedDesigner !== task.assigneeId) {
-            reassignedTasks.push({ taskId: task.id, oldAssigneeId: task.assigneeId ?? null, newAssigneeId: assignedDesigner });
-          } else if (assignedDesigner && assignedDesigner === task.assigneeId) {
+          if (assignedDesigner && assignedDesigner !== taskAssigneeId) {
+            reassignedTasks.push({ taskId: task.id, oldAssigneeId: taskAssigneeId, newAssigneeId: assignedDesigner });
+          } else if (assignedDesigner && assignedDesigner === taskAssigneeId) {
             const sliceKey = (r: { dayIndex: number | null; assignedHours: unknown }) =>
               `${r.dayIndex}:${this.toHours(r.assignedHours)}`;
             const oldSlices = previousRows
-              .filter((r: any) => r.taskId === task.id && r.designerId === assignedDesigner)
+              .filter((r: any) => r.taskId === task.id && String(r.designerId) === assignedDesigner)
               .map(sliceKey)
               .sort();
             const newSlices = assigneeSourceRows
@@ -3508,7 +3543,9 @@ export class SchedulerAssignmentsService implements OnModuleInit {
           const uniqueJunctionRows = [
             ...new Map(junctionRows.map((row) => [`${row.taskId}|${row.designerId}`, row])).values(),
           ];
-          await tx.taskDesigner.createMany({ data: uniqueJunctionRows });
+          await tx.taskDesigner.createMany({
+            data: uniqueJunctionRows.map((row) => ({ taskId: row.taskId, designerId: BigInt(row.designerId) })),
+          });
         }
 
         // Batched into a single UPDATE instead of one sequential round trip per distinct
@@ -3538,7 +3575,7 @@ export class SchedulerAssignmentsService implements OnModuleInit {
               tx.task.update({
                 where: { id: u.id },
                 data: {
-                  assigneeId: u.assigneeId,
+                  assigneeId: u.assigneeId != null ? BigInt(u.assigneeId) : null,
                   ...(u.status ? { status: u.status } : {}),
                 },
               }),
@@ -3552,7 +3589,7 @@ export class SchedulerAssignmentsService implements OnModuleInit {
         where: { weekStartDate },
         data: {
           version: nextVersion,
-          updatedBy: userId,
+          updatedBy: BigInt(userId),
           lastPayloadHash: payloadHash,
         },
       });
@@ -3562,7 +3599,7 @@ export class SchedulerAssignmentsService implements OnModuleInit {
           weekStartDate,
           versionFrom: existing.version,
           versionTo: nextVersion,
-          changedBy: userId,
+          changedBy: BigInt(userId),
           beforeJson: JSON.stringify(
             incremental
               ? previousRows.filter((r: { taskId?: string | null }) =>
@@ -3666,11 +3703,11 @@ export class SchedulerAssignmentsService implements OnModuleInit {
         ...result.reassignedTasks.map((r) => r.newAssigneeId),
         ...result.reassignedTasks.map((r) => r.oldAssigneeId).filter(Boolean) as string[],
       ]));
-      const designers = await this.prisma.user.findMany({
-        where: { id: { in: allDesignerIds } },
-        select: { id: true, fullName: true },
+      const designers = await this.prisma.erpUser.findMany({
+        where: { userId: { in: allDesignerIds.map((id) => BigInt(id)) } },
+        select: { userId: true, userName: true },
       });
-      const nameById = new Map(designers.map((d) => [d.id, d.fullName]));
+      const nameById = new Map(designers.map((d) => [String(d.userId), d.userName]));
 
       const taskIds = Array.from(new Set(result.reassignedTasks.map((r) => r.taskId)));
       const taskDetails = await this.prisma.task.findMany({
@@ -3706,10 +3743,10 @@ export class SchedulerAssignmentsService implements OnModuleInit {
       );
 
       // Notify each newly assigned designer + all HODs
-      const hodUsers = await this.prisma.user.findMany({
-        where: { role: { name: { in: ['HOD', 'ADMIN'] } } },
-        select: { id: true },
-      });
+      // NOTE: role-based filtering (HOD/ADMIN) is no longer possible here — ErpUser (mapped
+      // onto ERP's own user table) carries no role data; role now lives only in the JWT of
+      // the currently authenticated user, not queryable for arbitrary other users.
+      const hodUsers: Array<{ id: string }> = [];
       for (const r of result.reassignedTasks) {
         const task = taskById.get(r.taskId);
         if (!task) continue;
@@ -3737,10 +3774,10 @@ export class SchedulerAssignmentsService implements OnModuleInit {
         const splitDesignerIds = Array.from(new Set(result.splitTasks.flatMap((s) => s.designerIds)));
         const [splitTaskDetails, splitDesigners] = await Promise.all([
           this.prisma.task.findMany({ where: { id: { in: splitTaskIds } }, select: { id: true, taskNo: true, designType: true } }),
-          this.prisma.user.findMany({ where: { id: { in: splitDesignerIds } }, select: { id: true, fullName: true } }),
+          this.prisma.erpUser.findMany({ where: { userId: { in: splitDesignerIds.map((id) => BigInt(id)) } }, select: { userId: true, userName: true } }),
         ]);
         const splitTaskById = new Map(splitTaskDetails.map((t) => [t.id, t]));
-        const splitNameById = new Map(splitDesigners.map((d) => [d.id, d.fullName]));
+        const splitNameById = new Map(splitDesigners.map((d) => [String(d.userId), d.userName]));
 
         for (const { taskId, designerIds } of result.splitTasks) {
           const task = splitTaskById.get(taskId);
@@ -3878,15 +3915,112 @@ export class SchedulerAssignmentsService implements OnModuleInit {
     const team = collectProjectTeamNames(project);
     if (team.normalized.size === 0) return;
 
-    const designer = await this.prisma.user.findUnique({
-      where: { id: designerId },
-      select: { id: true, fullName: true },
+    const designer = await this.prisma.erpUser.findUnique({
+      where: { userId: BigInt(designerId) },
+      select: { userId: true, userName: true },
     });
-    if (!designer || !team.normalized.has(normalizePersonName(designer.fullName))) {
+    if (!designer || !team.normalized.has(normalizePersonName(designer.userName))) {
       throw new BadRequestException(
-        `${designer?.fullName ?? designerId} is not on this project's team.`,
+        `${designer?.userName ?? designerId} is not on this project's team.`,
       );
     }
+  }
+
+  /**
+   * Applies distinct (assignedHours, notes) per row in one round-trip via a
+   * CASE-keyed UPDATE, instead of one `update()` per row. The DB is remote, so
+   * each avoided round-trip is real latency saved, not just a query-count nicety.
+   */
+  private async batchUpdateLoggedRemainder(
+    tx: Prisma.TransactionClient,
+    rows: Array<{ id: string; hours: number; notes: string }>,
+  ): Promise<void> {
+    if (rows.length === 0) return;
+    const ids = rows.map((r) => r.id);
+    await tx.$executeRaw(Prisma.sql`
+      UPDATE [ErpTSSchedulerAssignment]
+      SET
+        [assignedHours] = CASE [id]
+          ${Prisma.join(
+            rows.map((r) => Prisma.sql`WHEN ${r.id} THEN ${new Prisma.Decimal(r.hours)}`),
+            ' ',
+          )}
+        END,
+        [isLocked] = 1,
+        [notes] = CASE [id]
+          ${Prisma.join(
+            rows.map((r) => Prisma.sql`WHEN ${r.id} THEN ${r.notes}`),
+            ' ',
+          )}
+        END,
+        [updatedAt] = SYSUTCDATETIME()
+      WHERE [id] IN (${Prisma.join(ids)})
+    `);
+  }
+
+  /**
+   * Same one-round-trip CASE-keyed UPDATE for split-index recompute — every row
+   * gets its own `splitIndex` (its position in `orderedIds`) while `totalParts`
+   * and `parentId` are identical across the set.
+   */
+  private async batchUpdateSplitIndices(
+    tx: Prisma.TransactionClient,
+    taskId: string,
+    orderedIds: string[],
+    totalParts: number,
+  ): Promise<void> {
+    if (orderedIds.length === 0) return;
+    await tx.$executeRaw(Prisma.sql`
+      UPDATE [ErpTSSchedulerAssignment]
+      SET
+        [parentId] = ${taskId},
+        [totalParts] = ${totalParts},
+        [splitIndex] = CASE [id]
+          ${Prisma.join(
+            orderedIds.map((id, index) => Prisma.sql`WHEN ${id} THEN ${index + 1}`),
+            ' ',
+          )}
+        END,
+        [updatedAt] = SYSUTCDATETIME()
+      WHERE [id] IN (${Prisma.join(orderedIds)})
+    `);
+  }
+
+  /**
+   * Same one-round-trip pattern as `batchUpdateSplitIndices`, but for callers
+   * (e.g. `detachAssignmentPart`) where `parentId` can legitimately differ
+   * row-to-row, so it needs its own CASE clause rather than one shared value.
+   */
+  private async batchUpdateSplitIndicesWithParents(
+    tx: Prisma.TransactionClient,
+    rows: Array<{ id: string; splitIndex: number; totalParts: number; parentId: string }>,
+  ): Promise<void> {
+    if (rows.length === 0) return;
+    const ids = rows.map((r) => r.id);
+    await tx.$executeRaw(Prisma.sql`
+      UPDATE [ErpTSSchedulerAssignment]
+      SET
+        [parentId] = CASE [id]
+          ${Prisma.join(
+            rows.map((r) => Prisma.sql`WHEN ${r.id} THEN ${r.parentId}`),
+            ' ',
+          )}
+        END,
+        [totalParts] = CASE [id]
+          ${Prisma.join(
+            rows.map((r) => Prisma.sql`WHEN ${r.id} THEN ${r.totalParts}`),
+            ' ',
+          )}
+        END,
+        [splitIndex] = CASE [id]
+          ${Prisma.join(
+            rows.map((r) => Prisma.sql`WHEN ${r.id} THEN ${r.splitIndex}`),
+            ' ',
+          )}
+        END,
+        [updatedAt] = SYSUTCDATETIME()
+      WHERE [id] IN (${Prisma.join(ids)})
+    `);
   }
 
   /**
@@ -3920,7 +4054,7 @@ export class SchedulerAssignmentsService implements OnModuleInit {
       // Only Draft timer seconds count toward FIFO on unlocked slices.
       // Prior HandedOff time is already represented by locked logged-remainder cards.
       const draft = await tx.taskWorkSession.findFirst({
-        where: { taskId, designerId: fromDesignerId, status: 'Draft' },
+        where: { taskId, designerId: BigInt(fromDesignerId), status: 'Draft' },
         orderBy: { createdAt: 'desc' },
       });
       let workedRemainingSeconds = 0;
@@ -3949,7 +4083,7 @@ export class SchedulerAssignmentsService implements OnModuleInit {
       }
 
       const rows = await tx.schedulerAssignment.findMany({
-        where: { taskId, designerId: fromDesignerId },
+        where: { taskId, designerId: BigInt(fromDesignerId) },
         orderBy: [{ weekStartDate: 'asc' }, { dayIndex: 'asc' }, { position: 'asc' }],
       });
       if (rows.length === 0) {
@@ -3970,6 +4104,9 @@ export class SchedulerAssignmentsService implements OnModuleInit {
       let earliestMoveDate: Date | null = null;
       const affectedWeekStarts = new Set<string>();
       const idsToDelete: string[] = [];
+      // Computed here, applied as one batched statement below — avoids one
+      // network round-trip per row against the remote SQL Server.
+      const idsToLog: Array<{ id: string; hours: number; notes: string }> = [];
 
       for (const row of rows) {
         const weekKey = this.dateKey(new Date(row.weekStartDate!));
@@ -3994,27 +4131,11 @@ export class SchedulerAssignmentsService implements OnModuleInit {
         const remHours = Math.round(Math.max(0, assignedHours - loggedHours) * 100) / 100;
         const rowDate = this.addUtcDays(new Date(row.weekStartDate!), Number(row.dayIndex ?? 0));
 
-        if (loggedHours > 0.001 && remHours < 0.01) {
-          await tx.schedulerAssignment.update({
-            where: { id: row.id },
-            data: {
-              assignedHours: new Prisma.Decimal(loggedHours),
-              isLocked: true,
-              notes: row.notes?.includes('logged') ? row.notes : 'logged remainder',
-            },
-          });
-          affectedWeekStarts.add(weekKey);
-          continue;
-        }
-
         if (loggedHours > 0.001) {
-          await tx.schedulerAssignment.update({
-            where: { id: row.id },
-            data: {
-              assignedHours: new Prisma.Decimal(loggedHours),
-              isLocked: true,
-              notes: row.notes?.includes('logged') ? row.notes : 'logged remainder',
-            },
+          idsToLog.push({
+            id: row.id,
+            hours: loggedHours,
+            notes: row.notes?.includes('logged') ? row.notes : 'logged remainder',
           });
           affectedWeekStarts.add(weekKey);
         } else {
@@ -4030,6 +4151,9 @@ export class SchedulerAssignmentsService implements OnModuleInit {
 
       if (idsToDelete.length > 0) {
         await tx.schedulerAssignment.deleteMany({ where: { id: { in: idsToDelete } } });
+      }
+      if (idsToLog.length > 0) {
+        await this.batchUpdateLoggedRemainder(tx, idsToLog);
       }
 
       if (remainingHoursToMove < 0.01) {
@@ -4047,7 +4171,7 @@ export class SchedulerAssignmentsService implements OnModuleInit {
         this.loadHolidayKeys(tx, packStart, packEnd),
         tx.leaveRequest.findMany({
           where: {
-            userId: toDesignerId,
+            userId: BigInt(toDesignerId),
             status: { in: ['Approved', 'APPROVED', 'approved'] },
             revokedAt: null,
             startDate: { lte: packEnd },
@@ -4057,7 +4181,7 @@ export class SchedulerAssignmentsService implements OnModuleInit {
         }),
         tx.schedulerAssignment.findMany({
           where: {
-            designerId: toDesignerId,
+            designerId: BigInt(toDesignerId),
             weekStartDate: { gte: this.weekStartForDate(packStart), lte: this.weekStartForDate(packEnd) },
           },
           select: {
@@ -4142,10 +4266,10 @@ export class SchedulerAssignmentsService implements OnModuleInit {
               weekStartDate: candidateWeekStart,
               version: 1,
               isLocked: false,
-              updatedBy: assignedBy,
+              updatedBy: BigInt(assignedBy),
               lastPayloadHash: null,
             },
-            update: { version: { increment: 1 }, updatedBy: assignedBy, lastPayloadHash: null },
+            update: { version: { increment: 1 }, updatedBy: BigInt(assignedBy), lastPayloadHash: null },
           });
           touchedWeekStarts.add(weekKey);
         }
@@ -4156,7 +4280,7 @@ export class SchedulerAssignmentsService implements OnModuleInit {
 
         await tx.schedulerAssignment.create({
           data: {
-            designerId: toDesignerId,
+            designerId: BigInt(toDesignerId),
             taskId,
             dayIndex: candidateDayIndex,
             assignedHours: new Prisma.Decimal(placeHours),
@@ -4169,7 +4293,7 @@ export class SchedulerAssignmentsService implements OnModuleInit {
             notes: null,
             isLocked: false,
             isPinned: false,
-            assignedBy,
+            assignedBy: BigInt(assignedBy),
           },
         });
 
@@ -4192,7 +4316,7 @@ export class SchedulerAssignmentsService implements OnModuleInit {
         select: { designerId: true },
       });
       const designerIds = Array.from(
-        new Set(liveRows.map((r) => r.designerId).filter((id): id is string => Boolean(id))),
+        new Set(liveRows.map((r) => r.designerId).filter((id): id is bigint => id != null)),
       );
 
       await tx.taskDesigner.deleteMany({ where: { taskId } });
@@ -4222,18 +4346,15 @@ export class SchedulerAssignmentsService implements OnModuleInit {
       });
       const totalParts = allParts.length;
       if (totalParts > 0) {
-        await Promise.all(
-          allParts.map((part, index) =>
-            tx.schedulerAssignment.update({
-              where: { id: part.id },
-              data: {
-                parentId: taskId,
-                splitIndex: totalParts > 1 ? index + 1 : null,
-                totalParts: totalParts > 1 ? totalParts : null,
-              },
-            }),
-          ),
-        );
+        if (totalParts === 1) {
+          // Every row gets the same value — one statement, no per-row CASE needed.
+          await tx.schedulerAssignment.updateMany({
+            where: { taskId },
+            data: { parentId: taskId, splitIndex: null, totalParts: null },
+          });
+        } else {
+          await this.batchUpdateSplitIndices(tx, taskId, allParts.map((part) => part.id), totalParts);
+        }
       }
 
       return {
@@ -4276,8 +4397,8 @@ export class SchedulerAssignmentsService implements OnModuleInit {
    */
   async getDesignerStats(designerId: string, weekStart: string) {
     const trimmedId = designerId?.trim() ?? '';
-    if (!this.isUuid(trimmedId)) {
-      throw new BadRequestException('designerId must be a UUID.');
+    if (!this.isNumericId(trimmedId)) {
+      throw new BadRequestException('designerId must be numeric.');
     }
     const ws = weekStart?.trim() ?? '';
     if (!/^\d{4}-\d{2}-\d{2}$/.test(ws)) {
@@ -4292,8 +4413,8 @@ export class SchedulerAssignmentsService implements OnModuleInit {
         this.prisma.task.findMany({
           where: {
             OR: [
-              { assigneeId: trimmedId },
-              { taskDesigners: { some: { designerId: trimmedId } } },
+              { assigneeId: BigInt(trimmedId) },
+              { taskDesigners: { some: { designerId: BigInt(trimmedId) } } },
             ],
           },
           select: {

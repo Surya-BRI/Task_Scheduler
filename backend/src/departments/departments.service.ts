@@ -18,18 +18,12 @@ export class DepartmentsService {
   findAll() {
     return this.prisma.department.findMany({
       orderBy: { name: 'asc' },
-      include: { _count: { select: { users: true } } },
     });
   }
 
   async findOne(id: string) {
     const dept = await this.prisma.department.findUnique({
       where: { id },
-      include: {
-        users: {
-          select: { id: true, fullName: true, email: true, role: { select: { name: true } } },
-        },
-      },
     });
     if (!dept) throw new NotFoundException('Department not found');
     return dept;

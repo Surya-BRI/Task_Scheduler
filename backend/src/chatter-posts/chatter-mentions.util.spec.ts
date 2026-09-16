@@ -2,7 +2,7 @@ import {
   isDesignerDepartmentMentionable,
   mergeCollectedMentionUserIds,
   parseMentionUserIdsFromMessage,
-  uniqueUuids,
+  uniqueUserIds,
 } from './chatter-mentions.util';
 
 describe('isDesignerDepartmentMentionable', () => {
@@ -26,9 +26,9 @@ describe('isDesignerDepartmentMentionable', () => {
 });
 
 describe('mergeCollectedMentionUserIds', () => {
-  const userA = 'aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa';
-  const userB = 'bbbbbbbb-bbbb-4bbb-8bbb-bbbbbbbbbbbb';
-  const userC = 'cccccccc-cccc-4ccc-8ccc-cccccccccccc';
+  const userA = '1001';
+  const userB = '1002';
+  const userC = '1003';
   const eligible = new Set([userA, userB]);
 
   it('keeps all explicitly tagged users even when outside eligible directory', () => {
@@ -55,7 +55,7 @@ describe('mergeCollectedMentionUserIds', () => {
       parsedFromMessageIds: [userA, userB],
       eligibleIds: eligible,
     });
-    expect(result).toEqual(uniqueUuids([userA, userB]));
+    expect(result).toEqual(uniqueUserIds([userA, userB]));
   });
 });
 

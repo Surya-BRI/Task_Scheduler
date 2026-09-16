@@ -363,7 +363,7 @@ export class ActivitiesService {
     } catch {
       details = { raw: row.details };
     }
-    const actorName = row.user?.fullName ?? 'Unknown user';
+    const actorName = row.user?.userName ?? 'Unknown user';
     const taskSnapshot = details?.taskSnapshot ?? {};
     const projectSnapshot = details?.projectSnapshot ?? {};
     const task = row.task
@@ -375,9 +375,9 @@ export class ActivitiesService {
           status: taskSnapshot.status ?? details?.changes?.newStatus ?? row.task.status ?? null,
           priority: row.task.priority,
           dueDate: row.task.dueDate ? row.task.dueDate.toISOString() : null,
-          assigneeName: row.task.assignee?.fullName
+          assigneeName: row.task.assignee?.userName
             ?? (row.task.taskDesigners?.length > 0
-              ? row.task.taskDesigners.map((td: any) => td.designer.fullName).join(', ')
+              ? row.task.taskDesigners.map((td: any) => td.designer.userName).join(', ')
               : null),
           hodName: row.task.retailDetails?.[0]?.hodName ?? null,
         }
@@ -413,7 +413,7 @@ export class ActivitiesService {
       action: row.action,
       occurredAt: row.createdAt.toISOString(),
       actor: {
-        id: row.user?.id ?? '',
+        id: row.user?.userId != null ? String(row.user.userId) : '',
         name: actorName,
         avatarUrl: `https://ui-avatars.com/api/?name=${encodeURIComponent(actorName)}&background=random`,
       },
@@ -428,7 +428,7 @@ export class ActivitiesService {
   private getTaskInclude(options?: { slim?: boolean }) {
     if (options?.slim) {
       return {
-        user: { select: { id: true, fullName: true } },
+        user: { select: { userId: true, userName: true } },
         task: {
           select: {
             id: true,
@@ -443,7 +443,7 @@ export class ActivitiesService {
       };
     }
     return {
-      user: { select: { id: true, fullName: true } },
+      user: { select: { userId: true, userName: true } },
       task: {
         select: {
           id: true,
@@ -453,8 +453,8 @@ export class ActivitiesService {
           status: true,
           priority: true,
           dueDate: true,
-          assignee: { select: { id: true, fullName: true } },
-          taskDesigners: { select: { designer: { select: { id: true, fullName: true } } } },
+          assignee: { select: { userId: true, userName: true } },
+          taskDesigners: { select: { designer: { select: { userId: true, userName: true } } } },
           retailDetails: { select: { hodName: true } },
           project: { select: { id: true, name: true, projectNo: true } },
         },

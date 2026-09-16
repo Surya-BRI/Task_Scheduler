@@ -20,7 +20,7 @@ import {
   CreateReallocationRequestDto,
   ReviewReallocationRequestDto,
 } from './dto/reallocation-request.dto';
-import { isUuidString } from './sql-uuid.util';
+import { isUuidString, isPositiveIntegerString } from './sql-uuid.util';
 import {
   collectProjectTeamNames,
   normalizePersonName,
@@ -43,14 +43,13 @@ const INCLUDE = {
   },
   requester: {
     select: {
-      id: true,
-      fullName: true,
-      department: { select: { name: true } },
+      userId: true,
+      userName: true,
     },
   },
-  suggestedDesigner: { select: { id: true, fullName: true } },
-  targetDesigner: { select: { id: true, fullName: true } },
-  approver: { select: { id: true, fullName: true } },
+  suggestedDesigner: { select: { userId: true, userName: true } },
+  targetDesigner: { select: { userId: true, userName: true } },
+  approver: { select: { userId: true, userName: true } },
 } satisfies Prisma.ReallocationRequestInclude;
 
 type ReallocationFull = Prisma.ReallocationRequestGetPayload<{ include: typeof INCLUDE }>;
@@ -100,17 +99,17 @@ export class ReallocationRequestsService {
       taskNo: row.task.taskNo,
       taskStatus: row.task.status,
       projectName: row.task.project?.name ?? '',
-      requesterId: row.requesterId,
-      requesterName: row.requester.fullName,
-      suggestedDesignerId: row.suggestedDesignerId,
-      suggestedDesignerName: row.suggestedDesigner.fullName,
-      targetDesignerId: row.targetDesignerId,
-      targetDesignerName: row.targetDesigner?.fullName ?? null,
+      requesterId: String(row.requesterId),
+      requesterName: row.requester.userName,
+      suggestedDesignerId: String(row.suggestedDesignerId),
+      suggestedDesignerName: row.suggestedDesigner.userName,
+      targetDesignerId: row.targetDesignerId != null ? String(row.targetDesignerId) : null,
+      targetDesignerName: row.targetDesigner?.userName ?? null,
       reason: row.reason,
       status: row.status as ReallocationRequestView['status'],
       remainingHours,
-      approverId: row.approverId,
-      approverName: row.approver?.fullName ?? null,
+      approverId: row.approverId != null ? String(row.approverId) : null,
+      approverName: row.approver?.userName ?? null,
       approverRemarks: row.approverRemarks,
       reviewedAt: row.reviewedAt ? row.reviewedAt.toISOString() : null,
       createdAt: row.createdAt.toISOString(),
@@ -120,7 +119,7 @@ export class ReallocationRequestsService {
 
   private async remainingHoursFor(taskId: string, designerId: string): Promise<number> {
     const rows = await this.prisma.schedulerAssignment.findMany({
-      where: { taskId, designerId, isLocked: { not: true } },
+      where: { taskId, designerId: BigInt(designerId), isLocked: { not: true } },
       select: { assignedHours: true },
     });
     return Math.round(
@@ -169,24 +168,26 @@ export class ReallocationRequestsService {
   }
 
   private ownsTask(
-    task: { assigneeId: string | null; taskDesigners: { designerId: string }[] },
+    task: { assigneeId: bigint | null; taskDesigners: { designerId: bigint }[] },
     userId: string,
   ) {
-    if (task.assigneeId === userId) return true;
-    return task.taskDesigners.some((d) => d.designerId === userId);
+    const userIdBig = BigInt(userId);
+    if (task.assigneeId === userIdBig) return true;
+    return task.taskDesigners.some((d) => d.designerId === userIdBig);
   }
 
   async listTaskOptions(designerId: string) {
-    if (!isUuidString(designerId)) return [];
+    if (!isPositiveIntegerString(designerId)) return [];
+    const designerIdBig = BigInt(designerId);
     const tasks = await this.prisma.task.findMany({
       where: {
         status: { in: [...ALLOWED_TASK_STATUSES] },
         OR: [
-          { assigneeId: designerId },
-          { taskDesigners: { some: { designerId } } },
+          { assigneeId: designerIdBig },
+          { taskDesigners: { some: { designerId: designerIdBig } } },
         ],
         schedulerAssignments: {
-          some: { designerId, isLocked: { not: true } },
+          some: { designerId: designerIdBig, isLocked: { not: true } },
         },
       },
       select: {
@@ -242,36 +243,56 @@ export class ReallocationRequestsService {
     if (!task) throw new NotFoundException('Task not found');
 
     const team = collectProjectTeamNames(task.project);
-    const roleFilter = {
-      role: { name: { in: [UserRole.DESIGNER, UserRole.HOD] } },
-      id: { not: requesterId },
-    };
+    const candidates = (await this.findErpUsersByRoleBuckets([UserRole.DESIGNER, UserRole.HOD]))
+      .filter((d) => d.id.toString() !== requesterId)
+      .map((d) => ({ id: d.id.toString(), fullName: d.userName }));
 
     // Empty team → keep prior fallback (full Designer/HOD directory except requester).
     if (team.normalized.size === 0) {
-      return this.prisma.user.findMany({
-        where: roleFilter,
-        select: { id: true, fullName: true },
-        orderBy: { fullName: 'asc' },
-      });
+      return candidates.sort((a, b) => a.fullName.localeCompare(b.fullName));
     }
 
-    const designers = await this.prisma.user.findMany({
-      where: {
-        ...roleFilter,
-        OR: [...team.displayNames].map((fullName) => ({ fullName })),
-      },
-      select: { id: true, fullName: true },
-      orderBy: { fullName: 'asc' },
-    });
-
     // Preserve trim+lower eligibility semantics regardless of DB collation.
-    return designers.filter((d) => team.normalized.has(normalizePersonName(d.fullName)));
+    return candidates
+      .filter((d) => team.normalized.has(normalizePersonName(d.fullName)))
+      .sort((a, b) => a.fullName.localeCompare(b.fullName));
+  }
+
+  /** Raw ERP role join — the local Role table is gone, so bucket membership must be
+   * resolved against ERP's own ErpAuthUserRoleMap/ErpMasterRole tables. */
+  private async findErpUsersByRoleBuckets(buckets: UserRole[]): Promise<Array<{ id: bigint; userName: string }>> {
+    const rows = await this.prisma.$queryRaw<Array<{ userId: bigint; userName: string; roleName: string | null }>>`
+      SELECT u.userId, u.userName, r.roleName
+      FROM ErpAuthUsers u
+      JOIN ErpAuthUserRoleMap m ON m.userId = u.userId AND m.isActive = 1
+      JOIN ErpMasterRole r ON r.roleId = m.roleId AND r.isActive = 1 AND r.isDeleted = 0
+      WHERE u.isActive = 1 AND u.isDeleted = 0
+    `;
+    const roleMap: Record<string, UserRole> = {
+      'Design HOD': UserRole.HOD,
+      'Design Head': UserRole.HOD,
+      SalesRep: UserRole.SALESPERSON,
+      'Sales Coordinator': UserRole.SALESPERSON,
+      Designer: UserRole.DESIGNER,
+      QS: UserRole.QS,
+    };
+    const bucketSet = new Set(buckets);
+    const seen = new Set<string>();
+    const result: Array<{ id: bigint; userName: string }> = [];
+    for (const row of rows) {
+      const bucket = row.roleName ? roleMap[row.roleName] : undefined;
+      if (!bucket || !bucketSet.has(bucket)) continue;
+      const key = row.userId.toString();
+      if (seen.has(key)) continue;
+      seen.add(key);
+      result.push({ id: row.userId, userName: row.userName });
+    }
+    return result;
   }
 
   async findByRequester(requesterId: string) {
     const rows = await this.prisma.reallocationRequest.findMany({
-      where: { requesterId },
+      where: { requesterId: BigInt(requesterId) },
       include: INCLUDE,
       orderBy: { createdAt: 'desc' },
       take: 100,
@@ -292,7 +313,7 @@ export class ReallocationRequestsService {
   async findTeamRequests(filters?: { status?: string; designerId?: string }) {
     const where: Prisma.ReallocationRequestWhereInput = {};
     if (filters?.status?.trim()) where.status = filters.status.trim();
-    if (filters?.designerId?.trim()) where.requesterId = filters.designerId.trim();
+    if (filters?.designerId?.trim()) where.requesterId = BigInt(filters.designerId.trim());
     const rows = await this.prisma.reallocationRequest.findMany({
       where,
       include: INCLUDE,
@@ -308,11 +329,11 @@ export class ReallocationRequestsService {
       include: INCLUDE,
     });
     if (!row) throw new NotFoundException('Reallocation request not found');
-    if (!hasDepartmentManagerAccess(role) && row.requesterId !== userId) {
+    if (!hasDepartmentManagerAccess(role) && String(row.requesterId) !== userId) {
       throw new ForbiddenException('You can only view your own reallocation requests.');
     }
     const remaining =
-      row.status === 'Pending' ? await this.remainingHoursFor(row.taskId, row.requesterId) : null;
+      row.status === 'Pending' ? await this.remainingHoursFor(row.taskId, String(row.requesterId)) : null;
     return this.toView(row, remaining);
   }
 
@@ -354,7 +375,7 @@ export class ReallocationRequestsService {
     await this.schedulerAssignments.assertDesignerOnProjectTeam(dto.taskId, dto.suggestedDesignerId);
 
     const existingPending = await this.prisma.reallocationRequest.findFirst({
-      where: { taskId: dto.taskId, requesterId: userId, status: 'Pending' },
+      where: { taskId: dto.taskId, requesterId: BigInt(userId), status: 'Pending' },
       select: { id: true },
     });
     if (existingPending) {
@@ -366,8 +387,8 @@ export class ReallocationRequestsService {
       created = await this.prisma.reallocationRequest.create({
         data: {
           taskId: dto.taskId,
-          requesterId: userId,
-          suggestedDesignerId: dto.suggestedDesignerId,
+          requesterId: BigInt(userId),
+          suggestedDesignerId: BigInt(dto.suggestedDesignerId),
           reason: dto.reason.trim(),
           status: 'Pending',
         },
@@ -416,7 +437,7 @@ export class ReallocationRequestsService {
       include: INCLUDE,
     });
     if (!row) throw new NotFoundException('Reallocation request not found');
-    if (row.requesterId !== userId) {
+    if (String(row.requesterId) !== userId) {
       throw new ForbiddenException('Only the requester can cancel this request.');
     }
     if (row.status !== 'Pending') {
@@ -466,7 +487,7 @@ export class ReallocationRequestsService {
         where: { id },
         data: {
           status: 'Rejected',
-          approverId: reviewerId,
+          approverId: BigInt(reviewerId),
           approverRemarks: remarks,
           reviewedAt: new Date(),
         },
@@ -491,11 +512,11 @@ export class ReallocationRequestsService {
       return this.toView(updated, null);
     }
 
-    const targetDesignerId = (dto.targetDesignerId ?? row.suggestedDesignerId).trim();
-    if (!isUuidString(targetDesignerId)) {
-      throw new BadRequestException('targetDesignerId must be a UUID.');
+    const targetDesignerId = String(dto.targetDesignerId ?? row.suggestedDesignerId).trim();
+    if (!isPositiveIntegerString(targetDesignerId)) {
+      throw new BadRequestException('targetDesignerId must be numeric.');
     }
-    if (targetDesignerId === row.requesterId) {
+    if (targetDesignerId === String(row.requesterId)) {
       throw new BadRequestException('Target designer must be different from the requester.');
     }
 
@@ -504,7 +525,7 @@ export class ReallocationRequestsService {
     // leaves the requester timer HandedOff while this request stays Pending.
     const handoff = await this.schedulerAssignments.applyReallocationHandoff({
       taskId: row.taskId,
-      fromDesignerId: row.requesterId,
+      fromDesignerId: String(row.requesterId),
       toDesignerId: targetDesignerId,
       assignedBy: reviewerId,
     });
@@ -513,8 +534,8 @@ export class ReallocationRequestsService {
       where: { id },
       data: {
         status: 'Approved',
-        targetDesignerId,
-        approverId: reviewerId,
+        targetDesignerId: BigInt(targetDesignerId),
+        approverId: BigInt(reviewerId),
         approverRemarks: String(dto.remarks ?? dto.comments ?? '').trim() || null,
         reviewedAt: new Date(),
       },
@@ -561,12 +582,9 @@ export class ReallocationRequestsService {
   }
 
   private async notifyHods(request: ReallocationFull) {
-    const hods = await this.prisma.user.findMany({
-      where: { role: { name: UserRole.HOD } },
-      select: { id: true },
-    });
+    const hods = await this.findErpUsersByRoleBuckets([UserRole.HOD]);
     const linkUrl = this.reallocationLink(request.id, true);
-    const message = `${request.requester.fullName} requested reallocation of ${request.task.taskNo} to ${request.suggestedDesigner.fullName}.`;
+    const message = `${request.requester.userName} requested reallocation of ${request.task.taskNo} to ${request.suggestedDesigner.userName}.`;
     await Promise.all(
       hods.map(async (hod) => {
         try {
@@ -579,7 +597,7 @@ export class ReallocationRequestsService {
               linkUrl,
             },
           });
-          this.dashboardRealtime?.notifyUserNotificationRefresh(hod.id);
+          this.dashboardRealtime?.notifyUserNotificationRefresh(String(hod.id));
         } catch (err) {
           this.logger.error('Failed to notify HOD of reallocation request', err);
         }
@@ -607,7 +625,7 @@ export class ReallocationRequestsService {
           linkUrl,
         },
       });
-      this.dashboardRealtime?.notifyUserNotificationRefresh(request.requesterId);
+      this.dashboardRealtime?.notifyUserNotificationRefresh(String(request.requesterId));
     } catch (err) {
       this.logger.error('Failed to notify requester of reallocation review', err);
     }
@@ -623,11 +641,11 @@ export class ReallocationRequestsService {
           id: randomUUID(),
           userId: targetId,
           title: 'Task Reallocated to You',
-          message: `${Math.round(hours * 100) / 100}h of ${request.task.taskNo} was reallocated to you from ${request.requester.fullName}.`,
+          message: `${Math.round(hours * 100) / 100}h of ${request.task.taskNo} was reallocated to you from ${request.requester.userName}.`,
           linkUrl,
         },
       });
-      this.dashboardRealtime?.notifyUserNotificationRefresh(targetId);
+      this.dashboardRealtime?.notifyUserNotificationRefresh(String(targetId));
     } catch (err) {
       this.logger.error('Failed to notify target designer of reallocation', err);
     }

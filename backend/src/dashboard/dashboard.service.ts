@@ -84,18 +84,9 @@ export class DashboardService {
     we.setUTCDate(we.getUTCDate() + 6);
     we.setUTCHours(23, 59, 59, 999);
 
-    let hodDepartmentId: string | null | undefined;
-    if (viewerId && viewerRole && hasDepartmentManagerAccess(viewerRole)) {
-      const viewer = await this.prisma.user.findUnique({
-        where: { id: viewerId },
-        select: { departmentId: true },
-      });
-      hodDepartmentId = viewer?.departmentId ?? null;
-    }
-
     const metricsWhere =
       viewerId && viewerRole
-        ? await this.buildMetricsTaskWhere(viewerId, viewerRole, hodDepartmentId)
+        ? await this.buildMetricsTaskWhere(viewerId, viewerRole)
         : {};
     const hasMetricsFilter = Object.keys(metricsWhere).length > 0;
     const taskScope = hasMetricsFilter ? { task: metricsWhere } : {};
@@ -121,10 +112,10 @@ export class DashboardService {
                 revisionCode: true,
                 dueDate: true,
                 project: { select: { name: true, projectNo: true } },
-                assignee: { select: { fullName: true } },
+                assignee: { select: { userName: true } },
               },
             },
-            designer: { select: { fullName: true } },
+            designer: { select: { userName: true } },
           },
           orderBy: [{ taskId: 'asc' }, { dayIndex: 'asc' }],
           take: SCHEDULED_TAKE * 8,
@@ -191,9 +182,9 @@ export class DashboardService {
             revisionCode: true,
             updatedAt: true,
             project: { select: { name: true, projectNo: true } },
-            assignee: { select: { fullName: true } },
+            assignee: { select: { userName: true } },
             taskDesigners: {
-              select: { designer: { select: { fullName: true } } },
+              select: { designer: { select: { userName: true } } },
               take: 5,
             },
           },
@@ -211,7 +202,7 @@ export class DashboardService {
             details: true,
             createdAt: true,
             taskId: true,
-            user: { select: { fullName: true } },
+            user: { select: { userName: true } },
             task: { select: { taskNo: true, id: true, designType: true } },
           },
         }),
@@ -231,7 +222,7 @@ export class DashboardService {
           take: 500,
         }),
       ]),
-      this.buildApprovalInbox(viewerId, viewerRole, hodDepartmentId),
+      this.buildApprovalInbox(viewerId, viewerRole),
     ]);
 
     const seenScheduled = new Set<string>();
@@ -241,7 +232,7 @@ export class DashboardService {
       seenScheduled.add(row.taskId);
       if (scheduledTasks.length >= SCHEDULED_TAKE) break;
       const taskId = row.task?.id ?? row.taskId;
-      const name = row.task?.assignee?.fullName ?? row.designer?.fullName ?? '';
+      const name = row.task?.assignee?.userName ?? row.designer?.userName ?? '';
       scheduledTasks.push({
         id: taskId,
         taskNo: row.task?.taskNo ?? '',
@@ -309,10 +300,10 @@ export class DashboardService {
 
     const reworkTasks: ReworkTaskItem[] = reworkRows.map((r) => {
       const splitNames = (r.taskDesigners ?? [])
-        .map((d) => d.designer?.fullName)
+        .map((d) => d.designer?.userName)
         .filter(Boolean) as string[];
       const assigneeName =
-        r.assignee?.fullName
+        r.assignee?.userName
         ?? (splitNames.length > 0 ? splitNames.join(', ') : null);
       return {
         id: r.id,
@@ -329,7 +320,7 @@ export class DashboardService {
 
     const activityInbox: InboxItem[] = activityRows.map((row) => {
       const label = INBOX_ACTION_LABELS[row.action] ?? row.action;
-      const actor = row.user?.fullName ?? 'System';
+      const actor = row.user?.userName ?? 'System';
       const itemKey = `activity-${row.id}`;
       const taskId = row.task?.id ?? row.taskId;
       return {
@@ -461,104 +452,70 @@ export class DashboardService {
   private async buildMetricsTaskWhere(
     userId: string,
     role: UserRole,
-    preloadedDepartmentId?: string | null,
   ) {
     if (role === UserRole.DESIGNER) {
+      const designerId = BigInt(userId);
       const junctionIds = await this.prisma.taskDesigner.findMany({
-        where: { designerId: userId },
+        where: { designerId },
         select: { taskId: true },
       });
       const splitIds = junctionIds.map((r) => r.taskId);
       return {
         OR: [
-          { assigneeId: userId },
+          { assigneeId: designerId },
           ...(splitIds.length > 0 ? [{ id: { in: splitIds } }] : []),
         ],
       };
     }
     if (hasDepartmentManagerAccess(role)) {
-      let departmentId = preloadedDepartmentId;
-      if (departmentId === undefined) {
-        const viewer = await this.prisma.user.findUnique({
-          where: { id: userId },
-          select: { departmentId: true },
-        });
-        departmentId = viewer?.departmentId ?? null;
-      }
-      if (departmentId) {
-        return {
-          OR: [
-            { assignee: { departmentId } },
-            { taskDesigners: { some: { designer: { departmentId } } } },
-            { AND: [{ assigneeId: null }, { taskDesigners: { none: {} } }] },
-          ],
-        };
-      }
+      // ERP has no department concept on ErpAuthUsers, so department-scoped
+      // managers currently see the unfiltered task set.
       return {};
     }
-    return { assigneeId: userId };
+    return { assigneeId: BigInt(userId) };
   }
 
   private async buildApprovalInbox(
     viewerId?: string,
     viewerRole?: UserRole,
-    preloadedDepartmentId?: string | null,
   ): Promise<InboxItem[]> {
     if (!viewerId || !hasHrApproverAccess(viewerRole ?? '')) {
       return [];
     }
 
-    const deptFilter: Record<string, unknown> = {};
-    let hodDepartmentId: string | null =
-      preloadedDepartmentId === undefined ? null : preloadedDepartmentId;
-    if (preloadedDepartmentId === undefined) {
-      const viewer = await this.prisma.user.findUnique({
-        where: { id: viewerId },
-        select: { departmentId: true },
-      });
-      hodDepartmentId = viewer?.departmentId ?? null;
-    }
-    if (hodDepartmentId) {
-      deptFilter.designer = { departmentId: hodDepartmentId };
-    }
-
     const [regRows, otRows, leaveRows] = await Promise.all([
       this.prisma.regularizationRequest.findMany({
-        where: { status: 'Pending', ...deptFilter },
+        where: { status: 'Pending' },
         orderBy: { createdAt: 'desc' },
         take: 30,
         include: {
-          designer: { select: { id: true, fullName: true } },
+          designer: { select: { userId: true, userName: true } },
           task: { select: { taskNo: true, title: true } },
         },
       }),
       this.prisma.overtimeRequest.findMany({
-        where: { status: 'SUBMITTED', ...deptFilter },
+        where: { status: 'SUBMITTED' },
         orderBy: { createdAt: 'desc' },
         take: 30,
         include: {
-          designer: { select: { id: true, fullName: true } },
+          designer: { select: { userId: true, userName: true } },
           task: { select: { taskNo: true, title: true, project: { select: { name: true } } } },
         },
       }),
       this.prisma.leaveRequest.findMany({
         where: {
           status: { in: ['Pending', 'PENDING', 'pending'] },
-          user: {
-            role: { name: 'DESIGNER' },
-            ...(hodDepartmentId ? { departmentId: hodDepartmentId } : {}),
-          },
         },
         orderBy: { createdAt: 'desc' },
         take: 30,
         include: {
-          user: { select: { id: true, fullName: true } },
+          user: { select: { userId: true, userName: true } },
         },
       }),
     ]);
 
     const regItems: InboxItem[] = regRows.map((row) => {
-      const requester = row.designer?.fullName?.trim() || 'Designer';
+      const requester = row.designer?.userName?.trim() || 'Designer';
       const taskLabel = row.task?.title?.trim() || row.task?.taskNo?.trim() || 'task';
       const requestDate = row.date?.toISOString().split('T')[0] ?? null;
       const itemKey = `regularization-${row.id}`;
@@ -584,7 +541,7 @@ export class DashboardService {
     });
 
     const otItems: InboxItem[] = otRows.map((row) => {
-      const requester = row.designer?.fullName?.trim() || 'Designer';
+      const requester = row.designer?.userName?.trim() || 'Designer';
       const taskLabel = row.task?.title?.trim() || row.task?.taskNo?.trim() || 'task';
       const projectName = row.task?.project?.name?.trim();
       const requestDate = row.date?.toISOString().split('T')[0] ?? null;
@@ -614,8 +571,8 @@ export class DashboardService {
     });
 
     const leaveItems: InboxItem[] = leaveRows.map((row) => {
-      const requester = row.user?.fullName?.trim() || 'Designer';
-      const designerId = row.user?.id ?? row.userId;
+      const requester = row.user?.userName?.trim() || 'Designer';
+      const designerId = (row.user?.userId ?? row.userId).toString();
       const from = row.startDate.toISOString().split('T')[0];
       const to = (row.endDate ?? row.startDate).toISOString().split('T')[0];
       const leaveType = normalizeLeaveType(row.type) ?? 'Full Day';

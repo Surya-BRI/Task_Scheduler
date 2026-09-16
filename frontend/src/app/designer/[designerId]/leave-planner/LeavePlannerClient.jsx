@@ -23,7 +23,8 @@ import { requestsPath } from "@/lib/role-routes";
 import { connectDashboardRealtime, isDashboardRealtimeConnected } from "@/lib/realtime";
 
 import { toUserFacingError } from "@/lib/api-error"
-const UUID_RE = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
+// User ids (designer/session) are now decimal bigint strings from ERP, not GUIDs.
+const UUID_RE = /^\d+$/;
 
 /** Backup HTTP poll only when the dashboard socket is down (WS drives live leave updates). */
 const BACKUP_POLL_MS = 180_000;
@@ -472,7 +473,7 @@ export default function LeavePlannerClient() {
     if (!isHOD) return;
     apiClient.get("/users?role=DESIGNER").then((res) => {
       const rows = Array.isArray(res) ? res : (Array.isArray(res?.data) ? res.data : []);
-      setDesignerList(rows.map((u) => ({ id: u.id, name: u.fullName })));
+      setDesignerList(rows.map((u) => ({ id: u.id, name: u.fullName ?? u.userName })));
     }).catch(() => setDesignerList([]));
   }, [isHOD]);
 

@@ -1,7 +1,8 @@
-import { IsBoolean, IsOptional, IsUUID } from 'class-validator';
+import { IsBoolean, IsOptional, Matches } from 'class-validator';
 
 export class FreezeDraftWorkSessionDto {
-  @IsUUID()
+  // ERP ErpAuthUsers.userId is a decimal bigint, not a GUID.
+  @Matches(/^\d+$/)
   designerId: string;
 
   /** When false, returns worked time without closing the session (multi-slice handoff). */

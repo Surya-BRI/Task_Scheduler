@@ -48,12 +48,12 @@ describe('DashboardService', () => {
       prisma.task.findMany.mockResolvedValue([{ projectId: 'p1' }, { projectId: 'p2' }]);
       prisma.taskDesigner.findMany.mockResolvedValue([{ taskId: 'split-task-1' }]);
 
-      await service.getMetrics('designer-1', UserRole.DESIGNER);
+      await service.getMetrics('5001', UserRole.DESIGNER);
 
       expect(prisma.task.count).toHaveBeenCalledWith({
         where: {
           OR: [
-            { assigneeId: 'designer-1' },
+            { assigneeId: BigInt('5001') },
             { id: { in: ['split-task-1'] } },
           ],
         },
@@ -70,7 +70,7 @@ describe('DashboardService', () => {
       ]);
 
       prisma.user.findUnique.mockResolvedValue({ departmentId: null });
-      const result = await service.getMetrics('hod-1', UserRole.HOD);
+      const result = await service.getMetrics('5002', UserRole.HOD);
 
       expect(result.bucketTotals.total).toBe(37);
       expect(result.activeTasks).toBe(34);
@@ -84,7 +84,7 @@ describe('DashboardService', () => {
       prisma.project.count.mockResolvedValue(5);
       prisma.task.groupBy.mockResolvedValue([]);
 
-      await service.getMetrics('hod-1', UserRole.HOD);
+      await service.getMetrics('5002', UserRole.HOD);
 
       expect(prisma.task.count).toHaveBeenCalledWith({
         where: {
@@ -103,7 +103,7 @@ describe('DashboardService', () => {
       prisma.project.count.mockResolvedValue(76);
       prisma.task.groupBy.mockResolvedValue([]);
 
-      await service.getMetrics('hod-1', UserRole.HOD);
+      await service.getMetrics('5002', UserRole.HOD);
 
       expect(prisma.task.count).toHaveBeenCalledWith({ where: {} });
     });
@@ -152,7 +152,7 @@ describe('DashboardService', () => {
         { status: 'ON_HOLD', _count: { status: 1 } },
       ]);
 
-      const result = await service.getProjectsOverview('2026-06-08', 'hod-1', UserRole.HOD);
+      const result = await service.getProjectsOverview('2026-06-08', '5002', UserRole.HOD);
 
       expect(prisma.schedulerAssignment.findMany).toHaveBeenCalledWith(
         expect.objectContaining({
@@ -187,7 +187,7 @@ describe('DashboardService', () => {
             revisionCode: 'R0',
             updatedAt: new Date('2026-06-09T15:00:00.000Z'),
             project,
-            assignee: { fullName: 'Sarah Mitchell' },
+            assignee: { userName: 'Sarah Mitchell' },
             taskDesigners: [],
           },
         ])
@@ -197,7 +197,7 @@ describe('DashboardService', () => {
         { status: 'IN_PROGRESS', _count: { status: 3 } },
       ]);
 
-      const result = await service.getProjectsOverview('2026-06-08', 'hod-1', UserRole.HOD);
+      const result = await service.getProjectsOverview('2026-06-08', '5002', UserRole.HOD);
 
       expect(result.reworkTasks).toHaveLength(1);
       expect(result.reworkTasks[0].linkUrl).toContain('/project-task-view/rw-1');
@@ -215,13 +215,13 @@ describe('DashboardService', () => {
           createdAt: new Date(),
           taskId: 'task-99',
           details: {},
-          user: { fullName: 'Alex' },
+          user: { userName: 'Alex' },
           task: { id: 'task-99', taskNo: 'T-99', designType: 'PROJECT' },
         },
       ]);
       prisma.task.groupBy.mockResolvedValue([]);
 
-      const result = await service.getProjectsOverview('2026-06-08', 'hod-1', UserRole.HOD);
+      const result = await service.getProjectsOverview('2026-06-08', '5002', UserRole.HOD);
       const activity = result.inbox.find((i) => i.id === 'act-1');
       expect(activity?.linkUrl).toBe('/project-task-view/task-99?from=design-list');
       expect(activity?.linkUrl).not.toContain('/design-list/tasks');
@@ -234,15 +234,15 @@ describe('DashboardService', () => {
       prisma.leaveRequest.findMany.mockResolvedValue([
         {
           id: 'leave-1',
-          userId: 'designer-1',
+          userId: '5001',
           startDate: new Date('2026-06-10'),
           endDate: new Date('2026-06-12'),
           createdAt: new Date(),
           type: 'Full Day',
-          user: { id: 'designer-1', fullName: 'Alex Johnson' },
+          user: { userId: '5001', userName: 'Alex Johnson' },
         },
       ]);
-      const result = await service.getProjectsOverview('2026-06-08', 'hod-1', UserRole.HOD);
+      const result = await service.getProjectsOverview('2026-06-08', '5002', UserRole.HOD);
       const leaveItems = result.inbox.filter((i) => i.requestType === 'leave');
       expect(leaveItems.length).toBeGreaterThan(0);
       expect(leaveItems[0].requiresAction).toBe(true);
@@ -253,15 +253,15 @@ describe('DashboardService', () => {
       prisma.leaveRequest.findMany.mockResolvedValue([
         {
           id: 'leave-1',
-          userId: 'designer-1',
+          userId: '5001',
           startDate: new Date('2026-06-10'),
           endDate: new Date('2026-06-12'),
           createdAt: new Date(),
           type: 'Full Day',
-          user: { id: 'designer-1', fullName: 'Alex Johnson' },
+          user: { userId: '5001', userName: 'Alex Johnson' },
         },
       ]);
-      const result = await service.getProjectsOverview('2026-06-08', 'sales-1', UserRole.SALESPERSON);
+      const result = await service.getProjectsOverview('2026-06-08', '5003', UserRole.SALESPERSON);
       expect(result.inbox.filter((i) => i.requestType === 'leave')).toHaveLength(0);
       expect(result.inbox.filter((i) => i.requestType === 'overtime')).toHaveLength(0);
       expect(result.inbox.filter((i) => i.requestType === 'regularization')).toHaveLength(0);

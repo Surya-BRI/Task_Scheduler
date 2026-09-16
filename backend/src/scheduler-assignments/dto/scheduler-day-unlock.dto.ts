@@ -1,8 +1,11 @@
-import { IsDateString, IsOptional, IsString, IsUUID, MaxLength } from 'class-validator';
+import { IsDateString, IsOptional, IsString, Matches, MaxLength } from 'class-validator';
+
+// ERP ErpAuthUsers.userId is a decimal bigint, not a GUID.
+const NUMERIC_ID_RE = /^\d+$/;
 
 /** Lock a weekend day for a designer (row in ErpTSSchedulerDayUnlock = skip that day). */
 export class CreateSchedulerDayLockDto {
-  @IsUUID()
+  @Matches(NUMERIC_ID_RE)
   designerId!: string;
 
   /** Calendar date YYYY-MM-DD — must be Saturday or Sunday (UTC date). */
@@ -17,7 +20,7 @@ export class CreateSchedulerDayLockDto {
 
 /** Remove a weekend day lock (day becomes open again). */
 export class DeleteSchedulerDayLockDto {
-  @IsUUID()
+  @Matches(NUMERIC_ID_RE)
   designerId!: string;
 
   @IsDateString()

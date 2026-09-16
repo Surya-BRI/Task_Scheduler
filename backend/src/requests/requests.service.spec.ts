@@ -10,8 +10,8 @@ import { RequestsService } from './requests.service';
 describe('RequestsService', () => {
   let service: RequestsService;
 
-  const designerId = '11111111-1111-4111-8111-111111111111';
-  const hodId = '22222222-2222-4222-8222-222222222222';
+  const designerId = '1001';
+  const hodId = '1002';
   const leaveId = '33333333-3333-4333-8333-333333333333';
 
   const mockActivityLogger = { log: jest.fn() };
@@ -27,7 +27,7 @@ describe('RequestsService', () => {
       create: jest.fn(),
       update: jest.fn(),
     },
-    user: {
+    erpUser: {
       findUnique: jest.fn(),
       findFirst: jest.fn(),
       findMany: jest.fn(),
@@ -35,29 +35,35 @@ describe('RequestsService', () => {
     notification: { create: jest.fn() },
     schedulerWeek: { upsert: jest.fn() },
     $executeRawUnsafe: jest.fn(),
+    $queryRaw: jest.fn(),
   };
 
   const designerUser = {
-    id: designerId,
-    fullName: 'Alex Johnson',
-    role: { name: UserRole.DESIGNER },
-    departmentId: 'dept-1',
+    userId: BigInt(designerId),
+    userName: 'Alex Johnson',
+  };
+
+  const futureDate = (daysFromNow: number) => {
+    const d = new Date();
+    d.setUTCDate(d.getUTCDate() + daysFromNow);
+    d.setUTCHours(0, 0, 0, 0);
+    return d;
   };
 
   const pendingLeave = {
     id: leaveId,
-    userId: designerId,
+    userId: BigInt(designerId),
     type: 'Leave',
     reason: 'Vacation',
-    startDate: new Date('2026-09-01T00:00:00.000Z'),
-    endDate: new Date('2026-09-03T00:00:00.000Z'),
+    startDate: futureDate(14),
+    endDate: futureDate(16),
     status: 'Pending',
     createdAt: new Date(),
     approverId: null,
     approverRemarks: null,
     reviewedAt: null,
     halfDaySession: null,
-    user: designerUser,
+    user: { userName: designerUser.userName },
     approver: null,
   };
 
@@ -74,7 +80,9 @@ describe('RequestsService', () => {
     service = module.get(RequestsService);
     jest.clearAllMocks();
     mockPrisma.leaveRequest.findMany.mockResolvedValue([]);
-    mockPrisma.user.findMany.mockResolvedValue([]);
+    mockPrisma.erpUser.findMany.mockResolvedValue([]);
+    mockPrisma.erpUser.findUnique.mockResolvedValue(designerUser);
+    mockPrisma.$queryRaw.mockResolvedValue([{ userId: BigInt(hodId), userName: 'HOD User' }]);
     mockPrisma.notification.create.mockResolvedValue({});
     mockPrisma.schedulerWeek.upsert.mockResolvedValue({});
     mockSchedulerAssignments.rescheduleForApprovedLeave.mockResolvedValue({ movedCount: 0, affectedWeeks: [] });
@@ -125,7 +133,6 @@ describe('RequestsService', () => {
 
     it('rejects overlapping pending leave', async () => {
       const start = futureStart();
-      mockPrisma.user.findUnique.mockResolvedValue({ role: { name: UserRole.DESIGNER } });
       mockPrisma.leaveRequest.findMany.mockResolvedValue([
         {
           id: 'existing',
@@ -155,7 +162,6 @@ describe('RequestsService', () => {
       overlapDay.setUTCDate(overlapDay.getUTCDate() + 2);
       const overlapIso = overlapDay.toISOString().slice(0, 10);
 
-      mockPrisma.user.findUnique.mockResolvedValue({ role: { name: UserRole.DESIGNER } });
       mockPrisma.leaveRequest.findMany.mockResolvedValue([
         {
           id: 'approved-block',
@@ -178,10 +184,6 @@ describe('RequestsService', () => {
 
     it('allows reapplication over cancelled and revoked leave dates', async () => {
       const start = futureStart();
-      mockPrisma.user.findUnique.mockResolvedValue({
-        role: { name: UserRole.DESIGNER },
-        departmentId: 'dept-1',
-      });
       mockPrisma.leaveRequest.findMany.mockResolvedValue([
         {
           id: 'cancelled-block',
@@ -216,11 +218,7 @@ describe('RequestsService', () => {
 
     it('creates valid leave request', async () => {
       const start = futureStart();
-      mockPrisma.user.findUnique.mockResolvedValue({
-        role: { name: UserRole.DESIGNER },
-        departmentId: 'dept-1',
-      });
-      mockPrisma.user.findMany.mockResolvedValue([{ id: hodId, fullName: 'HOD' }]);
+      mockPrisma.erpUser.findMany.mockResolvedValue([{ userId: BigInt(hodId), userName: 'HOD' }]);
       mockPrisma.leaveRequest.create.mockResolvedValue({
         ...pendingLeave,
         startDate: new Date(`${start}T00:00:00.000Z`),
@@ -248,10 +246,6 @@ describe('RequestsService', () => {
 
     it('creates half-day leave with 0.5 day duration', async () => {
       const start = futureStart();
-      mockPrisma.user.findUnique.mockResolvedValue({
-        role: { name: UserRole.DESIGNER },
-        departmentId: 'dept-1',
-      });
       mockPrisma.leaveRequest.create.mockResolvedValue({
         ...pendingLeave,
         type: 'Half Day',
@@ -277,17 +271,14 @@ describe('RequestsService', () => {
 
     it('reschedules tasks when HOD-created leave is auto-approved', async () => {
       const start = futureStart();
-      mockPrisma.user.findUnique
-        .mockResolvedValueOnce({
-          ...designerUser,
-          role: { name: UserRole.DESIGNER },
-        })
-        .mockResolvedValueOnce({ fullName: 'HOD User' });
+      mockPrisma.erpUser.findUnique
+        .mockResolvedValueOnce(designerUser)
+        .mockResolvedValueOnce({ userId: BigInt(hodId), userName: 'HOD User' });
       mockPrisma.leaveRequest.create.mockResolvedValue({
         ...pendingLeave,
         status: 'Approved',
-        approverId: hodId,
-        approver: { fullName: 'HOD User' },
+        approverId: BigInt(hodId),
+        approver: { userName: 'HOD User' },
         reviewedAt: new Date(),
         startDate: new Date(`${start}T00:00:00.000Z`),
         endDate: new Date(`${start}T00:00:00.000Z`),
@@ -309,7 +300,6 @@ describe('RequestsService', () => {
 
     it('rejects half-day leave without a session', async () => {
       const start = futureStart();
-      mockPrisma.user.findUnique.mockResolvedValue({ role: { name: UserRole.DESIGNER } });
 
       await expect(
         service.create(designerId, UserRole.DESIGNER, {
@@ -326,7 +316,6 @@ describe('RequestsService', () => {
       const start = futureStart();
       const end = new Date(`${start}T00:00:00.000Z`);
       end.setUTCDate(end.getUTCDate() + 1);
-      mockPrisma.user.findUnique.mockResolvedValue({ role: { name: UserRole.DESIGNER } });
 
       await expect(
         service.create(designerId, UserRole.DESIGNER, {
@@ -405,33 +394,27 @@ describe('RequestsService', () => {
       const approvedLeave = {
         ...pendingLeave,
         status: 'APPROVED',
-        approverId: hodId,
-        approver: { fullName: 'HOD User' },
+        approverId: BigInt(hodId),
+        approver: { userName: 'HOD User' },
         reviewedAt: new Date(),
       };
       mockPrisma.leaveRequest.findUnique.mockResolvedValue(pendingLeave);
-      mockPrisma.user.findUnique.mockResolvedValue({
-        fullName: 'HOD User',
-        departmentId: 'dept-1',
-      });
       mockPrisma.leaveRequest.update.mockResolvedValue(approvedLeave);
 
       await service.review(leaveId, hodId, UserRole.HOD, { status: 'APPROVED' });
 
-      expect(mockSchedulerAssignments.rescheduleForApprovedLeave).toHaveBeenCalledWith(pendingLeave, hodId);
+      expect(mockSchedulerAssignments.rescheduleForApprovedLeave).toHaveBeenCalledWith(
+        expect.objectContaining({ id: leaveId, userId: designerId }),
+        hodId,
+      );
       expect(mockPrisma.schedulerWeek.upsert).toHaveBeenCalled();
     });
 
     it('blocks HOD self-approval and self-rejection', async () => {
       mockPrisma.leaveRequest.findUnique.mockResolvedValue({
         ...pendingLeave,
-        userId: hodId,
-        user: {
-          id: hodId,
-          fullName: 'HOD User',
-          role: { name: UserRole.HOD },
-          departmentId: 'dept-1',
-        },
+        userId: BigInt(hodId),
+        user: { userName: 'HOD User' },
       });
 
       await expect(
@@ -460,8 +443,8 @@ describe('RequestsService', () => {
     const approvedLeave = {
       ...pendingLeave,
       status: 'APPROVED',
-      approverId: hodId,
-      approver: { fullName: 'HOD User' },
+      approverId: BigInt(hodId),
+      approver: { userName: 'HOD User' },
       reviewedAt: new Date(),
       revokedById: null,
       revokedAt: null,
@@ -469,23 +452,16 @@ describe('RequestsService', () => {
       revokedBy: null,
     };
 
-    const setupHodAccess = () => {
-      mockPrisma.user.findUnique.mockResolvedValue({
-        fullName: 'HOD User',
-        departmentId: 'dept-1',
-      });
-    };
-
     it('revokes an approved future leave', async () => {
       mockPrisma.leaveRequest.findUnique.mockResolvedValue(approvedLeave);
-      setupHodAccess();
+      mockPrisma.erpUser.findUnique.mockResolvedValue({ userId: BigInt(hodId), userName: 'HOD User' });
       mockPrisma.leaveRequest.update.mockResolvedValue({
         ...approvedLeave,
         status: 'REVOKED',
-        revokedById: hodId,
+        revokedById: BigInt(hodId),
         revokedAt: new Date(),
         revocationReason: 'Resource reallocation',
-        revokedBy: { fullName: 'HOD User' },
+        revokedBy: { userName: 'HOD User' },
       });
 
       const result = await service.revoke(leaveId, hodId, UserRole.HOD, {
@@ -511,23 +487,18 @@ describe('RequestsService', () => {
     it('allows HOD to revoke their own approved future leave', async () => {
       const hodOwnLeave = {
         ...approvedLeave,
-        userId: hodId,
-        user: {
-          id: hodId,
-          fullName: 'HOD User',
-          role: { name: UserRole.HOD },
-          departmentId: 'dept-1',
-        },
+        userId: BigInt(hodId),
+        user: { userName: 'HOD User' },
       };
       mockPrisma.leaveRequest.findUnique.mockResolvedValue(hodOwnLeave);
-      setupHodAccess();
+      mockPrisma.erpUser.findUnique.mockResolvedValue({ userId: BigInt(hodId), userName: 'HOD User' });
       mockPrisma.leaveRequest.update.mockResolvedValue({
         ...hodOwnLeave,
         status: 'REVOKED',
-        revokedById: hodId,
+        revokedById: BigInt(hodId),
         revokedAt: new Date(),
         revocationReason: 'Personal plan changed',
-        revokedBy: { fullName: 'HOD User' },
+        revokedBy: { userName: 'HOD User' },
       });
 
       const result = await service.revoke(leaveId, hodId, UserRole.HOD, {
@@ -588,30 +559,25 @@ describe('RequestsService', () => {
   });
 
   describe('findTeamRequests', () => {
-    it('includes HOD self-leave alongside designer leaves', async () => {
+    it('returns all leave requests for HOD viewers (ERP has no department to scope by)', async () => {
       const hodLeave = {
         ...pendingLeave,
         id: '44444444-4444-4444-8444-444444444444',
-        userId: hodId,
+        userId: BigInt(hodId),
         status: 'Approved',
-        user: {
-          id: hodId,
-          fullName: 'Sarah Mitchell',
-          role: { name: UserRole.HOD },
-          departmentId: 'dept-1',
-        },
+        user: { userName: 'Sarah Mitchell' },
       };
-      mockPrisma.user.findUnique.mockResolvedValue({ departmentId: 'dept-1' });
       mockPrisma.leaveRequest.findMany.mockResolvedValue([pendingLeave, hodLeave]);
 
-      await service.findTeamRequests(hodId, UserRole.HOD);
+      const result = await service.findTeamRequests(hodId, UserRole.HOD);
 
+      // Department/role-based scoping was dropped (ErpUser has neither field) —
+      // findTeamRequests now returns every leave request unfiltered.
       expect(mockPrisma.leaveRequest.findMany).toHaveBeenCalledWith(
-        expect.objectContaining({
-          where: expect.objectContaining({
-            OR: [{ userId: hodId }, { user: { role: { name: UserRole.DESIGNER }, departmentId: 'dept-1' } }],
-          }),
-        }),
+        expect.objectContaining({ where: {} }),
+      );
+      expect(result.map((r) => r.id)).toEqual(
+        expect.arrayContaining([pendingLeave.id, hodLeave.id]),
       );
     });
   });

@@ -87,7 +87,7 @@ export class OvertimeRequestsService {
 
   private isUuidString(value: string | undefined | null): boolean {
     if (value == null) return false;
-    return /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i.test(value.trim());
+    return /^\d+$/.test(value.trim());
   }
 
   private parseDateOnly(dateStr: string, fieldName: string): Date {
@@ -117,7 +117,7 @@ export class OvertimeRequestsService {
     const { dayStart, dayEnd } = this.getDayWindow(date);
     const leaves = await client.leaveRequest.findMany({
       where: {
-        userId: designerId,
+        userId: BigInt(designerId),
         status: { in: ['Approved', 'APPROVED', 'approved'] },
         revokedAt: null,
         startDate: { lte: dayEnd },
@@ -158,7 +158,7 @@ export class OvertimeRequestsService {
     const dayIndex = this.dayIndexForDate(requestDate, weekStartDate);
     const assignment = await this.prisma.schedulerAssignment.findFirst({
       where: {
-        designerId,
+        designerId: BigInt(designerId),
         taskId,
         weekStartDate,
         dayIndex,
@@ -186,7 +186,7 @@ export class OvertimeRequestsService {
     const weekStartDate = this.getStartOfWeek(date);
     const dayIndex = this.dayIndexForDate(date, weekStartDate);
     const regularAssignments = await client.schedulerAssignment.findMany({
-      where: { designerId, weekStartDate, dayIndex },
+      where: { designerId: BigInt(designerId), weekStartDate, dayIndex },
       select: { assignedHours: true },
     });
     const regularHours = regularAssignments.reduce(
@@ -216,12 +216,12 @@ export class OvertimeRequestsService {
           weekStartDate,
           version: 1,
           isLocked: false,
-          updatedBy: userId,
+          updatedBy: BigInt(userId),
           lastPayloadHash: null,
         },
         update: {
           version: { increment: 1 },
-          updatedBy: userId,
+          updatedBy: BigInt(userId),
           lastPayloadHash: null,
         },
       });
@@ -247,6 +247,7 @@ export class OvertimeRequestsService {
     const requestDate = new Date(dateStr);
     const startMinutes = this.timeToMinutes(startTime);
     const endMinutes = this.timeToMinutes(endTime);
+    const designerIdBig = BigInt(designerId);
 
     await this.assertNoApprovedLeaveBlockingOvertime(client, designerId, requestDate);
 
@@ -265,7 +266,7 @@ export class OvertimeRequestsService {
     const duplicateDay = await client.overtimeRequest.findFirst({
       where: {
         id: excludeRequestId ? { not: excludeRequestId } : undefined,
-        designerId,
+        designerId: designerIdBig,
         date: requestDate,
         status: { in: ['DRAFT', 'SUBMITTED', 'APPROVED_BY_MANAGER', 'APPROVED'] },
       },
@@ -280,7 +281,7 @@ export class OvertimeRequestsService {
     const duplicate = await client.overtimeRequest.findFirst({
       where: {
         id: excludeRequestId ? { not: excludeRequestId } : undefined,
-        designerId,
+        designerId: designerIdBig,
         taskId,
         date: requestDate,
         status: { in: ['DRAFT', 'SUBMITTED', 'APPROVED_BY_MANAGER', 'APPROVED'] },
@@ -294,7 +295,7 @@ export class OvertimeRequestsService {
     const activeRequests = await client.overtimeRequest.findMany({
       where: {
         id: excludeRequestId ? { not: excludeRequestId } : undefined,
-        designerId,
+        designerId: designerIdBig,
         date: requestDate,
         status: { in: ['SUBMITTED', 'APPROVED_BY_MANAGER', 'APPROVED'] },
       },
@@ -318,7 +319,7 @@ export class OvertimeRequestsService {
     const weeklyRequests = await client.overtimeRequest.findMany({
       where: {
         id: excludeRequestId ? { not: excludeRequestId } : undefined,
-        designerId,
+        designerId: designerIdBig,
         date: {
           gte: weekStart,
           lte: weekEnd,
@@ -411,7 +412,7 @@ export class OvertimeRequestsService {
 
     const rows = await this.prisma.schedulerAssignment.findMany({
       where: {
-        designerId: normalizedDesignerId,
+        designerId: BigInt(normalizedDesignerId),
         weekStartDate,
         dayIndex,
         taskId: { not: null },
@@ -454,7 +455,7 @@ export class OvertimeRequestsService {
   private buildOvertimeActivityDetails(
     request: {
       id: string;
-      designerId?: string | null;
+      designerId?: string | bigint | null;
       date?: Date | null;
       totalHours?: Decimal | null;
       requestedHours?: Decimal | null;
@@ -466,7 +467,7 @@ export class OvertimeRequestsService {
         opNo?: string | null;
         project?: { name?: string | null; projectNo?: string | null } | null;
       } | null;
-      designer?: { fullName?: string | null; departmentId?: string | null } | null;
+      designer?: { userName?: string | null } | null;
     },
     action: ActivityActionType,
     messageKey: string,
@@ -500,9 +501,9 @@ export class OvertimeRequestsService {
         ...extra?.changes,
       },
       context: {
-        designerId: request.designerId,
-        designerName: request.designer?.fullName ?? undefined,
-        requesterName: request.designer?.fullName ?? undefined,
+        designerId: request.designerId != null ? String(request.designerId) : undefined,
+        designerName: request.designer?.userName ?? undefined,
+        requesterName: request.designer?.userName ?? undefined,
         ...extra?.context,
       },
     };
@@ -514,7 +515,7 @@ export class OvertimeRequestsService {
     userId: string;
     request: {
       id: string;
-      designerId?: string | null;
+      designerId?: string | bigint | null;
       date?: Date | null;
       totalHours?: Decimal | null;
       requestedHours?: Decimal | null;
@@ -526,7 +527,7 @@ export class OvertimeRequestsService {
         opNo?: string | null;
         project?: { name?: string | null; projectNo?: string | null } | null;
       } | null;
-      designer?: { fullName?: string | null; departmentId?: string | null } | null;
+      designer?: { userName?: string | null } | null;
     };
     changes?: Record<string, unknown>;
     context?: Record<string, unknown>;
@@ -586,15 +587,15 @@ export class OvertimeRequestsService {
     status: string | null;
     createdAt: Date | null;
     reason: string | null;
-    designer: { id: string; fullName: string; department?: { name: string } | null } | null;
+    designer: { userId: bigint; userName: string } | null;
     task: { title: string | null; taskNo: string; project?: { name: string } | null } | null;
   }) {
     const base = this.mapRowForDesignerView(row);
     return {
       ...base,
-      designerId: row.designer?.id ?? null,
-      designerName: row.designer?.fullName?.trim() || 'Unknown',
-      departmentName: row.designer?.department?.name?.trim() || '—',
+      designerId: row.designer?.userId != null ? String(row.designer.userId) : null,
+      designerName: row.designer?.userName?.trim() || 'Unknown',
+      departmentName: '—',
       reason: row.reason?.trim() || '—',
       submittedAt: row.createdAt ? row.createdAt.toISOString() : null,
     };
@@ -602,7 +603,7 @@ export class OvertimeRequestsService {
 
   async findByDesignerForView(designerId: string) {
     const rows = await this.prisma.overtimeRequest.findMany({
-      where: { designerId },
+      where: { designerId: BigInt(designerId) },
       orderBy: { createdAt: 'desc' },
       include: {
         task: {
@@ -617,21 +618,16 @@ export class OvertimeRequestsService {
     return rows.map((row) => this.mapRowForDesignerView(row));
   }
 
-  async findPendingApprovalsForView(managerId: string, role: UserRole) {
-    const where: Record<string, unknown> = { status: 'SUBMITTED' };
-
-    if (hasHrApproverAccess(role)) {
-      const manager = await this.prisma.user.findUnique({ where: { id: managerId }, select: { departmentId: true } });
-      if (manager?.departmentId) {
-        where.designer = { departmentId: manager.departmentId };
-      }
-    }
-
+  // Note: HOD scoping used to be filtered by the designer's department, but ERP
+  // has no department concept on ErpAuthUsers — every HOD now sees all pending
+  // requests company-wide (managerId/role are unused now but kept for call-site
+  // compatibility with the controller).
+  async findPendingApprovalsForView(_managerId: string, _role: UserRole) {
     const rows = await this.prisma.overtimeRequest.findMany({
-      where,
+      where: { status: 'SUBMITTED' },
       orderBy: { createdAt: 'desc' },
       include: {
-        designer: { select: { id: true, fullName: true, email: true, department: { select: { name: true } } } },
+        designer: { select: { userId: true, userName: true } },
         task: {
           select: {
             title: true,
@@ -695,7 +691,7 @@ export class OvertimeRequestsService {
 
       const created = await tx.overtimeRequest.create({
         data: {
-          designerId,
+          designerId: BigInt(designerId),
           taskId: dto.taskId,
           date: new Date(dto.date),
           startTime: schedule.startTime,
@@ -707,7 +703,7 @@ export class OvertimeRequestsService {
           status,
           ...(hodAutoApprove
             ? {
-                approvedById: creatorId,
+                approvedById: BigInt(creatorId),
                 approvedAt: now,
                 approvedHours: totalHours,
                 managerComments: hodOnBehalf
@@ -717,7 +713,7 @@ export class OvertimeRequestsService {
             : {}),
         },
         include: {
-          designer: { select: { id: true, fullName: true, email: true, departmentId: true } },
+          designer: { select: { userId: true, userName: true } },
           task: { select: this.overtimeActivityTaskSelect },
           attachments: true,
         },
@@ -727,7 +723,7 @@ export class OvertimeRequestsService {
         data: {
           requestId: created.id,
           action: status,
-          actionById: creatorId,
+          actionById: BigInt(creatorId),
           comments: 'Request initiated',
         },
       });
@@ -737,7 +733,7 @@ export class OvertimeRequestsService {
           data: {
             requestId: created.id,
             action: 'APPROVED',
-            actionById: creatorId,
+            actionById: BigInt(creatorId),
             comments: hodOnBehalf
               ? 'Auto-approved by system (HOD submission on behalf of designer)'
               : 'Auto-approved by system (HOD submission)',
@@ -779,7 +775,7 @@ export class OvertimeRequestsService {
         this.dashboardRealtime?.notifyUserNotificationRefresh(designerId);
       }
     } else if (status === 'SUBMITTED') {
-      const recipientName = await this.resolveOvertimeApproverName(request.designer?.departmentId);
+      const recipientName = await this.resolveOvertimeApproverName();
       await this.logOvertimeActivity({
         action: ActivityAction.OVERTIME_REQUEST_SUBMITTED,
         messageKey: 'overtime_request_submitted',
@@ -813,7 +809,7 @@ export class OvertimeRequestsService {
     }
 
     // Auth check
-    if (request.designerId !== userId && !hasHrApproverAccess(role)) {
+    if (String(request.designerId) !== userId && !hasHrApproverAccess(role)) {
       throw new ForbiddenException('You can only update your own requests');
     }
 
@@ -835,7 +831,7 @@ export class OvertimeRequestsService {
     // request can otherwise be edited days later, or onto a task/day the designer was
     // never scheduled for, without ever re-checking either invariant.
     assertOvertimeDateIsToday(nextDate);
-    await this.assertTaskScheduledForDate(request.designerId!, nextTaskId, nextDate);
+    await this.assertTaskScheduledForDate(String(request.designerId), nextTaskId, nextDate);
 
     const totalHours = new Decimal((this.timeToMinutes(nextEnd) - this.timeToMinutes(nextStart)) / 60);
     const status = dto.status || request.status;
@@ -843,7 +839,7 @@ export class OvertimeRequestsService {
     const updated = await this.prisma.$transaction(async (tx) => {
       // Same race-closing pattern as create(): validate and write inside one
       // serializable transaction so a concurrent edit can't slip past the checks.
-      await this.validatePolicyRules(tx, request.designerId!, nextDate, nextStart, nextEnd, nextTaskId, request.id);
+      await this.validatePolicyRules(tx, String(request.designerId), nextDate, nextStart, nextEnd, nextTaskId, request.id);
 
       const row = await tx.overtimeRequest.update({
         where: { id },
@@ -858,7 +854,7 @@ export class OvertimeRequestsService {
           status,
         },
         include: {
-          designer: { select: { id: true, fullName: true, email: true, departmentId: true } },
+          designer: { select: { userId: true, userName: true } },
           task: { select: this.overtimeActivityTaskSelect },
           attachments: true,
         },
@@ -868,7 +864,7 @@ export class OvertimeRequestsService {
         data: {
           requestId: row.id,
           action: status || 'UPDATED',
-          actionById: userId,
+          actionById: BigInt(userId),
           comments: 'Request details updated',
         },
       });
@@ -880,7 +876,7 @@ export class OvertimeRequestsService {
     });
 
     if (status === 'SUBMITTED' && request.status !== 'SUBMITTED') {
-      const recipientName = await this.resolveOvertimeApproverName(updated.designer?.departmentId);
+      const recipientName = await this.resolveOvertimeApproverName();
       await this.logOvertimeActivity({
         action: ActivityAction.OVERTIME_REQUEST_SUBMITTED,
         messageKey: 'overtime_request_submitted',
@@ -911,14 +907,14 @@ export class OvertimeRequestsService {
     const request = await this.prisma.overtimeRequest.findUnique({
       where: { id },
       include: {
-        designer: { select: { id: true, fullName: true, email: true, departmentId: true } },
+        designer: { select: { userId: true, userName: true } },
         task: { select: this.overtimeActivityTaskSelect },
         attachments: true,
       },
     });
 
     if (!request) throw new NotFoundException('Overtime request not found');
-    if (request.designerId !== userId) throw new ForbiddenException('Access denied');
+    if (String(request.designerId) !== userId) throw new ForbiddenException('Access denied');
     if (request.status !== 'DRAFT') throw new BadRequestException('Request is already submitted');
     if (!request.taskId || !request.date) {
       throw new BadRequestException('Request is missing a task or date');
@@ -928,14 +924,14 @@ export class OvertimeRequestsService {
     // submission time instead of trusting the state from whenever it was drafted.
     const dateStr = request.date.toISOString().split('T')[0];
     assertOvertimeDateIsToday(dateStr);
-    await this.assertTaskScheduledForDate(request.designerId!, request.taskId, dateStr);
-    await this.assertNoApprovedLeaveBlockingOvertime(this.prisma, request.designerId, new Date(request.date));
+    await this.assertTaskScheduledForDate(String(request.designerId), request.taskId, dateStr);
+    await this.assertNoApprovedLeaveBlockingOvertime(this.prisma, String(request.designerId), new Date(request.date));
 
     const updated = await this.prisma.overtimeRequest.update({
       where: { id },
       data: { status: 'SUBMITTED' },
       include: {
-        designer: { select: { id: true, fullName: true, email: true, departmentId: true } },
+        designer: { select: { userId: true, userName: true } },
         task: { select: this.overtimeActivityTaskSelect },
         attachments: true,
       },
@@ -945,7 +941,7 @@ export class OvertimeRequestsService {
       data: {
         requestId: id,
         action: 'SUBMITTED',
-        actionById: userId,
+        actionById: BigInt(userId),
         comments: 'Request submitted for approval',
       },
     });
@@ -955,7 +951,7 @@ export class OvertimeRequestsService {
       messageKey: 'overtime_request_submitted',
       userId,
       request: updated,
-      context: { recipientName: await this.resolveOvertimeApproverName(updated.designer?.departmentId) },
+      context: { recipientName: await this.resolveOvertimeApproverName() },
     });
 
     await this.notifyApprovers(updated);
@@ -968,7 +964,7 @@ export class OvertimeRequestsService {
   async withdraw(id: string, userId: string) {
     const request = await this.prisma.overtimeRequest.findUnique({ where: { id } });
     if (!request) throw new NotFoundException('Overtime request not found');
-    if (request.designerId !== userId) throw new ForbiddenException('Access denied');
+    if (String(request.designerId) !== userId) throw new ForbiddenException('Access denied');
     if (request.status !== 'SUBMITTED' && request.status !== 'APPROVED_BY_MANAGER') {
       throw new BadRequestException('Cannot withdraw request at this stage');
     }
@@ -977,7 +973,7 @@ export class OvertimeRequestsService {
       where: { id },
       data: { status: 'WITHDRAWN' },
       include: {
-        designer: { select: { id: true, fullName: true, email: true, departmentId: true } },
+        designer: { select: { userId: true, userName: true } },
         task: { select: this.overtimeActivityTaskSelect },
       },
     });
@@ -986,7 +982,7 @@ export class OvertimeRequestsService {
       data: {
         requestId: id,
         action: 'WITHDRAWN',
-        actionById: userId,
+        actionById: BigInt(userId),
         comments: 'Request withdrawn by employee',
       },
     });
@@ -1011,7 +1007,7 @@ export class OvertimeRequestsService {
     });
 
     if (!request) throw new NotFoundException('Overtime request not found');
-    if (request.designerId !== userId) throw new ForbiddenException('Access denied');
+    if (String(request.designerId) !== userId) throw new ForbiddenException('Access denied');
     if (request.status !== 'DRAFT') throw new BadRequestException('Only draft requests can be deleted');
 
     // Clean up S3 attachments first
@@ -1034,12 +1030,12 @@ export class OvertimeRequestsService {
     const request = await this.prisma.overtimeRequest.findUnique({
       where: { id },
       include: {
-        designer: { select: { id: true, fullName: true, email: true, departmentId: true, department: { select: { name: true } } } },
+        designer: { select: { userId: true, userName: true } },
         task: { select: { id: true, title: true, taskNo: true, project: { select: { name: true } } } },
         attachments: true,
         history: {
           include: {
-            actionBy: { select: { id: true, fullName: true, role: { select: { name: true } } } },
+            actionBy: { select: { userId: true, userName: true } },
           },
           orderBy: { createdAt: 'asc' },
         },
@@ -1048,13 +1044,10 @@ export class OvertimeRequestsService {
 
     if (!request) throw new NotFoundException('Overtime request not found');
 
-    // Auth check: owner or HOD in the same department
-    if (request.designerId !== userId) {
+    // Auth check: owner or HOD (department-scoped access is no longer possible —
+    // ERP has no department concept on ErpAuthUsers).
+    if (String(request.designerId) !== userId) {
       if (!hasHrApproverAccess(role)) {
-        throw new ForbiddenException('Access denied');
-      }
-      const viewer = await this.prisma.user.findUnique({ where: { id: userId }, select: { departmentId: true } });
-      if (viewer?.departmentId && viewer.departmentId !== request.designer?.departmentId) {
         throw new ForbiddenException('Access denied');
       }
     }
@@ -1075,7 +1068,7 @@ export class OvertimeRequestsService {
    * Lists request history for the calling designer.
    */
   async findOwnRequests(userId: string, filters: { status?: string; startDate?: string; endDate?: string }) {
-    const where: any = { designerId: userId };
+    const where: any = { designerId: BigInt(userId) };
     if (filters.status) where.status = filters.status;
     if (filters.startDate || filters.endDate) {
       where.date = {};
@@ -1100,7 +1093,7 @@ export class OvertimeRequestsService {
     const request = await this.prisma.overtimeRequest.findUnique({
       where: { id },
       include: {
-        designer: { select: { id: true, fullName: true, departmentId: true } },
+        designer: { select: { userId: true, userName: true } },
         task: { select: this.overtimeActivityTaskSelect },
       },
     });
@@ -1121,7 +1114,7 @@ export class OvertimeRequestsService {
         throw new BadRequestException('Request is not in a submittable state for review');
       }
       if (dto.status === 'APPROVED_BY_MANAGER' && request.designerId && request.date) {
-        await this.assertNoApprovedLeaveBlockingOvertime(this.prisma, request.designerId, new Date(request.date));
+        await this.assertNoApprovedLeaveBlockingOvertime(this.prisma, String(request.designerId), new Date(request.date));
       }
 
       const updateData: any = {
@@ -1134,16 +1127,16 @@ export class OvertimeRequestsService {
         if (request.designerId && request.date) {
           await this.assertDailyCeilingNotExceeded(
             this.prisma,
-            request.designerId,
+            String(request.designerId),
             new Date(request.date),
             Number.parseFloat(String(approvedHoursValue ?? 0)),
           );
         }
         updateData.approvedHours = approvedHoursValue;
-        updateData.approvedById = reviewerId;
+        updateData.approvedById = BigInt(reviewerId);
         updateData.approvedAt = new Date();
       } else {
-        updateData.rejectedById = reviewerId;
+        updateData.rejectedById = BigInt(reviewerId);
         updateData.rejectedAt = new Date();
       }
 
@@ -1152,7 +1145,7 @@ export class OvertimeRequestsService {
           where: { id },
           data: updateData,
           include: {
-            designer: { select: { id: true, fullName: true, email: true } },
+            designer: { select: { userId: true, userName: true } },
             task: { select: this.overtimeActivityTaskSelect },
           },
         });
@@ -1161,7 +1154,7 @@ export class OvertimeRequestsService {
           data: {
             requestId: id,
             action: dto.status,
-            actionById: reviewerId,
+            actionById: BigInt(reviewerId),
             comments: dto.comments || 'Manager review completed',
           },
         });
@@ -1199,7 +1192,7 @@ export class OvertimeRequestsService {
           : {},
       );
       if (updated.designerId) {
-        this.dashboardRealtime?.notifyUserNotificationRefresh(updated.designerId);
+        this.dashboardRealtime?.notifyUserNotificationRefresh(String(updated.designerId));
       }
 
       return updated;
@@ -1211,22 +1204,16 @@ export class OvertimeRequestsService {
   /**
    * HOD lists pending reviews from their department.
    */
-  async findPendingApprovals(managerId: string, role: UserRole) {
+  async findPendingApprovals(_managerId: string, _role: UserRole) {
+    // Department-scoped filtering is no longer possible — ERP has no department
+    // concept on ErpAuthUsers, so every HOD sees all pending requests company-wide.
     const where: any = { status: 'SUBMITTED' };
-
-    // If HOD, filter by department
-    if (hasHrApproverAccess(role)) {
-      const manager = await this.prisma.user.findUnique({ where: { id: managerId }, select: { departmentId: true } });
-      if (manager?.departmentId) {
-        where.designer = { departmentId: manager.departmentId };
-      }
-    }
 
     return this.prisma.overtimeRequest.findMany({
       where,
       orderBy: { createdAt: 'desc' },
       include: {
-        designer: { select: { id: true, fullName: true, email: true, department: { select: { name: true } } } },
+        designer: { select: { userId: true, userName: true } },
         task: { select: { id: true, title: true, taskNo: true, project: { select: { name: true } } } },
       },
     });
@@ -1235,23 +1222,16 @@ export class OvertimeRequestsService {
   /**
    * HOD views all team overtime requests.
    */
-  async findTeamRequests(managerId: string, role: UserRole, filters: { status?: string; designerId?: string }) {
+  async findTeamRequests(_managerId: string, _role: UserRole, filters: { status?: string; designerId?: string }) {
     const where: any = {};
     if (filters.status) where.status = filters.status;
-    if (filters.designerId) where.designerId = filters.designerId;
-
-    if (hasHrApproverAccess(role)) {
-      const manager = await this.prisma.user.findUnique({ where: { id: managerId }, select: { departmentId: true } });
-      if (manager?.departmentId) {
-        where.designer = { departmentId: manager.departmentId };
-      }
-    }
+    if (filters.designerId) where.designerId = BigInt(filters.designerId);
 
     return this.prisma.overtimeRequest.findMany({
       where,
       orderBy: { createdAt: 'desc' },
       include: {
-        designer: { select: { id: true, fullName: true, email: true, department: { select: { name: true } } } },
+        designer: { select: { userId: true, userName: true } },
         task: { select: { id: true, title: true, taskNo: true, project: { select: { name: true } } } },
       },
     });
@@ -1272,11 +1252,11 @@ export class OvertimeRequestsService {
 
     const where: any = {};
     if (status) where.status = status;
-    if (designerId) where.designerId = designerId;
+    if (designerId) where.designerId = BigInt(designerId);
     if (search) {
       where.OR = [
         { reason: { contains: search } },
-        { designer: { fullName: { contains: search } } },
+        { designer: { userName: { contains: search } } },
         { task: { title: { contains: search } } },
       ];
     }
@@ -1288,7 +1268,7 @@ export class OvertimeRequestsService {
         skip,
         take: limit,
         include: {
-          designer: { select: { id: true, fullName: true, email: true, department: { select: { name: true } } } },
+          designer: { select: { userId: true, userName: true } },
           task: { select: { id: true, title: true, taskNo: true, project: { select: { name: true } } } },
         },
       }),
@@ -1310,7 +1290,7 @@ export class OvertimeRequestsService {
   async uploadAttachment(requestId: string, file: Express.Multer.File, userId: string) {
     const request = await this.prisma.overtimeRequest.findUnique({ where: { id: requestId } });
     if (!request) throw new NotFoundException('Overtime request not found');
-    if (request.designerId !== userId) throw new ForbiddenException('Access denied');
+    if (String(request.designerId) !== userId) throw new ForbiddenException('Access denied');
 
     const uploaded = await this.taskFilesService.uploadTaskFile(file, userId);
     
@@ -1361,7 +1341,7 @@ export class OvertimeRequestsService {
     return this.prisma.overtimeRequest.findMany({
       where,
       include: {
-        designer: { select: { fullName: true, email: true, department: { select: { name: true } } } },
+        designer: { select: { userName: true } },
         task: { select: { title: true, taskNo: true } },
       },
       orderBy: { createdAt: 'desc' },
@@ -1377,49 +1357,41 @@ export class OvertimeRequestsService {
     return `${base}?${params.toString()}#overtime`;
   }
 
-  private async resolveOvertimeApproverName(departmentId: string | null | undefined): Promise<string> {
-    let hods: Array<{ fullName: string | null }> = [];
-    if (departmentId) {
-      hods = await this.prisma.user.findMany({
-        where: {
-          departmentId,
-          role: { name: UserRole.HOD },
-        },
-        select: { fullName: true },
-        take: 1,
-      });
+  /** Raw ERP role join — the local Role/Department tables are gone, so HOD
+   * membership must be resolved against ERP's own ErpAuthUserRoleMap/ErpMasterRole
+   * tables, and (since ERP has no department concept on ErpAuthUsers) HOD
+   * notifications are no longer department-scoped — every HOD is notified. */
+  private async findHodUsers(): Promise<Array<{ id: bigint; userName: string }>> {
+    const rows = await this.prisma.$queryRaw<Array<{ userId: bigint; userName: string; roleName: string | null }>>`
+      SELECT u.userId, u.userName, r.roleName
+      FROM ErpAuthUsers u
+      JOIN ErpAuthUserRoleMap m ON m.userId = u.userId AND m.isActive = 1
+      JOIN ErpMasterRole r ON r.roleId = m.roleId AND r.isActive = 1 AND r.isDeleted = 0
+      WHERE u.isActive = 1 AND u.isDeleted = 0
+    `;
+    const hodRoleNames = new Set(['Design HOD', 'Design Head']);
+    const seen = new Set<string>();
+    const result: Array<{ id: bigint; userName: string }> = [];
+    for (const row of rows) {
+      if (!row.roleName || !hodRoleNames.has(row.roleName)) continue;
+      const key = row.userId.toString();
+      if (seen.has(key)) continue;
+      seen.add(key);
+      result.push({ id: row.userId, userName: row.userName });
     }
-    if (hods.length === 0) {
-      hods = await this.prisma.user.findMany({
-        where: { role: { name: UserRole.HOD } },
-        select: { fullName: true },
-        take: 1,
-      });
-    }
-    return hods[0]?.fullName?.trim() || 'HOD';
+    return result;
+  }
+
+  private async resolveOvertimeApproverName(): Promise<string> {
+    const hods = await this.findHodUsers();
+    return hods[0]?.userName?.trim() || 'HOD';
   }
 
   private async notifyApprovers(request: any) {
-    // Notify department HOD
-    const deptId = request.designer?.departmentId;
-    let hods: Array<{ id: string }> = [];
-    if (deptId) {
-      hods = await this.prisma.user.findMany({
-        where: {
-          departmentId: deptId,
-          role: { name: UserRole.HOD },
-        },
-        select: { id: true },
-      });
-    }
-    if (hods.length === 0) {
-      hods = await this.prisma.user.findMany({
-        where: { role: { name: UserRole.HOD } },
-        select: { id: true },
-      });
-    }
+    const hods = await this.findHodUsers();
 
     const taskLabel = request.task?.title?.trim() || request.task?.taskNo?.trim() || 'task';
+    const designerId = request.designerId != null ? String(request.designerId) : undefined;
     for (const hod of hods) {
       try {
         await this.prisma.notification.create({
@@ -1427,11 +1399,11 @@ export class OvertimeRequestsService {
             id: randomUUID(),
             userId: hod.id,
             title: 'New Overtime Request Submitted',
-            message: `${request.designer.fullName} has submitted an overtime request for ${request.totalHours} hours on ${request.date.toISOString().split('T')[0]} (${taskLabel}).`,
-            linkUrl: this.overtimeLink(request.id, request.designerId, true),
+            message: `${request.designer?.userName ?? 'A designer'} has submitted an overtime request for ${request.totalHours} hours on ${request.date.toISOString().split('T')[0]} (${taskLabel}).`,
+            linkUrl: this.overtimeLink(request.id, designerId, true),
           },
         });
-        this.dashboardRealtime?.notifyUserNotificationRefresh(hod.id);
+        this.dashboardRealtime?.notifyUserNotificationRefresh(String(hod.id));
       } catch (err) {
         this.logger.warn(`Failed to notify HOD ${hod.id}: ${err instanceof Error ? err.message : err}`);
       }
@@ -1448,7 +1420,7 @@ export class OvertimeRequestsService {
         message: `Your overtime request for ${request.date.toISOString().split('T')[0]} has been ${actionLabel.toLowerCase()}.${
           comments ? ` Comment: "${comments}"` : ''
         }`,
-        linkUrl: this.overtimeLink(request.id, request.designerId),
+        linkUrl: this.overtimeLink(request.id, request.designerId != null ? String(request.designerId) : undefined),
       },
     });
   }

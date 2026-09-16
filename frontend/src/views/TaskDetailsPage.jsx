@@ -812,8 +812,8 @@ function mapTaskToRecord(task) {
     teamLead: task.teamLead ?? '',
     subTeamLead: task.subTeamLead ?? '',
     designers: task.designers ?? '',
-    assignedTo: task.assignee?.fullName
-      || (task.taskDesigners?.length > 0 ? task.taskDesigners.map(d => d.designer.fullName).join(', ') : 'Unassigned'),
+    assignedTo: (task.assignee?.fullName ?? task.assignee?.userName)
+      || (task.taskDesigners?.length > 0 ? task.taskDesigners.map(d => d.designer.fullName ?? d.designer.userName).join(', ') : 'Unassigned'),
     assigneeId: task.assigneeId ?? task.assignee?.id ?? null,
     assignedDesignerIds: [
       ...new Set([
@@ -1208,9 +1208,9 @@ function ProjectTaskList({ tasks, loading, onView, isRetail = false }) {
                     </span>
                   </span>
                   <span className="truncate">
-                    {task.assignee?.fullName ||
+                    {(task.assignee?.fullName ?? task.assignee?.userName) ||
                       (task.taskDesigners?.length > 0
-                        ? task.taskDesigners.map(d => d.designer.fullName).join(', ')
+                        ? task.taskDesigners.map(d => d.designer.fullName ?? d.designer.userName).join(', ')
                         : 'Unassigned')}
                   </span>
                   <span className="text-slate-500">{task.dueDate ? new Date(task.dueDate).toLocaleDateString('en-GB') : '—'}</span>
@@ -1838,14 +1838,14 @@ export function TaskDetailsPage() {
       .get('/users?role=HOD&limit=200')
       .then((res) => {
         const list = Array.isArray(res) ? res : (res?.data ?? [])
-        setHodUsers(Array.isArray(list) ? list : [])
+        setHodUsers(Array.isArray(list) ? list.map((u) => ({ ...u, fullName: u.fullName ?? u.userName })) : [])
       })
       .catch(() => {})
     apiClient
       .get('/users?role=DESIGNER&limit=200')
       .then((res) => {
         const list = Array.isArray(res) ? res : (res?.data ?? [])
-        setDesignerUsers(Array.isArray(list) ? list : [])
+        setDesignerUsers(Array.isArray(list) ? list.map((u) => ({ ...u, fullName: u.fullName ?? u.userName })) : [])
       })
       .catch(() => {})
   }, [isCreationRoute, isQs])

@@ -1,6 +1,7 @@
-import { IsUUID } from 'class-validator';
+import { Matches } from 'class-validator';
 
+// ERP ErpAuthUsers.userId is a decimal bigint, not a GUID.
 export class AssignTaskDto {
-  @IsUUID()
+  @Matches(/^\d+$/)
   assigneeId!: string;
 }

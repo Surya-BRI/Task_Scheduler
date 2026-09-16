@@ -8,40 +8,30 @@ datasource db {
 }
 
 // ---------------------------------------------------------
-// USERS & ROLES
+// USERS (ERP auth — read-only reference into ERP's own tables)
 // ---------------------------------------------------------
-model Role {
-  id          String   @id @default(dbgenerated("newid()")) @db.UniqueIdentifier
-  name        String   @unique @db.NVarChar(50)
-  permissions String?  @db.NVarChar(Max)
-  users       User[]
-  createdAt   DateTime @default(dbgenerated("sysutcdatetime()"))
-  updatedAt   DateTime @default(dbgenerated("sysutcdatetime()")) @updatedAt
 
-  @@map("ErpTSRole")
-}
-
-/// Legacy department table (referenced by ErpTSUser.departmentId).
+/// Legacy department table. No longer FK'd from anywhere (ERP has no
+/// department concept on ErpAuthUsers) — kept only in case other code
+/// still reads department rows directly.
 model Department {
   id        String   @id @db.NVarChar(450)
   name      String   @unique
-  users     User[]
   createdAt DateTime @default(now())
   updatedAt DateTime @default(now()) @updatedAt
 
   @@map("Department")
 }
 
-model User {
-  id           String   @id @default(dbgenerated("newid()")) @db.UniqueIdentifier
-  email        String   @unique @db.NVarChar(255)
-  passwordHash String   @db.NVarChar(255)
-  fullName     String   @db.NVarChar(150)
-  roleId       String   @db.UniqueIdentifier
-  departmentId String?  @db.NVarChar(450)
-
-  role         Role     @relation(fields: [roleId], references: [id], onUpdate: NoAction)
-  department   Department? @relation(fields: [departmentId], references: [id], onDelete: NoAction, onUpdate: NoAction)
+/// Read-only reference onto ERP's own ErpAuthUsers table. Scheduler never
+/// writes here — login validates against it directly (see users.service.ts),
+/// and every business-table FK that used to point at the old local ErpTSUser
+/// GUID now points at this bigint userId instead.
+model ErpUser {
+  userId   BigInt  @id @db.BigInt
+  userName String  @db.VarChar(500)
+  isActive Boolean
+  isDeleted Boolean
 
   tasks                    Task[]                     @relation("TaskAssignee")
   projects                 Project[]                  @relation("ProjectCreator")
@@ -86,12 +76,7 @@ model User {
   reallocationAsTarget     ReallocationRequest[]      @relation("ReallocationTarget")
   reallocationAsApprover   ReallocationRequest[]      @relation("ReallocationApprover")
 
-  createdAt DateTime @default(dbgenerated("sysutcdatetime()"))
-  updatedAt DateTime @default(dbgenerated("sysutcdatetime()")) @updatedAt
-
-  @@index([roleId], name: "IX_ErpTSUser_roleId")
-  @@index([departmentId], name: "IX_ErpTSUser_departmentId")
-  @@map("ErpTSUser")
+  @@map("ErpAuthUsers")
 }
 
 // ---------------------------------------------------------
@@ -110,8 +95,8 @@ model Project {
   teamLead       String?  @db.NVarChar(255)
   subTeamLead    String?  @db.NVarChar(255)
   designers      String?  @db.NVarChar(Max)
-  createdById    String?  @db.UniqueIdentifier
-  createdBy    User?    @relation("ProjectCreator", fields: [createdById], references: [id], onDelete: NoAction, onUpdate: NoAction)
+  createdById    BigInt?  @db.BigInt
+  createdBy    ErpUser? @relation("ProjectCreator", fields: [createdById], references: [userId], onDelete: NoAction, onUpdate: NoAction)
   tasks        Task[]
   signRows     ProjectSignRow[]
   chatterPosts ChatterPost[]
@@ -129,8 +114,8 @@ model ProjectQsAssignment {
   id         String   @id @default(dbgenerated("newid()")) @db.UniqueIdentifier
   projectId  String   @db.UniqueIdentifier
   project    Project  @relation(fields: [projectId], references: [id], onDelete: Cascade, onUpdate: NoAction)
-  qsUserId   String   @db.UniqueIdentifier
-  qsUser     User     @relation("ProjectQsAssignments", fields: [qsUserId], references: [id], onDelete: Cascade, onUpdate: NoAction)
+  qsUserId   BigInt   @db.BigInt
+  qsUser     ErpUser  @relation("ProjectQsAssignments", fields: [qsUserId], references: [userId], onDelete: Cascade, onUpdate: NoAction)
   assignedAt DateTime @default(dbgenerated("sysutcdatetime()"))
 
   @@unique([projectId, qsUserId], name: "UQ_ErpTSProjectQsAssignment_project_user")
@@ -142,10 +127,10 @@ model ProjectQsStatus {
   projectId     String    @id @db.UniqueIdentifier
   project       Project   @relation(fields: [projectId], references: [id], onDelete: Cascade, onUpdate: NoAction)
   status        String    @default("Pending") @db.NVarChar(20)
-  updatedById   String?   @db.UniqueIdentifier
-  updatedBy     User?     @relation("ProjectQsStatusUpdatedBy", fields: [updatedById], references: [id], onDelete: NoAction, onUpdate: NoAction)
-  submittedById String?   @db.UniqueIdentifier
-  submittedBy   User?     @relation("ProjectQsStatusSubmittedBy", fields: [submittedById], references: [id], onDelete: NoAction, onUpdate: NoAction)
+  updatedById   BigInt?   @db.BigInt
+  updatedBy     ErpUser?  @relation("ProjectQsStatusUpdatedBy", fields: [updatedById], references: [userId], onDelete: NoAction, onUpdate: NoAction)
+  submittedById BigInt?   @db.BigInt
+  submittedBy   ErpUser?  @relation("ProjectQsStatusSubmittedBy", fields: [submittedById], references: [userId], onDelete: NoAction, onUpdate: NoAction)
   submittedAt   DateTime? @db.DateTime2
   createdAt     DateTime  @default(dbgenerated("sysutcdatetime()"))
   updatedAt     DateTime  @default(dbgenerated("sysutcdatetime()")) @updatedAt
@@ -168,7 +153,7 @@ model Task {
   status      String    @default("DESIGN_NEW") @db.NVarChar(20)
   priority    String    @default("Medium") @db.NVarChar(50)
   projectId   String    @db.UniqueIdentifier
-  assigneeId  String?   @db.UniqueIdentifier
+  assigneeId  BigInt?   @db.BigInt
   dueDate     DateTime?
   startedAt          DateTime?
   completedAt        DateTime?
@@ -188,7 +173,7 @@ model Task {
   designers      String?  @db.NVarChar(Max)
 
   project                Project                 @relation(fields: [projectId], references: [id], onUpdate: NoAction)
-  assignee               User?                   @relation("TaskAssignee", fields: [assigneeId], references: [id], onDelete: NoAction, onUpdate: NoAction)
+  assignee               ErpUser?                @relation("TaskAssignee", fields: [assigneeId], references: [userId], onDelete: NoAction, onUpdate: NoAction)
   chatterPosts           ChatterPost[]
   activityLogs           ActivityLog[]
   regularizationRequests RegularizationRequest[]
@@ -291,8 +276,8 @@ model ProjectAttachment {
   fileName     String   @db.NVarChar(255)
   mimeType     String?  @db.NVarChar(100)
   sizeBytes    BigInt?
-  uploadedById String?  @db.UniqueIdentifier
-  uploadedBy   User?    @relation(fields: [uploadedById], references: [id], onDelete: NoAction, onUpdate: NoAction)
+  uploadedById BigInt?  @db.BigInt
+  uploadedBy   ErpUser? @relation(fields: [uploadedById], references: [userId], onDelete: NoAction, onUpdate: NoAction)
   createdAt    DateTime @default(now())
 
   @@index([projectId])
@@ -342,11 +327,11 @@ model DesignTask {
   designType         String?   @db.NVarChar(50)
   businessUnit       String?   @db.NVarChar(100)
   status             String?   @db.NVarChar(50)
-  salesPerson        String?   @db.UniqueIdentifier
-  assignedDesignerId String?   @db.UniqueIdentifier
-  assignedDesigner   User?     @relation("DesignTaskAssignee", fields: [assignedDesignerId], references: [id], onDelete: NoAction, onUpdate: NoAction)
-  lastUpdatedBy      String?   @db.UniqueIdentifier
-  updatedBy          User?     @relation("DesignTaskUpdatedBy", fields: [lastUpdatedBy], references: [id], onDelete: NoAction, onUpdate: NoAction)
+  salesPerson        BigInt?   @db.BigInt
+  assignedDesignerId BigInt?   @db.BigInt
+  assignedDesigner   ErpUser?  @relation("DesignTaskAssignee", fields: [assignedDesignerId], references: [userId], onDelete: NoAction, onUpdate: NoAction)
+  lastUpdatedBy      BigInt?   @db.BigInt
+  updatedBy          ErpUser?  @relation("DesignTaskUpdatedBy", fields: [lastUpdatedBy], references: [userId], onDelete: NoAction, onUpdate: NoAction)
   deadline           DateTime? @db.DateTime
   agingDays          Int?
   priority           String?   @db.NVarChar(20)
@@ -397,10 +382,10 @@ model ChatterPost {
   task          Task?   @relation(fields: [taskId], references: [id], onDelete: NoAction, onUpdate: NoAction)
   projectId     String? @db.UniqueIdentifier
   project       Project? @relation(fields: [projectId], references: [id], onDelete: NoAction, onUpdate: NoAction)
-  authorId      String? @db.UniqueIdentifier
-  author        User?   @relation("PostAuthor", fields: [authorId], references: [id], onDelete: NoAction, onUpdate: NoAction)
-  mentionUserId String? @db.UniqueIdentifier
-  mentionUser   User?   @relation("MentionedUser", fields: [mentionUserId], references: [id], onDelete: NoAction, onUpdate: NoAction)
+  authorId      BigInt? @db.BigInt
+  author        ErpUser? @relation("PostAuthor", fields: [authorId], references: [userId], onDelete: NoAction, onUpdate: NoAction)
+  mentionUserId BigInt? @db.BigInt
+  mentionUser   ErpUser? @relation("MentionedUser", fields: [mentionUserId], references: [userId], onDelete: NoAction, onUpdate: NoAction)
 
   attachments     Attachment[]
   links           LinkAttachment[]
@@ -423,10 +408,10 @@ model ChatterComment {
   id       String    @id @default(dbgenerated("newid()")) @db.UniqueIdentifier
   postId   String?   @db.UniqueIdentifier
   post     ChatterPost? @relation(fields: [postId], references: [id], onDelete: Cascade, onUpdate: NoAction)
-  authorId String?   @db.UniqueIdentifier
-  author   User?     @relation("CommentAuthor", fields: [authorId], references: [id], onDelete: NoAction, onUpdate: NoAction)
-  mentionUserId String? @db.UniqueIdentifier
-  mentionUser   User? @relation("CommentMentionedUser", fields: [mentionUserId], references: [id], onDelete: NoAction, onUpdate: NoAction)
+  authorId BigInt?   @db.BigInt
+  author   ErpUser?  @relation("CommentAuthor", fields: [authorId], references: [userId], onDelete: NoAction, onUpdate: NoAction)
+  mentionUserId BigInt? @db.BigInt
+  mentionUser   ErpUser? @relation("CommentMentionedUser", fields: [mentionUserId], references: [userId], onDelete: NoAction, onUpdate: NoAction)
   message  String?   @db.NVarChar(Max)
   createdAt DateTime? @default(now()) @db.DateTime
 
@@ -440,8 +425,8 @@ model ChatterPostMention {
   id        String      @id @default(dbgenerated("newid()")) @db.UniqueIdentifier
   postId    String      @db.UniqueIdentifier
   post      ChatterPost @relation(fields: [postId], references: [id], onDelete: Cascade, onUpdate: NoAction)
-  userId    String      @db.UniqueIdentifier
-  user      User        @relation("ChatterPostMentions", fields: [userId], references: [id], onDelete: NoAction, onUpdate: NoAction)
+  userId    BigInt      @db.BigInt
+  user      ErpUser     @relation("ChatterPostMentions", fields: [userId], references: [userId], onDelete: NoAction, onUpdate: NoAction)
   createdAt DateTime    @default(dbgenerated("sysutcdatetime()")) @db.DateTime
 
   @@unique([postId, userId], name: "UQ_ErpTSChatterPostMention_post_user")
@@ -453,8 +438,8 @@ model ChatterCommentMention {
   id        String         @id @default(dbgenerated("newid()")) @db.UniqueIdentifier
   commentId String         @db.UniqueIdentifier
   comment   ChatterComment @relation(fields: [commentId], references: [id], onDelete: Cascade, onUpdate: NoAction)
-  userId    String         @db.UniqueIdentifier
-  user      User           @relation("ChatterCommentMentions", fields: [userId], references: [id], onDelete: NoAction, onUpdate: NoAction)
+  userId    BigInt         @db.BigInt
+  user      ErpUser        @relation("ChatterCommentMentions", fields: [userId], references: [userId], onDelete: NoAction, onUpdate: NoAction)
   createdAt DateTime       @default(dbgenerated("sysutcdatetime()")) @db.DateTime
 
   @@unique([commentId, userId], name: "UQ_ErpTSChatterCommentMention_comment_user")
@@ -466,8 +451,8 @@ model ChatterPostLike {
   id        String      @id @default(dbgenerated("newid()")) @db.UniqueIdentifier
   postId    String      @db.UniqueIdentifier
   post      ChatterPost @relation(fields: [postId], references: [id], onDelete: Cascade, onUpdate: NoAction)
-  userId    String      @db.UniqueIdentifier
-  user      User        @relation("ChatterPostLikes", fields: [userId], references: [id], onDelete: NoAction, onUpdate: NoAction)
+  userId    BigInt      @db.BigInt
+  user      ErpUser     @relation("ChatterPostLikes", fields: [userId], references: [userId], onDelete: NoAction, onUpdate: NoAction)
   createdAt DateTime    @default(dbgenerated("sysutcdatetime()")) @db.DateTime
 
   @@unique([postId, userId], name: "UQ_ErpTSChatterPostLike_post_user")
@@ -478,8 +463,8 @@ model ChatterPostSeen {
   id        String      @id @default(dbgenerated("newid()")) @db.UniqueIdentifier
   postId    String      @db.UniqueIdentifier
   post      ChatterPost @relation(fields: [postId], references: [id], onDelete: Cascade, onUpdate: NoAction)
-  userId    String      @db.UniqueIdentifier
-  user      User        @relation("ChatterPostSeen", fields: [userId], references: [id], onDelete: NoAction, onUpdate: NoAction)
+  userId    BigInt      @db.BigInt
+  user      ErpUser     @relation("ChatterPostSeen", fields: [userId], references: [userId], onDelete: NoAction, onUpdate: NoAction)
   seenAt    DateTime    @default(dbgenerated("sysutcdatetime()")) @db.DateTime
 
   @@unique([postId, userId], name: "UQ_ErpTSChatterPostSeen_post_user")
@@ -519,20 +504,20 @@ model LinkAttachment {
 // ---------------------------------------------------------
 model LeaveRequest {
   id              String    @id @default(dbgenerated("newid()")) @db.UniqueIdentifier
-  userId          String    @db.UniqueIdentifier
-  user            User      @relation(fields: [userId], references: [id], onDelete: NoAction, onUpdate: NoAction)
+  userId          BigInt    @db.BigInt
+  user            ErpUser   @relation(fields: [userId], references: [userId], onDelete: NoAction, onUpdate: NoAction)
   type            String    @db.NVarChar(255)
   status          String    @default("Pending") @db.NVarChar(255)
   startDate       DateTime
   endDate         DateTime?
   halfDaySession  String?   @db.NVarChar(50)
   reason          String?   @db.NVarChar(Max)
-  approverId      String?   @db.UniqueIdentifier
-  approver        User?     @relation("LeaveApprover", fields: [approverId], references: [id], onDelete: NoAction, onUpdate: NoAction)
+  approverId      BigInt?   @db.BigInt
+  approver        ErpUser?  @relation("LeaveApprover", fields: [approverId], references: [userId], onDelete: NoAction, onUpdate: NoAction)
   approverRemarks String?   @db.NVarChar(Max)
   reviewedAt      DateTime? @db.DateTime
-  revokedById     String?   @db.UniqueIdentifier
-  revokedBy       User?     @relation("LeaveRevoker", fields: [revokedById], references: [id], onDelete: NoAction, onUpdate: NoAction)
+  revokedById     BigInt?   @db.BigInt
+  revokedBy       ErpUser?  @relation("LeaveRevoker", fields: [revokedById], references: [userId], onDelete: NoAction, onUpdate: NoAction)
   revokedAt       DateTime? @db.DateTime
   revocationReason String? @db.NVarChar(Max)
   createdAt       DateTime  @default(now())
@@ -544,8 +529,8 @@ model LeaveRequest {
 
 model RegularizationRequest {
   id         String    @id @default(dbgenerated("newid()")) @db.UniqueIdentifier
-  designerId String?   @db.UniqueIdentifier
-  designer   User?     @relation("RegularizationDesigner", fields: [designerId], references: [id], onDelete: NoAction, onUpdate: NoAction)
+  designerId BigInt?   @db.BigInt
+  designer   ErpUser?  @relation("RegularizationDesigner", fields: [designerId], references: [userId], onDelete: NoAction, onUpdate: NoAction)
   taskId     String?   @db.UniqueIdentifier
   task       Task?     @relation(fields: [taskId], references: [id], onDelete: NoAction, onUpdate: NoAction)
   date       DateTime? @db.Date
@@ -553,8 +538,8 @@ model RegularizationRequest {
   reason     String?   @db.NVarChar(100)
   notes      String?   @db.NVarChar(Max)
   status     String?   @db.NVarChar(50)
-  approverId String?   @db.UniqueIdentifier
-  approver   User?     @relation("RegularizationApprover", fields: [approverId], references: [id], onDelete: NoAction, onUpdate: NoAction)
+  approverId BigInt?   @db.BigInt
+  approver   ErpUser?  @relation("RegularizationApprover", fields: [approverId], references: [userId], onDelete: NoAction, onUpdate: NoAction)
   approverRemarks String? @db.NVarChar(Max)
   reviewedAt DateTime? @db.DateTime
   createdAt  DateTime? @default(now())
@@ -567,16 +552,16 @@ model ReallocationRequest {
   id                  String    @id @default(dbgenerated("newid()")) @db.UniqueIdentifier
   taskId              String    @db.UniqueIdentifier
   task                Task      @relation(fields: [taskId], references: [id], onDelete: NoAction, onUpdate: NoAction)
-  requesterId         String    @db.UniqueIdentifier
-  requester           User      @relation("ReallocationRequester", fields: [requesterId], references: [id], onDelete: NoAction, onUpdate: NoAction)
-  suggestedDesignerId String    @db.UniqueIdentifier
-  suggestedDesigner   User      @relation("ReallocationSuggested", fields: [suggestedDesignerId], references: [id], onDelete: NoAction, onUpdate: NoAction)
-  targetDesignerId    String?   @db.UniqueIdentifier
-  targetDesigner      User?     @relation("ReallocationTarget", fields: [targetDesignerId], references: [id], onDelete: NoAction, onUpdate: NoAction)
+  requesterId         BigInt    @db.BigInt
+  requester           ErpUser   @relation("ReallocationRequester", fields: [requesterId], references: [userId], onDelete: NoAction, onUpdate: NoAction)
+  suggestedDesignerId BigInt    @db.BigInt
+  suggestedDesigner   ErpUser   @relation("ReallocationSuggested", fields: [suggestedDesignerId], references: [userId], onDelete: NoAction, onUpdate: NoAction)
+  targetDesignerId    BigInt?   @db.BigInt
+  targetDesigner      ErpUser?  @relation("ReallocationTarget", fields: [targetDesignerId], references: [userId], onDelete: NoAction, onUpdate: NoAction)
   reason              String    @db.NVarChar(Max)
   status              String    @default("Pending") @db.NVarChar(50)
-  approverId          String?   @db.UniqueIdentifier
-  approver            User?     @relation("ReallocationApprover", fields: [approverId], references: [id], onDelete: NoAction, onUpdate: NoAction)
+  approverId          BigInt?   @db.BigInt
+  approver            ErpUser?  @relation("ReallocationApprover", fields: [approverId], references: [userId], onDelete: NoAction, onUpdate: NoAction)
   approverRemarks     String?   @db.NVarChar(Max)
   reviewedAt          DateTime? @db.DateTime2
   createdAt           DateTime  @default(dbgenerated("sysutcdatetime()"))
@@ -592,8 +577,8 @@ model ReallocationRequest {
 
 model OvertimeRequest {
   id                 String    @id @default(dbgenerated("newid()")) @db.UniqueIdentifier
-  designerId         String?   @db.UniqueIdentifier
-  designer           User?     @relation("OvertimeDesigner", fields: [designerId], references: [id], onDelete: NoAction, onUpdate: NoAction)
+  designerId         BigInt?   @db.BigInt
+  designer           ErpUser?  @relation("OvertimeDesigner", fields: [designerId], references: [userId], onDelete: NoAction, onUpdate: NoAction)
   taskId             String?   @db.UniqueIdentifier
   task               Task?     @relation(fields: [taskId], references: [id], onDelete: NoAction, onUpdate: NoAction)
   date               DateTime? @db.Date
@@ -609,11 +594,11 @@ model OvertimeRequest {
   totalHours         Decimal?  @db.Decimal(10, 2)
   managerComments    String?   @db.NVarChar(Max)
   hrComments         String?   @db.NVarChar(Max)
-  approvedById       String?   @db.UniqueIdentifier
-  approvedBy         User?     @relation("OvertimeApprovedBy", fields: [approvedById], references: [id], onDelete: NoAction, onUpdate: NoAction)
+  approvedById       BigInt?   @db.BigInt
+  approvedBy         ErpUser?  @relation("OvertimeApprovedBy", fields: [approvedById], references: [userId], onDelete: NoAction, onUpdate: NoAction)
   approvedAt         DateTime? @db.DateTime
-  rejectedById       String?   @db.UniqueIdentifier
-  rejectedBy         User?     @relation("OvertimeRejectedBy", fields: [rejectedById], references: [id], onDelete: NoAction, onUpdate: NoAction)
+  rejectedById       BigInt?   @db.BigInt
+  rejectedBy         ErpUser?  @relation("OvertimeRejectedBy", fields: [rejectedById], references: [userId], onDelete: NoAction, onUpdate: NoAction)
   rejectedAt         DateTime? @db.DateTime
   updatedAt          DateTime? @default(dbgenerated("sysutcdatetime()")) @updatedAt
 
@@ -630,8 +615,8 @@ model OvertimeApprovalHistory {
   requestId  String          @db.UniqueIdentifier
   request    OvertimeRequest @relation(fields: [requestId], references: [id], onDelete: Cascade, onUpdate: NoAction)
   action     String          @db.NVarChar(100)
-  actionById String          @db.UniqueIdentifier
-  actionBy   User            @relation("OvertimeActionBy", fields: [actionById], references: [id], onDelete: NoAction, onUpdate: NoAction)
+  actionById BigInt          @db.BigInt
+  actionBy   ErpUser         @relation("OvertimeActionBy", fields: [actionById], references: [userId], onDelete: NoAction, onUpdate: NoAction)
   comments   String?         @db.NVarChar(Max)
   createdAt  DateTime        @default(now())
 
@@ -657,8 +642,8 @@ model OvertimeAttachment {
 // ---------------------------------------------------------
 model SchedulerAssignment {
   id            String    @id @default(dbgenerated("newid()")) @db.UniqueIdentifier
-  designerId    String?   @db.UniqueIdentifier
-  designer      User?     @relation("SchedulerDesigner", fields: [designerId], references: [id], onDelete: NoAction, onUpdate: NoAction)
+  designerId    BigInt?   @db.BigInt
+  designer      ErpUser?  @relation("SchedulerDesigner", fields: [designerId], references: [userId], onDelete: NoAction, onUpdate: NoAction)
   taskId        String?   @db.UniqueIdentifier
   task          Task?     @relation(fields: [taskId], references: [id], onDelete: NoAction, onUpdate: NoAction)
   dayIndex      Int?
@@ -672,8 +657,8 @@ model SchedulerAssignment {
   position      Int?      @default(0)
   isLocked      Boolean?  @default(false)
   isPinned      Boolean?  @default(false)
-  assignedBy    String?   @db.UniqueIdentifier
-  assignedByUser User?    @relation("SchedulerAssignedBy", fields: [assignedBy], references: [id], onDelete: NoAction, onUpdate: NoAction)
+  assignedBy    BigInt?   @db.BigInt
+  assignedByUser ErpUser? @relation("SchedulerAssignedBy", fields: [assignedBy], references: [userId], onDelete: NoAction, onUpdate: NoAction)
   createdAt     DateTime? @default(now())
   updatedAt     DateTime? @default(now()) @updatedAt
 
@@ -694,7 +679,7 @@ model SchedulerTaskFragment {
   parentId         String?  @db.UniqueIdentifier
   hours            Decimal  @db.Decimal(10, 2)
   status           String   @db.NVarChar(20)
-  sourceDesignerId String?  @db.UniqueIdentifier
+  sourceDesignerId BigInt?  @db.BigInt
   splitIndex       Int?
   totalParts       Int?
   createdAt        DateTime @default(now())
@@ -709,8 +694,8 @@ model SchedulerWeek {
   weekStartDate   DateTime @unique @db.Date
   version         Int      @default(0)
   isLocked        Boolean  @default(false)
-  updatedBy       String?  @db.UniqueIdentifier
-  updatedByUser   User?    @relation("SchedulerWeekUpdatedBy", fields: [updatedBy], references: [id], onDelete: NoAction, onUpdate: NoAction)
+  updatedBy       BigInt?  @db.BigInt
+  updatedByUser   ErpUser? @relation("SchedulerWeekUpdatedBy", fields: [updatedBy], references: [userId], onDelete: NoAction, onUpdate: NoAction)
   lastPayloadHash String?  @db.NVarChar(128)
   createdAt       DateTime @default(now())
   updatedAt       DateTime @default(now()) @updatedAt
@@ -723,8 +708,8 @@ model SchedulerAssignmentHistory {
   weekStartDate DateTime @db.Date
   versionFrom   Int
   versionTo     Int
-  changedBy     String?  @db.UniqueIdentifier
-  changedByUser User?    @relation("SchedulerAssignmentHistoryChangedBy", fields: [changedBy], references: [id], onDelete: NoAction, onUpdate: NoAction)
+  changedBy     BigInt?  @db.BigInt
+  changedByUser ErpUser? @relation("SchedulerAssignmentHistoryChangedBy", fields: [changedBy], references: [userId], onDelete: NoAction, onUpdate: NoAction)
   beforeJson    String?  @db.NVarChar(Max)
   afterJson     String?  @db.NVarChar(Max)
   createdAt     DateTime @default(now())
@@ -747,11 +732,11 @@ model Holiday {
 /// HOD unlock of a weekend day (Sat/Sun) for one designer so tasks can be scheduled there.
 model SchedulerDayUnlock {
   id           String   @id @default(dbgenerated("newid()")) @db.UniqueIdentifier
-  designerId   String   @db.UniqueIdentifier
-  designer     User     @relation("SchedulerDayUnlockDesigner", fields: [designerId], references: [id], onDelete: NoAction, onUpdate: NoAction)
+  designerId   BigInt   @db.BigInt
+  designer     ErpUser  @relation("SchedulerDayUnlockDesigner", fields: [designerId], references: [userId], onDelete: NoAction, onUpdate: NoAction)
   date         DateTime @db.Date
-  unlockedById String   @db.UniqueIdentifier
-  unlockedBy   User     @relation("SchedulerDayUnlockBy", fields: [unlockedById], references: [id], onDelete: NoAction, onUpdate: NoAction)
+  unlockedById BigInt   @db.BigInt
+  unlockedBy   ErpUser  @relation("SchedulerDayUnlockBy", fields: [unlockedById], references: [userId], onDelete: NoAction, onUpdate: NoAction)
   reason       String?  @db.NVarChar(500)
   createdAt    DateTime @default(dbgenerated("sysutcdatetime()"))
 
@@ -780,8 +765,8 @@ model ActivityLog {
   id        String   @id @default(dbgenerated("newid()")) @db.UniqueIdentifier
   action    String   @db.NVarChar(1000)
   details   String?  @db.NVarChar(Max)
-  userId    String   @db.UniqueIdentifier
-  user      User     @relation(fields: [userId], references: [id], onDelete: NoAction, onUpdate: NoAction)
+  userId    BigInt   @db.BigInt
+  user      ErpUser  @relation(fields: [userId], references: [userId], onDelete: NoAction, onUpdate: NoAction)
   taskId    String?  @db.UniqueIdentifier
   task      Task?    @relation(fields: [taskId], references: [id], onDelete: NoAction, onUpdate: NoAction)
   createdAt DateTime @default(now())
@@ -794,8 +779,8 @@ model ActivityLog {
 
 model Notification {
   id        String   @id @default(dbgenerated("newid()")) @db.UniqueIdentifier
-  userId    String   @db.UniqueIdentifier
-  user      User     @relation(fields: [userId], references: [id], onDelete: Cascade, onUpdate: NoAction)
+  userId    BigInt   @db.BigInt
+  user      ErpUser  @relation(fields: [userId], references: [userId], onDelete: Cascade, onUpdate: NoAction)
   title     String
   message   String   @db.NVarChar(Max)
   isRead    Boolean  @default(false)
@@ -808,8 +793,8 @@ model Notification {
 
 model InboxReadMarker {
   id        String   @id @default(dbgenerated("newid()")) @db.UniqueIdentifier
-  userId    String   @db.UniqueIdentifier
-  user      User     @relation("InboxReadMarkers", fields: [userId], references: [id], onDelete: Cascade, onUpdate: NoAction)
+  userId    BigInt   @db.BigInt
+  user      ErpUser  @relation("InboxReadMarkers", fields: [userId], references: [userId], onDelete: Cascade, onUpdate: NoAction)
   itemKey   String   @db.NVarChar(200)
   isRead    Boolean  @default(true)
   updatedAt DateTime @updatedAt
@@ -838,12 +823,12 @@ model Conversation {
 model ConversationParticipant {
   id             String       @id @default(dbgenerated("newid()")) @db.UniqueIdentifier
   conversationId String       @db.UniqueIdentifier
-  userId         String       @db.UniqueIdentifier
+  userId         BigInt       @db.BigInt
   joinedAt       DateTime     @default(dbgenerated("sysutcdatetime()"))
   lastReadAt     DateTime     @default(dbgenerated("sysutcdatetime()"))
 
   conversation   Conversation @relation(fields: [conversationId], references: [id], onDelete: Cascade, onUpdate: NoAction)
-  user           User         @relation(fields: [userId], references: [id], onDelete: Cascade, onUpdate: NoAction)
+  user           ErpUser      @relation(fields: [userId], references: [userId], onDelete: Cascade, onUpdate: NoAction)
 
   @@unique([conversationId, userId])
   @@map("ErpTSConversationParticipant")
@@ -852,13 +837,13 @@ model ConversationParticipant {
 model Message {
   id             String       @id @default(dbgenerated("newid()")) @db.UniqueIdentifier
   conversationId String       @db.UniqueIdentifier
-  senderId       String       @db.UniqueIdentifier
+  senderId       BigInt       @db.BigInt
   content        String       @db.NVarChar(Max)
   createdAt      DateTime     @default(dbgenerated("sysutcdatetime()"))
   updatedAt      DateTime     @default(dbgenerated("sysutcdatetime()")) @updatedAt
 
   conversation   Conversation @relation(fields: [conversationId], references: [id], onDelete: Cascade, onUpdate: NoAction)
-  sender         User         @relation("MessageSender", fields: [senderId], references: [id], onDelete: Cascade, onUpdate: NoAction)
+  sender         ErpUser      @relation("MessageSender", fields: [senderId], references: [userId], onDelete: Cascade, onUpdate: NoAction)
 
   @@index([conversationId, createdAt(sort: Desc)], name: "IX_ErpTSMessage_conversationId_createdAt")
   @@map("ErpTSMessage")
@@ -871,8 +856,8 @@ model TaskWorkSession {
   id              String   @id @default(dbgenerated("newid()")) @db.UniqueIdentifier
   taskId          String   @db.UniqueIdentifier
   task            Task     @relation(fields: [taskId], references: [id], onDelete: Cascade, onUpdate: NoAction)
-  designerId      String   @db.UniqueIdentifier
-  designer        User     @relation("WorkSessionDesigner", fields: [designerId], references: [id], onDelete: NoAction, onUpdate: NoAction)
+  designerId      BigInt   @db.BigInt
+  designer        ErpUser  @relation("WorkSessionDesigner", fields: [designerId], references: [userId], onDelete: NoAction, onUpdate: NoAction)
   durationSeconds Int
   runStartedAt    DateTime?
   submissionLink  String?  @db.NVarChar(2000)
@@ -906,11 +891,11 @@ model TaskWorkSessionFile {
 // ---------------------------------------------------------
 model TaskDesigner {
   id         String @id @default(dbgenerated("newid()")) @db.UniqueIdentifier
-  taskId     String @db.UniqueIdentifier
-  designerId String @db.UniqueIdentifier
+  taskId     String  @db.UniqueIdentifier
+  designerId BigInt  @db.BigInt
 
-  task       Task   @relation("TaskDesigners", fields: [taskId], references: [id], onDelete: Cascade, onUpdate: NoAction)
-  designer   User   @relation("TaskDesignerUsers", fields: [designerId], references: [id], onDelete: NoAction, onUpdate: NoAction)
+  task       Task    @relation("TaskDesigners", fields: [taskId], references: [id], onDelete: Cascade, onUpdate: NoAction)
+  designer   ErpUser @relation("TaskDesignerUsers", fields: [designerId], references: [userId], onDelete: NoAction, onUpdate: NoAction)
 
   @@unique([taskId, designerId])
   @@index([taskId])

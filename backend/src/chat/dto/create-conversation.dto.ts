@@ -1,9 +1,10 @@
-import { IsArray, IsBoolean, IsNotEmpty, IsOptional, IsString, IsUUID } from 'class-validator';
+import { IsArray, IsBoolean, IsNotEmpty, IsOptional, IsString, Matches } from 'class-validator';
 
 export class CreateConversationDto {
+  // ERP ErpAuthUsers.userId is a decimal bigint, not a GUID.
   @IsNotEmpty()
   @IsArray()
-  @IsUUID(undefined, { each: true })
+  @Matches(/^\d+$/, { each: true })
   participantIds: string[];
 
   @IsOptional()

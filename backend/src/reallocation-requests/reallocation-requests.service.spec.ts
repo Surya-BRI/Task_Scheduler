@@ -10,14 +10,17 @@ import { ReallocationRequestsService } from './reallocation-requests.service';
 describe('ReallocationRequestsService', () => {
   let service: ReallocationRequestsService;
 
-  const designerId = '11111111-1111-1111-1111-111111111111';
-  const otherDesignerId = '44444444-4444-4444-4444-444444444444';
+  // Numeric ERP user ids (ErpAuthUsers.userId is bigint) — a distinct range
+  // for this spec file to avoid confusion with other services' fixtures.
+  const designerId = '6001';
+  const otherDesignerId = '6002';
+  const hodId = '6003';
+  const extraCandidateId = '6004';
   const taskId = '22222222-2222-2222-2222-222222222222';
-  const hodId = '33333333-3333-3333-3333-333333333333';
 
   const mockPrisma: any = {
     task: { findUnique: jest.fn() },
-    user: { findMany: jest.fn(), findUnique: jest.fn() },
+    $queryRaw: jest.fn(),
     schedulerAssignment: { findMany: jest.fn(), groupBy: jest.fn() },
     reallocationRequest: {
       findFirst: jest.fn(),
@@ -52,11 +55,11 @@ describe('ReallocationRequestsService', () => {
     mockPrisma.task.findUnique.mockResolvedValue({
       id: taskId,
       status: 'IN_PROGRESS',
-      assigneeId: designerId,
+      assigneeId: BigInt(designerId),
       taskNo: 'T-1',
       title: 'Signage',
       designType: 'Project',
-      taskDesigners: [{ designerId }],
+      taskDesigners: [{ designerId: BigInt(designerId) }],
       project: {
         technicalHead: 'Alex Johnson',
         teamLead: null,
@@ -71,8 +74,8 @@ describe('ReallocationRequestsService', () => {
     mockPrisma.reallocationRequest.create.mockResolvedValue({
       id: 'req-1',
       taskId,
-      requesterId: designerId,
-      suggestedDesignerId: otherDesignerId,
+      requesterId: BigInt(designerId),
+      suggestedDesignerId: BigInt(otherDesignerId),
       reason: 'Overloaded',
       status: 'Pending',
       targetDesignerId: null,
@@ -90,12 +93,12 @@ describe('ReallocationRequestsService', () => {
         projectId: 'p1',
         project: { id: 'p1', name: 'Proj', projectNo: 'P1' },
       },
-      requester: { id: designerId, fullName: 'Alex Johnson', department: { name: 'Design' } },
-      suggestedDesigner: { id: otherDesignerId, fullName: 'Benjamin Harris' },
+      requester: { userId: BigInt(designerId), userName: 'Alex Johnson' },
+      suggestedDesigner: { userId: BigInt(otherDesignerId), userName: 'Benjamin Harris' },
       targetDesigner: null,
       approver: null,
     });
-    mockPrisma.user.findMany.mockResolvedValue([{ id: hodId }]);
+    mockPrisma.$queryRaw.mockResolvedValue([]);
     mockPrisma.notification.create.mockResolvedValue({});
     mockScheduler.assertDesignerOnProjectTeam.mockResolvedValue(undefined);
   });
@@ -115,8 +118,8 @@ describe('ReallocationRequestsService', () => {
     mockPrisma.task.findUnique.mockResolvedValue({
       id: taskId,
       status: 'IN_PROGRESS',
-      assigneeId: otherDesignerId,
-      taskDesigners: [{ designerId: otherDesignerId }],
+      assigneeId: BigInt(otherDesignerId),
+      taskDesigners: [{ designerId: BigInt(otherDesignerId) }],
       taskNo: 'T-1',
       title: 'Signage',
       designType: 'Project',
@@ -242,9 +245,6 @@ describe('ReallocationRequestsService', () => {
       reviewedAt: new Date(),
       createdAt: new Date(),
     });
-    mockPrisma.user.findUnique.mockResolvedValue({ id: otherDesignerId });
-    mockPrisma.user.findMany.mockResolvedValue([]);
-
     const result = await service.review('req-1', hodId, UserRole.HOD, {
       status: 'Approved',
       targetDesignerId: otherDesignerId,
@@ -429,6 +429,11 @@ describe('ReallocationRequestsService', () => {
     expect(result[1].remainingHours).toBe(6);
   });
 
+  // listEligibleDesigners used to query prisma.user by department/role and
+  // fullName OR-matching. ErpAuthUsers has no local role/department table, so
+  // eligible designers now come from a raw-SQL role-bucket join
+  // (findErpUsersByRoleBuckets, backed by $queryRaw) instead — see
+  // reallocation-requests.service.ts around line 246-291.
   describe('listEligibleDesigners', () => {
     it('queries by team names when project team is present (not all users)', async () => {
       mockPrisma.task.findUnique.mockResolvedValue({
@@ -439,26 +444,16 @@ describe('ReallocationRequestsService', () => {
           designers: 'Benjamin Harris',
         },
       });
-      mockPrisma.user.findMany.mockResolvedValue([
-        { id: otherDesignerId, fullName: 'Benjamin Harris' },
-        { id: '55555555-5555-5555-5555-555555555555', fullName: 'Alex Johnson' },
+      mockPrisma.$queryRaw.mockResolvedValue([
+        { userId: BigInt(designerId), userName: 'Requester Self', roleName: 'Designer' },
+        { userId: BigInt(otherDesignerId), userName: 'Benjamin Harris', roleName: 'Designer' },
+        { userId: BigInt(extraCandidateId), userName: 'Alex Johnson', roleName: 'Designer' },
+        { userId: BigInt('6099'), userName: 'Not On Team', roleName: 'Designer' },
       ]);
 
       const result = await service.listEligibleDesigners(taskId, designerId);
 
-      expect(mockPrisma.user.findMany).toHaveBeenCalledWith(
-        expect.objectContaining({
-          where: expect.objectContaining({
-            id: { not: designerId },
-            OR: expect.arrayContaining([
-              { fullName: 'Alex Johnson' },
-              { fullName: 'Benjamin Harris' },
-            ]),
-          }),
-        }),
-      );
-      const where = mockPrisma.user.findMany.mock.calls[0][0].where;
-      expect(where.OR).toBeDefined();
+      // Requester excluded, off-team designer filtered out by name match.
       expect(result.map((d: { fullName: string }) => d.fullName).sort()).toEqual([
         'Alex Johnson',
         'Benjamin Harris',
@@ -474,16 +469,16 @@ describe('ReallocationRequestsService', () => {
           designers: null,
         },
       });
-      mockPrisma.user.findMany.mockResolvedValue([
-        { id: otherDesignerId, fullName: 'Anyone' },
+      mockPrisma.$queryRaw.mockResolvedValue([
+        { userId: BigInt(designerId), userName: 'Requester Self', roleName: 'Designer' },
+        { userId: BigInt(otherDesignerId), userName: 'Anyone', roleName: 'Designer' },
       ]);
 
-      await service.listEligibleDesigners(taskId, designerId);
+      const result = await service.listEligibleDesigners(taskId, designerId);
 
-      const where = mockPrisma.user.findMany.mock.calls[0][0].where;
-      expect(where.OR).toBeUndefined();
-      expect(where.id).toEqual({ not: designerId });
-      expect(where.role).toEqual({ name: { in: [UserRole.DESIGNER, UserRole.HOD] } });
+      // No team names to match against -> falls back to the full Designer/HOD
+      // directory (minus the requester), unfiltered by name.
+      expect(result.map((d: { fullName: string }) => d.fullName)).toEqual(['Anyone']);
     });
 
     it('excludes requester and filters by normalized name match', async () => {
@@ -495,16 +490,14 @@ describe('ReallocationRequestsService', () => {
           designers: null,
         },
       });
-      mockPrisma.user.findMany.mockResolvedValue([
-        { id: '55555555-5555-5555-5555-555555555555', fullName: 'Alex Johnson' },
-        { id: otherDesignerId, fullName: 'Outsider' },
+      mockPrisma.$queryRaw.mockResolvedValue([
+        { userId: BigInt(extraCandidateId), userName: 'Alex Johnson', roleName: 'Designer' },
+        { userId: BigInt(otherDesignerId), userName: 'Outsider', roleName: 'Designer' },
       ]);
 
       const result = await service.listEligibleDesigners(taskId, designerId);
 
-      expect(result).toEqual([
-        { id: '55555555-5555-5555-5555-555555555555', fullName: 'Alex Johnson' },
-      ]);
+      expect(result).toEqual([{ id: extraCandidateId, fullName: 'Alex Johnson' }]);
     });
   });
 });

@@ -22,7 +22,7 @@ import {
   ReviewReallocationRequestDto,
 } from './dto/reallocation-request.dto';
 import { ReallocationRequestsService } from './reallocation-requests.service';
-import { isUuidString } from './sql-uuid.util';
+import { isPositiveIntegerString, isUuidString } from './sql-uuid.util';
 
 @Controller('reallocation-requests')
 @UseGuards(JwtAuthGuard, RolesGuard)
@@ -37,8 +37,8 @@ export class ReallocationRequestsController {
   ) {
     const designerId = (designerIdParam ?? user?.sub ?? '').trim();
     if (!designerId) return [];
-    if (!isUuidString(designerId)) {
-      throw new BadRequestException('Query designerId must be a UUID.');
+    if (!isPositiveIntegerString(designerId)) {
+      throw new BadRequestException('Query designerId must be numeric.');
     }
     if (!hasDepartmentManagerAccess(user.role) && designerId !== user.sub) {
       throw new ForbiddenException('You can only view your own reallocation task options.');
@@ -79,8 +79,8 @@ export class ReallocationRequestsController {
     if (!user?.sub) return [];
     const designerId = resolveDesignerScope(designerIdParam, user.sub, user.role);
     if (!designerId) return [];
-    if (!isUuidString(designerId)) {
-      throw new BadRequestException('Query designerId must be a UUID.');
+    if (!isPositiveIntegerString(designerId)) {
+      throw new BadRequestException('Query designerId must be numeric.');
     }
     return this.reallocationRequestsService.findByRequester(designerId);
   }

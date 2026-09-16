@@ -425,6 +425,11 @@ function isUuid(value) {
     return /^[0-9a-f]{8}-[0-9a-f]{4}-[1-5][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i.test(String(value ?? "").trim());
 }
 
+// User ids (designer/session) are now decimal bigint strings from ERP, not GUIDs.
+function isNumericId(value) {
+    return /^\d+$/.test(String(value ?? "").trim());
+}
+
 function toInitials(fullName) {
     const parts = String(fullName ?? "").trim().split(/\s+/).filter(Boolean);
     if (parts.length === 0) return "DX";
@@ -1063,11 +1068,11 @@ export function DesignSchedulerScreen() {
                 const designerRows = Array.isArray(res)
                     ? res.map((user) => ({
                         id: String(user?.id ?? "").trim(),
-                        name: String(user?.fullName ?? "Designer"),
-                        initials: toInitials(user?.fullName),
+                        name: String(user?.fullName ?? user?.userName ?? "Designer"),
+                        initials: toInitials(user?.fullName ?? user?.userName),
                     })).filter((d) => d.id)
                     : [];
-                const hodOption = session?.role === "HOD" && isUuid(session.id)
+                const hodOption = session?.role === "HOD" && isNumericId(session.id)
                     ? {
                         id: String(session.id).trim(),
                         name: String(session.name ?? "HOD").trim() || "HOD",

@@ -12,7 +12,7 @@ import {
 import { CreateRegularizationRequestDto } from './dto/create-regularization-request.dto';
 import { ReviewRegularizationRequestDto } from './dto/review-regularization-request.dto';
 import { RegularizationRequestsService } from './regularization-requests.service';
-import { isUuidString } from './sql-uuid.util';
+import { isPositiveIntegerString } from './sql-uuid.util';
 import { JwtAuthGuard } from '../common/guards/jwt-auth.guard';
 import { RolesGuard } from '../common/guards/roles.guard';
 import { Roles } from '../common/decorators/roles.decorator';
@@ -36,8 +36,8 @@ export class RegularizationRequestsController {
   ) {
     const designerId = (designerIdParam ?? user?.sub ?? '').trim();
     if (!designerId) return [];
-    if (!isUuidString(designerId)) {
-      throw new BadRequestException('Query designerId must be a UUID.');
+    if (!isPositiveIntegerString(designerId)) {
+      throw new BadRequestException('Query designerId must be numeric.');
     }
     if (!hasHrApproverAccess(user.role) && designerId !== user.sub) {
       throw new ForbiddenException('You can only view your own regularization task options.');
@@ -67,8 +67,8 @@ export class RegularizationRequestsController {
     if (!user?.sub) return [];
     const designerId = resolveDesignerScope(designerIdParam, user.sub, user.role);
     if (!designerId) return [];
-    if (!isUuidString(designerId)) {
-      throw new BadRequestException('Query designerId must be a UUID.');
+    if (!isPositiveIntegerString(designerId)) {
+      throw new BadRequestException('Query designerId must be numeric.');
     }
     return this.regularizationRequestsService.findByDesigner(designerId);
   }

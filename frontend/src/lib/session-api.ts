@@ -9,17 +9,15 @@ import {
 
 type MeResponse = {
   id: string;
-  email: string;
-  fullName: string;
-  role: { name: string };
+  userName: string;
+  role: string | null;
 };
 
 function mapMeToSession(user: MeResponse) {
   return buildSessionForUser({
     id: user.id,
-    email: user.email,
-    fullName: user.fullName,
-    role: user.role?.name ?? 'DESIGNER',
+    userName: user.userName,
+    role: user.role ?? 'DESIGNER',
   });
 }
 

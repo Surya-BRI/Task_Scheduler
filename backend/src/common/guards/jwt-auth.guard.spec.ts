@@ -56,7 +56,7 @@ describe('JwtAuthGuard', () => {
     expect(guard.canActivate(context)).toBe(true);
     expect(request.user).toEqual({
       sub: 'dev-id',
-      email: 'dev@example.com',
+      username: 'dev@example.com',
       role: 'HOD',
     });
   });

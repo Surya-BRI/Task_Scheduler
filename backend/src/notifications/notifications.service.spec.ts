@@ -14,7 +14,7 @@ describe('NotificationsService', () => {
   };
 
   const service = new NotificationsService(prisma as never);
-  const userId = '11111111-1111-4111-8111-111111111111';
+  const userId = '11111111';
 
   beforeEach(() => {
     jest.clearAllMocks();
@@ -57,13 +57,13 @@ describe('NotificationsService', () => {
   });
 
   it('markRead updates only notifications owned by the user', async () => {
-    const row = { id: 'n1', userId };
+    const row = { id: 'n1', userId: BigInt(userId) };
     prisma.notification.findFirst.mockResolvedValue(row);
     prisma.notification.update.mockResolvedValue({ ...row, isRead: true });
 
     await expect(service.markRead('n1', userId)).resolves.toEqual({ ...row, isRead: true });
     expect(prisma.notification.findFirst).toHaveBeenCalledWith({
-      where: { id: 'n1', userId },
+      where: { id: 'n1', userId: BigInt(userId) },
     });
   });
 
@@ -77,7 +77,7 @@ describe('NotificationsService', () => {
     prisma.notification.updateMany.mockResolvedValue({ count: 3 });
     await expect(service.markAllRead(userId)).resolves.toEqual({ success: true });
     expect(prisma.notification.updateMany).toHaveBeenCalledWith({
-      where: { userId, isRead: false },
+      where: { userId: BigInt(userId), isRead: false },
       data: { isRead: true },
     });
   });
@@ -92,7 +92,7 @@ describe('NotificationsService', () => {
     expect(prisma.notification.count).toHaveBeenCalledWith(
       expect.objectContaining({
         where: expect.objectContaining({
-          userId,
+          userId: BigInt(userId),
           title: 'Title',
           linkUrl: '/link',
           createdAt: { gte: new Date('2026-08-08T20:00:00.000Z') },

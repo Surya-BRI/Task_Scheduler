@@ -13,6 +13,7 @@ import { DashboardRealtimeService } from '../dashboard/dashboard-realtime.servic
 import { SaveSignRowsDto, SIGN_ROW_COMMENT_MAX_LENGTH } from '../tasks/dto/save-sign-rows.dto';
 import { QsStatusValue, UpdateQsStatusDto } from '../tasks/dto/update-qs-status.dto';
 import { shouldRunRuntimeSchemaBootstrap } from '../common/utils/runtime-schema-bootstrap.util';
+import { UsersService } from '../users/users.service';
 
 const PROJECT_SELECT = {
   id: true,
@@ -28,7 +29,7 @@ const PROJECT_SELECT = {
   subTeamLead: true,
   designers: true,
   createdById: true,
-  createdBy: { select: { id: true, fullName: true } },
+  createdBy: { select: { userId: true, userName: true } },
   _count: { select: { tasks: true } },
   createdAt: true,
   updatedAt: true,
@@ -64,6 +65,7 @@ export class ProjectsService {
     private readonly taskFilesService: TaskFilesService,
     private readonly activityLogger: ActivityLoggerService,
     private readonly notificationsService: NotificationsService,
+    private readonly usersService: UsersService,
     @Optional() private readonly dashboardRealtime?: DashboardRealtimeService,
   ) {}
 
@@ -85,8 +87,8 @@ BEGIN
   CREATE TABLE [dbo].[ErpTSProjectQsStatus] (
     [projectId] UNIQUEIDENTIFIER NOT NULL,
     [status] NVARCHAR(20) NOT NULL CONSTRAINT [DF_ErpTSProjectQsStatus_status] DEFAULT ('Pending'),
-    [updatedById] UNIQUEIDENTIFIER NULL,
-    [submittedById] UNIQUEIDENTIFIER NULL,
+    [updatedById] BIGINT NULL,
+    [submittedById] BIGINT NULL,
     [submittedAt] DATETIME2 NULL,
     [createdAt] DATETIME2 NOT NULL CONSTRAINT [DF_ErpTSProjectQsStatus_createdAt] DEFAULT SYSUTCDATETIME(),
     [updatedAt] DATETIME2 NOT NULL CONSTRAINT [DF_ErpTSProjectQsStatus_updatedAt] DEFAULT SYSUTCDATETIME(),
@@ -95,9 +97,9 @@ BEGIN
     CONSTRAINT [FK_ErpTSProjectQsStatus_Project] FOREIGN KEY ([projectId])
       REFERENCES [dbo].[ErpTSProject]([id]) ON DELETE CASCADE,
     CONSTRAINT [FK_ErpTSProjectQsStatus_UpdatedBy] FOREIGN KEY ([updatedById])
-      REFERENCES [dbo].[ErpTSUser]([id]),
+      REFERENCES [dbo].[ErpAuthUsers]([userId]),
     CONSTRAINT [FK_ErpTSProjectQsStatus_SubmittedBy] FOREIGN KEY ([submittedById])
-      REFERENCES [dbo].[ErpTSUser]([id])
+      REFERENCES [dbo].[ErpAuthUsers]([userId])
   );
 END;
     `);
@@ -143,7 +145,7 @@ END;
         description: dto.description,
         status: dto.status ?? 'ACTIVE',
         salesPerson: dto.salesPerson,
-        createdById,
+        createdById: BigInt(createdById),
       },
       select: PROJECT_SELECT,
     });
@@ -216,7 +218,7 @@ END;
             status: true,
             priority: true,
             dueDate: true,
-            assignee: { select: { id: true, fullName: true } },
+            assignee: { select: { userId: true, userName: true } },
           },
           orderBy: { createdAt: 'desc' },
         },
@@ -383,7 +385,7 @@ END;
         fileName: uploaded.fileName,
         mimeType: uploaded.mimeType,
         sizeBytes: uploaded.size,
-        uploadedById: userId,
+        uploadedById: BigInt(userId),
       },
       select: {
         id: true,
@@ -437,7 +439,7 @@ END;
         fileName,
         mimeType: null,
         sizeBytes: null,
-        uploadedById: userId,
+        uploadedById: BigInt(userId),
       },
       select: {
         id: true,
@@ -575,16 +577,13 @@ END;
     actingUserId: string | null,
     project: { name: string; projectNo?: string | null },
   ) {
-    const qsUsers = await this.prisma.user.findMany({
-      where: { role: { name: UserRole.QS } },
-      select: { id: true },
-    });
+    const qsUsers = await this.usersService.findAll({ role: UserRole.QS });
     if (qsUsers.length === 0) return;
 
     await this.prisma.$executeRaw(Prisma.sql`
       INSERT INTO [ErpTSProjectQsAssignment] ([projectId], [qsUserId])
       SELECT ${projectId}, [incoming].[qsUserId]
-      FROM (VALUES ${Prisma.join(qsUsers.map((user) => Prisma.sql`(${user.id})`))}) AS [incoming]([qsUserId])
+      FROM (VALUES ${Prisma.join(qsUsers.map((user) => Prisma.sql`(${BigInt(user.id)})`))}) AS [incoming]([qsUserId])
       WHERE NOT EXISTS (
         SELECT 1
         FROM [ErpTSProjectQsAssignment] [existing]
@@ -630,7 +629,7 @@ END;
     const rows = await this.prisma.$queryRaw<Array<{ projectId: string }>>(Prisma.sql`
       SELECT [projectId] AS [projectId]
       FROM [ErpTSProjectQsAssignment]
-      WHERE [qsUserId] = ${userId}
+      WHERE [qsUserId] = ${BigInt(userId)}
     `);
     return rows.map((row) => row.projectId);
   }
@@ -670,10 +669,8 @@ END;
     title: string,
     message: string,
   ) {
-    const hodUsers = await this.prisma.user.findMany({
-      where: { role: { name: { in: ['HOD', 'ADMIN'] } } },
-      select: { id: true },
-    });
+    const allUsers = await this.usersService.findAll();
+    const hodUsers = allUsers.filter((user) => user.role === UserRole.HOD || (user.role as string) === 'ADMIN');
     const linkUrl = `/project-task-creation/${project.projectNo}?from=projects-list&projectCode=${project.projectNo}&designType=Project`;
     for (const hod of hodUsers) {
       this.notificationsService
@@ -910,7 +907,8 @@ END;
       },
     });
 
-    const hodUsers = await this.prisma.user.findMany({ where: { role: { name: { in: ['HOD', 'ADMIN'] } } }, select: { id: true } });
+    const allUsers = await this.usersService.findAll();
+    const hodUsers = allUsers.filter((user) => user.role === UserRole.HOD || (user.role as string) === 'ADMIN');
     const message = `${project.projectNo ? `${project.projectNo} — ` : ''}${project.name} QS update submitted with ${existingRows.length} sign row(s).`;
     for (const hod of hodUsers) {
       this.notificationsService

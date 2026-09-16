@@ -1216,7 +1216,7 @@ export function ChatterScreen() {
     }
     return [...map.values()];
   }, [mentionUsersDirectoryBase, posts]);
-  const currentUserName = useMemo(() => getSession()?.fullName ?? '', []);
+  const currentUserName = useMemo(() => getSession()?.name ?? '', []);
 
   useEffect(() => {
     setViewedPrivateEntryIds(readPrivateChatterViewedIds(currentUserId));

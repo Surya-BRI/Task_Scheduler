@@ -1,8 +1,11 @@
 import { Type } from 'class-transformer';
-import { IsArray, IsBoolean, IsInt, IsNumber, IsOptional, IsString, IsUUID, Max, Min, ValidateNested } from 'class-validator';
+import { IsArray, IsBoolean, IsInt, IsNumber, IsOptional, IsString, IsUUID, Matches, Max, Min, ValidateNested } from 'class-validator';
+
+// ERP ErpAuthUsers.userId is a decimal bigint, not a GUID.
+const NUMERIC_ID_RE = /^\d+$/;
 
 export class SchedulerAssignmentInputDto {
-  @IsUUID()
+  @Matches(NUMERIC_ID_RE)
   designerId: string;
 
   @IsUUID()
@@ -63,7 +66,7 @@ export class SchedulerAssignmentInputDto {
  * no client-side carry-forward, no dependency on the destination week ever being loaded.
  */
 export class SchedulerOverflowInputDto {
-  @IsUUID()
+  @Matches(NUMERIC_ID_RE)
   designerId: string;
 
   /** Canonical (parent) task id — the same id used across all of this task's split parts. */

@@ -6,9 +6,10 @@ import { TasksModule } from '../tasks/tasks.module';
 import { ActivitiesModule } from '../activities/activities.module';
 import { NotificationsModule } from '../notifications/notifications.module';
 import { DashboardModule } from '../dashboard/dashboard.module';
+import { UsersModule } from '../users/users.module';
 
 @Module({
-  imports: [PrismaModule, TasksModule, ActivitiesModule, NotificationsModule, DashboardModule],
+  imports: [PrismaModule, TasksModule, ActivitiesModule, NotificationsModule, DashboardModule, UsersModule],
   controllers: [ProjectsController],
   providers: [ProjectsService],
 })

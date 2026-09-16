@@ -29,6 +29,8 @@ import { leavePlannerPath, requestsPath } from "@/lib/role-routes";
 import { connectDashboardRealtime, isDashboardRealtimeConnected } from "@/lib/realtime";
 
 const UUID_RE = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
+// User ids (designer/session) are now decimal bigint strings from ERP, not GUIDs.
+const NUMERIC_ID_RE = /^\d+$/;
 
 /** Backup HTTP poll only when the dashboard socket is down (WS drives live updates). */
 const BACKUP_POLL_MS = 180_000;
@@ -150,7 +152,7 @@ export default function DesignerDashboard({ designer: designerProp } = {}) {
   const [viewedDesignerName, setViewedDesignerName] = useState(null);
 
   // When HOD views a specific designer, fetch that designer's name
-  const propErpId = designerProp?.erpDesignerId ?? (UUID_RE.test(designerProp?.id ?? '') ? designerProp?.id : null);
+  const propErpId = designerProp?.erpDesignerId ?? (NUMERIC_ID_RE.test(designerProp?.id ?? '') ? designerProp?.id : null);
 
   useEffect(() => {
     const session = getSession();
@@ -165,7 +167,7 @@ export default function DesignerDashboard({ designer: designerProp } = {}) {
   useEffect(() => {
     if (!propErpId) return;
     apiClient.get(`/users/${propErpId}`)
-      .then((u) => { if (u?.fullName) setViewedDesignerName(u.fullName); })
+      .then((u) => { const name = u?.fullName ?? u?.userName; if (name) setViewedDesignerName(name); })
       .catch(() => {});
   }, [propErpId]);
 
@@ -210,7 +212,7 @@ export default function DesignerDashboard({ designer: designerProp } = {}) {
   const [assigneeTasks, setAssigneeTasks] = useState([]);
   const [pendingRegCount, setPendingRegCount] = useState(null);
 
-  const erpId = designer.erpDesignerId || (UUID_RE.test(designer.id) ? designer.id : null);
+  const erpId = designer.erpDesignerId || (NUMERIC_ID_RE.test(designer.id) ? designer.id : null);
   // Assignee task list = source of truth for monthly/completed/donut (never mix in week-only rows).
   const assigneeTasksRef = useRef([]);
   // Lookup used only to render this week's scheduler grid labels/hours.

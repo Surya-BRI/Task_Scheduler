@@ -19,6 +19,27 @@ export function uniqueUuids(ids: Array<string | null | undefined>): string[] {
   return out;
 }
 
+// User ids are ERP ErpAuthUsers.userId — decimal bigints, not GUIDs.
+const NUMERIC_ID_RE = /^\d+$/;
+
+export function optionalUserId(value?: string | null): string | null {
+  if (!value?.trim()) return null;
+  const trimmed = value.trim();
+  return NUMERIC_ID_RE.test(trimmed) ? trimmed : null;
+}
+
+export function uniqueUserIds(ids: Array<string | null | undefined>): string[] {
+  const seen = new Set<string>();
+  const out: string[] = [];
+  for (const raw of ids) {
+    const id = optionalUserId(raw);
+    if (!id || seen.has(id)) continue;
+    seen.add(id);
+    out.push(id);
+  }
+  return out;
+}
+
 /**
  * Merge explicitly tagged user ids with ids parsed from @mentions in message text.
  * Explicit ids are always kept; parsed ids are restricted to the eligible directory.
@@ -28,9 +49,9 @@ export function mergeCollectedMentionUserIds(params: {
   parsedFromMessageIds: string[];
   eligibleIds: Set<string>;
 }): string[] {
-  const explicit = uniqueUuids(params.explicitIds);
+  const explicit = uniqueUserIds(params.explicitIds);
   const parsed = params.parsedFromMessageIds.filter((id) => params.eligibleIds.has(id));
-  return uniqueUuids([...explicit, ...parsed]);
+  return uniqueUserIds([...explicit, ...parsed]);
 }
 
 export type MentionUserRef = { id: string; fullName: string };

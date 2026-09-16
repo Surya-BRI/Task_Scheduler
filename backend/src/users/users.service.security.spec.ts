@@ -4,16 +4,7 @@ import { UserRole } from '../common/constants/roles.enum';
 
 describe('UsersService IDOR protection', () => {
   const prisma = {
-    user: {
-      findUnique: jest.fn(),
-      findMany: jest.fn(),
-      create: jest.fn(),
-      update: jest.fn(),
-      delete: jest.fn(),
-    },
-    role: {
-      findUnique: jest.fn(),
-    },
+    $queryRaw: jest.fn(),
   };
 
   const service = new UsersService(prisma as never);
@@ -23,30 +14,40 @@ describe('UsersService IDOR protection', () => {
   });
 
   it('allows users to read their own profile', async () => {
-    const profile = { id: 'self-id', email: 'me@example.com' };
-    prisma.user.findUnique.mockResolvedValue(profile);
+    prisma.$queryRaw.mockResolvedValue([{ userId: 42n, userName: 'me', roleName: 'Designer' }]);
 
-    await expect(service.findByIdForViewer('self-id', 'self-id', UserRole.DESIGNER)).resolves.toEqual(
-      profile,
-    );
+    await expect(service.findByIdForViewer('42', '42', UserRole.DESIGNER)).resolves.toEqual({
+      id: '42',
+      userName: 'me',
+      role: UserRole.DESIGNER,
+    });
   });
 
   it('allows HOD to read any profile', async () => {
-    const profile = { id: 'other-id', email: 'other@example.com' };
-    prisma.user.findUnique.mockResolvedValue(profile);
+    prisma.$queryRaw.mockResolvedValue([{ userId: 43n, userName: 'other', roleName: 'SalesRep' }]);
 
-    await expect(service.findByIdForViewer('other-id', 'hod-id', UserRole.HOD)).resolves.toEqual(profile);
+    await expect(service.findByIdForViewer('43', '99', UserRole.HOD)).resolves.toEqual({
+      id: '43',
+      userName: 'other',
+      role: UserRole.SALESPERSON,
+    });
   });
 
   it('blocks designers from reading another user profile', async () => {
     await expect(
-      service.findByIdForViewer('other-id', 'designer-id', UserRole.DESIGNER),
+      service.findByIdForViewer('43', '99', UserRole.DESIGNER),
     ).rejects.toThrow(ForbiddenException);
-    expect(prisma.user.findUnique).not.toHaveBeenCalled();
+    expect(prisma.$queryRaw).not.toHaveBeenCalled();
   });
 
   it('findById throws when user is missing', async () => {
-    prisma.user.findUnique.mockResolvedValue(null);
-    await expect(service.findById('missing-id')).rejects.toThrow(NotFoundException);
+    prisma.$queryRaw.mockResolvedValue([]);
+    await expect(service.findById('999')).rejects.toThrow(NotFoundException);
   });
+
+  // Removed: create/update/remove/findByEmail no-longer exist — UsersService
+  // no longer owns user identity (that lives in ERP's ErpAuthUsers), so
+  // email-uniqueness-on-create and similar checks are structurally impossible
+  // now. validateErpLogin/findAll/findById/findByIdForViewer cover the
+  // current security-relevant surface above.
 });

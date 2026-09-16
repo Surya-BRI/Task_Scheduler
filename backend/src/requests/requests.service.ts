@@ -39,8 +39,8 @@ import {
 } from './leave-request.validation';
 import { DashboardRealtimeService } from '../dashboard/dashboard-realtime.service';
 
-const UUID_RE =
-  /^[0-9a-f]{8}-[0-9a-f]{4}-[1-5][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i;
+// designerId/userId (ERP ErpAuthUsers.userId) is now a decimal bigint, not a GUID.
+const NUMERIC_ID_RE = /^\d+$/;
 
 export type LeaveRequestView = {
   id: string;
@@ -132,7 +132,7 @@ export class RequestsService implements OnModuleInit {
   }
 
   private isUuid(value: string | null | undefined): boolean {
-    return Boolean(value?.trim() && UUID_RE.test(value.trim()));
+    return Boolean(value?.trim() && NUMERIC_ID_RE.test(value.trim()));
   }
 
   private async resolveDummyId(dummyId: string): Promise<string> {
@@ -146,11 +146,11 @@ export class RequestsService implements OnModuleInit {
     };
 
     const name = mapping[dummyId] || 'Alex Johnson';
-    const user = await this.prisma.user.findFirst({ where: { fullName: name } });
-    if (user) return user.id;
+    const user = await this.prisma.erpUser.findFirst({ where: { userName: name } });
+    if (user) return user.userId.toString();
 
-    const fallback = await this.prisma.user.findFirst();
-    return fallback?.id || dummyId;
+    const fallback = await this.prisma.erpUser.findFirst();
+    return fallback ? fallback.userId.toString() : dummyId;
   }
 
   private toDateLabel(d: Date): string {
@@ -189,12 +189,12 @@ export class RequestsService implements OnModuleInit {
           weekStartDate: new Date(weekStartDate),
           version: 1,
           isLocked: false,
-          updatedBy: userId,
+          updatedBy: BigInt(userId),
           lastPayloadHash: null,
         },
         update: {
           version: { increment: 1 },
-          updatedBy: userId,
+          updatedBy: BigInt(userId),
           lastPayloadHash: null,
         },
       });
@@ -263,7 +263,7 @@ export class RequestsService implements OnModuleInit {
     excludeRequestId?: string,
   ): Promise<void> {
     const existing = await this.prisma.leaveRequest.findMany({
-      where: { userId },
+      where: { userId: BigInt(userId) },
       select: {
         id: true,
         startDate: true,
@@ -283,12 +283,12 @@ export class RequestsService implements OnModuleInit {
   private assertOwnerCanModifyPending(
     requesterId: string,
     role: UserRole,
-    request: { userId: string; status: string },
+    request: { userId: bigint; status: string },
   ): void {
     if (role !== UserRole.DESIGNER) {
       throw new ForbiddenException('Only designers can modify their own leave requests');
     }
-    if (requesterId !== request.userId) {
+    if (BigInt(requesterId) !== request.userId) {
       throw new ForbiddenException('You can only modify your own leave requests');
     }
     if (this.normalizeStatus(request.status) !== 'PENDING') {
@@ -301,7 +301,7 @@ export class RequestsService implements OnModuleInit {
   private mapRequest(
     req: {
       id: string;
-      userId: string;
+      userId: bigint;
       reason: string | null;
       startDate: Date;
       endDate: Date | null;
@@ -309,19 +309,18 @@ export class RequestsService implements OnModuleInit {
       type: string;
       halfDaySession?: string | null;
       createdAt: Date;
-      approverId?: string | null;
+      approverId?: bigint | null;
       approverRemarks?: string | null;
       reviewedAt?: Date | null;
-      revokedById?: string | null;
+      revokedById?: bigint | null;
       revokedAt?: Date | null;
       revocationReason?: string | null;
-      user: { fullName: string; role: { name: string } };
-      approver?: { fullName: string } | null;
-      revokedBy?: { fullName: string } | null;
+      user: { userName: string };
+      approver?: { userName: string } | null;
+      revokedBy?: { userName: string } | null;
     },
     designerIdOverride?: string,
   ): LeaveRequestView {
-    const roleName = req.user.role.name;
     const type = normalizeLeaveType(req.type) ?? 'Full Day';
     const halfDaySession = type === LEAVE_TYPE_HALF_DAY
       ? normalizeHalfDaySession(req.halfDaySession) ?? null
@@ -330,8 +329,8 @@ export class RequestsService implements OnModuleInit {
     const leaveDurationDays = calculateLeaveDurationDays(type, range);
     return {
       id: req.id,
-      designerId: designerIdOverride ?? req.userId,
-      requesterName: req.user.fullName,
+      designerId: designerIdOverride ?? req.userId.toString(),
+      requesterName: req.user.userName,
       reason: req.reason,
       fromDate: this.toDateLabel(req.startDate),
       toDate: this.toDateLabel(req.endDate ?? req.startDate),
@@ -340,13 +339,13 @@ export class RequestsService implements OnModuleInit {
       halfDaySession,
       leaveDurationDays,
       leaveDurationLabel: formatLeaveDurationLabel(leaveDurationDays),
-      createdBy: roleName === UserRole.HOD ? 'HOD' : 'Designer',
-      approverId: req.approverId ?? null,
-      approverName: req.approver?.fullName ?? null,
+      createdBy: 'Designer',
+      approverId: req.approverId != null ? req.approverId.toString() : null,
+      approverName: req.approver?.userName ?? null,
       approverRemarks: req.approverRemarks?.trim() || null,
       reviewedAt: req.reviewedAt ? req.reviewedAt.toISOString() : null,
-      revokedById: req.revokedById ?? null,
-      revokedByName: req.revokedBy?.fullName ?? null,
+      revokedById: req.revokedById != null ? req.revokedById.toString() : null,
+      revokedByName: req.revokedBy?.userName ?? null,
       revokedAt: req.revokedAt ? req.revokedAt.toISOString() : null,
       revocationReason: req.revocationReason?.trim() || null,
       createdAt: req.createdAt.toISOString(),
@@ -355,9 +354,9 @@ export class RequestsService implements OnModuleInit {
 
   private leaveInclude() {
     return {
-      user: { select: { id: true, fullName: true, role: { select: { name: true } }, departmentId: true } },
-      approver: { select: { id: true, fullName: true } },
-      revokedBy: { select: { id: true, fullName: true } },
+      user: { select: { userId: true, userName: true } },
+      approver: { select: { userId: true, userName: true } },
+      revokedBy: { select: { userId: true, userName: true } },
     } as const;
   }
 
@@ -368,30 +367,24 @@ export class RequestsService implements OnModuleInit {
     return `${base}?${params.toString()}`;
   }
 
-  private async findDepartmentManagers(departmentId: string | null | undefined) {
-    if (!departmentId?.trim()) return [];
-    return this.prisma.user.findMany({
-      where: {
-        departmentId: departmentId.trim(),
-        role: { name: UserRole.HOD },
-      },
-      select: { id: true, fullName: true },
-    });
+  // ERP no longer has a department concept on its user table, so HOD lookup
+  // can no longer be scoped by department — it now resolves every active HOD
+  // via ERP's own role-mapping tables (mirrors UsersService.validateErpLogin).
+  private async findDepartmentHods(
+    _departmentId?: string | null,
+  ): Promise<{ id: string; fullName: string }[]> {
+    const rows = await this.prisma.$queryRaw<{ userId: bigint; userName: string }[]>`
+      SELECT DISTINCT u.userId, u.userName
+      FROM ErpAuthUsers u
+      JOIN ErpAuthUserRoleMap m ON m.userId = u.userId AND m.isActive = 1
+      JOIN ErpMasterRole r ON r.roleId = m.roleId AND r.isActive = 1 AND r.isDeleted = 0
+      WHERE u.isActive = 1 AND u.isDeleted = 0 AND r.roleName IN ('Design HOD', 'Design Head')
+    `;
+    return rows.map((row) => ({ id: row.userId.toString(), fullName: row.userName }));
   }
 
-  private async findDepartmentHods(departmentId: string | null | undefined) {
-    return this.findDepartmentManagers(departmentId);
-  }
-
-  private async resolveHodRecipientName(departmentId: string | null | undefined): Promise<string> {
-    let targets = await this.findDepartmentHods(departmentId);
-    if (targets.length === 0) {
-      targets = await this.prisma.user.findMany({
-        where: { role: { name: UserRole.HOD } },
-        select: { id: true, fullName: true },
-        take: 1,
-      });
-    }
+  private async resolveHodRecipientName(_departmentId?: string | null): Promise<string> {
+    const targets = await this.findDepartmentHods();
     return targets[0]?.fullName?.trim() || 'HOD';
   }
 
@@ -411,17 +404,7 @@ export class RequestsService implements OnModuleInit {
     const leaveDetails = this.formatLeaveTypeAndDuration(view);
     const messageBase = `Leave request ${view.id.slice(0, 8)}… for ${dates} (${leaveDetails}). Reason: ${view.reason ?? '—'}.`;
 
-    const requester = await this.prisma.user.findUnique({
-      where: { id: view.designerId },
-      select: { departmentId: true },
-    });
-    let targets = await this.findDepartmentHods(requester?.departmentId);
-    if (targets.length === 0) {
-      targets = await this.prisma.user.findMany({
-        where: { role: { name: UserRole.HOD } },
-        select: { id: true, fullName: true },
-      });
-    }
+    const targets = await this.findDepartmentHods();
 
     for (const approver of targets) {
       if (approver.id === view.designerId) continue;
@@ -429,7 +412,7 @@ export class RequestsService implements OnModuleInit {
         await this.prisma.notification.create({
           data: {
             id: randomUUID(),
-            userId: approver.id,
+            userId: BigInt(approver.id),
             title: 'New Leave Request',
             message: `${view.requesterName} submitted a leave request. ${messageBase}`,
             linkUrl: this.leaveLink(view.id, view.designerId, true),
@@ -449,17 +432,7 @@ export class RequestsService implements OnModuleInit {
   ) {
     const dates = this.formatLeaveDates(view.fromDate, view.toDate);
     const leaveDetails = this.formatLeaveTypeAndDuration(view);
-    const requester = await this.prisma.user.findUnique({
-      where: { id: view.designerId },
-      select: { departmentId: true },
-    });
-    let targets = await this.findDepartmentHods(requester?.departmentId);
-    if (targets.length === 0) {
-      targets = await this.prisma.user.findMany({
-        where: { role: { name: UserRole.HOD } },
-        select: { id: true, fullName: true },
-      });
-    }
+    const targets = await this.findDepartmentHods();
 
     for (const approver of targets) {
       if (approver.id === view.designerId) continue;
@@ -467,7 +440,7 @@ export class RequestsService implements OnModuleInit {
         await this.prisma.notification.create({
           data: {
             id: randomUUID(),
-            userId: approver.id,
+            userId: BigInt(approver.id),
             title,
             message: `${view.requesterName} ${actionVerb} a leave request (${dates}, ${leaveDetails}). Reason: ${view.reason ?? '—'}.`,
             linkUrl: this.leaveLink(view.id, view.designerId, true),
@@ -493,7 +466,7 @@ export class RequestsService implements OnModuleInit {
       await this.prisma.notification.create({
         data: {
           id: randomUUID(),
-          userId: view.designerId,
+          userId: BigInt(view.designerId),
           title: 'Leave Request Revoked',
           message: `Your approved leave (${dates}, ${leaveDetails}) was revoked by ${revokerName}. Reason: ${reason}`,
           linkUrl: this.leaveLink(view.id, view.designerId),
@@ -523,7 +496,7 @@ export class RequestsService implements OnModuleInit {
       await this.prisma.notification.create({
         data: {
           id: randomUUID(),
-          userId: view.designerId,
+          userId: BigInt(view.designerId),
           title: `Leave Request ${actionLabel}`,
           message: `Leave ${view.id.slice(0, 8)}… (${dates}, ${leaveDetails}) was ${actionLabel.toLowerCase()} by ${reviewerName} at ${timestamp}.${remarks}`,
           linkUrl: this.leaveLink(view.id, view.designerId),
@@ -549,45 +522,30 @@ export class RequestsService implements OnModuleInit {
   private async assertReviewerAccess(
     reviewerId: string,
     role: UserRole,
-    request: { userId: string; user: { role: { name: string }; departmentId: string | null } },
+    request: { userId: bigint },
   ) {
-    if (reviewerId === request.userId) {
+    if (BigInt(reviewerId) === request.userId) {
       throw new ForbiddenException('You cannot approve or reject your own leave request');
     }
-
-    const requesterRole = request.user.role.name;
 
     if (!hasHrApproverAccess(role)) {
       throw new ForbiddenException('Only department managers can review leave requests');
     }
 
-    if (requesterRole !== UserRole.DESIGNER) {
-      throw new ForbiddenException('Only designer leave requests can be reviewed');
-    }
-
-    const [reviewer, requester] = await Promise.all([
-      this.prisma.user.findUnique({ where: { id: reviewerId }, select: { departmentId: true } }),
-      Promise.resolve(request.user),
-    ]);
-
-    if (
-      reviewer?.departmentId &&
-      requester.departmentId &&
-      reviewer.departmentId !== requester.departmentId
-    ) {
-      throw new ForbiddenException('You can only review leave requests from your department');
-    }
+    // ERP's user table no longer carries a role or department, so the
+    // requester-is-a-designer and same-department checks that used to run
+    // here can no longer be evaluated and have been dropped.
   }
 
   private async assertRevokerAccess(
     revokerId: string,
     role: UserRole,
-    request: { userId: string; user: { role: { name: string }; departmentId: string | null } },
+    request: { userId: bigint },
   ) {
     if (!hasHrApproverAccess(role)) {
       throw new ForbiddenException('Only HOD can revoke leave requests');
     }
-    if (revokerId === request.userId) {
+    if (BigInt(revokerId) === request.userId) {
       return;
     }
     await this.assertReviewerAccess(revokerId, role, request);
@@ -606,23 +564,17 @@ export class RequestsService implements OnModuleInit {
     if (role === UserRole.DESIGNER && resolvedId !== requesterId) {
       throw new ForbiddenException('You can only view your own leave requests');
     }
-    if (hasHrApproverAccess(role) && userId && resolvedId !== requesterId) {
-      const target = await this.prisma.user.findUnique({
-        where: { id: resolvedId },
-        select: { role: { select: { name: true } } },
-      });
-      if (target?.role.name !== UserRole.DESIGNER) {
-        throw new ForbiddenException('HOD can only view designer leave records for others');
-      }
-    }
+    // ERP's user table no longer carries a role, so the "HOD can only view
+    // designer records" check that used to run here can no longer be
+    // evaluated and has been dropped.
 
     const requests = await this.prisma.leaveRequest.findMany({
-      where: { userId: resolvedId },
+      where: { userId: BigInt(resolvedId) },
       orderBy: { createdAt: 'desc' },
       include: this.leaveInclude(),
     });
 
-    return requests.map((req) => this.mapRequest(req, userId || req.userId));
+    return requests.map((req) => this.mapRequest(req, userId || req.userId.toString()));
   }
 
   async findPendingApprovals(reviewerId: string, role: UserRole): Promise<LeaveRequestView[]> {
@@ -630,26 +582,18 @@ export class RequestsService implements OnModuleInit {
       throw new ForbiddenException('Only HOD can view pending leave approvals');
     }
 
+    // ERP's user table no longer carries a role or department, so pending
+    // approvals can no longer be scoped to designer-only / same-department
+    // requesters — those filters have been dropped.
     const pending = await this.prisma.leaveRequest.findMany({
       where: {
         status: { in: ['Pending', 'PENDING', 'pending'] },
-        user: { role: { name: UserRole.DESIGNER } },
       },
       orderBy: { createdAt: 'desc' },
       include: this.leaveInclude(),
     });
 
-    const reviewer = await this.prisma.user.findUnique({
-      where: { id: reviewerId },
-      select: { departmentId: true },
-    });
-
-    return pending
-      .filter((req) => {
-        if (!reviewer?.departmentId || !req.user.departmentId) return true;
-        return reviewer.departmentId === req.user.departmentId;
-      })
-      .map((req) => this.mapRequest(req));
+    return pending.map((req) => this.mapRequest(req));
   }
 
   async findTeamRequests(
@@ -661,26 +605,17 @@ export class RequestsService implements OnModuleInit {
       throw new ForbiddenException('Only HOD can view team leave requests');
     }
 
-    const manager = await this.prisma.user.findUnique({
-      where: { id: managerId },
-      select: { departmentId: true },
-    });
-
-    const designerScope: Prisma.LeaveRequestWhereInput['user'] = {
-      role: { name: UserRole.DESIGNER },
-      ...(manager?.departmentId ? { departmentId: manager.departmentId } : {}),
-    };
-
+    // ERP's user table no longer carries a role or department, so team
+    // requests can no longer be scoped to designer-only / same-department
+    // requesters — those filters have been dropped; all leave requests
+    // (optionally narrowed by the filters below) are now visible to HODs.
     const where: Prisma.LeaveRequestWhereInput = {};
 
     if (filters?.status?.trim()) {
       where.status = filters.status.trim();
     }
-    if (filters?.designerId?.trim() && this.isUuid(filters.designerId)) {
-      where.userId = filters.designerId.trim();
-    } else {
-      // Include HOD self-leave alongside designers in the department.
-      where.OR = [{ userId: managerId }, { user: designerScope }];
+    if (filters?.designerId?.trim() && /^\d+$/.test(filters.designerId.trim())) {
+      where.userId = BigInt(filters.designerId.trim());
     }
 
     const from = String(filters?.from ?? '').trim();
@@ -713,22 +648,17 @@ export class RequestsService implements OnModuleInit {
     const resolvedId = await this.resolveDummyId(dto.userId);
     this.assertCreateAccess(submitterId, role, resolvedId);
 
-    const requester = await this.prisma.user.findUnique({
-      where: { id: resolvedId },
-      include: { role: { select: { name: true } } },
-    });
-    if (!requester) throw new BadRequestException('User not found');
-    if (!this.isUuid(resolvedId)) {
+    if (!/^\d+$/.test(resolvedId)) {
       throw new BadRequestException('A valid user id is required to submit a leave request');
     }
+    const requester = await this.prisma.erpUser.findUnique({
+      where: { userId: BigInt(resolvedId) },
+    });
+    if (!requester) throw new BadRequestException('User not found');
 
-    if (hasHrApproverAccess(role) && resolvedId !== submitterId) {
-      if (requester.role.name !== UserRole.DESIGNER) {
-        throw new ForbiddenException('HOD can only apply leave on behalf of designers');
-      }
-    } else if (role === UserRole.DESIGNER && requester.role.name !== UserRole.DESIGNER) {
-      throw new ForbiddenException('Only designers can submit leave requests');
-    }
+    // ERP's user table no longer carries a role, so the "HOD can only apply
+    // leave on behalf of designers" / "only designers can submit" checks
+    // that used to run here can no longer be evaluated and have been dropped.
 
     let reason: string;
     try {
@@ -750,14 +680,14 @@ export class RequestsService implements OnModuleInit {
     const req = await this.prisma.leaveRequest.create({
       data: {
         id: randomUUID(),
-        userId: resolvedId,
+        userId: BigInt(resolvedId),
         type,
         halfDaySession,
         startDate: range.startDate,
         endDate: range.endDate,
         reason,
         status,
-        approverId: hodAutoApprove ? submitterId : null,
+        approverId: hodAutoApprove ? BigInt(submitterId) : null,
         approverRemarks: hodAutoApprove
           ? 'Auto-approved by system (HOD submission)'
           : null,
@@ -775,14 +705,13 @@ export class RequestsService implements OnModuleInit {
       ? 'leave_auto_approved'
       : 'leave_request_submitted';
     const submitter = hodAutoApprove
-      ? await this.prisma.user.findUnique({
-          where: { id: submitterId },
-          select: { fullName: true },
+      ? await this.prisma.erpUser.findUnique({
+          where: { userId: BigInt(submitterId) },
         })
       : null;
     const recipientName = hodAutoApprove
-      ? requester.fullName
-      : await this.resolveHodRecipientName(requester.departmentId);
+      ? requester.userName
+      : await this.resolveHodRecipientName();
 
     await this.activityLogger.log({
       action: submitAction,
@@ -801,11 +730,11 @@ export class RequestsService implements OnModuleInit {
           autoApproved: hodAutoApprove,
           submittedByHod: hodAutoApprove,
           reasonCategory: dto.reasonCategory,
-          requesterName: requester.fullName,
-          designerName: requester.fullName,
+          requesterName: requester.userName,
+          designerName: requester.userName,
           recipientName,
-          approverName: submitter?.fullName ?? undefined,
-          reviewerName: submitter?.fullName ?? undefined,
+          approverName: submitter?.userName ?? undefined,
+          reviewerName: submitter?.userName ?? undefined,
         },
       },
     });
@@ -815,11 +744,12 @@ export class RequestsService implements OnModuleInit {
         await this.notifyRequesterOnReview(
           view,
           'APPROVED',
-          submitter?.fullName ?? 'HOD',
+          submitter?.userName ?? 'HOD',
           reviewedAt!,
         );
       }
-      await this.schedulerAssignments?.rescheduleForApprovedLeave(req, submitterId);
+      const leaveForScheduler = { ...req, userId: req.userId.toString() };
+      await this.schedulerAssignments?.rescheduleForApprovedLeave(leaveForScheduler, submitterId);
       await this.touchSchedulerWeeksForLeave(req, submitterId);
       this.dashboardRealtime?.notifyOverviewRefresh('leave_approved', {
         affectedWeekStarts: this.weekStartKeysForLeave(req),
@@ -876,7 +806,7 @@ export class RequestsService implements OnModuleInit {
 
     const range = this.assertDatesOrThrow(nextStartIso, nextEndIso);
     this.assertLeaveTypeMatchesDuration(nextType, range);
-    await this.assertNoOverlappingLeave(existing.userId, range, nextType, nextHalfDaySession, id);
+    await this.assertNoOverlappingLeave(existing.userId.toString(), range, nextType, nextHalfDaySession, id);
 
     const changes: Record<string, { from: unknown; to: unknown }> = {};
     const existingType = this.assertLeaveTypeOrThrow(existing.type);
@@ -914,7 +844,7 @@ export class RequestsService implements OnModuleInit {
 
     await this.activityLogger.log({
       action: ActivityAction.LEAVE_REQUEST_UPDATED,
-      userId: existing.userId,
+      userId: existing.userId.toString(),
       details: {
         event: ActivityAction.LEAVE_REQUEST_UPDATED,
         messageKey: 'leave_request_updated',
@@ -923,9 +853,9 @@ export class RequestsService implements OnModuleInit {
           requestId: id,
           halfDaySession: nextHalfDaySession,
           leaveDurationDays: calculateLeaveDurationDays(nextType, range),
-          requesterName: existing.user.fullName,
-          designerName: existing.user.fullName,
-          recipientName: existing.approver?.fullName ?? 'HOD',
+          requesterName: existing.user.userName,
+          designerName: existing.user.userName,
+          recipientName: existing.approver?.userName ?? 'HOD',
         },
       },
     });
@@ -947,7 +877,7 @@ export class RequestsService implements OnModuleInit {
     if (role !== UserRole.DESIGNER) {
       throw new ForbiddenException('Only designers can cancel their own leave requests');
     }
-    if (requesterId !== existing.userId) {
+    if (BigInt(requesterId) !== existing.userId) {
       throw new ForbiddenException('You can only cancel your own leave requests');
     }
 
@@ -977,16 +907,16 @@ export class RequestsService implements OnModuleInit {
 
     await this.activityLogger.log({
       action: ActivityAction.LEAVE_REQUEST_CANCELLED,
-      userId: existing.userId,
+      userId: existing.userId.toString(),
       details: {
         event: ActivityAction.LEAVE_REQUEST_CANCELLED,
         messageKey: 'leave_request_cancelled',
         changes: { status: { from: existing.status, to: 'CANCELLED' } },
         context: {
           requestId: id,
-          requesterName: existing.user.fullName,
-          designerName: existing.user.fullName,
-          recipientName: existing.approver?.fullName ?? 'HOD',
+          requesterName: existing.user.userName,
+          designerName: existing.user.userName,
+          recipientName: existing.approver?.userName ?? 'HOD',
         },
       },
     });
@@ -1025,14 +955,15 @@ export class RequestsService implements OnModuleInit {
     const approverRemarks = dto.remarks?.trim() || null;
 
     if (status === 'APPROVED') {
-      await this.schedulerAssignments?.rescheduleForApprovedLeave(existing, reviewerId);
+      const leaveForScheduler = { ...existing, userId: existing.userId.toString() };
+      await this.schedulerAssignments?.rescheduleForApprovedLeave(leaveForScheduler, reviewerId);
     }
 
     const req = await this.prisma.leaveRequest.update({
       where: { id },
       data: {
         status,
-        approverId: reviewerId,
+        approverId: BigInt(reviewerId),
         approverRemarks,
         reviewedAt,
       },
@@ -1050,11 +981,11 @@ export class RequestsService implements OnModuleInit {
         changes: { newStatus: status, approverId: reviewerId },
         context: {
           requestId: id,
-          requesterName: existing.user.fullName,
-          designerName: existing.user.fullName,
-          recipientName: req.approver?.fullName ?? 'HOD',
-          approverName: req.approver?.fullName ?? undefined,
-          reviewerName: req.approver?.fullName ?? undefined,
+          requesterName: existing.user.userName,
+          designerName: existing.user.userName,
+          recipientName: req.approver?.userName ?? 'HOD',
+          approverName: req.approver?.userName ?? undefined,
+          reviewerName: req.approver?.userName ?? undefined,
         },
       },
     });
@@ -1062,7 +993,7 @@ export class RequestsService implements OnModuleInit {
     await this.notifyRequesterOnReview(
       view,
       status as 'APPROVED' | 'REJECTED',
-      req.approver?.fullName ?? 'Approver',
+      req.approver?.userName ?? 'Approver',
       reviewedAt,
     );
 
@@ -1073,7 +1004,7 @@ export class RequestsService implements OnModuleInit {
       status === 'APPROVED' ? 'leave_approved' : 'leave_rejected',
       status === 'APPROVED' ? { affectedWeekStarts: this.weekStartKeysForLeave(req) } : {},
     );
-    this.dashboardRealtime?.notifyUserNotificationRefresh(req.userId);
+    this.dashboardRealtime?.notifyUserNotificationRefresh(req.userId.toString());
 
     return view;
   }
@@ -1119,19 +1050,19 @@ export class RequestsService implements OnModuleInit {
 
     await this.assertRevokerAccess(reviewerId, role, existing);
 
-    const revoker = await this.prisma.user.findUnique({
-      where: { id: reviewerId },
-      select: { fullName: true },
+    const revoker = await this.prisma.erpUser.findUnique({
+      where: { userId: BigInt(reviewerId) },
     });
 
-    await this.schedulerAssignments?.rescheduleAfterLeaveRevocation?.(existing, reviewerId);
+    const leaveForScheduler = { ...existing, userId: existing.userId.toString() };
+    await this.schedulerAssignments?.rescheduleAfterLeaveRevocation?.(leaveForScheduler, reviewerId);
 
     const revokedAt = new Date();
     const req = await this.prisma.leaveRequest.update({
       where: { id },
       data: {
         status: 'REVOKED',
-        revokedById: reviewerId,
+        revokedById: BigInt(reviewerId),
         revokedAt,
         revocationReason: reason,
       } as Prisma.LeaveRequestUncheckedUpdateInput,
@@ -1141,7 +1072,7 @@ export class RequestsService implements OnModuleInit {
     const view = this.mapRequest({
       ...req,
       user: existing.user,
-      revokedBy: revoker ? { fullName: revoker.fullName } : null,
+      revokedBy: revoker ? { userName: revoker.userName } : null,
     });
 
     await this.activityLogger.log({
@@ -1157,19 +1088,19 @@ export class RequestsService implements OnModuleInit {
         },
         context: {
           requestId: id,
-          designerId: existing.userId,
-          designerName: existing.user.fullName,
-          requesterName: existing.user.fullName,
+          designerId: existing.userId.toString(),
+          designerName: existing.user.userName,
+          requesterName: existing.user.userName,
           revokedAt: revokedAt.toISOString(),
-          revokerName: revoker?.fullName ?? 'HOD',
-          reviewerName: revoker?.fullName ?? 'HOD',
+          revokerName: revoker?.userName ?? 'HOD',
+          reviewerName: revoker?.userName ?? 'HOD',
         },
       },
     });
 
     await this.notifyRequesterOnRevoke(
       view,
-      revoker?.fullName ?? 'HOD',
+      revoker?.userName ?? 'HOD',
       revokedAt,
     );
 
@@ -1177,7 +1108,7 @@ export class RequestsService implements OnModuleInit {
     this.dashboardRealtime?.notifyOverviewRefresh('leave_revoked', {
       affectedWeekStarts: this.weekStartKeysForLeave(existing),
     });
-    this.dashboardRealtime?.notifyUserNotificationRefresh(existing.userId);
+    this.dashboardRealtime?.notifyUserNotificationRefresh(existing.userId.toString());
 
     return view;
   }

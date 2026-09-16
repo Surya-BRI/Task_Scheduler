@@ -10,6 +10,8 @@ import { CronLockService, LOCK_NOT_ACQUIRED } from '../common/services/cron-lock
 import { taskViewPath } from '../common/utils/design-type.util';
 import { matchSalesUsersToProject } from '../common/utils/sales-notification-recipients.util';
 import { normalizePersonName } from '../common/utils/project-team-names.util';
+import { UsersService } from '../users/users.service';
+import { UserRole } from '../common/constants/roles.enum';
 
 const DEADLINE_CRON_LOCK = 'TaskScheduler:DeadlineAlertsCron';
 
@@ -50,6 +52,7 @@ export class DeadlineAlertsService {
     private readonly notificationsService: NotificationsService,
     private readonly activityLogger: ActivityLoggerService,
     private readonly cronLockService: CronLockService,
+    private readonly usersService: UsersService,
     @Optional() private readonly dashboardRealtime?: DashboardRealtimeService,
   ) {}
 
@@ -88,14 +91,13 @@ export class DeadlineAlertsService {
     const now = new Date();
     const horizon = new Date(now.getTime() + HORIZON_MS);
 
-    const stakeholderUsers = await this.prisma.user.findMany({
-      where: { role: { name: { in: ['HOD', 'SALESPERSON', 'ADMIN'] } } },
-      select: { id: true, fullName: true, role: { select: { name: true } } },
-    });
-    const managementUsers = stakeholderUsers.filter(
-      (user) => user.role?.name === 'HOD' || user.role?.name === 'ADMIN',
-    );
-    const salesUsers = stakeholderUsers.filter((user) => user.role?.name === 'SALESPERSON');
+    const stakeholderUsers = await this.usersService.findAll();
+    const managementUsers = stakeholderUsers
+      .filter((user) => user.role === UserRole.HOD || (user.role as string) === 'ADMIN')
+      .map((user) => ({ id: user.id, fullName: user.userName }));
+    const salesUsers = stakeholderUsers
+      .filter((user) => user.role === UserRole.SALESPERSON)
+      .map((user) => ({ id: user.id, fullName: user.userName }));
 
     if (managementUsers.length === 0 && salesUsers.length === 0) {
       this.logger.warn('Deadline alerts skipped: no HOD/Admin/Sales users found');

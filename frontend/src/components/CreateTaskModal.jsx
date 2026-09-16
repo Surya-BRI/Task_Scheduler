@@ -529,7 +529,7 @@ export function CreateTaskModal({ open, onClose, onCreated, submissionDate, reco
                   {hodUsersLoading ? 'Loading HODs…' : hodUsersError ? 'Failed to load HODs' : 'Select'}
                 </option>
                 {hodUsers.map((user) => {
-                  const name = String(user?.fullName ?? '').trim()
+                  const name = String(user?.userName ?? '').trim()
                   if (!name) return null
                   return (
                     <option key={user.id ?? name} value={name}>

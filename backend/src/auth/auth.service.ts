@@ -1,9 +1,7 @@
-import { Injectable, UnauthorizedException } from '@nestjs/common';
+import { Injectable, NotFoundException, UnauthorizedException } from '@nestjs/common';
 import { JwtService } from '@nestjs/jwt';
-import * as bcrypt from 'bcrypt';
-import { UsersService } from '../users/users.service';
+import { UsersService, ErpLoginResult } from '../users/users.service';
 import { LoginDto } from './dto/login.dto';
-import { RegisterDto } from './dto/register.dto';
 
 @Injectable()
 export class AuthService {
@@ -12,50 +10,34 @@ export class AuthService {
     private readonly jwtService: JwtService,
   ) {}
 
-  async register(dto: RegisterDto) {
-    const user = await this.usersService.create(dto);
-    return {
-      id: user.id,
-      email: user.email,
-      fullName: user.fullName,
-      role: user.role.name,
-    };
+  /** Accounts are ERP-managed now — Scheduler no longer registers local users. */
+  register(): never {
+    throw new NotFoundException();
   }
 
   async login(dto: LoginDto) {
-    const user = await this.usersService.findByEmail(dto.email);
-
-    if (user) {
-      const passwordMatches = await bcrypt.compare(dto.password, user.passwordHash);
-      if (!passwordMatches) {
-        throw new UnauthorizedException('Invalid credentials');
-      }
-      return this.issueSession(user);
-    }
-
-    // Not a native Scheduler account — try bridging an ERP-side (ErpAuthUsers) login.
-    const bridgedUser = await this.usersService.findOrCreateFromErpAuth(dto.email, dto.password);
-    if (!bridgedUser) {
+    const erpUser = await this.usersService.validateErpLogin(dto.email, dto.password);
+    if (!erpUser) {
       throw new UnauthorizedException('Invalid credentials');
     }
-    return this.issueSession(bridgedUser);
+    return this.issueSession(erpUser);
   }
 
-  private async issueSession(user: { id: string; email: string; fullName: string; role: { name: string } }) {
+  private async issueSession(user: ErpLoginResult) {
+    const sub = user.userId.toString();
     const payload = {
-      sub: user.id,
-      email: user.email,
-      role: user.role.name,
+      sub,
+      username: user.userName,
+      role: user.role,
     };
     const accessToken = await this.jwtService.signAsync(payload);
 
     return {
       accessToken,
       user: {
-        id: user.id,
-        email: user.email,
-        fullName: user.fullName,
-        role: user.role.name,
+        id: sub,
+        username: user.userName,
+        role: user.role,
       },
     };
   }
@@ -72,7 +54,7 @@ export class AuthService {
    * open the socket directly against the backend without exposing the full
    * session token to client JS for longer than a single connection attempt.
    */
-  async mintSocketToken(userId: string, email: string, role: string): Promise<string> {
-    return this.jwtService.signAsync({ sub: userId, email, role }, { expiresIn: '2m' });
+  async mintSocketToken(userId: string, username: string, role: string): Promise<string> {
+    return this.jwtService.signAsync({ sub: userId, username, role }, { expiresIn: '2m' });
   }
 }

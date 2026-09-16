@@ -1,6 +1,8 @@
 import { IsIn, IsOptional, IsString, Matches, MaxLength, MinLength, ValidateIf } from 'class-validator';
 
 const UUID_RE = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
+// ERP ErpAuthUsers.userId is a decimal bigint, not a GUID.
+const NUMERIC_ID_RE = /^\d+$/;
 
 export class CreateReallocationRequestDto {
   @IsString()
@@ -8,7 +10,7 @@ export class CreateReallocationRequestDto {
   taskId!: string;
 
   @IsString()
-  @Matches(UUID_RE, { message: 'suggestedDesignerId must be a UUID string' })
+  @Matches(NUMERIC_ID_RE, { message: 'suggestedDesignerId must be numeric' })
   suggestedDesignerId!: string;
 
   @IsString()
@@ -24,7 +26,7 @@ export class ReviewReallocationRequestDto {
   @ValidateIf((o) => o.status === 'Approved')
   @IsOptional()
   @IsString()
-  @Matches(UUID_RE, { message: 'targetDesignerId must be a UUID string' })
+  @Matches(NUMERIC_ID_RE, { message: 'targetDesignerId must be numeric' })
   targetDesignerId?: string;
 
   @ValidateIf((o) => o.status === 'Rejected')

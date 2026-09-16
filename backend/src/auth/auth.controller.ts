@@ -4,7 +4,6 @@ import {
   Get,
   HttpCode,
   HttpStatus,
-  NotFoundException,
   Post,
   Res,
   UseGuards,
@@ -13,7 +12,6 @@ import { Throttle } from '@nestjs/throttler';
 import { ConfigService } from '@nestjs/config';
 import type { Response } from 'express';
 import { AuthService } from './auth.service';
-import { RegisterDto } from './dto/register.dto';
 import { LoginDto } from './dto/login.dto';
 import { JwtAuthGuard } from '../common/guards/jwt-auth.guard';
 import { CurrentUser } from '../common/decorators/current-user.decorator';
@@ -29,18 +27,12 @@ export class AuthController {
     private readonly configService: ConfigService,
   ) {}
 
-  /**
-   * Public registration is disabled in production.
-   * Use POST /users (HOD-only) for admin provisioning.
-   */
+  /** Disabled — accounts are ERP-managed (ErpAuthUsers), not created by Scheduler. */
   @Public()
   @Post('register')
   @Throttle({ register: { limit: 3, ttl: 60_000 } })
-  register(@Body() dto: RegisterDto) {
-    if (process.env.NODE_ENV === 'production') {
-      throw new NotFoundException();
-    }
-    return this.authService.register(dto);
+  register() {
+    return this.authService.register();
   }
 
   @Public()
@@ -80,7 +72,7 @@ export class AuthController {
   @Get('ws-token')
   @UseGuards(JwtAuthGuard)
   async getWsToken(@CurrentUser() user: JwtPayload) {
-    const token = await this.authService.mintSocketToken(user.sub, user.email, user.role);
+    const token = await this.authService.mintSocketToken(user.sub, user.username, user.role);
     return { token };
   }
 }

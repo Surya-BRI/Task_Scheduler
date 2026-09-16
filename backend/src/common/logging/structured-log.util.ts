@@ -52,6 +52,7 @@ export function formatStructuredLog(
   if (entry.method && entry.path) parts.push(`${entry.method} ${entry.path}`);
   if (entry.statusCode !== undefined) parts.push(`status=${entry.statusCode}`);
   if (entry.durationMs !== undefined) parts.push(`${entry.durationMs}ms`);
+  if (entry.error) parts.push(`\n${entry.error}`);
 
   return parts.join(' ');
 }
