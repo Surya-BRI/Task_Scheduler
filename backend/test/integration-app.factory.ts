@@ -5,11 +5,11 @@ import { JwtModule } from '@nestjs/jwt';
 import { PassportModule } from '@nestjs/passport';
 import { ThrottlerGuard, ThrottlerModule } from '@nestjs/throttler';
 import { APP_GUARD } from '@nestjs/core';
-import * as bcrypt from 'bcrypt';
 import { AuthController } from '../src/auth/auth.controller';
 import { AuthService } from '../src/auth/auth.service';
 import { JwtStrategy } from '../src/auth/jwt.strategy';
 import { UsersService } from '../src/users/users.service';
+import { UserRole } from '../src/common/constants/roles.enum';
 import { ConfigModule } from '@nestjs/config';
 import configuration from '../src/config/configuration';
 import { HttpExceptionFilter } from '../src/common/filters/http-exception.filter';
@@ -21,8 +21,7 @@ export async function createIntegrationApp(): Promise<INestApplication> {
   process.env.CORS_ORIGIN = process.env.CORS_ORIGIN ?? 'http://localhost:5000';
 
   const usersService = {
-    create: jest.fn(),
-    findByEmail: jest.fn(),
+    validateErpLogin: jest.fn(),
     findById: jest.fn(),
     findByIdForViewer: jest.fn(),
   };
@@ -62,23 +61,24 @@ export async function createIntegrationApp(): Promise<INestApplication> {
   return app;
 }
 
+/** ERP-managed identity: bigint userId, username, role — no local email/password. */
 export const TEST_USER = {
-  id: 'aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa',
-  email: 'hod@example.com',
-  fullName: 'Test HOD',
-  passwordHash: '',
-  role: { name: 'HOD' },
+  userId: 3001n,
+  id: '3001',
+  username: 'hod-uat',
+  role: UserRole.HOD,
 };
 
 export async function seedTestUser(usersService: UsersService) {
-  TEST_USER.passwordHash = await bcrypt.hash('password123', 4);
-  (usersService.findByEmail as jest.Mock).mockImplementation(async (email: string) =>
-    email === TEST_USER.email ? TEST_USER : null,
+  (usersService.validateErpLogin as jest.Mock).mockImplementation(
+    async (userName: string, password: string) =>
+      userName === TEST_USER.username && password === 'password123'
+        ? { userId: TEST_USER.userId, userName: TEST_USER.username, role: TEST_USER.role }
+        : null,
   );
   (usersService.findById as jest.Mock).mockResolvedValue({
     id: TEST_USER.id,
-    email: TEST_USER.email,
-    fullName: TEST_USER.fullName,
+    userName: TEST_USER.username,
     role: TEST_USER.role,
   });
 }

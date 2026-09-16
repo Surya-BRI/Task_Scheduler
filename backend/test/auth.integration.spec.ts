@@ -20,19 +20,19 @@ describe('Auth integration', () => {
   it('POST /auth/login rejects invalid credentials', async () => {
     await request(app.getHttpServer())
       .post('/api/v1/auth/login')
-      .send({ email: TEST_USER.email, password: 'wrong-password' })
+      .send({ email: TEST_USER.username, password: 'wrong-password' })
       .expect(401);
   });
 
   it('POST /auth/login sets httpOnly cookie and returns user', async () => {
     const response = await request(app.getHttpServer())
       .post('/api/v1/auth/login')
-      .send({ email: TEST_USER.email, password: 'password123' })
+      .send({ email: TEST_USER.username, password: 'password123' })
       .expect(200);
 
     expect(response.body.user).toMatchObject({
       id: TEST_USER.id,
-      email: TEST_USER.email,
+      username: TEST_USER.username,
       role: 'HOD',
     });
 
@@ -48,7 +48,7 @@ describe('Auth integration', () => {
   it('GET /auth/me returns profile when cookie is present', async () => {
     const login = await request(app.getHttpServer())
       .post('/api/v1/auth/login')
-      .send({ email: TEST_USER.email, password: 'password123' });
+      .send({ email: TEST_USER.username, password: 'password123' });
 
     const cookie = login.headers['set-cookie'];
 
@@ -59,14 +59,14 @@ describe('Auth integration', () => {
 
     expect(me.body).toMatchObject({
       id: TEST_USER.id,
-      email: TEST_USER.email,
+      userName: TEST_USER.username,
     });
   });
 
   it('POST /auth/logout clears access cookie', async () => {
     const login = await request(app.getHttpServer())
       .post('/api/v1/auth/login')
-      .send({ email: TEST_USER.email, password: 'password123' });
+      .send({ email: TEST_USER.username, password: 'password123' });
 
     const logout = await request(app.getHttpServer())
       .post('/api/v1/auth/logout')
