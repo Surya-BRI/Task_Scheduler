@@ -91,7 +91,8 @@ export function normalizeDesignType(value) {
     v === "estimation purpose" ||
     v === "presentation" ||
     v === "client submission" ||
-    v === "technical drawing"
+    v === "technical drawing" ||
+    v === "production release"
   ) {
     return "retail";
   }

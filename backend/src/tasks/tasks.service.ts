@@ -75,6 +75,8 @@ const TASK_PROJECT_DETAIL_CORE_SELECT = {
   locationHours: true,
   asBuilt: true,
   asBuiltHours: true,
+  productionRelease: true,
+  productionReleaseHours: true,
   bim: true,
   deadline: true,
   comment: true,
@@ -572,6 +574,7 @@ export class TasksService {
     if (raw === 'PRESENTATION') return 'PRESENTATION';
     if (raw === 'CLIENT SUBMISSION' || raw === 'CLIENT_SUBMISSION') return 'CLIENT_SUBMISSION';
     if (raw === 'TECHNICAL DRAWING' || raw === 'TECHNICAL_DRAWING') return 'TECHNICAL_DRAWING';
+    if (raw === 'PRODUCTION RELEASE' || raw === 'PRODUCTION_RELEASE') return 'PRODUCTION_RELEASE';
     if (raw === 'PROJECT') return 'PROJECT';
     if (!raw) return 'PROJECT';
     return raw.replace(/\s+/g, '_');
@@ -1410,6 +1413,8 @@ export class TasksService {
             locationHours: line.locationHours ?? null,
             asBuilt: line.asBuilt ?? false,
             asBuiltHours: line.asBuiltHours ?? null,
+            productionRelease: line.productionRelease ?? false,
+            productionReleaseHours: line.productionReleaseHours ?? null,
             bim: line.bim ?? false,
             deadline: line.deadline ? new Date(line.deadline) : null,
             comment: line.comment,
@@ -2218,6 +2223,8 @@ export class TasksService {
             locationHours: true,
             asBuilt: true,
             asBuiltHours: true,
+            productionRelease: true,
+            productionReleaseHours: true,
             deadline: true,
           },
         },
@@ -2271,6 +2278,8 @@ export class TasksService {
       locationHours?: number | null;
       asBuilt?: boolean | null;
       asBuiltHours?: number | null;
+      productionRelease?: boolean | null;
+      productionReleaseHours?: number | null;
     },
     disciplineType: string | null,
     hours: number,
@@ -2279,6 +2288,7 @@ export class TasksService {
     technicalHours?: number;
     locationHours?: number;
     asBuiltHours?: number;
+    productionReleaseHours?: number;
   } {
     const disc = String(disciplineType ?? '').trim().toLowerCase();
     if (disc === 'artwork' || detail.artwork) return { artworkHours: hours };
@@ -2287,10 +2297,19 @@ export class TasksService {
     if (disc === 'as-built' || disc === 'as built' || disc === 'asbuilt' || detail.asBuilt) {
       return { asBuiltHours: hours };
     }
+    if (
+      disc === 'production release' ||
+      disc === 'production-release' ||
+      disc === 'productionrelease' ||
+      detail.productionRelease
+    ) {
+      return { productionReleaseHours: hours };
+    }
     if ((Number(detail.artworkHours) || 0) > 0) return { artworkHours: hours };
     if ((Number(detail.technicalHours) || 0) > 0) return { technicalHours: hours };
     if ((Number(detail.locationHours) || 0) > 0) return { locationHours: hours };
     if ((Number(detail.asBuiltHours) || 0) > 0) return { asBuiltHours: hours };
+    if ((Number(detail.productionReleaseHours) || 0) > 0) return { productionReleaseHours: hours };
     return { artworkHours: hours };
   }
 
@@ -2309,6 +2328,8 @@ export class TasksService {
         locationHours?: number | null;
         asBuilt?: boolean | null;
         asBuiltHours?: number | null;
+        productionRelease?: boolean | null;
+        productionReleaseHours?: number | null;
         deadline?: Date | null;
       }>;
     },
@@ -2954,6 +2975,7 @@ export class TasksService {
             signType: true, planCode: true, area: true, level: true,
             artwork: true, artworkHours: true, technical: true, technicalHours: true,
             location: true, locationHours: true, asBuilt: true, asBuiltHours: true,
+            productionRelease: true, productionReleaseHours: true,
             bim: true, deadline: true, comment: true,
             attachments: { select: { fileKey: true, fileName: true, mimeType: true, sizeBytes: true } },
           },
@@ -3061,6 +3083,8 @@ export class TasksService {
                 locationHours: detail.locationHours,
                 asBuilt: detail.asBuilt,
                 asBuiltHours: detail.asBuiltHours,
+                productionRelease: detail.productionRelease,
+                productionReleaseHours: detail.productionReleaseHours,
                 bim: detail.bim,
                 deadline: detail.deadline,
                 comment: detail.comment,

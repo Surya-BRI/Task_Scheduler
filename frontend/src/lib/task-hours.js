@@ -20,7 +20,8 @@ export function getTaskRequiredHours(task) {
       toHours(line?.artworkHours) +
       toHours(line?.technicalHours) +
       toHours(line?.locationHours) +
-      toHours(line?.asBuiltHours),
+      toHours(line?.asBuiltHours) +
+      toHours(line?.productionReleaseHours),
     0,
   );
   if (projectHours > 0) return projectHours;

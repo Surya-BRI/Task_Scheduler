@@ -15,6 +15,7 @@ describe('design-type-colors', () => {
     expect(normalizeRetailDesignTypeCode('Estimation Purpose')).toBe('ESTIMATION_PURPOSE');
     expect(normalizeRetailDesignTypeCode('Client Submission')).toBe('CLIENT_SUBMISSION');
     expect(normalizeRetailDesignTypeCode('Technical Drawing')).toBe('TECHNICAL_DRAWING');
+    expect(normalizeRetailDesignTypeCode('Production Release')).toBe('PRODUCTION_RELEASE');
     expect(normalizeRetailDesignTypeCode('Retail')).toBeNull();
     expect(normalizeRetailDesignTypeCode('PROJECT')).toBeNull();
   });
@@ -24,11 +25,13 @@ describe('design-type-colors', () => {
     expect(RETAIL_DESIGN_TYPE_HEX.PRESENTATION).toBe('#3B82F6');
     expect(RETAIL_DESIGN_TYPE_HEX.CLIENT_SUBMISSION).toBe('#06B6D4');
     expect(RETAIL_DESIGN_TYPE_HEX.TECHNICAL_DRAWING).toBe('#22A06B');
+    expect(RETAIL_DESIGN_TYPE_HEX.PRODUCTION_RELEASE).toBe('#8B5CF6');
 
     expect(resolveRetailDesignTypeBlockClass('Estimation Purpose')).toContain('border-[#D946EF]');
     expect(resolveRetailDesignTypeBlockClass('Presentation')).toContain('border-[#3B82F6]');
     expect(resolveRetailDesignTypeBlockClass('Client Submission')).toContain('border-[#06B6D4]');
     expect(resolveRetailDesignTypeBlockClass('Technical Drawing')).toContain('border-[#22A06B]');
+    expect(resolveRetailDesignTypeBlockClass('Production Release')).toContain('border-[#8B5CF6]');
   });
 
   it('keeps project hues clearly separated from retail overlaps', () => {

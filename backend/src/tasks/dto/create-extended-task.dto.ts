@@ -233,6 +233,16 @@ export class ProjectDetailInputDto {
 
   @IsBoolean()
   @IsOptional()
+  productionRelease?: boolean;
+
+  @Type(() => Number)
+  @IsNumber()
+  @Min(0)
+  @IsOptional()
+  productionReleaseHours?: number;
+
+  @IsBoolean()
+  @IsOptional()
   bim?: boolean;
 
   @IsDateString()

@@ -10,19 +10,22 @@ export type RetailDesignTypeCode =
   | 'ESTIMATION_PURPOSE'
   | 'PRESENTATION'
   | 'CLIENT_SUBMISSION'
-  | 'TECHNICAL_DRAWING';
+  | 'TECHNICAL_DRAWING'
+  | 'PRODUCTION_RELEASE';
 
 export type ProjectDisciplineCode =
   | 'ARTWORK'
   | 'TECHNICAL'
   | 'LOCATION'
-  | 'AS_BUILT';
+  | 'AS_BUILT'
+  | 'PRODUCTION_RELEASE';
 
 export const RETAIL_DESIGN_TYPE_LABELS: Record<RetailDesignTypeCode, string> = {
   ESTIMATION_PURPOSE: 'Estimation Purpose',
   PRESENTATION: 'Presentation',
   CLIENT_SUBMISSION: 'Client Submission',
   TECHNICAL_DRAWING: 'Technical Drawing',
+  PRODUCTION_RELEASE: 'Production Release',
 };
 
 export const PROJECT_DISCIPLINE_LABELS: Record<ProjectDisciplineCode, string> = {
@@ -30,6 +33,7 @@ export const PROJECT_DISCIPLINE_LABELS: Record<ProjectDisciplineCode, string> = 
   TECHNICAL: 'Technical',
   LOCATION: 'Location',
   AS_BUILT: 'As-Built',
+  PRODUCTION_RELEASE: 'Production Release',
 };
 
 /** Primary accent hex (borders / legend swatches). */
@@ -38,6 +42,7 @@ export const RETAIL_DESIGN_TYPE_HEX: Record<RetailDesignTypeCode, string> = {
   PRESENTATION: '#3B82F6', // blue
   CLIENT_SUBMISSION: '#06B6D4', // cyan
   TECHNICAL_DRAWING: '#22A06B', // green
+  PRODUCTION_RELEASE: '#8B5CF6', // violet
 };
 
 export const PROJECT_DISCIPLINE_HEX: Record<ProjectDisciplineCode, string> = {
@@ -45,6 +50,7 @@ export const PROJECT_DISCIPLINE_HEX: Record<ProjectDisciplineCode, string> = {
   TECHNICAL: '#F97316', // orange
   LOCATION: '#F43F5E', // rose
   AS_BUILT: '#4B5563', // slate
+  PRODUCTION_RELEASE: '#0D9488', // teal
 };
 
 /** Soft pastel block chrome — light fill + accent border + dark text. */
@@ -53,6 +59,7 @@ export const RETAIL_DESIGN_TYPE_BLOCK_CLASSES: Record<RetailDesignTypeCode, stri
   PRESENTATION: 'bg-[#EFF5FF] border border-[#3B82F6] text-[#1E40AF]',
   CLIENT_SUBMISSION: 'bg-[#ECFEFF] border border-[#06B6D4] text-[#0E7490]',
   TECHNICAL_DRAWING: 'bg-[#EAF7F0] border border-[#22A06B] text-[#166534]',
+  PRODUCTION_RELEASE: 'bg-[#F5F3FF] border border-[#8B5CF6] text-[#5B21B6]',
 };
 
 export const PROJECT_DISCIPLINE_BLOCK_CLASSES: Record<ProjectDisciplineCode, string> = {
@@ -60,6 +67,7 @@ export const PROJECT_DISCIPLINE_BLOCK_CLASSES: Record<ProjectDisciplineCode, str
   TECHNICAL: 'bg-[#FFF7ED] border border-[#F97316] text-[#9A3412]',
   LOCATION: 'bg-[#FFF1F2] border border-[#F43F5E] text-[#9F1239]',
   AS_BUILT: 'bg-[#F1F5F9] border border-[#4B5563] text-[#111827]',
+  PRODUCTION_RELEASE: 'bg-[#F0FDFA] border border-[#0D9488] text-[#115E59]',
 };
 
 /** Status-badge style pills — same pastel language as blocks. */
@@ -68,6 +76,7 @@ export const RETAIL_DESIGN_TYPE_PILL_CLASSES: Record<RetailDesignTypeCode, strin
   PRESENTATION: 'bg-[#EFF5FF] text-[#1E40AF] border border-[#3B82F6]',
   CLIENT_SUBMISSION: 'bg-[#ECFEFF] text-[#0E7490] border border-[#06B6D4]',
   TECHNICAL_DRAWING: 'bg-[#EAF7F0] text-[#166534] border border-[#22A06B]',
+  PRODUCTION_RELEASE: 'bg-[#F5F3FF] text-[#5B21B6] border border-[#8B5CF6]',
 };
 
 export const PROJECT_DISCIPLINE_PILL_CLASSES: Record<ProjectDisciplineCode, string> = {
@@ -75,6 +84,7 @@ export const PROJECT_DISCIPLINE_PILL_CLASSES: Record<ProjectDisciplineCode, stri
   TECHNICAL: 'bg-[#FFF7ED] text-[#9A3412] border border-[#F97316]',
   LOCATION: 'bg-[#FFF1F2] text-[#9F1239] border border-[#F43F5E]',
   AS_BUILT: 'bg-[#F1F5F9] text-[#111827] border border-[#4B5563]',
+  PRODUCTION_RELEASE: 'bg-[#F0FDFA] text-[#115E59] border border-[#0D9488]',
 };
 
 /** Legend swatches use the primary accent color. */
@@ -83,6 +93,7 @@ export const RETAIL_DESIGN_TYPE_SWATCH_CLASSES: Record<RetailDesignTypeCode, str
   PRESENTATION: 'bg-[#3B82F6]',
   CLIENT_SUBMISSION: 'bg-[#06B6D4]',
   TECHNICAL_DRAWING: 'bg-[#22A06B]',
+  PRODUCTION_RELEASE: 'bg-[#8B5CF6]',
 };
 
 export const PROJECT_DISCIPLINE_SWATCH_CLASSES: Record<ProjectDisciplineCode, string> = {
@@ -90,6 +101,7 @@ export const PROJECT_DISCIPLINE_SWATCH_CLASSES: Record<ProjectDisciplineCode, st
   TECHNICAL: 'bg-[#F97316]',
   LOCATION: 'bg-[#F43F5E]',
   AS_BUILT: 'bg-[#4B5563]',
+  PRODUCTION_RELEASE: 'bg-[#0D9488]',
 };
 
 export const RETAIL_DESIGN_TYPE_LEGEND: ReadonlyArray<{
@@ -130,6 +142,7 @@ export function normalizeRetailDesignTypeCode(value: unknown): RetailDesignTypeC
   if (raw === 'PRESENTATION') return 'PRESENTATION';
   if (raw === 'CLIENT_SUBMISSION' || raw === 'CLIENTSUBMISSION') return 'CLIENT_SUBMISSION';
   if (raw === 'TECHNICAL_DRAWING' || raw === 'TECHNICALDRAWING') return 'TECHNICAL_DRAWING';
+  if (raw === 'PRODUCTION_RELEASE' || raw === 'PRODUCTIONRELEASE') return 'PRODUCTION_RELEASE';
   return null;
 }
 
@@ -143,6 +156,7 @@ export function normalizeProjectDisciplineCode(value: unknown): ProjectDisciplin
   if (raw === 'TECHNICAL') return 'TECHNICAL';
   if (raw === 'LOCATION') return 'LOCATION';
   if (raw === 'AS_BUILT' || raw === 'ASBUILT') return 'AS_BUILT';
+  if (raw === 'PRODUCTION_RELEASE' || raw === 'PRODUCTIONRELEASE') return 'PRODUCTION_RELEASE';
   return null;
 }
 

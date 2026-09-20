@@ -10,6 +10,8 @@ const RETAIL_DESIGN_TYPES = new Set([
   'client submission',
   'technical_drawing',
   'technical drawing',
+  'production_release',
+  'production release',
 ]);
 
 /** True when designType is Retail or a retail subtype (Estimation Purpose, etc.). */
