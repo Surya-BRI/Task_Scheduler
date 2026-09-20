@@ -298,7 +298,8 @@ function getRecordEstimatedHours(record) {
           (Number(detail?.artworkHours) || 0) +
           (Number(detail?.technicalHours) || 0) +
           (Number(detail?.locationHours) || 0) +
-          (Number(detail?.asBuiltHours) || 0),
+          (Number(detail?.asBuiltHours) || 0) +
+          (Number(detail?.productionReleaseHours) || 0),
         0,
       )
     : 0
@@ -1090,6 +1091,7 @@ const RETAIL_TYPE_LABELS = {
   PRESENTATION: 'Presentation',
   CLIENT_SUBMISSION: 'Client Submission',
   TECHNICAL_DRAWING: 'Technical Drawing',
+  PRODUCTION_RELEASE: 'Production Release',
 }
 
 function formatRetailTypeLabel(task) {
@@ -2819,7 +2821,8 @@ export function TaskDetailsPage() {
                                 const total = Array.isArray(record.projectDetails)
                                   ? record.projectDetails.reduce((sum, d) =>
                                       sum + (Number(d.artworkHours) || 0) + (Number(d.technicalHours) || 0) +
-                                      (Number(d.locationHours) || 0) + (Number(d.asBuiltHours) || 0), 0)
+                                      (Number(d.locationHours) || 0) + (Number(d.asBuiltHours) || 0) +
+                                      (Number(d.productionReleaseHours) || 0), 0)
                                   : 0;
                                 return total > 0 ? formatHoursAsHm(total) : '-';
                               })()}
@@ -3070,6 +3073,7 @@ export function TaskDetailsPage() {
                                 { key: 'technical', label: 'Technical', hours: detail.technicalHours },
                                 { key: 'location',  label: 'Location',  hours: detail.locationHours },
                                 { key: 'asBuilt',   label: 'As-Built',  hours: detail.asBuiltHours },
+                                { key: 'productionRelease', label: 'Production Release', hours: detail.productionReleaseHours },
                                 { key: 'bim',       label: 'BIM',       hours: null },
                               ]
                               const activeDiscipline =

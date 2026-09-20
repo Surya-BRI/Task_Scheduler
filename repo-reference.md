@@ -940,6 +940,26 @@ SubmitWorkDto:          { durationSeconds: number, submissionLink?: string, paus
 SaveTimerStateDto:      { durationSeconds: number, pauseLog?: string }
 ```
 
+**Retail subtype values** (stored on `task.designType`, top-level `designType` field is always `'Retail'` for these):
+`Estimation Purpose | Presentation | Client Submission | Technical Drawing | Production Release` (added 2026-09-20).
+Defined in `frontend/src/components/CreateTaskModal.jsx` (`DESIGN_OPTIONS`), normalized/colored in
+`frontend/src/lib/ui/design-type-colors.ts` (`RetailDesignTypeCode`), routed via
+`backend/src/common/utils/design-type.util.ts` + `frontend/src/lib/design-list-routes.js`
+(`RETAIL_DESIGN_TYPES` / `normalizeDesignType`), canonicalized in
+`backend/src/tasks/tasks.service.ts`'s `normalizeDesignType()`.
+
+**Project has no equivalent "Design Type" field.** Project task creation
+(`ProjectCreateTaskModal.jsx`) always sends top-level `designType: 'Project'`
+and instead exposes a **Discipline** multi-select — `Artwork | Technical |
+Location | As-Built` (the `DISCIPLINES` const), each with its own hours
+field, stored per-child on `disciplineType`. "Production Release" was
+requested for both Retail and Project task creation, but Discipline and
+Design Type are different concepts (single-choice subtype vs. multi-select
+with per-item hours) — **decision was to leave Project unchanged for now**.
+If it's needed later, the likely approach is adding `'Production Release'`
+as a 5th entry in `ProjectCreateTaskModal.jsx`'s `DISCIPLINES` array (with
+its own hours field), not forcing it into the Retail design-type list.
+
 ### Chatter
 ```typescript
 CreateChatterPostDto: {

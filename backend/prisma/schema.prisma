@@ -236,6 +236,8 @@ model ProjectTaskDetail {
   locationHours  Int?
   asBuilt        Boolean? @default(false)
   asBuiltHours   Int?
+  productionRelease      Boolean? @default(false)
+  productionReleaseHours Int?
   bim            Boolean? @default(false)
   deadline       DateTime?
   comment        String?  @db.NVarChar(Max)

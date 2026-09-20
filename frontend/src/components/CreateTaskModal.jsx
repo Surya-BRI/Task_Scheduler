@@ -11,6 +11,7 @@ const DESIGN_OPTIONS = [
   { value: 'Presentation', label: 'Presentation' },
   { value: 'Client Submission', label: 'Client Submission' },
   { value: 'Technical Drawing', label: 'Technical Drawing' },
+  { value: 'Production Release', label: 'Production Release' },
 ]
 const PRIORITY_OPTIONS = ['Low', 'Medium', 'High']
 const REVISION_PATTERN = /^R\d+$/

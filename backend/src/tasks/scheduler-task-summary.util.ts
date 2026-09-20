@@ -36,6 +36,7 @@ export const SCHEDULER_TASK_SUMMARY_SELECT = {
       technicalHours: true,
       locationHours: true,
       asBuiltHours: true,
+      productionReleaseHours: true,
     },
   },
 } satisfies Prisma.TaskSelect;
@@ -82,7 +83,8 @@ export function computeSchedulerEstimatedHours(task: SchedulerTaskSummaryRow): n
       (Number(detail.artworkHours) || 0) +
       (Number(detail.technicalHours) || 0) +
       (Number(detail.locationHours) || 0) +
-      (Number(detail.asBuiltHours) || 0),
+      (Number(detail.asBuiltHours) || 0) +
+      (Number(detail.productionReleaseHours) || 0),
     0,
   );
   return Math.max(1, Number(retailHours ?? (projectHours || null) ?? 0) || 0);

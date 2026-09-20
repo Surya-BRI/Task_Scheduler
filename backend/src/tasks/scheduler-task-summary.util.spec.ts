@@ -57,10 +57,21 @@ describe('scheduler-task-summary.util', () => {
       ...baseTask,
       retailDetails: [],
       projectDetails: [
-        { artworkHours: 2, technicalHours: 1, locationHours: 0, asBuiltHours: 0 },
+        { artworkHours: 2, technicalHours: 1, locationHours: 0, asBuiltHours: 0, productionReleaseHours: 0 },
       ],
     });
     expect(hours).toBe(3);
+  });
+
+  it('includes productionReleaseHours in the project-detail hours sum', () => {
+    const hours = computeSchedulerEstimatedHours({
+      ...baseTask,
+      retailDetails: [],
+      projectDetails: [
+        { artworkHours: 0, technicalHours: 0, locationHours: 0, asBuiltHours: 0, productionReleaseHours: 4 },
+      ],
+    });
+    expect(hours).toBe(4);
   });
 
   it('builds a queue filter for unassigned and on-hold tasks only', () => {

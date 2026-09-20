@@ -89,6 +89,7 @@ const RETAIL_TYPE_LABELS = {
   PRESENTATION: 'Presentation',
   CLIENT_SUBMISSION: 'Client Submission',
   TECHNICAL_DRAWING: 'Technical Drawing',
+  PRODUCTION_RELEASE: 'Production Release',
 };
 
 function prettifyTypeToken(value) {

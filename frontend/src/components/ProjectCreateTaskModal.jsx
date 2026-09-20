@@ -20,6 +20,7 @@ const DISCIPLINES = [
   { key: 'technical', label: 'Technical', hoursKey: 'techHours' },
   { key: 'location',  label: 'Location',  hoursKey: 'locationHours' },
   { key: 'asBuilt',   label: 'As-Built',  hoursKey: 'asBuiltHours' },
+  { key: 'productionRelease', label: 'Production Release', hoursKey: 'productionReleaseHours' },
 ]
 
 function getPriorityClasses(level) {
@@ -39,6 +40,8 @@ function emptyWorkFields(base) {
     locationHours: '',
     asBuilt: false,
     asBuiltHours: '',
+    productionRelease: false,
+    productionReleaseHours: '',
     deadline: '',
   }
 }
@@ -265,11 +268,12 @@ export function ProjectCreateTaskModal({ open, onClose, onCreated, submissionDat
 
   function rowHasSelection(r) {
     return (
-      r.artwork || r.technical || r.location || r.asBuilt ||
+      r.artwork || r.technical || r.location || r.asBuilt || r.productionRelease ||
       String(r.artHours ?? '').trim() !== '' ||
       String(r.techHours ?? '').trim() !== '' ||
       String(r.locationHours ?? '').trim() !== '' ||
-      String(r.asBuiltHours ?? '').trim() !== ''
+      String(r.asBuiltHours ?? '').trim() !== '' ||
+      String(r.productionReleaseHours ?? '').trim() !== ''
     )
   }
 
@@ -289,6 +293,7 @@ export function ProjectCreateTaskModal({ open, onClose, onCreated, submissionDat
       if (child.technical) sum += Number(child.techHours) || 0
       if (child.location) sum += Number(child.locationHours) || 0
       if (child.asBuilt) sum += Number(child.asBuiltHours) || 0
+      if (child.productionRelease) sum += Number(child.productionReleaseHours) || 0
     }
     return sum
   }, 0)
@@ -325,6 +330,7 @@ export function ProjectCreateTaskModal({ open, onClose, onCreated, submissionDat
                 if (field === 'technical' && value && !child.techHours) updates.techHours = '1'
                 if (field === 'location' && value && !child.locationHours) updates.locationHours = '1'
                 if (field === 'asBuilt' && value && !child.asBuiltHours) updates.asBuiltHours = '1'
+                if (field === 'productionRelease' && value && !child.productionReleaseHours) updates.productionReleaseHours = '1'
                 const isDisciplineToggle = DISCIPLINES.some((d) => d.key === field)
                 if (isDisciplineToggle && value && !child.deadline && deadlineInputValue) {
                   updates.deadline = deadlineInputValue
@@ -380,6 +386,7 @@ export function ProjectCreateTaskModal({ open, onClose, onCreated, submissionDat
       { flag: 'technical', hours: 'techHours', label: 'Technical' },
       { flag: 'location', hours: 'locationHours', label: 'Location' },
       { flag: 'asBuilt', hours: 'asBuiltHours', label: 'As-Built' },
+      { flag: 'productionRelease', hours: 'productionReleaseHours', label: 'Production Release' },
     ]
     // Validate only child rows
     for (const row of rows) {
@@ -470,6 +477,8 @@ export function ProjectCreateTaskModal({ open, onClose, onCreated, submissionDat
               locationHours:  disc.key === 'location' && disc.hoursKey ? Number(child[disc.hoursKey]) : undefined,
               asBuilt:        disc.key === 'asBuilt',
               asBuiltHours:   disc.key === 'asBuilt' && disc.hoursKey ? Number(child[disc.hoursKey]) : undefined,
+              productionRelease:      disc.key === 'productionRelease',
+              productionReleaseHours: disc.key === 'productionRelease' && disc.hoursKey ? Number(child[disc.hoursKey]) : undefined,
               deadline:       resolveDeadline(child.deadline),
               attachments:    allAttachments.length > 0 ? allAttachments : undefined,
             })
@@ -750,7 +759,7 @@ export function ProjectCreateTaskModal({ open, onClose, onCreated, submissionDat
 
           <div className="overflow-hidden rounded-lg border border-slate-200">
               {/* Table header */}
-              <div className="grid grid-cols-[1.6fr_0.7fr_0.6fr_0.8fr_0.6fr_0.8fr_0.6fr_0.8fr_0.6fr_1fr] bg-slate-700 text-xs font-semibold text-white">
+              <div className="grid grid-cols-[1.6fr_0.7fr_0.6fr_0.8fr_0.6fr_0.8fr_0.6fr_0.8fr_0.6fr_0.9fr_0.6fr_1fr] bg-slate-700 text-xs font-semibold text-white">
                 <div className="bg-emerald-600 px-3 py-2">Sign Type</div>
                 <div className="px-2 py-2 text-center">Artwork</div>
                 <div className="px-2 py-2 text-center">Hours</div>
@@ -759,6 +768,8 @@ export function ProjectCreateTaskModal({ open, onClose, onCreated, submissionDat
                 <div className="px-2 py-2 text-center">Location</div>
                 <div className="px-2 py-2 text-center">Hours</div>
                 <div className="px-2 py-2 text-center">As Built</div>
+                <div className="px-2 py-2 text-center">Hours</div>
+                <div className="px-2 py-2 text-center">Production Release</div>
                 <div className="px-2 py-2 text-center">Hours</div>
                 <div className="bg-amber-500 px-2 py-2">Deadline</div>
               </div>
@@ -791,7 +802,7 @@ export function ProjectCreateTaskModal({ open, onClose, onCreated, submissionDat
                         <div
                           key={child.id}
                           id={`sign-row-child-${child.id}`}
-                          className="grid grid-cols-[1.6fr_0.7fr_0.6fr_0.8fr_0.6fr_0.8fr_0.6fr_0.8fr_0.6fr_1fr] items-center border-t border-slate-100 bg-white text-xs"
+                          className="grid grid-cols-[1.6fr_0.7fr_0.6fr_0.8fr_0.6fr_0.8fr_0.6fr_0.8fr_0.6fr_0.9fr_0.6fr_1fr] items-center border-t border-slate-100 bg-white text-xs"
                         >
                           <div className="px-6 py-1.5 font-medium text-slate-700" title={child.description || ''}>{child.signType}</div>
                           <div className="px-2 py-1.5 text-center"><TickBox checked={child.artwork} onChange={(v) => updateChildField(row.id, child.id, 'artwork', v)} /></div>
@@ -802,6 +813,8 @@ export function ProjectCreateTaskModal({ open, onClose, onCreated, submissionDat
                           <div className="px-1 py-1.5"><TableInput type="number" value={child.locationHours} onChange={(v) => updateChildField(row.id, child.id, 'locationHours', v)} /></div>
                           <div className="px-2 py-1.5 text-center"><TickBox checked={child.asBuilt} onChange={(v) => updateChildField(row.id, child.id, 'asBuilt', v)} /></div>
                           <div className="px-1 py-1.5"><TableInput type="number" value={child.asBuiltHours} onChange={(v) => updateChildField(row.id, child.id, 'asBuiltHours', v)} /></div>
+                          <div className="px-2 py-1.5 text-center"><TickBox checked={child.productionRelease} onChange={(v) => updateChildField(row.id, child.id, 'productionRelease', v)} /></div>
+                          <div className="px-1 py-1.5"><TableInput type="number" value={child.productionReleaseHours} onChange={(v) => updateChildField(row.id, child.id, 'productionReleaseHours', v)} /></div>
                           <div className="px-2 py-1.5">
                             <input
                               type="date"

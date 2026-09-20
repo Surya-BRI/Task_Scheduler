@@ -366,9 +366,9 @@ function QsProjectDetailContent() {
   }
 
   return (
-    <div className="min-h-screen bg-slate-50">
+    <div className="min-h-screen min-w-0 bg-slate-50">
       <Navbar />
-      <main className="w-full overflow-y-auto px-4 py-4 sm:px-6">
+      <main className="w-full min-w-0 overflow-y-auto px-4 py-4 sm:px-6">
         <div className="w-full space-y-3">
 
           {/* Back button */}
