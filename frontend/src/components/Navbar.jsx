@@ -2,9 +2,10 @@
 
 import { useEffect, useRef, useState } from 'react'
 import { usePathname, useRouter } from 'next/navigation'
-import { Bell, Calendar, ChevronDown, ClipboardList, Clock, Home, LayoutList, LogOut, MessageSquareText, Users, Volume2, VolumeX } from 'lucide-react'
+import { Bell, Calendar, ChevronDown, ClipboardList, Clock, ExternalLink, Home, LayoutList, LogOut, MessageSquareText, Users, Volume2, VolumeX } from 'lucide-react'
 import { SalesReviewIcon } from '@/features/sales/components/SalesReviewIcon'
 import { getSession, mockLogout } from '@/lib/mock-auth'
+import { env } from '@/lib/env'
 import {
   listNotifications,
   markAllNotificationsRead,
@@ -18,14 +19,14 @@ import { canAccessTransactions, getTransactionDropdownItems, isTransactionNavIte
 import { toast } from 'sonner'
 
 const NAV_ITEMS = [
-  'Activities',
-  'Dashboards',
+  // 'Activities',
+  // 'Dashboards',
   'Transactions',
-  'Reports',
-  'Analytics',
-  'Screens',
-  'Setup',
-  'Support',
+  // 'Reports',
+  // 'Analytics',
+  // 'Screens',
+  // 'Setup',
+  // 'Support',
 ]
 
 function TransactionsNavDropdown({ pathname, role, onNavigate }) {
@@ -718,6 +719,16 @@ export function Navbar({ currentDate, onCalendarChange, dateRangeText }) {
                 <ClipboardList className="h-5 w-5" strokeWidth={1.75} aria-hidden />
               </button>
             )}
+
+            {/* ERP App — same-domain SSO cookie carries the session over, no re-login */}
+            <a
+              href={env.erpHomeUrl}
+              className={utilityIconClass}
+              aria-label="Open ERP App"
+              title="ERP App"
+            >
+              <ExternalLink className="h-5 w-5" strokeWidth={1.75} aria-hidden />
+            </a>
 
             {/* Chatter */}
             <button
