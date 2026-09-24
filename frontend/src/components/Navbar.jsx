@@ -720,16 +720,6 @@ export function Navbar({ currentDate, onCalendarChange, dateRangeText }) {
               </button>
             )}
 
-            {/* ERP App — same-domain SSO cookie carries the session over, no re-login */}
-            <a
-              href={env.erpHomeUrl}
-              className={utilityIconClass}
-              aria-label="Open ERP App"
-              title="ERP App"
-            >
-              <ExternalLink className="h-5 w-5" strokeWidth={1.75} aria-hidden />
-            </a>
-
             {/* Chatter */}
             <button
               type="button"
@@ -779,7 +769,7 @@ export function Navbar({ currentDate, onCalendarChange, dateRangeText }) {
       <div className="bg-slate-200/80 border-t border-slate-200">
         <div className="w-full flex items-center px-4 py-1.5 sm:px-6">
           <nav className="min-w-0 flex-1">
-            <div className="flex w-full items-center justify-evenly">
+            <div className="flex w-full items-center justify-start gap-2">
               {bottomNavItems.map((item) => {
                 const label = typeof item === 'string' ? item : item.label
                 const href = typeof item === 'string' ? null : item.href
@@ -811,6 +801,14 @@ export function Navbar({ currentDate, onCalendarChange, dateRangeText }) {
                   </button>
                 )
               })}
+              {/* ERP App — same-domain SSO cookie carries the session over, no re-login */}
+              <a
+                href={env.erpHomeUrl}
+                className="inline-flex items-center gap-1.5 rounded-lg px-3 py-1.5 text-sm font-semibold text-slate-700 transition-colors hover:bg-white/50"
+              >
+                ERP App
+                <ExternalLink className="h-3.5 w-3.5" strokeWidth={1.75} aria-hidden />
+              </a>
             </div>
           </nav>
         </div>
