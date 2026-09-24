@@ -155,7 +155,6 @@ function playDeadlineAlertSound(kind = 'reminder') {
 
 // ─── Profile Dropdown ────────────────────────────────────────────────────────
 function ProfileDropdown({ session }) {
-  const router = useRouter()
   const [open, setOpen] = useState(false)
   const rootRef = useRef(null)
 
@@ -181,7 +180,8 @@ function ProfileDropdown({ session }) {
   const handleLogout = () => {
     setOpen(false)
     void mockLogout().finally(() => {
-      router.push('/login')
+      // Sign-in lives on the ERP site now — send people back there, not to a local /login page.
+      window.location.href = env.erpLoginUrl
     })
   }
 
