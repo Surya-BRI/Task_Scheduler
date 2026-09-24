@@ -60,11 +60,25 @@ export class AuthController {
     };
   }
 
+  /**
+   * A full SSO logout, not just this app's view of the session: with COOKIE_DOMAIN set to the
+   * shared parent domain, clearing access_token here removes the browser's one copy of it
+   * regardless of which app originally set it — signing the user out of the ERP portal (and
+   * anything else on that domain) too, not just Scheduler. EXTERNAL_LOGOUT_COOKIES clears the
+   * sibling role/department/etc cookies the ERP site also sets, for a clean logout.
+   */
   @Public()
   @Post('logout')
   @HttpCode(HttpStatus.OK)
   logout(@Res({ passthrough: true }) res: Response) {
-    res.clearCookie(ACCESS_TOKEN_COOKIE, buildAccessTokenCookieOptions(this.configService));
+    const cookieOptions = buildAccessTokenCookieOptions(this.configService);
+    res.clearCookie(ACCESS_TOKEN_COOKIE, cookieOptions);
+
+    const siblingCookies = this.configService.get<string[]>('auth.externalLogoutCookies') ?? [];
+    for (const name of siblingCookies) {
+      res.clearCookie(name, cookieOptions);
+    }
+
     return { ok: true };
   }
 
