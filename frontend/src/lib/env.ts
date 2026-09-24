@@ -52,6 +52,8 @@ function resolveApiBaseUrl(): string {
 export const env = {
   apiBaseUrl: resolveApiBaseUrl(),
   appName: process.env.NEXT_PUBLIC_APP_NAME ?? 'TaskScheduler',
+  /** Where to send people who land here signed out — sign-in now happens on the ERP site (SSO cookie shared via .app-brisigns.com). */
+  erpLoginUrl: process.env.NEXT_PUBLIC_ERP_LOGIN_URL ?? 'https://dev.app-brisigns.com/auth/login',
 } as const;
 
 if (typeof window !== 'undefined') {
