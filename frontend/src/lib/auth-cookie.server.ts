@@ -42,6 +42,14 @@ export function buildAccessTokenCookieOptions(): Omit<AccessTokenCookieOptions, 
   };
 }
 
+/** Sibling cookies the ERP site also sets (role, department, etc.) — cleared on logout too. */
+export function getExternalLogoutCookieNames(): string[] {
+  return (process.env.EXTERNAL_LOGOUT_COOKIES ?? '')
+    .split(',')
+    .map((name) => name.trim())
+    .filter(Boolean);
+}
+
 export function extractAccessTokenFromSetCookies(setCookies: string[]): string | null {
   for (const header of setCookies) {
     if (!header.startsWith(`${ACCESS_TOKEN_COOKIE}=`)) continue;
