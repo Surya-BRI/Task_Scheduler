@@ -33,6 +33,16 @@ describe('UsersService IDOR protection', () => {
     });
   });
 
+  it.each(['Admin', 'Sub Admin'])('maps the ERP "%s" role to HOD', async (roleName) => {
+    prisma.$queryRaw.mockResolvedValue([{ userId: 44n, userName: 'boss', roleName }]);
+
+    await expect(service.findByIdForViewer('44', '44', UserRole.HOD)).resolves.toEqual({
+      id: '44',
+      userName: 'boss',
+      role: UserRole.HOD,
+    });
+  });
+
   it('blocks designers from reading another user profile', async () => {
     await expect(
       service.findByIdForViewer('43', '99', UserRole.DESIGNER),

@@ -8,6 +8,8 @@ import { UserRole } from '../common/constants/roles.enum';
 const ERP_ROLE_MAP: Record<string, UserRole> = {
   'Design HOD': UserRole.HOD,
   'Design Head': UserRole.HOD,
+  Admin: UserRole.HOD,
+  'Sub Admin': UserRole.HOD,
   SalesRep: UserRole.SALESPERSON,
   'Sales Coordinator': UserRole.SALESPERSON,
   Designer: UserRole.DESIGNER,
