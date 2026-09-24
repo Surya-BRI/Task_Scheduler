@@ -1,7 +1,15 @@
 import { NextResponse } from 'next/server';
 import { resolveBackendApiBase } from '@/lib/backend-origin';
-import { buildAccessTokenCookieOptions } from '@/lib/auth-cookie.server';
+import { buildAccessTokenCookieOptions, getExternalLogoutCookieNames } from '@/lib/auth-cookie.server';
 
+/**
+ * This is the route the browser actually calls (logoutSession() posts here) — the backend's
+ * own /auth/logout only runs server-to-server underneath and its Set-Cookie response never
+ * reaches the browser, so the cookie-clearing that matters for the browser happens here, not
+ * there. With COOKIE_DOMAIN set to the shared parent domain, this is a full SSO logout: it
+ * removes the browser's one shared copy of these cookies, signing the user out of the ERP
+ * portal too, not just this app's view of the session.
+ */
 export async function POST() {
   try {
     await fetch(`${resolveBackendApiBase()}/auth/logout`, {
@@ -11,11 +19,14 @@ export async function POST() {
       cache: 'no-store',
     });
   } catch {
-    // Best-effort backend logout; always clear the frontend cookie.
+    // Best-effort backend logout; always clear the frontend cookies.
   }
 
   const response = NextResponse.json({ ok: true });
   const cookieOptions = buildAccessTokenCookieOptions();
   response.cookies.set({ ...cookieOptions, value: '', maxAge: 0 });
+  for (const name of getExternalLogoutCookieNames()) {
+    response.cookies.set({ ...cookieOptions, name, value: '', maxAge: 0 });
+  }
   return response;
 }
