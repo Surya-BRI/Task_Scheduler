@@ -38,6 +38,8 @@ export const envValidationSchema = Joi.object({
       }
       return value;
     }),
+  /** Set to a parent domain (e.g. ".app-brisigns.com") to share the auth cookie across subdomains. */
+  COOKIE_DOMAIN: Joi.string().optional(),
   LOG_LEVEL: Joi.string().valid('debug', 'info', 'log', 'warn', 'error').default('debug'),
   SERVICE_NAME: Joi.string().max(64).default('task-scheduler-api'),
   SENTRY_DSN: Joi.string().uri().allow('').optional(),
@@ -61,6 +63,10 @@ export const envValidationSchema = Joi.object({
   EXTERNAL_ROLE_FIELD:  Joi.string().optional(),
   /** JSON object mapping external role strings to internal UserRole values */
   EXTERNAL_ROLE_MAP:    Joi.string().optional(),
+  /** Name of a sibling cookie carrying role info, when the external JWT has no role claim (e.g. BRI ERP) */
+  EXTERNAL_ROLE_COOKIE: Joi.string().optional(),
+  /** Field name inside that cookie's JSON holding the human-readable role name (default: 'roleName') */
+  EXTERNAL_ROLE_NAME_FIELD: Joi.string().optional(),
   AWS_ACCESS_KEY_ID: Joi.string().optional(),
   AWS_SECRET_ACCESS_KEY: Joi.string().optional(),
   AWS_REGION: Joi.string().optional(),

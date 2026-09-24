@@ -30,6 +30,8 @@ export default () => {
       port: Number(process.env.PORT ?? 7000),
       nodeEnv,
       corsOrigin: process.env.CORS_ORIGIN ?? 'http://localhost:5000',
+      /** Parent domain (e.g. ".app-brisigns.com") to share the auth cookie across subdomains; unset = host-only. */
+      cookieDomain: process.env.COOKIE_DOMAIN ?? '',
       logLevel: process.env.LOG_LEVEL ?? 'debug',
       serviceName: process.env.SERVICE_NAME ?? 'task-scheduler-api',
     },
@@ -52,6 +54,9 @@ export default () => {
       externalEmailField: process.env.EXTERNAL_EMAIL_FIELD ?? 'email',
       externalRoleField: process.env.EXTERNAL_ROLE_FIELD ?? 'role',
       externalRoleMap: process.env.EXTERNAL_ROLE_MAP ?? '{}',
+      /** Sibling cookie carrying the role, when the external JWT itself has no role claim (e.g. BRI ERP). */
+      externalRoleCookie: process.env.EXTERNAL_ROLE_COOKIE ?? '',
+      externalRoleNameField: process.env.EXTERNAL_ROLE_NAME_FIELD ?? 'roleName',
     },
     database: {
       url: dbUrl,

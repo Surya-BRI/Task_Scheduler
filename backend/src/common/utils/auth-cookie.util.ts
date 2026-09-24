@@ -51,11 +51,13 @@ function parseDurationToMs(value: string | undefined): number {
 
 export function buildAccessTokenCookieOptions(configService: ConfigService): CookieOptions {
   const isProd = configService.get<string>('app.nodeEnv') === 'production';
+  const cookieDomain = configService.get<string>('app.cookieDomain');
   return {
     httpOnly: true,
     secure: isProd,
     sameSite: 'lax',
     path: '/',
     maxAge: parseDurationToMs(configService.get<string>('jwt.accessExpiresIn')),
+    ...(cookieDomain ? { domain: cookieDomain } : {}),
   };
 }
