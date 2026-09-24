@@ -8,6 +8,7 @@ type AccessTokenCookieOptions = {
   sameSite: 'lax';
   path: string;
   maxAge: number;
+  domain?: string;
 };
 
 const DEFAULT_MAX_AGE_SECONDS = 24 * 60 * 60;
@@ -29,6 +30,7 @@ function parseDurationToSeconds(value: string | undefined): number {
 
 export function buildAccessTokenCookieOptions(): Omit<AccessTokenCookieOptions, 'value'> {
   const isProd = process.env.NODE_ENV === 'production';
+  const cookieDomain = process.env.COOKIE_DOMAIN?.trim();
   return {
     name: ACCESS_TOKEN_COOKIE,
     httpOnly: true,
@@ -36,6 +38,7 @@ export function buildAccessTokenCookieOptions(): Omit<AccessTokenCookieOptions, 
     sameSite: 'lax',
     path: '/',
     maxAge: parseDurationToSeconds(process.env.JWT_ACCESS_EXPIRES_IN),
+    ...(cookieDomain ? { domain: cookieDomain } : {}),
   };
 }
 
