@@ -1,5 +1,6 @@
 import {
   Body,
+  ConflictException,
   Controller,
   Get,
   HttpCode,
@@ -35,11 +36,20 @@ export class AuthController {
     return this.authService.register();
   }
 
+  /**
+   * Disabled in external auth mode — sign-in happens on the ERP site and arrives here
+   * via a shared cookie (see jwt.strategy.ts). A local login here would sign a token
+   * with the wrong secret (JWT_ACCESS_SECRET, not EXTERNAL_JWT_SECRET), producing a
+   * cookie the app can't verify and corrupting the session alongside the real one.
+   */
   @Public()
   @Post('login')
   @HttpCode(HttpStatus.OK)
   @Throttle({ login: { limit: 5, ttl: 60_000 } })
   async login(@Body() dto: LoginDto, @Res({ passthrough: true }) res: Response) {
+    if ((this.configService.get<string>('auth.mode') ?? 'demo').toLowerCase() === 'external') {
+      throw new ConflictException('Local sign-in is disabled — sign in via the ERP portal.');
+    }
     const result = await this.authService.login(dto);
     const cookieOptions = buildAccessTokenCookieOptions(this.configService);
     res.cookie(ACCESS_TOKEN_COOKIE, result.accessToken, cookieOptions);
