@@ -1,6 +1,6 @@
 import { NextResponse } from 'next/server';
 import type { NextRequest } from 'next/server';
-import { hasUsableAccessToken } from './lib/auth-middleware.util';
+import { hasUsableAccessToken, shouldAllowLoginPage } from './lib/auth-middleware.util';
 
 export const ACCESS_TOKEN_COOKIE = 'access_token';
 
@@ -12,17 +12,16 @@ function isPublicPath(pathname: string) {
 
 export function middleware(request: NextRequest) {
   const { pathname } = request.nextUrl;
-
-  // Root always lands on login — never skip straight to the app.
-  if (pathname === '/') {
-    return NextResponse.redirect(new URL('/login', request.url));
-  }
-
   const token = request.cookies.get(ACCESS_TOKEN_COOKIE)?.value;
   const hasToken = hasUsableAccessToken(token);
 
-  // Login is always reachable (including ?expired=1 with a stale cookie).
   if (isPublicPath(pathname)) {
+    // A cookie from another app on the same parent domain (BRI ERP SSO) counts here too —
+    // skip the form and let '/' resolve the right home route instead of a second login.
+    const sessionExpired = request.nextUrl.searchParams.get('expired') === '1';
+    if (!shouldAllowLoginPage(token, sessionExpired)) {
+      return NextResponse.redirect(new URL('/', request.url));
+    }
     return NextResponse.next();
   }
 
