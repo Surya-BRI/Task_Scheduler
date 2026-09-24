@@ -57,6 +57,12 @@ export default () => {
       /** Sibling cookie carrying the role, when the external JWT itself has no role claim (e.g. BRI ERP). */
       externalRoleCookie: process.env.EXTERNAL_ROLE_COOKIE ?? '',
       externalRoleNameField: process.env.EXTERNAL_ROLE_NAME_FIELD ?? 'roleName',
+      /** Comma-separated sibling cookies (e.g. "role,department,session_id,user_name") to also
+       *  clear on logout — a full SSO logout, not just this app's view of the session. */
+      externalLogoutCookies: (process.env.EXTERNAL_LOGOUT_COOKIES ?? '')
+        .split(',')
+        .map((name) => name.trim())
+        .filter(Boolean),
     },
     database: {
       url: dbUrl,

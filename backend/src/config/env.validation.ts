@@ -67,6 +67,8 @@ export const envValidationSchema = Joi.object({
   EXTERNAL_ROLE_COOKIE: Joi.string().optional(),
   /** Field name inside that cookie's JSON holding the human-readable role name (default: 'roleName') */
   EXTERNAL_ROLE_NAME_FIELD: Joi.string().optional(),
+  /** Comma-separated sibling cookies to also clear on logout, for a full SSO logout */
+  EXTERNAL_LOGOUT_COOKIES: Joi.string().optional(),
   AWS_ACCESS_KEY_ID: Joi.string().optional(),
   AWS_SECRET_ACCESS_KEY: Joi.string().optional(),
   AWS_REGION: Joi.string().optional(),
