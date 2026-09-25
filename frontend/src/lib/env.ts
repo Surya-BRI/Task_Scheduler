@@ -53,9 +53,9 @@ export const env = {
   apiBaseUrl: resolveApiBaseUrl(),
   appName: process.env.NEXT_PUBLIC_APP_NAME ?? 'TaskScheduler',
   /** Where to send people who land here signed out — sign-in now happens on the ERP site (SSO cookie shared via .app-brisigns.com). */
-  erpLoginUrl: process.env.NEXT_PUBLIC_ERP_LOGIN_URL ?? 'https://dev.app-brisigns.com/auth/login',
+  erpLoginUrl: process.env.NEXT_PUBLIC_ERP_LOGIN_URL ?? 'https://app-brisigns.com/auth/login',
   /** The ERP middleware portal's home — the shared .app-brisigns.com cookie carries the session over, no re-login. */
-  erpHomeUrl: process.env.NEXT_PUBLIC_ERP_HOME_URL ?? 'https://dev.app-brisigns.com/home',
+  erpHomeUrl: process.env.NEXT_PUBLIC_ERP_HOME_URL ?? 'https://app-brisigns.com/home',
 } as const;
 
 if (typeof window !== 'undefined') {
