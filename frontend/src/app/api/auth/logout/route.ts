@@ -3,6 +3,8 @@ import { resolveBackendApiBase } from '@/lib/backend-origin';
 import { buildAccessTokenCookieOptions, getExternalLogoutCookieNames } from '@/lib/auth-cookie.server';
 
 const ERP_SESSION_COOKIE = 'session_id';
+/** Live ERP's auth_logout endpoint; used in production builds when ERP_LOGOUT_URL isn't set. Local dev stays opt-in. */
+const DEFAULT_ERP_LOGOUT_URL = 'https://api.app-brisigns.com/api/auth/auth_logout';
 
 /** Runs one logout call and logs its outcome — these are best-effort, so failures must be visible, not thrown. */
 async function loggedCall(label: string, call: () => Promise<Response>) {
@@ -29,7 +31,9 @@ async function loggedCall(label: string, call: () => Promise<Response>) {
  * does the same — either alone is enough, both together cover one of them failing.
  */
 export async function POST(request: NextRequest) {
-  const erpLogoutUrl = process.env.ERP_LOGOUT_URL?.trim().replace(/\/+$/, '');
+  const erpLogoutUrl = (
+    process.env.ERP_LOGOUT_URL?.trim() || (process.env.NODE_ENV === 'production' ? DEFAULT_ERP_LOGOUT_URL : '')
+  ).replace(/\/+$/, '');
   const sessionId = request.cookies.get(ERP_SESSION_COOKIE)?.value;
 
   const calls = [
