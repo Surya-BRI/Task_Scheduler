@@ -1,8 +1,3 @@
-/**
- * Central environment config for the frontend.
- * Reads NEXT_PUBLIC_* vars at runtime so they can be swapped per-environment
- * without a code change.
- */
 const LOCAL_API = 'http://localhost:7000/api/v1';
 /** Same-origin path; Next.js rewrites proxy this to the Nest backend in production. */
 const PRODUCTION_API = '/api/v1';

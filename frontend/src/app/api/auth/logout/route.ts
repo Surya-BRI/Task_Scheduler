@@ -18,18 +18,6 @@ async function loggedCall(label: string, call: () => Promise<Response>) {
   }
 }
 
-/**
- * Explicit Sign Out only (Navbar) — never call this for a 401 or a stale cookie. It ends the
- * user's ERP session too, so a full SSO logout must be something the user asked for.
- *
- * This is the route the browser actually calls (logoutSession() posts here); the backend's own
- * /auth/logout only runs server-to-server underneath and its Set-Cookie never reaches the
- * browser. So the cookie-clearing that matters happens here. With COOKIE_DOMAIN set to the shared
- * parent domain it removes the browser's one shared copy of these cookies, signing the user out
- * of the ERP portal too. The two calls below end the session on the ERP side: our backend marks
- * the ErpAuthSession row logged out (and nulls fcmToken), and the ERP's own auth_logout endpoint
- * does the same — either alone is enough, both together cover one of them failing.
- */
 export async function POST(request: NextRequest) {
   const erpLogoutUrl = (
     process.env.ERP_LOGOUT_URL?.trim() || (process.env.NODE_ENV === 'production' ? DEFAULT_ERP_LOGOUT_URL : '')

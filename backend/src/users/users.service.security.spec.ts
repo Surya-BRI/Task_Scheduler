@@ -55,9 +55,4 @@ describe('UsersService IDOR protection', () => {
     await expect(service.findById('999')).rejects.toThrow(NotFoundException);
   });
 
-  // Removed: create/update/remove/findByEmail no-longer exist — UsersService
-  // no longer owns user identity (that lives in ERP's ErpAuthUsers), so
-  // email-uniqueness-on-create and similar checks are structurally impossible
-  // now. validateErpLogin/findAll/findById/findByIdForViewer cover the
-  // current security-relevant surface above.
 });

@@ -35,10 +35,6 @@ export function collectPrismaSqlValues(query: unknown): unknown[] {
   return collected;
 }
 
-/**
- * Asserts user-controlled input is passed as a bound parameter, not concatenated into SQL text.
- * Fails when dangerous substrings appear in static SQL string parts.
- */
 export function expectInputParameterized(
   query: unknown,
   userInput: string,

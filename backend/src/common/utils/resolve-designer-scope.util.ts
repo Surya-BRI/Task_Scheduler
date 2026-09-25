@@ -1,10 +1,6 @@
 import { ForbiddenException } from '@nestjs/common';
 import { hasDepartmentManagerAccess } from './workflow-roles.util';
 
-/**
- * Ensures non-manager users can only access their own designer-scoped data.
- * HOD / Sales callers may pass an explicit designerId (e.g. team views).
- */
 export function resolveDesignerScope(
   requestedDesignerId: string | undefined,
   callerId: string,

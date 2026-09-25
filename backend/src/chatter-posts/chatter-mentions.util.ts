@@ -40,10 +40,6 @@ export function uniqueUserIds(ids: Array<string | null | undefined>): string[] {
   return out;
 }
 
-/**
- * Merge explicitly tagged user ids with ids parsed from @mentions in message text.
- * Explicit ids are always kept; parsed ids are restricted to the eligible directory.
- */
 export function mergeCollectedMentionUserIds(params: {
   explicitIds: Array<string | null | undefined>;
   parsedFromMessageIds: string[];
@@ -62,10 +58,6 @@ export function normalizeDepartmentId(value?: string | null): string | null {
   return trimmed ? trimmed.toLowerCase() : null;
 }
 
-/**
- * Whether a designer is mentionable by department rules for the viewing designer/HOD.
- * Colleagues without a synced department remain eligible (common ERP data gap).
- */
 export function isDesignerDepartmentMentionable(
   viewerDeptId?: string | null,
   userDeptId?: string | null,

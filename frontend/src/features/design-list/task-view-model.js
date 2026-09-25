@@ -101,11 +101,6 @@ function prettifyTypeToken(value) {
   return raw.replace(/_/g, ' ').replace(/\b\w/g, (c) => c.toUpperCase());
 }
 
-/**
- * Human label that distinguishes sibling tasks sharing OP / project / revision.
- * Retail → Estimation Purpose / Client Submission / …
- * Project → Artwork / Location / Technical / … (discipline), with sign type as fallback.
- */
 export function resolveTypeOfDesign(task) {
   const category = String(task?.project?.category ?? '').trim().toLowerCase();
   const isRetail =

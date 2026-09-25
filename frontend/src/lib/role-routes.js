@@ -1,7 +1,3 @@
-/**
- * Role-based app paths for leave planner and requests.
- * HOD uses /hod/*; designers keep /designer/*.
- */
 
 export function isHodRole(role) {
   return String(role ?? "").toUpperCase() === "HOD";
@@ -25,13 +21,6 @@ export function requestsPath(role, search = "", hash = "") {
   return withSearchAndHash(base, search, hash);
 }
 
-/**
- * Preserve current query/hash when switching prefix by role.
- * @param {string} pathname
- * @param {string | null | undefined} role
- * @param {string} [search]
- * @param {string} [hash]
- */
 export function leaveOrRequestsPathForRole(pathname, role, search = "", hash = "") {
   const path = String(pathname ?? "");
   if (path.includes("leave-planner")) return leavePlannerPath(role, search, hash);

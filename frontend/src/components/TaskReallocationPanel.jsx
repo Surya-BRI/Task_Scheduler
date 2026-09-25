@@ -54,10 +54,6 @@ function FormSelect({ label, value, onChange, disabled, children, emptyLabel }) 
   );
 }
 
-/**
- * Compact task-detail panel. Create flow lives primarily under Requests → Reallocation.
- * Only designers with unlocked remaining hours see the request CTA (not post-handoff old owners).
- */
 export function TaskReallocationPanel({
   taskId,
   pendingReallocation,

@@ -81,12 +81,6 @@ describe('TasksService', () => {
 
   const service = new TasksService(prisma, taskFilesService, activityLogger, notificationsService, dashboardRealtime);
 
-  /**
-   * Backs findErpUsersByRoleBuckets' single $queryRaw (ErpAuthUsers/ErpAuthUserRoleMap/
-   * ErpMasterRole join) with fake role rows. Note: ERP has no role that maps to the
-   * `ADMIN` bucket (see ERP_ROLE_BUCKET in tasks.service.ts) — admin-only notify lists
-   * are now always empty; there is no `admins` option here.
-   */
   const mockNotifyUsersByRole = (opts: {
     managers?: Array<{ id: string }>;
     sales?: Array<{ id: string; fullName: string }>;
@@ -1062,9 +1056,6 @@ describe('TasksService', () => {
     });
 
     it('SALES_REVIEW notifies matched project sales only (not every salesperson)', async () => {
-      // ERP has no role that maps to the ADMIN bucket (ERP_ROLE_BUCKET in tasks.service.ts),
-      // so admin-only notify lists are now always empty — genuine, unavoidable behavior
-      // change from the migration, not a fixture bug.
       prisma.task.update.mockResolvedValue({ ...updatedTask, status: 'SALES_REVIEW' });
       mockNotifyUsersByRole({
         sales: [

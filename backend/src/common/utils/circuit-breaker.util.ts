@@ -5,10 +5,6 @@ export type CircuitBreakerOptions = {
 
 export type CircuitBreakerState = 'closed' | 'open' | 'half-open';
 
-/**
- * Lightweight in-memory circuit breaker for external dependencies.
- * Opens after consecutive failures; half-opens after reset timeout.
- */
 export class CircuitBreaker {
   private state: CircuitBreakerState = 'closed';
   private failureCount = 0;

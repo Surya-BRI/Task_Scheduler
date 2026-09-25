@@ -254,13 +254,6 @@ export class ChatService {
     return message;
   }
 
-  /**
-   * Durable notification-table parity with Chatter's @mention system — without this, a
-   * participant who isn't currently connected to the conversation's socket room (or the app
-   * at all) has no record of a new message beyond the conversation-list unread badge.
-   * Mentioned participants get a distinct "you were mentioned" notification instead of the
-   * generic one.
-   */
   private async notifyOtherParticipants(
     conversationId: string,
     message: { id: string; senderId: bigint; content: string; sender: { userName: string } },

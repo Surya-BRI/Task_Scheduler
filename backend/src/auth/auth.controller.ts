@@ -42,12 +42,6 @@ export class AuthController {
     return this.authService.register();
   }
 
-  /**
-   * Disabled in external auth mode — sign-in happens on the ERP site and arrives here
-   * via a shared cookie (see jwt.strategy.ts). A local login here would sign a token
-   * with the wrong secret (JWT_ACCESS_SECRET, not EXTERNAL_JWT_SECRET), producing a
-   * cookie the app can't verify and corrupting the session alongside the real one.
-   */
   @Public()
   @Post('login')
   @HttpCode(HttpStatus.OK)
@@ -66,18 +60,6 @@ export class AuthController {
     };
   }
 
-  /**
-   * A full SSO logout, not just this app's view of the session: with COOKIE_DOMAIN set to the
-   * shared parent domain, clearing access_token here removes the browser's one copy of it
-   * regardless of which app originally set it — signing the user out of the ERP portal (and
-   * anything else on that domain) too, not just Scheduler. EXTERNAL_LOGOUT_COOKIES clears the
-   * sibling role/department/etc cookies the ERP site also sets, for a clean logout.
-   */
-  /**
-   * Authenticated on purpose: ending an ERP session must be tied to the caller's own user, so
-   * nobody can log out someone else's session by guessing its id. The guard is explicit because
-   * JwtAuthGuard is not global (only the throttler is) — dropping @Public alone leaves it open.
-   */
   @Post('logout')
   @UseGuards(JwtAuthGuard)
   @HttpCode(HttpStatus.OK)
@@ -121,11 +103,6 @@ export class AuthController {
     return this.authService.getMe(user.sub);
   }
 
-  /**
-   * Mints a short-lived token for the dashboard Socket.IO handshake. Called by the
-   * frontend's own same-origin BFF route (which holds the httpOnly session cookie),
-   * not directly by the browser — see frontend/src/app/api/auth/ws-token/route.ts.
-   */
   @Get('ws-token')
   @UseGuards(JwtAuthGuard)
   async getWsToken(@CurrentUser() user: JwtPayload) {

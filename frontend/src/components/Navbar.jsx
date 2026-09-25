@@ -22,11 +22,6 @@ const NAV_ITEMS = [
   // 'Activities',
   // 'Dashboards',
   'Transactions',
-  // 'Reports',
-  // 'Analytics',
-  // 'Screens',
-  // 'Setup',
-  // 'Support',
 ]
 
 function TransactionsNavDropdown({ pathname, role, onNavigate }) {
@@ -263,9 +258,6 @@ function NotificationDropdown({ session }) {
   const loadNotifications = async () => {
     if (!session) return
     if (loadingRef.current) {
-      // Don't silently drop this refresh — a mark-as-read or another trigger firing while a
-      // fetch is already in flight needs to still be reflected once the current one finishes,
-      // otherwise stale data from the in-flight request can overwrite fresher local state.
       pendingReloadRef.current = true
       return
     }

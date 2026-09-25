@@ -1,7 +1,3 @@
-/**
- * Prints a SQL Server BACKUP DATABASE statement for pre-deploy snapshots.
- * Usage: tsx prisma/scripts/backup-database.ts --server HOST --database DBNAME
- */
 import * as process from 'process';
 
 function parseArg(flag: string): string | undefined {

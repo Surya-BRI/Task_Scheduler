@@ -11,10 +11,6 @@ export type ProjectTeamNameFields = {
   designers?: string | null;
 };
 
-/**
- * Collect display names and normalized names from project team fields.
- * `designers` may be a comma-separated list.
- */
 export function collectProjectTeamNames(project: ProjectTeamNameFields | null | undefined): {
   displayNames: Set<string>;
   normalized: Set<string>;

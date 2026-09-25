@@ -30,10 +30,6 @@ export function formatRelative(ms, now = Date.now()) {
 
 /** @typedef {{ startDate: string, endDate: string }} DateRange */
 
-/**
- * @param {string} iso
- * @param {DateRange | null} range
- */
 export function isInMonthYearRange(iso, range) {
   if (!range?.startDate && !range?.endDate) return true;
   const t = new Date(iso).getTime();

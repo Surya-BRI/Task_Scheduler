@@ -54,10 +54,6 @@ const DEFAULT_META = {
   tone: /** @type {HistoryTone} */ ('gray'),
 }
 
-/**
- * Maps activity actions to timeline presentation metadata.
- * Keys align with backend ActivityAction values.
- */
 const EVENT_META = {
   TASK_CREATED: { title: 'Task Created', icon: CheckCircle2, tone: 'green' },
   TASK_COMPLETED: { title: 'Completed', icon: CheckCircle2, tone: 'green' },

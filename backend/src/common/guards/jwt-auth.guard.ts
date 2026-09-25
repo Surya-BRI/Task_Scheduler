@@ -5,13 +5,6 @@ import { IS_PUBLIC_KEY } from '../decorators/public.decorator';
 import type { JwtPayload } from '../types/jwt-payload.type';
 import type { UserRole } from '../constants/roles.enum';
 
-/**
- * JWT Auth Guard with an optional dev-bypass for integration testing.
- *
- * Dev bypass requires ENABLE_DEV_AUTH_BYPASS=true and NODE_ENV !== 'production'.
- * When enabled, requests without Authorization may use:
- *   X-Dev-User-Id, X-Dev-User-Email, X-Dev-User-Role
- */
 @Injectable()
 export class JwtAuthGuard extends AuthGuard('jwt') {
   constructor(private readonly reflector: Reflector) {

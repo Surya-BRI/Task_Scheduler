@@ -1,7 +1,3 @@
-/**
- * Resolve task/project context for mention user lookup on a chatter post.
- * Prefer the post's own linkage so comments behave consistently per post.
- */
 export function resolveChatterMentionScope(
   entry,
   { taskId = null, projectId = null, taskIdReady = false } = {},

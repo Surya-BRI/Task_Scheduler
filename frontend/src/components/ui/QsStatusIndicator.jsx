@@ -2,10 +2,6 @@
 
 import { Lock, Pencil } from 'lucide-react'
 
-/**
- * Display-only QS status control. Highlights the active mode as a filled tab
- * so Pending/editable vs Completed/read-only is obvious at a glance.
- */
 export function QsStatusIndicator({ status }) {
   const normalized = String(status ?? '').trim().toLowerCase()
   if (!normalized) return null

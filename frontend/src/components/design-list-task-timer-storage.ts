@@ -73,11 +73,6 @@ export function readTimerRunStartAt(taskId: string): number | null {
   return readTimerState(taskId).runStartAt
 }
 
-/**
- * Cache the timer clock locally and notify same-tab listeners.
- * Other tabs pick this up via the native `storage` event on localStorage.
- * Callers should only write confirmed server state (or intentional clears).
- */
 export function writeTimerState(
   taskId: string,
   accumulatedSeconds: number,
@@ -112,10 +107,6 @@ export type ServerTimerState = {
   sessionId?: string | null
 }
 
-/**
- * Adopt authoritative server timer state into the local cache and notify listeners.
- * This is the only write path that should update the live clock from the network/socket.
- */
 export function applyServerTimerState(
   taskId: string,
   state: ServerTimerState | null | undefined,
@@ -346,11 +337,6 @@ export function hasLocalTimerEntry(taskId: string): boolean {
   return store.getItem(key) != null
 }
 
-/**
- * Resolve which task has an active running clock.
- * Server id wins when present; otherwise fall back to local cache.
- * A local paused entry for the server task means the server id is stale.
- */
 export function resolveActiveRunningTaskId(
   serverTaskId: string | null | undefined,
   excludeTaskId?: string,

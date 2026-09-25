@@ -107,10 +107,6 @@ function insertTextAtRichCaret(editor, text) {
   selection.addRange(range);
 }
 
-/**
- * Textarea with @mention autocomplete. Works for posts and comments.
- * When `richPreview` is enabled, users edit formatted content while the component emits markdown.
- */
 export const MentionTextarea = forwardRef(function MentionTextarea(
   {
     value,

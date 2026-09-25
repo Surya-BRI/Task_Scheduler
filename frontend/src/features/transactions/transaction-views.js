@@ -119,11 +119,6 @@ function transactionViewItems() {
   }))
 }
 
-/**
- * Role-specific Transactions dropdown items (transaction views + existing top-nav destinations).
- * @param {string | null | undefined} role
- * @returns {TransactionNavItem[]}
- */
 export function getTransactionDropdownItems(role) {
   const items = transactionViewItems()
 

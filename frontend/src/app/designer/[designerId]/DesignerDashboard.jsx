@@ -35,7 +35,6 @@ const NUMERIC_ID_RE = /^\d+$/;
 /** Backup HTTP poll only when the dashboard socket is down (WS drives live updates). */
 const BACKUP_POLL_MS = 180_000;
 
-
 function fmtYmd(date) {
   const y = date.getFullYear();
   const m = String(date.getMonth() + 1).padStart(2, "0");
@@ -100,10 +99,6 @@ function buildScheduledOnByTaskId(assignments, weekDates) {
   return result;
 }
 
-/**
- * Merge assignee/cache tasks with summaries already attached on assignment rows
- * so the grid never needs N× GET /tasks/:id on the critical path.
- */
 function collectTasksForSchedule(assignments, assigneeTasks = [], scheduleTasks = []) {
   const byId = {};
   for (const task of scheduleTasks) {

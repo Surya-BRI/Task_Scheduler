@@ -33,13 +33,6 @@ export class SchedulerAssignmentsController {
       return { assignments: [], dayLocks: [], dayLockKeys: [], dayUnlocks: [], dayUnlockKeys: [] };
     }
     const trimmedDesignerId = designerId?.trim();
-    // resolveDesignerScope defaults to the caller's own id whenever no designerId is passed —
-    // correct for a plain DESIGNER (their own schedule), but wrong here for an HOD: the
-    // scheduler grid's normal "give me the whole week" call never passes a designerId, so an
-    // HOD's own reload was silently scoped to only their own rows, making every OTHER
-    // designer's correctly-saved assignments disappear on every refresh. An HOD with no
-    // designerId explicitly requested should see the whole week; resolveDesignerScope's
-    // access check still applies whenever a SPECIFIC designerId is requested.
     const scopedDesignerId =
       !trimmedDesignerId && user && hasDepartmentManagerAccess(user.role)
         ? undefined

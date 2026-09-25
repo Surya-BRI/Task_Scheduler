@@ -7,10 +7,6 @@ import { fetchProjectActivities } from '@/features/team-activity/services/activi
 import { HISTORY_FIELD_ACTIONS } from './history-event-meta'
 import { ProjectHistoryTimeline } from './ProjectHistoryTimeline'
 
-/**
- * Full Project / Field History modal with paginated timeline.
- * Preserves existing fetch, filter, and pagination behavior.
- */
 export function ProjectHistoryDialog({ title, projectId, type = 'project', onClose }) {
   const [items, setItems] = useState([])
   const [loading, setLoading] = useState(false)

@@ -6,18 +6,6 @@ export interface RequestTimeoutOverride {
   timeoutMs: number;
 }
 
-/**
- * Aborts long-running HTTP requests that exceed the configured timeout.
- * Does not cancel in-flight async work — only stops the client response,
- * so a request that later succeeds server-side still commits even after
- * the client sees a 503 (known correctness gap, not something this
- * middleware can fix — see TESTING_PROGRESS.md's "save-then-500" note).
- *
- * `overrides` lets specific slow-but-legitimate routes (scheduler
- * handoffs that make many sequential round-trips to the remote SQL
- * Server) get a longer budget than the rest of the API, without raising
- * the default for every route and masking genuinely hung requests.
- */
 export function requestTimeoutMiddleware(timeoutMs: number, overrides: RequestTimeoutOverride[] = []) {
   const safeTimeout = Math.max(1_000, timeoutMs);
 

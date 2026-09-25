@@ -11,11 +11,6 @@ export function compactPersonName(value: string): string {
   return normalizePersonName(value).replace(/\s+/g, '');
 }
 
-/**
- * Match salesperson users to a project for notifications.
- * Supports ERP compacted names (e.g. user "Fahad" ↔ project "FahadQuazi").
- * Falls back to project.createdById, then optional extra user ids (e.g. TASK_CREATED actor).
- */
 export function matchSalesUsersToProject(
   project: SalesProjectRef | null | undefined,
   salesUsers: SalesUserRef[],

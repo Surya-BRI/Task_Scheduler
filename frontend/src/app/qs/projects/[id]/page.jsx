@@ -264,9 +264,6 @@ function QsProjectDetailContent() {
     [signRows, savedRowsSnapshot],
   )
 
-  // True when current rows differ from load / last submission. After a successful
-  // Save (and with no further edits), Submit is enabled; any new edit disables it
-  // again until the latest changes are saved.
   const hasChangesSinceSubmit = useMemo(
     () => serializeSignRows(signRows) !== submittedRowsSnapshot,
     [signRows, submittedRowsSnapshot],

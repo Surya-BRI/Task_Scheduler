@@ -1,11 +1,3 @@
-/**
- * Calendar-date helpers for SchedulerAssignment rows.
- *
- * Assignments are stored by (weekStartDate Monday, dayIndex 0–6). Filtering with
- * `weekStartDate >= today` incorrectly keeps remaining days in the current week
- * when today is mid-week (e.g. Wed–Fri stay after ON_HOLD). Always derive the
- * assignment's calendar date = weekStartDate + dayIndex.
- */
 
 export function startOfUtcDay(date: Date): Date {
   return new Date(Date.UTC(date.getUTCFullYear(), date.getUTCMonth(), date.getUTCDate()));

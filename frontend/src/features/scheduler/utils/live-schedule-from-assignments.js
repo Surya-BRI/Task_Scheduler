@@ -52,10 +52,6 @@ function resolveScheduleApiTask(assignment, taskById) {
   return assignment?.task ?? taskById?.[assignment?.taskId] ?? null;
 }
 
-/**
- * Build designer-dashboard schedule snapshot from week assignment rows.
- * Uses embedded row.task summaries when present (same path as designer / HOD).
- */
 export function buildLiveScheduleFromAssignments(assignments, tasksArr) {
   const taskById = Object.fromEntries((tasksArr || []).map((t) => [t.id, t]));
   const tasksMap = {};

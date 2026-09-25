@@ -1,9 +1,3 @@
-/**
- * Deletes all tasks whose status is a legacy value (PENDING, WIP, REVISION, COMPLETED, APPROVED).
- * Nulls out NoAction foreign keys first, then deletes tasks (cascades handle the rest).
- *
- * Run: npx ts-node -r tsconfig-paths/register prisma/scripts/clear-legacy-tasks.ts
- */
 
 import { PrismaClient } from '@prisma/client';
 

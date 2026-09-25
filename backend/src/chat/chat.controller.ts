@@ -59,10 +59,6 @@ export class ChatController {
     return this.chatService.findMessages(userId, conversationId, parsedLimit, before);
   }
 
-  /**
-   * Send a message to a conversation.
-   * Broadcasts the message in real-time to active WebSocket connections in the conversation.
-   */
   @Post(':id/messages')
   async sendMessage(
     @CurrentUser() user: any,
@@ -80,10 +76,6 @@ export class ChatController {
     return message;
   }
 
-  /**
-   * Mark all messages in a conversation as read.
-   * Broadcasts a 'messageRead' event to active WebSocket connections.
-   */
   @Post(':id/read')
   async markAsRead(
     @CurrentUser() user: any,

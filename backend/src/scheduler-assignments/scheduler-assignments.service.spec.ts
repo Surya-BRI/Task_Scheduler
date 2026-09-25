@@ -719,10 +719,6 @@ describe('SchedulerAssignmentsService', () => {
   });
 
   it('displaces a regular assignment on the leave day even when the leave request is not yet persisted as Approved', async () => {
-    // Regression test: RequestsService.review() calls rescheduleForApprovedLeave BEFORE
-    // writing the leave row's own status to APPROVED, so a naive "query leaveRequest for
-    // status=Approved" capacity check would miss this exact leave and never displace
-    // anything. Simulate that ordering by returning [] from the approved-leave query.
     const makeRow = (id: string, weekStartDate: string, dayIndex: number, taskId: string) => ({
       id,
       designerId: '2001',

@@ -14,10 +14,6 @@ export const HOD_WORKFLOW_ROLES: UserRole[] = [
   UserRole.PROJECT_MANAGER,
 ];
 
-/**
- * Leave / overtime / regularization approvers.
- * Sales creates and reviews tasks only — not HR approvals (and has no leave/OT UI).
- */
 export const HR_APPROVER_ROLES: UserRole[] = [UserRole.HOD];
 
 export function hasDepartmentManagerAccess(role: UserRole | string): boolean {

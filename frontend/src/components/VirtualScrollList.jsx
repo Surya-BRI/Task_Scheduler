@@ -3,10 +3,6 @@
 import { useRef } from "react";
 import { useVirtualizer } from "@tanstack/react-virtual";
 
-/**
- * Nested-scroller virtual list for dense feeds (team activity, scheduler queue, etc.).
- * Keeps ~overscan rows mounted; variable heights via measureElement.
- */
 export function VirtualScrollList({
   items,
   estimateSize = 88,

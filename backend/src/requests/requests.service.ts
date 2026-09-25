@@ -367,9 +367,6 @@ export class RequestsService implements OnModuleInit {
     return `${base}?${params.toString()}`;
   }
 
-  // ERP no longer has a department concept on its user table, so HOD lookup
-  // can no longer be scoped by department — it now resolves every active HOD
-  // via ERP's own role-mapping tables (mirrors UsersService.validateErpLogin).
   private async findDepartmentHods(
     _departmentId?: string | null,
   ): Promise<{ id: string; fullName: string }[]> {
@@ -532,9 +529,6 @@ export class RequestsService implements OnModuleInit {
       throw new ForbiddenException('Only department managers can review leave requests');
     }
 
-    // ERP's user table no longer carries a role or department, so the
-    // requester-is-a-designer and same-department checks that used to run
-    // here can no longer be evaluated and have been dropped.
   }
 
   private async assertRevokerAccess(
@@ -564,9 +558,6 @@ export class RequestsService implements OnModuleInit {
     if (role === UserRole.DESIGNER && resolvedId !== requesterId) {
       throw new ForbiddenException('You can only view your own leave requests');
     }
-    // ERP's user table no longer carries a role, so the "HOD can only view
-    // designer records" check that used to run here can no longer be
-    // evaluated and has been dropped.
 
     const requests = await this.prisma.leaveRequest.findMany({
       where: { userId: BigInt(resolvedId) },
@@ -582,9 +573,6 @@ export class RequestsService implements OnModuleInit {
       throw new ForbiddenException('Only HOD can view pending leave approvals');
     }
 
-    // ERP's user table no longer carries a role or department, so pending
-    // approvals can no longer be scoped to designer-only / same-department
-    // requesters — those filters have been dropped.
     const pending = await this.prisma.leaveRequest.findMany({
       where: {
         status: { in: ['Pending', 'PENDING', 'pending'] },
@@ -605,10 +593,6 @@ export class RequestsService implements OnModuleInit {
       throw new ForbiddenException('Only HOD can view team leave requests');
     }
 
-    // ERP's user table no longer carries a role or department, so team
-    // requests can no longer be scoped to designer-only / same-department
-    // requesters — those filters have been dropped; all leave requests
-    // (optionally narrowed by the filters below) are now visible to HODs.
     const where: Prisma.LeaveRequestWhereInput = {};
 
     if (filters?.status?.trim()) {
@@ -655,10 +639,6 @@ export class RequestsService implements OnModuleInit {
       where: { userId: BigInt(resolvedId) },
     });
     if (!requester) throw new BadRequestException('User not found');
-
-    // ERP's user table no longer carries a role, so the "HOD can only apply
-    // leave on behalf of designers" / "only designers can submit" checks
-    // that used to run here can no longer be evaluated and have been dropped.
 
     let reason: string;
     try {

@@ -66,10 +66,6 @@ export class TasksController {
     return this.tasksService.uploadTaskFile(file, user.sub);
   }
 
-  /**
-   * GET /tasks
-   *   ?projectId=&status=&priority=&assigneeId=&search=&type=&salesPerson=&startDate=&endDate=&page=1&limit=20
-   */
   @Get()
   @Roles(UserRole.HOD, UserRole.DESIGNER, UserRole.SALESPERSON, UserRole.QS)
   findAll(

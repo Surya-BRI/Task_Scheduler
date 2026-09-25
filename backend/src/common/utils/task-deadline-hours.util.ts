@@ -8,11 +8,6 @@ function startOfLocalDay(date: Date | string): Date | null {
   return d;
 }
 
-/**
- * Count calendar days from `fromDate` through `deadlineDate` (inclusive).
- * Sat/Sun count the same as Mon–Fri (scheduler weekends are open working days).
- * Returns 0 if the deadline is before fromDate or invalid.
- */
 export function countWorkingDaysUntil(
   deadlineDate: Date | string,
   fromDate: Date | string = new Date(),
@@ -36,10 +31,6 @@ export type HoursDeadlineCheck =
   | { ok: true; workingDays: number; maxHours: number }
   | { ok: false; message: string; workingDays: number; maxHours: number };
 
-/**
- * Hard-block check: estimated hours must not exceed workingDays × 12h.
- * Same rule used by Sales task creation on the frontend.
- */
 export function assertHoursWithinDeadline(
   hours: number,
   deadlineDate: Date | string,

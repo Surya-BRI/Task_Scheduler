@@ -6,11 +6,6 @@ export const WEEKDAY_INDICES = [0, 1, 2, 3, 4];
 /** Mon–Sun — packing, Rule 1, optimizer, and week workload (weekends open like weekdays). */
 export const WORKING_DAY_INDICES = [0, 1, 2, 3, 4, 5, 6];
 
-/**
- * Day-footer label that leads with the same total the week row uses
- * (regular + OT), then shows capacity / OT breakdown.
- * e.g. "8h/8h", "0h/8h" (fully free), or "9h 10m (8h/8h + 1h 10m OT)"
- */
 export function formatDayWorkloadFooter(regularHours, overtimeHours, dailyCapacity = 8) {
   const regular = toPositiveHours(regularHours);
   const overtime = toPositiveHours(overtimeHours);
@@ -20,11 +15,6 @@ export function formatDayWorkloadFooter(regularHours, overtimeHours, dailyCapaci
   return `${formatHoursAsHm(regular + overtime)} (${capacityLabel} + ${formatHoursAsHm(overtime)} OT)`;
 }
 
-/**
- * Normal (non-OT) hours for one assignment row.
- * When scheduledHours is absent, subtract approved OT from assignedHours so OT is not double-counted
- * when a separate overtime slot also exists in the grid.
- */
 export function resolveAssignmentScheduledHours(row = {}) {
   if (row.scheduledHours != null && row.scheduledHours !== "") {
     return toPositiveHours(row.scheduledHours);
