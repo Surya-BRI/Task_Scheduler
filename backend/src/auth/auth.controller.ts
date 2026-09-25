@@ -5,27 +5,33 @@ import {
   Get,
   HttpCode,
   HttpStatus,
+  Logger,
   Post,
+  Req,
   Res,
   UseGuards,
 } from '@nestjs/common';
 import { Throttle } from '@nestjs/throttler';
 import { ConfigService } from '@nestjs/config';
-import type { Response } from 'express';
+import type { Request, Response } from 'express';
 import { AuthService } from './auth.service';
+import { ErpSessionService } from './erp-session.service';
 import { LoginDto } from './dto/login.dto';
 import { JwtAuthGuard } from '../common/guards/jwt-auth.guard';
 import { CurrentUser } from '../common/decorators/current-user.decorator';
 import type { JwtPayload } from '../common/types/jwt-payload.type';
 import { ACCESS_TOKEN_COOKIE } from '../common/constants/auth-cookie.constants';
-import { buildAccessTokenCookieOptions } from '../common/utils/auth-cookie.util';
+import { buildAccessTokenCookieOptions, parseCookieHeader } from '../common/utils/auth-cookie.util';
 import { Public } from '../common/decorators/public.decorator';
 
 @Controller('auth')
 export class AuthController {
+  private readonly logger = new Logger(AuthController.name);
+
   constructor(
     private readonly authService: AuthService,
     private readonly configService: ConfigService,
+    private readonly erpSessionService: ErpSessionService,
   ) {}
 
   /** Disabled — accounts are ERP-managed (ErpAuthUsers), not created by Scheduler. */
@@ -67,10 +73,19 @@ export class AuthController {
    * anything else on that domain) too, not just Scheduler. EXTERNAL_LOGOUT_COOKIES clears the
    * sibling role/department/etc cookies the ERP site also sets, for a clean logout.
    */
-  @Public()
+  /**
+   * Authenticated on purpose (no @Public): ending an ERP session must be tied to the caller's
+   * own user, so nobody can log out someone else's session by guessing its id.
+   */
   @Post('logout')
   @HttpCode(HttpStatus.OK)
-  logout(@Res({ passthrough: true }) res: Response) {
+  async logout(
+    @CurrentUser() user: JwtPayload,
+    @Req() req: Request,
+    @Res({ passthrough: true }) res: Response,
+  ) {
+    const sessionEnded = await this.endErpSession(user, req);
+
     const cookieOptions = buildAccessTokenCookieOptions(this.configService);
     res.clearCookie(ACCESS_TOKEN_COOKIE, cookieOptions);
 
@@ -79,7 +94,23 @@ export class AuthController {
       res.clearCookie(name, cookieOptions);
     }
 
-    return { ok: true };
+    return { ok: true, sessionEnded };
+  }
+
+  /** Best-effort: marks the caller's ERP session logged out (needs EXTERNAL_SESSION_COOKIE). Never throws. */
+  private async endErpSession(user: JwtPayload, req: Request): Promise<boolean> {
+    const cookieName = this.configService.get<string>('auth.externalSessionCookie');
+    if (!cookieName) return false;
+
+    const rawSessionId = parseCookieHeader(req.headers.cookie)[cookieName];
+    if (!rawSessionId || !/^\d+$/.test(rawSessionId) || !/^\d+$/.test(user.sub)) return false;
+
+    try {
+      return await this.erpSessionService.endSession(BigInt(rawSessionId), BigInt(user.sub));
+    } catch (err) {
+      this.logger.warn(`Could not end ERP session: ${err instanceof Error ? err.message : String(err)}`);
+      return false;
+    }
   }
 
   @Get('me')

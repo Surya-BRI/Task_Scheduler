@@ -5,7 +5,6 @@ import { PrismaModule } from '../prisma/prisma.module';
 import { ChatController } from './chat.controller';
 import { ChatGateway } from './chat.gateway';
 import { ChatService } from './chat.service';
-import { resolveJwtSecret } from '../common/utils/resolve-jwt-secret.util';
 import { DashboardModule } from '../dashboard/dashboard.module';
 
 @Module({
@@ -17,7 +16,8 @@ import { DashboardModule } from '../dashboard/dashboard.module';
       imports: [ConfigModule],
       inject: [ConfigService],
       useFactory: (configService: ConfigService) => ({
-        secret: resolveJwtSecret(configService),
+        // Socket tokens are signed with JWT_ACCESS_SECRET (AuthService.mintSocketToken); see dashboard.module.ts.
+        secret: configService.getOrThrow<string>('jwt.accessSecret'),
         signOptions: {
           expiresIn: (configService.get<string>('jwt.accessExpiresIn') ?? '1d') as never,
         },

@@ -73,7 +73,7 @@ describe('Auth integration', () => {
       .set('Cookie', login.headers['set-cookie'])
       .expect(200);
 
-    expect(logout.body).toEqual({ ok: true });
+    expect(logout.body).toEqual({ ok: true, sessionEnded: false });
     const cleared = logout.headers['set-cookie']?.[0] ?? '';
     expect(cleared).toContain(`${ACCESS_TOKEN_COOKIE}=`);
   });

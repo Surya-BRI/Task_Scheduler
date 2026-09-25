@@ -68,7 +68,7 @@ function TransactionsNavDropdown({ pathname, role, onNavigate }) {
       </button>
       {open ? (
         <div
-          className="absolute left-1/2 z-50 mt-2 max-h-[min(70vh,32rem)] w-72 -translate-x-1/2 origin-top overflow-y-auto rounded-xl border border-slate-200 bg-white py-1 shadow-xl ring-1 ring-black/5"
+          className="absolute left-0 z-50 mt-2 max-h-[min(70vh,32rem)] w-72 origin-top-left overflow-y-auto rounded-xl border border-slate-200 bg-white py-1 shadow-xl ring-1 ring-black/5"
           role="menu"
           aria-label="Transactions"
         >
@@ -769,7 +769,7 @@ export function Navbar({ currentDate, onCalendarChange, dateRangeText }) {
       <div className="bg-slate-200/80 border-t border-slate-200">
         <div className="w-full flex items-center px-4 py-1.5 sm:px-6">
           <nav className="min-w-0 flex-1">
-            <div className="flex w-full items-center justify-start gap-2">
+            <div className="flex w-full items-center justify-start gap-2 pl-[34px] sm:pl-[26px]">
               {bottomNavItems.map((item) => {
                 const label = typeof item === 'string' ? item : item.label
                 const href = typeof item === 'string' ? null : item.href

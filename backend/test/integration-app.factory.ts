@@ -7,6 +7,7 @@ import { ThrottlerGuard, ThrottlerModule } from '@nestjs/throttler';
 import { APP_GUARD } from '@nestjs/core';
 import { AuthController } from '../src/auth/auth.controller';
 import { AuthService } from '../src/auth/auth.service';
+import { ErpSessionService } from '../src/auth/erp-session.service';
 import { JwtStrategy } from '../src/auth/jwt.strategy';
 import { UsersService } from '../src/users/users.service';
 import { UserRole } from '../src/common/constants/roles.enum';
@@ -41,6 +42,7 @@ export async function createIntegrationApp(): Promise<INestApplication> {
       AuthService,
       JwtStrategy,
       { provide: UsersService, useValue: usersService },
+      { provide: ErpSessionService, useValue: { endSession: jest.fn().mockResolvedValue(false) } },
       { provide: APP_GUARD, useClass: ThrottlerGuard },
     ],
   }).compile();
