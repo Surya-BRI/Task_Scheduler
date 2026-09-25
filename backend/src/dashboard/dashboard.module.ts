@@ -6,7 +6,6 @@ import { DashboardService } from './dashboard.service';
 import { DashboardGateway } from './dashboard.gateway';
 import { DashboardRealtimeService } from './dashboard-realtime.service';
 import { PrismaModule } from '../prisma/prisma.module';
-import { resolveJwtSecret } from '../common/utils/resolve-jwt-secret.util';
 
 @Module({
   imports: [
@@ -16,7 +15,10 @@ import { resolveJwtSecret } from '../common/utils/resolve-jwt-secret.util';
       imports: [ConfigModule],
       inject: [ConfigService],
       useFactory: (configService: ConfigService) => ({
-        secret: resolveJwtSecret(configService),
+        // Socket tokens are minted by AuthService.mintSocketToken with JWT_ACCESS_SECRET, so verify
+        // with that — not resolveJwtSecret(), which is EXTERNAL_JWT_SECRET in external auth mode and
+        // would reject every socket handshake.
+        secret: configService.getOrThrow<string>('jwt.accessSecret'),
         signOptions: {
           expiresIn: (configService.get<string>('jwt.accessExpiresIn') ?? '1d') as never,
         },

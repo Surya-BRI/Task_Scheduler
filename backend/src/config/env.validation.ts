@@ -67,6 +67,8 @@ export const envValidationSchema = Joi.object({
   EXTERNAL_ROLE_COOKIE: Joi.string().optional(),
   /** Field name inside that cookie's JSON holding the human-readable role name (default: 'roleName') */
   EXTERNAL_ROLE_NAME_FIELD: Joi.string().optional(),
+  /** Cookie holding the ERP auth session id (e.g. session_id); enables ending the ErpAuthSession row on logout */
+  EXTERNAL_SESSION_COOKIE: Joi.string().optional(),
   /** Comma-separated sibling cookies to also clear on logout, for a full SSO logout */
   EXTERNAL_LOGOUT_COOKIES: Joi.string().optional(),
   AWS_ACCESS_KEY_ID: Joi.string().optional(),

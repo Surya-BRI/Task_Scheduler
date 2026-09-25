@@ -11,7 +11,8 @@ export default function HomePage() {
     let active = true;
     ensureSession().then((session) => {
       if (!active) return;
-      router.replace(session ? getHomeRoute(session) : '/login');
+      // expired=1 so middleware lets /login render instead of bouncing back here (cookie is valid-shaped but rejected).
+      router.replace(session ? getHomeRoute(session) : '/login?expired=1');
     });
     return () => {
       active = false;

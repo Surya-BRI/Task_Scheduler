@@ -11,20 +11,6 @@ function redirectToLogin(expired = false) {
   window.location.href = `/login?next=${next}${suffix}`;
 }
 
-/** Clear the httpOnly access_token cookie (e.g. after expiry or invalid JWT). */
-async function clearStaleAuthCookie() {
-  try {
-    await fetch('/api/auth/logout', {
-      method: 'POST',
-      credentials: 'include',
-      headers: { 'Content-Type': 'application/json' },
-      body: '{}',
-    });
-  } catch {
-    // Best-effort; middleware also allows /login when expired=1.
-  }
-}
-
 async function request<T>(path: string, init?: RequestInit): Promise<T> {
   const headers = new Headers(init?.headers);
   if (!(init?.body instanceof FormData)) {
@@ -50,8 +36,10 @@ async function request<T>(path: string, init?: RequestInit): Promise<T> {
   if (response.status === 401) {
     const isLoginAttempt = path === '/auth/login' || path.endsWith('/auth/login');
     if (!isLoginAttempt) {
+      // Only drop this app's own state. The cookies belong to the ERP (shared across the domain),
+      // so a 401 here — e.g. an ERP role the Scheduler doesn't accept — must not sign the user out
+      // of the ERP. Middleware lets /login through when expired=1, so there's no redirect loop.
       clearSession();
-      await clearStaleAuthCookie();
       redirectToLogin(true);
     }
     throw new Error(isLoginAttempt ? 'Invalid email or password.' : 'Unauthorized');
