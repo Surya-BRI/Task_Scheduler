@@ -63,6 +63,10 @@ describe('Auth integration', () => {
     });
   });
 
+  it('POST /auth/logout requires authentication', async () => {
+    await request(app.getHttpServer()).post('/api/v1/auth/logout').expect(401);
+  });
+
   it('POST /auth/logout clears access cookie', async () => {
     const login = await request(app.getHttpServer())
       .post('/api/v1/auth/login')
