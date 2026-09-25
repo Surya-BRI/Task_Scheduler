@@ -74,10 +74,12 @@ export class AuthController {
    * sibling role/department/etc cookies the ERP site also sets, for a clean logout.
    */
   /**
-   * Authenticated on purpose (no @Public): ending an ERP session must be tied to the caller's
-   * own user, so nobody can log out someone else's session by guessing its id.
+   * Authenticated on purpose: ending an ERP session must be tied to the caller's own user, so
+   * nobody can log out someone else's session by guessing its id. The guard is explicit because
+   * JwtAuthGuard is not global (only the throttler is) — dropping @Public alone leaves it open.
    */
   @Post('logout')
+  @UseGuards(JwtAuthGuard)
   @HttpCode(HttpStatus.OK)
   async logout(
     @CurrentUser() user: JwtPayload,
