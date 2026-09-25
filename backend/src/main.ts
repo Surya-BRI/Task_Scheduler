@@ -48,11 +48,6 @@ async function bootstrap() {
   app.use(requestIdMiddleware);
   app.use(
     requestTimeoutMiddleware(requestTimeoutMs, [
-      // Each of these makes many sequential round-trips to the remote SQL
-      // Server inside one transaction (scheduler handoff/repack, or a status
-      // change that triggers one) — batched where possible, but latency still
-      // adds up faster than the default budget allows. See
-      // TESTING_PROGRESS.md "Known but unresolved — session 2".
       {
         test: (req) => /\/reallocation-requests(\/[^/]+\/review)?$/.test(req.path) && req.method === 'POST',
         timeoutMs: slowRouteTimeoutMs,

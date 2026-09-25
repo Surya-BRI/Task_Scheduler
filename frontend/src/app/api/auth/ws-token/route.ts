@@ -2,11 +2,6 @@ import { NextRequest, NextResponse } from 'next/server';
 import { resolveBackendApiBase } from '@/lib/backend-origin';
 import { ACCESS_TOKEN_COOKIE } from '@/middleware';
 
-/**
- * Same-origin BFF route: reads the httpOnly session cookie (only readable
- * server-side) and exchanges it for a short-lived Socket.IO auth token, so
- * client JS never touches the long-lived session token directly.
- */
 export async function GET(request: NextRequest) {
   const sessionToken = request.cookies.get(ACCESS_TOKEN_COOKIE)?.value;
   if (!sessionToken) {

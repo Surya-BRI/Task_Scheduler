@@ -1,9 +1,5 @@
 import DOMPurify from 'isomorphic-dompurify';
 
-/**
- * @param {Array<{ id: string, fullName: string }>} users
- * @returns {string[]}
- */
 export function parseMentionUserIdsFromMessage(message, users) {
   const text = message ?? '';
   const sorted = [...(users ?? [])].sort(
@@ -42,10 +38,6 @@ export function parseMentionUserIdsFromMessage(message, users) {
   return found;
 }
 
-/**
- * @param {Array<{ id: string, fullName: string }>} users
- * @returns {Array<{ id: string, fullName: string }>}
- */
 export function parseMentionedUsersFromMessage(message, users) {
   const ids = parseMentionUserIdsFromMessage(message, users);
   const byId = new Map(
@@ -54,10 +46,6 @@ export function parseMentionedUsersFromMessage(message, users) {
   return ids.map((id) => byId.get(id)).filter(Boolean);
 }
 
-/**
- * @param {Array<Array<{ id: string, fullName: string }>>} lists
- * @returns {Array<{ id: string, fullName: string }>}
- */
 export function mergeMentionUsers(...lists) {
   const map = new Map();
   for (const list of lists) {
@@ -71,11 +59,6 @@ export function mergeMentionUsers(...lists) {
   return [...map.values()];
 }
 
-/**
- * Build the user directory needed to render every @mention in a post/comment.
- * @param {Array<{ id: string, fullName: string }>} mentionedUsers
- * @param {Array<{ id: string, fullName: string }>} directory
- */
 export function resolveMentionUsersForDisplay(message, mentionedUsers = [], directory = []) {
   const merged = mergeMentionUsers(directory, mentionedUsers);
   const parsed = parseMentionedUsersFromMessage(message, merged);
@@ -110,10 +93,6 @@ export function applyChatterRichTextFormatting(text) {
     .replace(/\n/g, '<br />');
 }
 
-/**
- * Highlight @mentions as styled, non-clickable text.
- * @param {Array<{ id: string, fullName: string }>} users
- */
 const CHATTER_HTML_CONFIG = {
   ALLOWED_TAGS: ['a', 'strong', 'em', 'del', 'u', 'br', 'span'],
   ALLOWED_ATTR: ['href', 'class', 'data-mention-user'],

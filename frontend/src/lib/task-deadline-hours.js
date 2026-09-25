@@ -8,11 +8,6 @@ function startOfLocalDay(date) {
   return d;
 }
 
-/**
- * Count calendar days from `fromDate` through `deadlineDate` (inclusive).
- * Sat/Sun count the same as Mon–Fri (scheduler weekends are open working days).
- * Returns 0 if the deadline is before fromDate or invalid.
- */
 export function countWorkingDaysUntil(deadlineDate, fromDate = new Date()) {
   const start = startOfLocalDay(fromDate);
   const end = startOfLocalDay(deadlineDate);
@@ -27,10 +22,6 @@ export function maxHoursForDeadline(deadlineDate, fromDate = new Date()) {
   return countWorkingDaysUntil(deadlineDate, fromDate) * MAX_DAILY_HOURS;
 }
 
-/**
- * Hard-block check: estimated hours must not exceed workingDays × 12h.
- * @returns {{ ok: true, workingDays: number, maxHours: number } | { ok: false, message: string, workingDays: number, maxHours: number }}
- */
 export function assertHoursWithinDeadline(hours, deadlineDate, fromDate = new Date()) {
   const estimated = Number(hours);
   const workingDays = countWorkingDaysUntil(deadlineDate, fromDate);

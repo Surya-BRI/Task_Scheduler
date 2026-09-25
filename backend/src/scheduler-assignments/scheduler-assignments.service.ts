@@ -401,10 +401,6 @@ export class SchedulerAssignmentsService implements OnModuleInit {
     return day === 0 || day === 6;
   }
 
-  /**
-   * Day is unavailable for auto-packing / capacity when it is a holiday, a designer
-   * weekend day-lock, or full-day leave. Weekends are otherwise open like weekdays.
-   */
   private blockedHoursForDesignerDay(
     date: Date,
     designerId: string,
@@ -761,10 +757,6 @@ export class SchedulerAssignmentsService implements OnModuleInit {
     return { minWeekStart, maxWeekStart };
   }
 
-  /**
-   * Deletes SchedulerAssignmentHistory rows older than the configured retention window.
-   * Default: 18 months. Set SCHEDULER_HISTORY_RETENTION_MONTHS=0 to disable.
-   */
   async purgeExpiredAssignmentHistory(): Promise<{ deletedCount: number; cutoff: Date | null }> {
     const months = this.getHistoryRetentionMonths();
     if (months <= 0) {
@@ -846,11 +838,6 @@ export class SchedulerAssignmentsService implements OnModuleInit {
     };
   }
 
-  /**
-   * How many other grid rows exist for each taskId across all weeks. Lets the frontend
-   * choose per-part detach (Rule 5a) even when sibling parts live in other weeks and
-   * are not present in the current week's in-memory state.
-   */
   private async attachOtherScheduledAssignmentCounts(
     rows: SchedulerAssignmentDto[],
   ): Promise<SchedulerAssignmentDto[]> {
@@ -903,13 +890,6 @@ export class SchedulerAssignmentsService implements OnModuleInit {
     }));
   }
 
-  /**
-   * Maps a detached SchedulerTaskFragment (see Rule 5a) into the same DTO shape as
-   * a normal assignment row, so the frontend can merge it into the sidebar without
-   * a separate response shape. Fragments have no grid placement — dayIndex/week are
-   * carried over from the source row purely for historical context and are ignored
-   * by the frontend, which never adds a fragment to `schedulesObj`.
-   */
   private mapFragmentRow(fragment: SchedulerTaskFragmentRow): SchedulerAssignmentDto {
     return this.mapRow({
       id: `fragment-${fragment.id}`,
@@ -1116,10 +1096,6 @@ export class SchedulerAssignmentsService implements OnModuleInit {
     }
   }
 
-  /**
-   * Design Completed / in-review / client-final tasks keep their designer set until REWORK.
-   * Same-designer day reshuffles are allowed; changing or clearing designers is not.
-   */
   private assertNoBlockedTaskReassignment(
     scopeTaskIds: string[],
     tasks: Array<{ id: string; status?: string | null; assigneeId?: bigint | null }>,
@@ -1162,19 +1138,6 @@ export class SchedulerAssignmentsService implements OnModuleInit {
     }
   }
 
-  /**
-   * A task can only be assigned to a NEW designer who is part of its project's
-   * team (technicalHead/teamLead/subTeamLead/designers). Matching is by trimmed,
-   * lowercased User.fullName since these project fields are stored as
-   * comma-joined names, not user IDs. Projects with no team configured at all
-   * (e.g. Retail-category projects) are unrestricted.
-   *
-   * (taskId, designerId) pairs that were already saved for this week are
-   * grandfathered in and skipped — if the team changes after a task was
-   * assigned, that designer's existing work is left alone. Only a *new*
-   * pairing (a fresh drop, or moving the task to a different designer) is
-   * checked against the project's current team.
-   */
   private assertDesignerEligibleForProjectTeam(
     assignments: SaveSchedulerWeekDto['assignments'],
     tasks: Array<{
@@ -1338,10 +1301,6 @@ export class SchedulerAssignmentsService implements OnModuleInit {
     });
   }
 
-  /**
-   * Build post-update week buckets in memory (avoids a second full-week findMany).
-   * Patches must include every field that changed on the assignment row.
-   */
   private applyAssignmentPatchesToBuckets(
     beforeByWeek: Map<string, Array<Record<string, unknown>>>,
     patches: Array<Record<string, unknown> & { id: string }>,
@@ -1591,11 +1550,6 @@ export class SchedulerAssignmentsService implements OnModuleInit {
     }
 
     const result = await this.prisma.$transaction(async (tx) => {
-      // Approved overtime requests are rendered as read-time virtual blocks (see
-      // findForWeekStart) with no backing SchedulerAssignment row, so the FIFO
-      // reschedule below can never see or move them. Cancel any that fall inside
-      // the leave window outright rather than leaving a stale OT commitment glued
-      // to a day the designer is now on leave.
       const conflictingOvertimeRequests = await tx.overtimeRequest.findMany({
         where: {
           designerId: BigInt(leave.userId),
@@ -1679,10 +1633,6 @@ export class SchedulerAssignmentsService implements OnModuleInit {
       for (const approvedLeave of approvedLeaves) {
         accumulateLeaveHours(approvedLeave);
       }
-      // `leave` is the request being approved right now — RequestsService.review runs this
-      // reschedule before persisting the leave row's own status to APPROVED, so the query
-      // above can't see it yet. Count it explicitly, otherwise capacity looks unaffected
-      // and no assignments get displaced onto/around the leave being approved.
       accumulateLeaveHours({ type: leave.type, startDate: leaveStart, endDate: leaveEnd });
 
       const availableCapacity = (date: Date): number =>
@@ -2481,9 +2431,6 @@ export class SchedulerAssignmentsService implements OnModuleInit {
         });
       }
 
-      // In-progress timer work (Draft TaskWorkSession) logged against this task by this
-      // designer, so the frontend can offer "hours actually remaining" when the HOD
-      // reassigns a partially-worked task to a different designer via drag-and-drop.
       const taskIds = [...new Set(rows.map((r) => r.taskId).filter((id): id is string => Boolean(id)))];
       const designerIdsForWork = [...new Set(rows.map((r) => r.designerId).filter((id): id is bigint => id != null))];
       const workedSecondsByKey = new Map<string, number>();
@@ -2557,10 +2504,6 @@ export class SchedulerAssignmentsService implements OnModuleInit {
         })
         .filter((row): row is SchedulerAssignmentDto => row != null);
 
-      // Detached split-part fragments (Rule 5a) are week-independent — a designer might
-      // detach a part while viewing week N, but the sidebar must keep showing it while
-      // browsing any other week too. So this isn't filtered by weekStartDate at all,
-      // unlike every other query in this method.
       const fragments = await this.prisma.schedulerTaskFragment.findMany({
         where: designerId ? { sourceDesignerId: BigInt(designerId) } : {},
         orderBy: { createdAt: 'asc' },
@@ -2774,15 +2717,6 @@ export class SchedulerAssignmentsService implements OnModuleInit {
     };
   }
 
-  /**
-   * Wipes all future scheduler assignments for a task (whole-task unassign flow).
-   *
-   * When `expectedAssignmentIds` is passed (scheduler consolidation folding split parts into
-   * one whole-task card), the check-then-delete runs atomically in one transaction: if a live
-   * row exists that isn't in the expected set — e.g. a sibling scheduled in a week the caller
-   * never loaded — the whole call is rejected instead of silently deleting that sibling.
-   * Omit the param to preserve the old unconditional-wipe behavior for other callers.
-   */
   async clearTaskSchedule(taskId: string, expectedAssignmentIds?: string[]): Promise<void> {
     const todayMidnight = new Date(new Date().toISOString().split('T')[0] + 'T00:00:00.000Z');
     if (!expectedAssignmentIds) {
@@ -2809,17 +2743,6 @@ export class SchedulerAssignmentsService implements OnModuleInit {
     }, { timeout: 15_000 });
   }
 
-  /**
-   * Detaches ONE split part from its siblings (Rule 5a) — the opposite of Rule 5's
-   * "all parts move together" default. Only valid when at least one sibling part
-   * (same taskId) is still actively scheduled; if this is the last part, the caller
-   * should use the whole-task unassign/hold flow instead (PATCH /tasks/:id/status +
-   * DELETE /scheduler-assignments/task/:taskId), which is unchanged.
-   *
-   * The detached part becomes a SchedulerTaskFragment — its own row, independent of
-   * whatever happens to its former siblings — and the remaining active siblings for
-   * this taskId are renumbered so splitIndex/totalParts stay contiguous.
-   */
   async detachAssignmentPart(assignmentId: string, status: 'UNASSIGNED' | 'ON_HOLD'): Promise<{ fragmentId: string }> {
     return this.prisma.$transaction(async (tx) => {
       const row = await tx.schedulerAssignment.findUnique({ where: { id: assignmentId } });
@@ -2862,9 +2785,6 @@ export class SchedulerAssignmentsService implements OnModuleInit {
           });
         }
       } else {
-        // One round-trip instead of N `.update()` calls — the same remote-latency
-        // concern as applyReallocationHandoff's split-index recompute; this loop
-        // was hitting P2028 (interactive-tx timeout) on tasks with several parts.
         await this.batchUpdateSplitIndicesWithParents(
           tx,
           remaining.map((part, idx) => ({
@@ -2889,24 +2809,6 @@ export class SchedulerAssignmentsService implements OnModuleInit {
     await this.prisma.schedulerTaskFragment.update({ where: { id: fragmentId }, data: { status } });
   }
 
-  /**
-   * Places hours that didn't fit anywhere in the week being saved (e.g. a task dropped on a
-   * designer's Friday whose remaining capacity is less than the task's hours). Walks forward
-   * day-by-day from the day after `afterDate`, skipping holidays/full-day approved leave and
-   * designer weekend day-locks (weekends are otherwise open), live-checking each candidate
-   * day's actual remaining capacity inside this same transaction (never trusting a client
-   * assumption about a week it never loaded — the same principle as the
-   * `expectedAssignmentIds` guard elsewhere in this file), and creates SchedulerAssignment
-   * row(s) to consume the hours — splitting across multiple days/weeks if one day isn't enough.
-   * Every week actually touched gets its version bumped and a history entry written, mirroring
-   * `rescheduleForApprovedLeave`. Bounded by `maxLookaheadDays`; whatever can't be placed
-   * within that bound is reported back in `unplacedHours`, never silently dropped.
-   *
-   * Deliberately NOT unified with the near-identical "next available day" loops in
-   * `rescheduleForApprovedLeave`/`rescheduleAfterLeaveRevocation` — those are working,
-   * payroll-adjacent code paths; refactoring them as a side effect of this new, unrelated call
-   * site would add risk without benefit. Revisit unification later if it proves worthwhile.
-   */
   private async placeOverflowCapacity(
     tx: Prisma.TransactionClient,
     params: {
@@ -2942,9 +2844,6 @@ export class SchedulerAssignmentsService implements OnModuleInit {
         select: { type: true, startDate: true, endDate: true },
       }),
       this.loadDayLocksForRange(rangeStart, rangeEnd, designerId),
-      // Overflow must never write into a week-locked destination — mirrors the
-      // lockedWeekKeys guard in applyReallocationHandoff, which this loop
-      // previously lacked (a candidate week's isLocked flag was never even read).
       tx.schedulerWeek.findMany({
         where: {
           weekStartDate: { gte: this.weekStartForDate(rangeStart), lte: this.weekStartForDate(rangeEnd) },
@@ -3025,9 +2924,6 @@ export class SchedulerAssignmentsService implements OnModuleInit {
           dayIndex: candidateDayIndex,
           assignedHours: new Prisma.Decimal(placeHours),
           parentId: taskId,
-          // Provisional — the cross-week split recompute in saveWeekSnapshot runs immediately
-          // after this and relabels every part of this task (including this new row) to the
-          // correct, globally-contiguous splitIndex/totalParts.
           splitIndex: 1,
           totalParts: 1,
           position: 0,
@@ -3072,9 +2968,6 @@ export class SchedulerAssignmentsService implements OnModuleInit {
     }
 
     const result = await this.prisma.$transaction(async (tx) => {
-      // Overflow entries carry their own designerId/taskId that may not otherwise appear in
-      // dto.assignments — fold them into the same validation lists so an overflow placement
-      // can't schedule for a designer/task that was never verified as valid.
       const designerIds = Array.from(new Set([
         ...dto.assignments.map((a) => a.designerId),
         ...(dto.overflow ?? []).map((o) => o.designerId),
@@ -3272,11 +3165,6 @@ export class SchedulerAssignmentsService implements OnModuleInit {
         };
       }
 
-      // --- Cross-week overflow placement ---
-      // Runs BEFORE the cross-week split recompute below so any new row(s) created here are
-      // already in the database by the time that recompute's cross-week query runs — it then
-      // picks them up and relabels splitIndex/totalParts globally for free, no changes needed
-      // to that logic.
       const overflowPlacements: Array<{ weekStart: string; dayIndex: number; hours: number; taskId: string; designerId: string }> = [];
       const unplacedOverflow: Array<{ taskId: string; designerId: string; hours: number }> = [];
       if (dto.overflow?.length) {
@@ -3299,11 +3187,6 @@ export class SchedulerAssignmentsService implements OnModuleInit {
       }
       // --- End cross-week overflow placement ---
 
-      // --- Cross-week sequential split index recomputation ---
-      // If any assignments carry split metadata, recompute splitIndex/totalParts globally
-      // so that parts in other weeks are numbered sequentially (e.g. week1=1,2 + week2=3).
-      // Only peers within ±SCHEDULER_SPLIT_RECOMPUTE_WEEK_WINDOW weeks (default 26) are
-      // considered — avoids an unbounded history scan as assignment rows accumulate.
       const splitTaskIds = Array.from(new Set(
         dto.assignments
           .filter(a => a.splitIndex != null || a.parentId != null)
@@ -3385,9 +3268,6 @@ export class SchedulerAssignmentsService implements OnModuleInit {
         await tx.schedulerAssignment.deleteMany({ where: { weekStartDate } });
       }
 
-      // Fragments (Rule 5a — a single detached split part) that this save resolves,
-      // e.g. because the fragment card was dragged back onto the grid and is now part
-      // of dto.assignments. Deleted here so the sidebar doesn't keep a stale duplicate.
       if (dto.resolvedFragmentIds?.length) {
         await tx.schedulerTaskFragment.deleteMany({ where: { id: { in: dto.resolvedFragmentIds } } });
       }
@@ -3447,9 +3327,6 @@ export class SchedulerAssignmentsService implements OnModuleInit {
 
       const reassignedTasks: Array<{ taskId: string; oldAssigneeId: string | null; newAssigneeId: string }> = [];
       const splitTasks: Array<{ taskId: string; designerIds: string[] }> = [];
-      // Same designer keeps the task but its day/hours actually changed within this save —
-      // reassignedTasks only fires on an assignee CHANGE, so this covers the "moved to another
-      // day" case that would otherwise notify nobody.
       const sameDesignerChangedTasks: Array<{ taskId: string; designerId: string }> = [];
       // Task had an assignee before this save but has zero scheduler rows in this week now
       // (pulled off the grid entirely) — the former assignee would otherwise get no signal.
@@ -3548,11 +3425,6 @@ export class SchedulerAssignmentsService implements OnModuleInit {
           });
         }
 
-        // Batched into a single UPDATE instead of one sequential round trip per distinct
-        // assignee group (previously up to 5+ awaited updateMany calls in a row here, each
-        // paying full network latency to hold the transaction open longer). A task can only
-        // belong to one of these groups (they're built as mutually exclusive branches above),
-        // so one CASE WHEN per id is always unambiguous.
         const taskUpdatesById = new Map<string, { assigneeId: string | null; status?: string }>();
         const mergeTaskUpdate = (id: string, patch: { assigneeId: string | null; status?: string }) => {
           const prev = taskUpdatesById.get(id);
@@ -3638,13 +3510,6 @@ export class SchedulerAssignmentsService implements OnModuleInit {
       };
     }, { timeout: 30_000 });
 
-    // The row data is already durably committed at this point — everything below is activity
-    // logging and notification fan-out, not save correctness. It was previously all awaited
-    // before responding, adding 4-6 more sequential round trips (designer/task lookups, per-HOD
-    // notification loops) on top of the transaction itself, directly inflating how long the
-    // caller's PUT appears to take. None of it needs to block the response, so it now runs in
-    // the background — other clients still get notifyOverviewRefresh as soon as the transaction
-    // commits (moved up, not gated behind the slower per-task notification work below).
     if (result.changed) {
       const changedTaskIds = result.incrementalTaskIds?.length
         ? result.incrementalTaskIds
@@ -3742,10 +3607,6 @@ export class SchedulerAssignmentsService implements OnModuleInit {
         ),
       );
 
-      // Notify each newly assigned designer + all HODs
-      // NOTE: role-based filtering (HOD/ADMIN) is no longer possible here — ErpUser (mapped
-      // onto ERP's own user table) carries no role data; role now lives only in the JWT of
-      // the currently authenticated user, not queryable for arbitrary other users.
       const hodUsers: Array<{ id: string }> = [];
       for (const r of result.reassignedTasks) {
         const task = taskById.get(r.taskId);
@@ -3800,9 +3661,6 @@ export class SchedulerAssignmentsService implements OnModuleInit {
       }
     }
 
-    // Same designer, but their day/hours for this task actually changed within this save —
-    // reassignedTasks only covers an assignee CHANGE, so this fills the gap where the
-    // designer's calendar shifted with no notification at all.
     if (result.changed && result.sameDesignerChangedTasks?.length) {
       const taskIds = Array.from(new Set(result.sameDesignerChangedTasks.map((t) => t.taskId)));
       const taskDetails = await this.prisma.task.findMany({
@@ -3926,11 +3784,6 @@ export class SchedulerAssignmentsService implements OnModuleInit {
     }
   }
 
-  /**
-   * Applies distinct (assignedHours, notes) per row in one round-trip via a
-   * CASE-keyed UPDATE, instead of one `update()` per row. The DB is remote, so
-   * each avoided round-trip is real latency saved, not just a query-count nicety.
-   */
   private async batchUpdateLoggedRemainder(
     tx: Prisma.TransactionClient,
     rows: Array<{ id: string; hours: number; notes: string }>,
@@ -3958,11 +3811,6 @@ export class SchedulerAssignmentsService implements OnModuleInit {
     `);
   }
 
-  /**
-   * Same one-round-trip CASE-keyed UPDATE for split-index recompute — every row
-   * gets its own `splitIndex` (its position in `orderedIds`) while `totalParts`
-   * and `parentId` are identical across the set.
-   */
   private async batchUpdateSplitIndices(
     tx: Prisma.TransactionClient,
     taskId: string,
@@ -3986,11 +3834,6 @@ export class SchedulerAssignmentsService implements OnModuleInit {
     `);
   }
 
-  /**
-   * Same one-round-trip pattern as `batchUpdateSplitIndices`, but for callers
-   * (e.g. `detachAssignmentPart`) where `parentId` can legitimately differ
-   * row-to-row, so it needs its own CASE clause rather than one shared value.
-   */
   private async batchUpdateSplitIndicesWithParents(
     tx: Prisma.TransactionClient,
     rows: Array<{ id: string; splitIndex: number; totalParts: number; parentId: string }>,
@@ -4023,15 +3866,6 @@ export class SchedulerAssignmentsService implements OnModuleInit {
     `);
   }
 
-  /**
-   * Whole-designer remaining handoff for an approved reallocation request.
-   * Keeps locked logged-remainder cards on the source designer; packs remaining
-   * hours onto the target after existing cards (append by position).
-   *
-   * Draft timer freeze runs inside the same DB transaction as packing so a failed
-   * handoff (locked week / no capacity) never leaves the requester's session HandedOff
-   * while the reallocation request stays Pending.
-   */
   async applyReallocationHandoff(params: {
     taskId: string;
     fromDesignerId: string;
@@ -4390,11 +4224,6 @@ export class SchedulerAssignmentsService implements OnModuleInit {
     };
   }
 
-  /**
-   * Light StatsBar payload for Requests (and any chrome that needs the same numbers).
-   * Formulas live in designer-stats.util — keep in sync with frontend designer-task-stats.util.js
-   * + live-schedule-from-assignments / designerDashboardSync week slot math.
-   */
   async getDesignerStats(designerId: string, weekStart: string) {
     const trimmedId = designerId?.trim() ?? '';
     if (!this.isNumericId(trimmedId)) {

@@ -47,13 +47,6 @@ export class AuthService {
     return user;
   }
 
-  /**
-   * Short-lived token for the dashboard Socket.IO handshake (auth.token) — used
-   * instead of the long-lived httpOnly session cookie so a cross-origin frontend
-   * deployment (e.g. Vercel, which can't proxy the WS upgrade same-origin) can
-   * open the socket directly against the backend without exposing the full
-   * session token to client JS for longer than a single connection attempt.
-   */
   async mintSocketToken(userId: string, username: string, role: string): Promise<string> {
     return this.jwtService.signAsync({ sub: userId, username, role }, { expiresIn: '2m' });
   }

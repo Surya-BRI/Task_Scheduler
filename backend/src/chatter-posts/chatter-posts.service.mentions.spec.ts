@@ -68,9 +68,6 @@ describe('ChatterPostsService mention eligibility', () => {
     const ids = result.map((user) => user.id);
 
     expect(ids).toEqual(expect.arrayContaining([SALES_A, SALES_B, HOD_ID]));
-    // Department-based exclusion no longer applies: ErpUser has no department
-    // field post-migration, so isDesignerDepartmentMentionable treats every
-    // designer as mentionable (genuine, accepted behavior change).
     expect(ids).toContain(DESIGNER_OTHER);
   });
 

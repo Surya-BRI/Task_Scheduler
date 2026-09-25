@@ -36,9 +36,6 @@ async function request<T>(path: string, init?: RequestInit): Promise<T> {
   if (response.status === 401) {
     const isLoginAttempt = path === '/auth/login' || path.endsWith('/auth/login');
     if (!isLoginAttempt) {
-      // Only drop this app's own state. The cookies belong to the ERP (shared across the domain),
-      // so a 401 here — e.g. an ERP role the Scheduler doesn't accept — must not sign the user out
-      // of the ERP. Middleware lets /login through when expired=1, so there's no redirect loop.
       clearSession();
       redirectToLogin(true);
     }

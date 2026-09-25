@@ -1,7 +1,6 @@
-# Scheduler Monorepo — AI Reference Document
+# Scheduler Monorepo — Technical Reference
 
-> Complete technical reference for the Task Scheduler ERP integration project.
-> Use this document to answer questions about architecture, endpoints, data models, routes, and conventions without reading source files.
+> Technical reference for the Task Scheduler ERP integration project: architecture, endpoints, data models, routes, and conventions.
 
 ---
 

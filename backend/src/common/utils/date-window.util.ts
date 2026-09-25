@@ -9,10 +9,6 @@ export function utcDateOnlyString(d = new Date()): string {
   return shifted.toISOString().split('T')[0];
 }
 
-/**
- * UTC instant of 00:00 GST (Asia/Dubai) for the business calendar day containing `d`.
- * Example: 09 Aug 2026 00:00 GST → 08 Aug 2026 20:00 UTC.
- */
 export function startOfBusinessDayUtc(d = new Date()): Date {
   const [year, month, day] = utcDateOnlyString(d).split('-').map(Number);
   return new Date(Date.UTC(year, month - 1, day) - BUSINESS_UTC_OFFSET_MINUTES * 60_000);

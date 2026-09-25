@@ -258,8 +258,6 @@ export class ReallocationRequestsService {
       .sort((a, b) => a.fullName.localeCompare(b.fullName));
   }
 
-  /** Raw ERP role join — the local Role table is gone, so bucket membership must be
-   * resolved against ERP's own ErpAuthUserRoleMap/ErpMasterRole tables. */
   private async findErpUsersByRoleBuckets(buckets: UserRole[]): Promise<Array<{ id: bigint; userName: string }>> {
     const rows = await this.prisma.$queryRaw<Array<{ userId: bigint; userName: string; roleName: string | null }>>`
       SELECT u.userId, u.userName, r.roleName
@@ -520,9 +518,6 @@ export class ReallocationRequestsService {
       throw new BadRequestException('Target designer must be different from the requester.');
     }
 
-    // Freeze + pack share one DB transaction inside applyReallocationHandoff.
-    // Draft seconds for FIFO are read and frozen there so a failed pack never
-    // leaves the requester timer HandedOff while this request stays Pending.
     const handoff = await this.schedulerAssignments.applyReallocationHandoff({
       taskId: row.taskId,
       fromDesignerId: String(row.requesterId),

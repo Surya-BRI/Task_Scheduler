@@ -57,11 +57,7 @@ export default () => {
       /** Sibling cookie carrying the role, when the external JWT itself has no role claim (e.g. BRI ERP). */
       externalRoleCookie: process.env.EXTERNAL_ROLE_COOKIE ?? '',
       externalRoleNameField: process.env.EXTERNAL_ROLE_NAME_FIELD ?? 'roleName',
-      /** Cookie carrying the ERP auth session id (e.g. "session_id"); when set, logout also marks
-       *  that ErpAuthSession row logged out and nulls the user's fcmToken, like the ERP's own logout. */
       externalSessionCookie: process.env.EXTERNAL_SESSION_COOKIE ?? '',
-      /** Comma-separated sibling cookies (e.g. "role,department,session_id,user_name") to also
-       *  clear on logout — a full SSO logout, not just this app's view of the session. */
       externalLogoutCookies: (process.env.EXTERNAL_LOGOUT_COOKIES ?? '')
         .split(',')
         .map((name) => name.trim())

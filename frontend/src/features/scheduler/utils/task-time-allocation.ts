@@ -41,20 +41,12 @@ export function hoursToSeconds(hours: number): number {
   return Math.max(0, Math.round(h * 3600));
 }
 
-/**
- * Decimal hours for scheduler assignment rows (2 dp, DTO @Min(0.01)).
- * Zero stays zero; any positive seconds become at least 0.01h so a logged card can persist.
- */
 export function secondsToAssignmentHours(seconds: number): number {
   const s = Number.isFinite(seconds) ? Math.max(0, Math.floor(seconds)) : 0;
   if (s <= 0) return 0;
   return Math.max(0.01, Math.round((s / 3600) * 100) / 100);
 }
 
-/**
- * Allocate total logged seconds across slices in day order (Mon before Tue).
- * Locked "· logged" slices are credited first; remaining time fills active slices FIFO.
- */
 export function allocateLoggedSecondsFifo(
   slices: SchedulerSlice[],
   totalLoggedSeconds: number,
@@ -76,10 +68,6 @@ export function allocateLoggedSecondsFifo(
   return map;
 }
 
-/**
- * Allocate total logged hours across slices in day order (Mon before Tue).
- * Locked "· logged" slices are credited first; remaining time fills active slices FIFO.
- */
 export function allocateLoggedHoursFifo(
   slices: SchedulerSlice[],
   totalLoggedHours: number,

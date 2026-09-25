@@ -20,10 +20,6 @@ export const CLOSED_TASK_STATUSES = [
   'CLIENT_REJECTED',
 ] as const;
 
-/**
- * In-review + client-final — assignee / designer set must not change.
- * Return-to-work is REWORK (active); only then may the task be reassigned.
- */
 export const NON_REASSIGNABLE_TASK_STATUSES = [
   ...IN_REVIEW_TASK_STATUSES,
   ...CLOSED_TASK_STATUSES,

@@ -65,11 +65,6 @@ export type SaveSchedulerAssignmentInput = {
   isLocked?: boolean;
 };
 
-/**
- * Hours that didn't fit anywhere in the week being saved. The server finds the next available
- * working day (skipping holidays/full-day leave/designer weekend day-locks; weekends otherwise open)
- * and creates the assignment row(s) itself, atomically with the rest of this save.
- */
 export type SchedulerOverflowInput = {
   designerId: string;
   /** Canonical (parent) task id. */
@@ -224,16 +219,7 @@ export function unlockSchedulerWeek(weekStart: string) {
   return apiClient.delete<SchedulerWeekMeta>(`/scheduler-assignments/week/${encodeURIComponent(weekStart)}/lock`);
 }
 
-/**
- * Wipes all future scheduler assignments for a task. Pass `expectedAssignmentIds` (the
- * assignment row ids the caller believes make up the task's current full state) to have the
- * server reject the wipe if a live row exists outside that set — e.g. a sibling scheduled in
- * a week the caller never loaded — instead of silently deleting it.
- */
 export function clearTaskFromSchedule(taskId: string, expectedAssignmentIds?: string[]) {
-  // Empty arrays must be treated as "omit guard" — `[]` is truthy and would send
-  // `?expectedAssignmentIds=`, which the backend interprets as an empty expected set
-  // and then rejects any live row (false "Another scheduled part changed").
   const ids = (expectedAssignmentIds ?? []).map((id) => String(id ?? '').trim()).filter(Boolean);
   const q = ids.length > 0
     ? `?expectedAssignmentIds=${encodeURIComponent(ids.join(','))}`

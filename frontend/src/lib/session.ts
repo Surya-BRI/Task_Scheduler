@@ -1,7 +1,3 @@
-/**
- * In-memory session cache backed by /auth/me (httpOnly cookie auth).
- * Do not persist role or identity in localStorage — prevents client-side tampering.
- */
 
 import { buildSessionForUser } from './designers';
 import { clearSchedulerNavState } from '@/features/scheduler/utils/schedulerNavigationState';

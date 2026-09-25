@@ -66,10 +66,6 @@ export type DesignerTaskStatRow = {
   createdAt?: Date | string | null;
 };
 
-/**
- * Monthly / weekly closed counts + completion score.
- * Matches Requests StatsBar + DesignerDashboard computeDesignerTaskStats overrides.
- */
 export function computeDesignerTaskBarStats(
   tasks: DesignerTaskStatRow[],
   options: { now?: Date; viewWeekStart?: Date; viewWeekEnd?: Date } = {},
@@ -117,10 +113,6 @@ export type DesignerAssignmentStatRow = {
   requestType?: string | null;
 };
 
-/**
- * Week slot/hours/work-till for Mon–Sun — mirrors live-schedule-from-assignments StatsBar fields.
- * Weekends count the same as weekdays when scheduled.
- */
 export function computeDesignerWeekWorkloadStats(
   rows: DesignerAssignmentStatRow[],
   weekDates: Date[],

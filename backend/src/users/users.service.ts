@@ -25,13 +25,6 @@ export type ErpLoginResult = { userId: bigint; userName: string; role: UserRole 
 export class UsersService {
   constructor(private readonly prisma: PrismaService) {}
 
-  /**
-   * Validates a login directly against ERP's own auth tables
-   * (ErpAuthUsers/ErpAuthUserRoleMap/ErpMasterRole). Returns null if the
-   * account doesn't exist, the password doesn't match, or its ERP role has
-   * no Scheduler equivalent. No local shadow account is created — the
-   * returned userId IS the identity used everywhere else in the app.
-   */
   async validateErpLogin(userName: string, password: string): Promise<ErpLoginResult | null> {
     const rows = await this.prisma.$queryRaw<ErpAuthRow[]>`
       SELECT TOP 1 u.userId, u.userName, u.password, r.roleName

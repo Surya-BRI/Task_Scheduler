@@ -3,10 +3,6 @@
 import { useEffect, useLayoutEffect, useRef, useState } from "react";
 import { useWindowVirtualizer } from "@tanstack/react-virtual";
 
-/**
- * Document/window-scrolled virtual list (chatter posts feed, etc.).
- * Variable row heights via measureElement; scrollMargin tracks list offset under sticky chrome.
- */
 export function VirtualWindowList({
   items,
   estimateSize = 280,

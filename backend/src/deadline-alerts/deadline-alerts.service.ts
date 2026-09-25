@@ -29,10 +29,6 @@ const REMINDER_INTERVALS = [
 
 const SCAN_WINDOW_MS = 5 * 60 * 1000 + 30 * 1000;
 const HORIZON_MS = REMINDER_INTERVALS[0].ms;
-// Tasks in these statuses are not actively being worked and should not generate deadline
-// reminders/overdue nags. Kept in sync with the unified vocabulary in tasks/task-status.util.ts —
-// there is no CANCELLED/CANCELED Task status (that string only applies to LeaveRequest); a
-// paused task is ON_HOLD.
 const ACTIVE_TASK_STATUS_EXCLUSIONS = [
   'CLIENT_ACCEPTED',
   'CLIENT_REJECTED',
@@ -214,10 +210,6 @@ export class DeadlineAlertsService {
     );
   }
 
-  /**
-   * True during the ~5.5 min window after 08:00 GST so the every-5-minute cron fires
-   * overdue nags once per Gulf business day (not every tick while a task stays overdue).
-   */
   private isGstMorningOverdueWindow(now: Date): boolean {
     const gst = new Date(now.getTime() + GST_UTC_OFFSET_MS);
     const minutesOfDay =

@@ -1,8 +1,3 @@
-/**
- * Edge-safe JWT helpers for Next.js middleware.
- * Signature is not verified here — only shape/expiry — to avoid redirect loops
- * with stale cookies before the client can call /auth/logout.
- */
 
 export function isAccessTokenExpired(token: string, nowMs = Date.now()): boolean {
   try {

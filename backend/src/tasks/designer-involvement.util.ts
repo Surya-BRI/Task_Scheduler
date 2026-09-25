@@ -1,7 +1,3 @@
-/**
- * Existing relationships that mean a Designer worked on or was involved in a task.
- * Used for list filtering and IDOR protection — no new join table.
- */
 export function designerInvolvementWhere(userId: string) {
   return {
     OR: [

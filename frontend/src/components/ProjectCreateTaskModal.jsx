@@ -239,9 +239,6 @@ export function ProjectCreateTaskModal({ open, onClose, onCreated, submissionDat
   )
   const checkedSignTypesKey = Array.from(new Set(checkedSignTypes)).sort().join('|')
 
-  // Live "smart" phase suggestion: continue a checked sign type's own lineage
-  // (its last phase + 1) when it has history, otherwise fall back to the
-  // project-wide next phase. Stops recomputing once the HOD picks manually.
   useEffect(() => {
     if (!open || phaseTouched) return
     const distinctSignTypes = Array.from(new Set(checkedSignTypes))

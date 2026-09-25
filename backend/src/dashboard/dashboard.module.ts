@@ -15,9 +15,6 @@ import { PrismaModule } from '../prisma/prisma.module';
       imports: [ConfigModule],
       inject: [ConfigService],
       useFactory: (configService: ConfigService) => ({
-        // Socket tokens are minted by AuthService.mintSocketToken with JWT_ACCESS_SECRET, so verify
-        // with that — not resolveJwtSecret(), which is EXTERNAL_JWT_SECRET in external auth mode and
-        // would reject every socket handshake.
         secret: configService.getOrThrow<string>('jwt.accessSecret'),
         signOptions: {
           expiresIn: (configService.get<string>('jwt.accessExpiresIn') ?? '1d') as never,

@@ -7,10 +7,6 @@ import { UserRole } from '../common/constants/roles.enum';
 import { CurrentUser } from '../common/decorators/current-user.decorator';
 import type { JwtPayload } from '../common/types/jwt-payload.type';
 
-/**
- * Users are ERP accounts (ErpAuthUsers) — Scheduler no longer creates,
- * updates, or deletes them. This controller is read-only.
- */
 @Controller('users')
 @UseGuards(JwtAuthGuard, RolesGuard)
 export class UsersController {

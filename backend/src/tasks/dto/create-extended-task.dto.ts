@@ -44,10 +44,6 @@ class ExtendedTaskCoreDto {
   @IsOptional()
   revisionCode?: string;
 
-  /**
-   * Release-batch grouping for PROJECT tasks — every task created in one submission
-   * shares this value. Omit to auto-resolve (see TasksService.resolveNextPhase).
-   */
   @Type(() => Number)
   @IsInt()
   @Min(1)

@@ -157,9 +157,6 @@ export default function RequestsClient() {
 
   const [stats, setStats] = useState(DEFAULT_STATS);
 
-  // `tab` query param is the single source of truth (default "overtime" omits the param,
-  // matching the convention in TaskDetailsPage/RetailProjectPage/DesignListRecordPage).
-  // A notification deep-link's overtimeId/regularizationId takes priority when present.
   const rawTab = searchParams.get("tab");
   const activeTab = searchParams.get("regularizationId")
     ? "regularization"

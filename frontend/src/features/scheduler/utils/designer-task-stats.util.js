@@ -15,10 +15,6 @@ export const IN_REVIEW_TASK_STATUSES = new Set([
   "SALES_REVIEW",
 ]);
 
-/**
- * Client-final closed revisions.
- * CLIENT_REJECTED closes that revision; a new DESIGN_NEW revision is created separately.
- */
 export const CLOSED_TASK_STATUSES = new Set(["CLIENT_ACCEPTED", "CLIENT_REJECTED"]);
 
 /** In-review + closed — not draggable / not reassignable until REWORK. */
@@ -42,10 +38,6 @@ export function isTaskReassignmentBlocked(status) {
   return NON_REASSIGNABLE_TASK_STATUSES.has(normalizeTaskStatus(status));
 }
 
-/**
- * Source of truth for when a task was closed (accepted or rejected).
- * Prefer completedAt; fall back to updatedAt only when status is already closed.
- */
 export function getTaskCompletionDate(task) {
   if (task?.completedAt) {
     const completedAt = new Date(task.completedAt);
@@ -121,24 +113,6 @@ export function countCompletedTasksInDateRange(tasks, rangeStart, rangeEnd) {
 
 const EMPTY_DONUT_SLICE = { value: 0, pct: 0, color: "#94a3b8" };
 
-/**
- * Task-list stats for the designer dashboard.
- *
- * Monthly / weekly closed + score formulas for StatsBar must stay aligned with
- * backend `dashboard/designer-stats.util.ts` (GET /scheduler-assignments/designer-stats).
- *
- * Buckets:
- * - Active — drafting / planned / in progress / rework
- * - In Review — DESIGN_COMPLETED + HOD/Sales review
- * - On Hold — ON_HOLD
- * - Closed — CLIENT_ACCEPTED + CLIENT_REJECTED (client-final)
- *
- * Monthly / weekly closed counts use Closed only (via completedAt).
- */
-/**
- * @param {Array<object>} tasks
- * @param {{ now?: Date, viewWeekStart?: Date | null, viewWeekEnd?: Date | null }} [options]
- */
 export function computeDesignerTaskStats(tasks, options = {}) {
   const { now = new Date(), viewWeekStart = null, viewWeekEnd = null } = options;
   if (!Array.isArray(tasks) || tasks.length === 0) {

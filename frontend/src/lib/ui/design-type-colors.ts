@@ -1,10 +1,3 @@
-/**
- * Soft pastel badge/block colors by Retail Design Type and Project discipline.
- *
- * Hue map (spread for quick discrimination):
- * Retail  — fuchsia · blue · cyan · green
- * Project — yellow · orange · rose · slate
- */
 
 export type RetailDesignTypeCode =
   | 'ESTIMATION_PURPOSE'
@@ -207,10 +200,6 @@ export function resolveDisciplinePillClass(value: unknown): string | null {
   return code ? PROJECT_DISCIPLINE_PILL_CLASSES[code] : null;
 }
 
-/**
- * Prefer retail design-type color, then project discipline color,
- * otherwise the provided fallback (e.g. rotating palette).
- */
 export function resolveTaskBlockColorClass(
   designType: unknown,
   fallbackClass: string,

@@ -34,9 +34,6 @@ import { DeadlineAlertsModule } from './deadline-alerts/deadline-alerts.module';
       load: [configuration],
       validationSchema: envValidationSchema,
     }),
-    // Only the default throttler is global. Named limits (login, upload, etc.) are
-    // applied per-route via @Throttle({ default: ... }) — extra names in forRoot()
-    // would otherwise apply to every endpoint and cap the whole API at the lowest limit.
     ThrottlerModule.forRoot([{ name: 'default', ttl: 60_000, limit: 100 }]),
     ScheduleModule.forRoot(),
     PrismaModule,

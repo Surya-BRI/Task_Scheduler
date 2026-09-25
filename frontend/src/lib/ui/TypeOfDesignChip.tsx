@@ -11,10 +11,6 @@ type TypeOfDesignChipProps = {
   className?: string;
 };
 
-/**
- * Soft pastel pill for Retail design subtypes / Project disciplines —
- * same visual language as Design List status badges.
- */
 export function TypeOfDesignChip({ value, className = '' }: TypeOfDesignChipProps) {
   const raw = String(value ?? '').trim();
   if (!raw || raw === '—') {

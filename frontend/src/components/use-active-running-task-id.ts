@@ -13,10 +13,6 @@ import { connectDashboardRealtime } from '@/lib/realtime'
 export const ACTIVE_TIMER_BLOCKED_MESSAGE =
   'Pause or complete the task that is currently running before starting another.'
 
-/**
- * Which task has an active running clock for this designer.
- * Merges localStorage cache with GET /tasks/running-timer and socket updates.
- */
 export function useActiveRunningTaskId() {
   const [syncTick, setSyncTick] = useState(0)
   const [serverRunningTaskId, setServerRunningTaskId] = useState<string | null>(null)

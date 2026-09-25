@@ -1,7 +1,3 @@
-/**
- * Appends Prisma SQL Server pool settings when missing from the connection URL.
- * Prevents P2024 timeouts when many parallel queries run (e.g. projects overview).
- */
 export function withPrismaConnectionPool(url: string | undefined): string | undefined {
   if (!url?.trim()) return url;
 

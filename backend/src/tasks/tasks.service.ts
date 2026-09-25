@@ -142,10 +142,6 @@ const TASK_SELECT = {
   updatedAt: true,
 };
 
-/**
- * Fast first-paint payload: scalars + people + detail lines, no attachment rows.
- * Attachments / signed URLs / scheduler / reallocation load via findOneExtras.
- */
 const TASK_CORE_SELECT = {
   id: true,
   taskNo: true,
@@ -290,8 +286,6 @@ const TASK_LIST_SELECT = {
   updatedAt: true,
 };
 
-
-
 export type TaskFilters = {
   projectId?: string;
   status?: string;
@@ -355,8 +349,6 @@ export class TasksService {
     @Optional() private readonly dashboardRealtime?: DashboardRealtimeService,
   ) {}
 
-  /** Raw ERP role join — the local Role table is gone, so bucket membership must be
-   * resolved against ERP's own ErpAuthUserRoleMap/ErpMasterRole tables. */
   private async findErpUsersByRoleBuckets(buckets: UserRole[]): Promise<{ id: string; userName: string }[]> {
     const rows = await this.prisma.$queryRaw<ErpRoleRow[]>`
       SELECT u.userId, u.userName, r.roleName
@@ -663,11 +655,6 @@ export class TasksService {
     };
   }
 
-  /**
-   * Revision for Create Task / next-revision: stay on the open line.
-   * After Client Rejected (no open successor yet), allow R{max+1}.
-   * Pure Client Accepted lines stay blocked.
-   */
   private async resolveRevisionCodeForCreate(
     tx: Prisma.TransactionClient | PrismaService,
     params: { projectId: string; opNo: string; designType: string },
@@ -807,11 +794,6 @@ export class TasksService {
     return { maxPhase, bySignType };
   }
 
-  /**
-   * Smart phase suggestion: if any sign type in this submission already has phase
-   * history in the project, continue that lineage (its last phase + 1); otherwise
-   * start a new project-wide phase (maxPhase + 1).
-   */
   private resolveNextPhase(context: PhaseContext, signTypes: Array<string | null | undefined>): number {
     const lineages = Array.from(new Set(signTypes.filter((s): s is string => !!s)))
       .map((signType) => context.bySignType.get(signType))
@@ -1145,9 +1127,6 @@ export class TasksService {
       await this.taskFilesService.assertKeysExist(fileKeysToCheck);
     }
 
-    // ── RETAIL PATH: 1 task + N retail detail rows ─────────────────────────
-    // Reads (revision/duplicate + TASK_SELECT) stay outside the interactive tx —
-    // remote SQL Server + heavy joins blow Prisma's default 5s timeout (P2028).
     if (dto.designType === 'Retail') {
       const requestedRevision = this.normalizeRevisionCode(dto.task.revisionCode);
       const revisionCode = await this.assertRevisionAllowedForCreate(this.prisma, {
@@ -1340,9 +1319,6 @@ export class TasksService {
       }
     }
 
-    // Only writes inside the transaction; reads moved out where possible to avoid P2028 timeout.
-    // Revision is resolved once for the whole submission (reject-only bump policy).
-    // Returns task IDs and detail IDs; attachments are batched outside in one createMany.
     const created = await this.prisma.$transaction(async (tx) => {
       const results: { taskId: string; detailId: string }[] = [];
 
@@ -1544,9 +1520,6 @@ export class TasksService {
     } = filters;
     const skip = (page - 1) * limit;
 
-    // Role-based base filters — preserve sales review queue / history when requested.
-    // Queue keeps active Sales Review work plus temporary holds parked from Sales Review
-    // so Sales can resume without hunting History.
     let baseWhere: Record<string, unknown> = {};
     if (role === UserRole.SALESPERSON && salesQueue) {
       baseWhere = {
@@ -1658,11 +1631,6 @@ export class TasksService {
       addAndFilter({ dueDate: dueRange });
     }
 
-    // Sales design-list (no queue/history flag): scope to this salesperson's work
-    // so Sales cannot pull the org-wide task catalog.
-    // When projectId is set (task-creation / project details page), skip the name filter —
-    // salesPerson on the project often won't match the logged-in user (e.g. Sithara viewing
-    // FahadQuazi's OP), which hid tasks they just created.
     if (
       role === UserRole.SALESPERSON &&
       !salesQueue &&
@@ -1742,15 +1710,6 @@ export class TasksService {
     };
   }
 
-  /**
-   * Distinct task ids the salesperson already decided on after Sales Review
-   * (accepted / rejected / rework / other leave from SALES_REVIEW).
-   * Active ON_HOLD parked from Sales Review is excluded by findAll's salesHistory filter
-   * so those remain in the Queue for Resume.
-   *
-   * Uses DISTINCT over activity rows (no take 500–1000 cap) so deep pages stay correct;
-   * findAll then paginates Task rows with skip/limit.
-   */
   private async findSalesHistoryTaskIds(salesUserId: string): Promise<string[]> {
     const approved = ActivityAction.CLIENT_APPROVED;
     const rejected = ActivityAction.CLIENT_REJECTED_TASK;
@@ -1890,10 +1849,6 @@ export class TasksService {
     };
   }
 
-  /**
-   * Lazy extras for task detail: signed attachment URLs, scheduler hours, reallocation CTA.
-   * Pair with GET /tasks/:id?view=core for first paint.
-   */
   async findOneExtras(id: string, userId?: string, role?: UserRole) {
     if (!this.isUuid(id)) {
       throw new BadRequestException('Invalid task id');
@@ -1994,10 +1949,6 @@ export class TasksService {
     };
   }
 
-  /**
-   * Created By = actor of TASK_CREATED (Sales or HOD).
-   * Reviewer HOD = HOD/Admin who first assigned the task (activity), else retail hodName / technicalHead.
-   */
   private async getTaskPeopleLabels(
     taskId: string,
     task: {
@@ -2390,9 +2341,6 @@ export class TasksService {
     ]);
     if (!assignee) throw new NotFoundException('Assignee not found');
 
-    // Split tasks have assigneeId=null with real designers only in the taskDesigners junction —
-    // read both so reassigning a split task is recognized as a reassignment and the designers
-    // being removed are notified, not just whoever happened to hold the single assigneeId field.
     const previousDesignerIds = new Set(
       [existing.assigneeId, ...existingSplitDesigners.map((d) => d.designerId)]
         .filter((value): value is bigint => value != null)
@@ -2482,11 +2430,6 @@ export class TasksService {
     return this.normalizeTaskForApi(withUrls);
   }
 
-  /**
-   * Preview of what `updateStatus(..., ON_HOLD)` would remove from the scheduler grid —
-   * every current/future SchedulerAssignment row for this task, grouped by designer. Lets
-   * the "Put On Hold" button warn the user before the unconditional whole-task wipe fires.
-   */
   async getHoldImpact(taskId: string) {
     if (!this.isUuid(taskId)) throw new BadRequestException('Invalid task id');
     const todayMidnight = new Date(new Date().toISOString().split('T')[0] + 'T00:00:00.000Z');
@@ -2594,14 +2537,6 @@ export class TasksService {
 
     let updatedTask: Awaited<ReturnType<typeof this.prisma.task.findUniqueOrThrow>>;
 
-    // ON_HOLD: status update + future-assignment wipe (and optional consolidation guard) must
-    // run in one transaction. Without that, a sibling row created between the expected-ids
-    // check and deleteMany would still be wiped even though the guard "passed" — matching
-    // clearTaskSchedule's atomic check+delete.
-    //
-    // Keep the interactive transaction write-only (no TASK_SELECT joins). Remote SQL Server
-    // already needs ~5–7s for a full task read, which blows Prisma's default 5s tx timeout
-    // (P2028) if the heavy select runs inside the transaction.
     if (newStatusApi === 'ON_HOLD') {
       const todayMidnight = new Date(new Date().toISOString().split('T')[0] + 'T00:00:00.000Z');
       await this.prisma.$transaction(
@@ -3640,9 +3575,6 @@ export class TasksService {
       }
 
       if (existing) {
-        // Start/resume (and any non-pause sync): never let a stale tab regress banked time.
-        // If a run is already live, fold it into the bank first so that elapsed is not dropped
-        // when we stamp a fresh server runStartedAt.
         const serverBanked = existing.runStartedAt
           ? effectiveWorkSessionSeconds(existing.durationSeconds, existing.runStartedAt)
           : normalizeWorkSeconds(existing.durationSeconds);
@@ -3662,9 +3594,6 @@ export class TasksService {
         return tx.taskWorkSession.findUnique({ where: { id: existing.id } });
       }
 
-      // No Draft: a prior slice may have been marked HandedOff. If the designer is
-      // still assigned/scheduled on this task, reopen that same session instead of
-      // creating a second timer row.
       if (runStartedAt) {
         const handedOff = await tx.taskWorkSession.findFirst({
           where: { taskId, designerId: userIdBig, status: 'HandedOff' },
@@ -3880,10 +3809,6 @@ export class TasksService {
     }
   }
 
-  /**
-   * True when the designer still has live ownership on the task (assignee, junction,
-   * or scheduler row). Historical workSessions alone do not count — those stay HandedOff.
-   */
   private async designerCanRestartTimer(
     taskId: string,
     userId: string,

@@ -124,10 +124,6 @@ export class RegularizationRequestsService implements RegularizationRequestsCont
     return { dayStart, dayEnd };
   }
 
-  /**
-   * Regularization is for attendance on a working day. Any approved leave covering
-   * that calendar date (full-day or half-day) blocks create and approve.
-   */
   private async assertNoApprovedLeaveBlockingRegularization(
     designerId: string,
     date: Date,
@@ -270,10 +266,6 @@ export class RegularizationRequestsService implements RegularizationRequestsCont
     return this.mapRow(row);
   }
 
-  /** Raw ERP role join — the local Role/Department tables are gone, so HOD
-   * membership must be resolved against ERP's own ErpAuthUserRoleMap/ErpMasterRole
-   * tables, and (since ERP has no department concept on ErpAuthUsers) HOD lookups
-   * are no longer department-scoped — every HOD is returned. */
   private async findHodUsers(): Promise<Array<{ id: bigint; userName: string }>> {
     const rows = await this.prisma.$queryRaw<Array<{ userId: bigint; userName: string; roleName: string | null }>>`
       SELECT u.userId, u.userName, r.roleName
@@ -515,10 +507,6 @@ export class RegularizationRequestsService implements RegularizationRequestsCont
       if (byId) return byId;
     }
 
-    // `id` is a SQL Server uniqueidentifier column — comparing it against a
-    // non-UUID key (the common case: callers pass a projectNo) throws P2023
-    // instead of just not matching, so only include it in the OR when it's
-    // actually a UUID we haven't already checked above.
     return this.prisma.project.findFirst({
       where: isUuidString(key) ? { id: key } : { projectNo: key },
       select,
@@ -697,11 +685,6 @@ export class RegularizationRequestsService implements RegularizationRequestsCont
       );
     }
 
-    // The scheduler assignment this request was validated against at submission time may
-    // have since moved/been deleted (the two systems aren't re-synced between submission
-    // and review). Approving is still correct — the work happened regardless of where the
-    // task sits in the scheduler now — but the drift should be visible in the audit trail
-    // rather than silently treated as if the link still holds.
     let schedulerLinkStale = false;
     if (dto.status === 'Approved' && existing.taskId) {
       const stillLinked = await this.findSchedulerAssignmentForDate(

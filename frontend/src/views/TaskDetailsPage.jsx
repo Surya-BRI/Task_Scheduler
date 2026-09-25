@@ -1667,9 +1667,6 @@ export function TaskDetailsPage() {
   // Project Files: designers view-only; Sales/HOD can add; only HOD can delete.
   const canAddProjectFiles = sessionRole === 'HOD' || sessionRole === 'SALESPERSON'
   const canDeleteProjectFiles = sessionRole === 'HOD'
-  // HOD has a single login: keep Move Status (Start HOD Review, etc.) even when the
-  // task was opened from the personal designer dashboard (from=designer-queue).
-  // Salesperson must NOT get the HOD Move Status panel — only Sales Review actions.
   const isDesignerWorkMode =
     isDesigner || (isHod && sessionRole !== 'HOD' && from === FROM_DESIGNER_QUEUE)
   const isHodManagementMode = isHod && !isDesignerWorkMode && !isSales
@@ -1731,9 +1728,6 @@ export function TaskDetailsPage() {
     () => serializeSignRows(signRows) !== savedRowsSnapshot,
     [signRows, savedRowsSnapshot],
   )
-  // True when current rows differ from load / last submission. After a successful
-  // Save (and with no further edits), Submit is enabled; any new edit disables it
-  // again until the latest changes are saved.
   const hasSignRowChangesSinceSubmit = useMemo(
     () => serializeSignRows(signRows) !== submittedRowsSnapshot,
     [signRows, submittedRowsSnapshot],
@@ -2725,7 +2719,6 @@ export function TaskDetailsPage() {
               ) : null}
             </div>
           ) : null}
-
 
           <div className="grid gap-2.5 lg:grid-cols-[1fr_265px]">
             <section className="rounded-lg border border-slate-200 bg-white p-2.5 shadow-sm">
@@ -4119,5 +4112,4 @@ export function TaskDetailsPage() {
     </div>
   )
 }
-
 

@@ -16,10 +16,6 @@ function isPrismaTxStartTimeout(err: unknown): boolean {
   return /Unable to start a transaction in the given time/i.test(message);
 }
 
-/**
- * Prevents overlapping cron runs across processes using SQL Server app locks,
- * with an in-process guard for same-instance overlap.
- */
 @Injectable()
 export class CronLockService {
   private readonly logger = new Logger(CronLockService.name);
@@ -27,21 +23,6 @@ export class CronLockService {
 
   constructor(private readonly prisma: PrismaService) {}
 
-  /**
-   * Runs `fn` while holding a cross-process SQL Server app lock on `resource`,
-   * returning `fn`'s result, or `LOCK_NOT_ACQUIRED` if the lock is already held.
-   *
-   * Acquire, `fn`, and release all run inside one `$transaction` so they share
-   * the same physical DB connection — `sp_getapplock`'s `@LockOwner = 'Session'`
-   * ties the lock to whichever connection acquired it, and running acquire/release
-   * as separate pooled calls (the previous `tryAcquire()` + detached release
-   * closure design) let Prisma's connection pool hand them different physical
-   * connections, causing "lock not currently held" release failures.
-   *
-   * Note: this holds one pool connection for the duration of `fn`. Callers should
-   * keep `fn` reasonably short. If the pool is exhausted, Prisma raises P2028 —
-   * we treat that as a soft skip (`LOCK_NOT_ACQUIRED`) so cron noise does not crash the process.
-   */
   async withLock<T>(
     resource: string,
     fn: () => Promise<T>,

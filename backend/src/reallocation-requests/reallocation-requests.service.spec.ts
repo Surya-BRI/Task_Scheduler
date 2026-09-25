@@ -429,11 +429,6 @@ describe('ReallocationRequestsService', () => {
     expect(result[1].remainingHours).toBe(6);
   });
 
-  // listEligibleDesigners used to query prisma.user by department/role and
-  // fullName OR-matching. ErpAuthUsers has no local role/department table, so
-  // eligible designers now come from a raw-SQL role-bucket join
-  // (findErpUsersByRoleBuckets, backed by $queryRaw) instead — see
-  // reallocation-requests.service.ts around line 246-291.
   describe('listEligibleDesigners', () => {
     it('queries by team names when project team is present (not all users)', async () => {
       mockPrisma.task.findUnique.mockResolvedValue({

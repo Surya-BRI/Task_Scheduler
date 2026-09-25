@@ -1,13 +1,6 @@
 import { io, type Socket } from 'socket.io-client';
 import { env } from './env';
 
-/**
- * Fetches a short-lived Socket.IO auth token via the same-origin BFF route
- * (which holds the httpOnly session cookie). Needed because the socket
- * connects directly to the backend origin (NEXT_PUBLIC_WS_ORIGIN) when the
- * frontend is deployed somewhere that can't proxy the WS upgrade same-origin
- * (e.g. Vercel) — the session cookie itself never reaches that origin.
- */
 let cachedWsToken: { token: string; expiresAt: number } | null = null;
 /** Reuse ws-token within its TTL window to avoid auth storms on reconnect. */
 const WS_TOKEN_CACHE_MS = 90_000;
@@ -134,11 +127,6 @@ function ensureSharedSocket(): Socket | null {
   try {
     sharedSocket = io(`${getSocketOrigin()}/dashboard`, {
       path: '/socket.io',
-      // true (the library default) so requests hit `/socket.io/` — the backend's
-      // nginx reverse proxy 301-redirects the bare `/socket.io` path to add the
-      // slash, and browsers refuse to follow a redirect during a WS handshake.
-      // Safe for the same-origin/PM2 rewrite path too: next.config.ts's
-      // skipTrailingSlashRedirect already makes Next.js indifferent to either form.
       addTrailingSlash: true,
       withCredentials: true,
       transports: ['websocket', 'polling'],
@@ -167,10 +155,6 @@ function ensureSharedSocket(): Socket | null {
       broadcastTimerUpdated(payload);
     });
 
-    // socket.io gives up permanently after reconnectionAttempts is exhausted (e.g. a
-    // prolonged backend outage) — without this, the tab silently falls back to whatever
-    // polling the caller has and never becomes "realtime" again for the rest of the session.
-    // Retry the whole connection cycle periodically instead of giving up forever.
     sharedSocket.io.on('reconnect_failed', () => {
       if (subscribers.size === 0) return;
       if (sharedRetryTimer) clearTimeout(sharedRetryTimer);

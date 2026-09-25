@@ -170,13 +170,6 @@ export class OvertimeRequestsService {
     }
   }
 
-  /**
-   * The 8h/12h daily ceiling was previously only enforced as display math on the
-   * frontend (designerDashboardSync.js clamping the rendered blocks) — nothing
-   * rejected persisting regular scheduled hours + approved OT hours above 12h
-   * on a single day. Since only one OT request per designer per day is allowed
-   * (see validatePolicyRules), the check only needs this one request's hours.
-   */
   private async assertDailyCeilingNotExceeded(
     client: OvertimeDbClient,
     designerId: string,
@@ -618,10 +611,6 @@ export class OvertimeRequestsService {
     return rows.map((row) => this.mapRowForDesignerView(row));
   }
 
-  // Note: HOD scoping used to be filtered by the designer's department, but ERP
-  // has no department concept on ErpAuthUsers — every HOD now sees all pending
-  // requests company-wide (managerId/role are unused now but kept for call-site
-  // compatibility with the controller).
   async findPendingApprovalsForView(_managerId: string, _role: UserRole) {
     const rows = await this.prisma.overtimeRequest.findMany({
       where: { status: 'SUBMITTED' },
@@ -677,9 +666,6 @@ export class OvertimeRequestsService {
     const now = new Date();
 
     const request = await this.prisma.$transaction(async (tx) => {
-      // Duplicate/overlap/weekly-limit reads happen inside the same serializable
-      // transaction as the insert below, so two concurrent submissions can't both
-      // pass validation before either write lands.
       await this.validatePolicyRules(
         tx,
         designerId,
@@ -827,9 +813,6 @@ export class OvertimeRequestsService {
       throw new BadRequestException('Missing date, startTime, endTime, or taskId');
     }
 
-    // Re-validate eligibility every edit, not just on initial create — a draft/rejected
-    // request can otherwise be edited days later, or onto a task/day the designer was
-    // never scheduled for, without ever re-checking either invariant.
     assertOvertimeDateIsToday(nextDate);
     await this.assertTaskScheduledForDate(String(request.designerId), nextTaskId, nextDate);
 
@@ -1357,10 +1340,6 @@ export class OvertimeRequestsService {
     return `${base}?${params.toString()}#overtime`;
   }
 
-  /** Raw ERP role join — the local Role/Department tables are gone, so HOD
-   * membership must be resolved against ERP's own ErpAuthUserRoleMap/ErpMasterRole
-   * tables, and (since ERP has no department concept on ErpAuthUsers) HOD
-   * notifications are no longer department-scoped — every HOD is notified. */
   private async findHodUsers(): Promise<Array<{ id: bigint; userName: string }>> {
     const rows = await this.prisma.$queryRaw<Array<{ userId: bigint; userName: string; roleName: string | null }>>`
       SELECT u.userId, u.userName, r.roleName

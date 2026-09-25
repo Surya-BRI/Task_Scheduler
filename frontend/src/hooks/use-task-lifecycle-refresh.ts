@@ -18,10 +18,6 @@ type Options = {
   onRefresh: () => void
 }
 
-/**
- * Cross-tab + realtime refresh when a task's status/timer lifecycle changes
- * (submit, hold, etc.) or the dashboard broadcasts a task update.
- */
 export function useTaskLifecycleRefresh({
   taskId = null,
   enabled = true,

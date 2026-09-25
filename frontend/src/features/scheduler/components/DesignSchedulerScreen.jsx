@@ -126,10 +126,6 @@ const getRequestBlockLabel = (row) => {
     return "Request";
 };
 
-/**
- * Computes schedule/task updates after a drop onto a designer day.
- * @param {boolean} allowOvertime - If false, caps each day at DAILY_CAPACITY (normal hours only).
- */
 function buildPreparedDropAssignment({
     droppedTask,
     taskId,
@@ -255,9 +251,6 @@ function buildPreparedDropAssignment({
             splitIndex: totalParts > 1 ? index + 1 : undefined,
             totalParts: totalParts > 1 ? totalParts : undefined,
             status: "assigned",
-            // Only the first part reuses droppedTask's own id/fragmentId (see call sites) —
-            // it's the one that resolves the backend fragment row. Any additional part
-            // spawned here is a brand-new entity with no fragment of its own yet.
             fragmentId: index === 0 ? droppedTask.fragmentId : undefined,
         };
         const dayKey = part.dayIndex.toString();
@@ -269,9 +262,6 @@ function buildPreparedDropAssignment({
             updatedSchedules[targetDesignerId][dayKey].push(part.id);
         }
     });
-    // Hours that don't fit anywhere in the currently visible week. The server places these
-    // itself (next available working day, possibly next week) atomically with the rest of
-    // this save — see `overflow` on the save payload and `placeOverflowCapacity` backend-side.
     const overflow = remainingHours > 0
         ? { designerId: targetDesignerId, taskId: parentId, hours: remainingHours }
         : null;
@@ -289,10 +279,6 @@ function buildPreparedDropAssignment({
     };
 }
 
-// Shrinks the original card left behind on a busy designer's day to exactly the hours
-// they logged, and locks it so it can no longer be dragged. Called after a partial
-// handoff so the source designer's calendar keeps a real, visible, persisted record
-// instead of the task simply vanishing from their day.
 function applyLoggedCardPatch(preparedAssignment, patch, sourceId, sourceDay) {
     if (!preparedAssignment || !patch) return preparedAssignment;
     const existing = preparedAssignment.updatedTasks[patch.taskId];
@@ -343,9 +329,6 @@ function formatLocalYyyyMmDd(date) {
     return `${y}-${m}-${d}`;
 }
 
-// Maps assignment rows (from payload or backend response) back to frontend task IDs
-// so splitIndex/totalParts can be applied to the correct task object.
-// Keys by (designerId, dayIndex, taskId) to handle multiple parts with the same taskId.
 function applySplitIndexFromRows(rows, schedules, tasks) {
     const result = {};
     if (!rows?.length) return result;
@@ -372,12 +355,6 @@ function applySplitIndexFromRows(rows, schedules, tasks) {
     return result;
 }
 
-/**
- * After a week save, map each persisted SchedulerAssignment row id back onto the
- * matching frontend card. Save does deleteMany + createMany, so without this
- * assignmentRowId goes stale/empty and Unassign/Hold falsely trips the
- * expectedAssignmentIds consolidation guard.
- */
 function applyAssignmentMetaFromRows(rows, schedules, tasks) {
     const result = {};
     if (!rows?.length) return result;
@@ -639,17 +616,8 @@ function buildSchedulerStateFromErpAssignments(records, rows, designers) {
     records.forEach((record, idx) => {
         tasksObj[record.id] = buildSidebarTaskFromQueueRecord(record, idx);
     });
-    // Tracks how many times each taskId has been seen so far.
-    // Split tasks (same taskId across multiple designers or days) each get a unique
-    // frontend ID so they never overwrite each other in tasksObj.
-    // First occurrence → original taskId; subsequent → "${taskId}-rp${n}".
-    // buildWeekSnapshotPayload resolves these back to the canonical taskId via parentId.
     const seenTaskCount = new Map();
     for (const row of rows) {
-        // Detached split-part fragments (Rule 5a) never have a grid placement — they're
-        // sidebar-only cards, independent of whichever siblings remain actively scheduled.
-        // Handled before the designerId checks below since a fragment's sourceDesignerId
-        // can legitimately be blank.
         if (row.isFragment) {
             const fragTaskId = String(row.taskId ?? "").trim();
             if (!fragTaskId) continue;
@@ -799,10 +767,6 @@ function buildSchedulerStateFromErpAssignments(records, rows, designers) {
         if (scheduledHours > 0) {
             if (!schedulesObj[designerId][dayStr].includes(frontendId))
                 schedulesObj[designerId][dayStr].push(frontendId);
-            // Row-derived entries (including every split part) always render as plain "assigned"
-            // grid cards. The one true sidebar-visible status per task (ON_HOLD/assigned/unassigned)
-            // is decided once, below, from the canonical record — never per split part — so an
-            // on-hold task with multiple parts across days/weeks can't inflate the sidebar count.
             tasksObj[frontendId] = {
                 ...baseFromRecord,
                 estimatedHours: scheduledHours,
@@ -844,10 +808,6 @@ function buildSchedulerStateFromErpAssignments(records, rows, designers) {
             };
         }
     }
-    // Decide the ONE sidebar-visible status per real task from the canonical record alone —
-    // never from split-part rows, and never conditional on whether this specific week has a row.
-    // This runs for every real task regardless of assignedIds, so a task keeps its correct
-    // ON_HOLD/assigned/unassigned state even if it also has a (now purely "assigned") row this week.
     for (const id of Object.keys(recordById)) {
         const record = recordById[id];
         const sourceStatus = String(record?.status ?? "").toUpperCase();
@@ -863,11 +823,6 @@ function buildSchedulerStateFromErpAssignments(records, rows, designers) {
     return { tasksObj, schedulesObj };
 }
 
-/**
- * Keeps a state value and a ref in sync automatically.
- * The ref is updated synchronously on every set call — safe to read
- * inside async callbacks without stale-closure problems.
- */
 function useStateRef(initial) {
     const [state, setState] = useState(initial);
     const ref = useRef(initial);
@@ -947,9 +902,6 @@ export function DesignSchedulerScreen() {
     const schedulesRef = useRef({});
     tasksRef.current = tasks;
     schedulesRef.current = schedules;
-    // Synchronous map of frontend card id → live SchedulerAssignment row id.
-    // Save recreates DB rows; setTasks is async, so Unassign/Hold must read this
-    // ref (not only React state) to avoid sending a stale/empty expectedAssignmentIds.
     const assignmentRowIdByFrontendIdRef = useRef({});
     const syncAssignmentRowIdRef = (patch) => {
         if (!patch || typeof patch !== 'object') return;
@@ -971,34 +923,16 @@ export function DesignSchedulerScreen() {
     const currentUserIdRef = useRef(null);
     const persistInFlightRef      = useRef(false);
     const pendingPersistRef       = useRef(null);
-    // Overflow entries (hours that didn't fit this week) accumulate here across debounced
-    // persistWeekSnapshot calls — the server places and persists them atomically with the
-    // rest of the next flushPersist save; see placeOverflowCapacity backend-side.
     const pendingOverflowRef      = useRef([]);
     const flushPersistRef         = useRef(null);
     const pendingReloadRef        = useRef(false);
     const pendingQueueRefreshRef  = useRef(false);
-    // Bumped on every persistWeekSnapshot call. A pending/in-flight check alone isn't enough:
-    // a save can start AND fully finish (clearing those flags) entirely within the time a
-    // reload's own GET is in flight, so the flags read "clear" by the time the reload's data
-    // comes back even though that data was fetched from before the save committed. Comparing
-    // this counter across the reload's fetch window catches that case too.
     const saveGenerationRef = useRef(0);
-    // Guards against overlapping reloadWeek() calls resolving out of order — e.g. the mount
-    // effect fires once with designers=[] (before /users?role=DESIGNER resolves) and again once
-    // designers loads, since reloadWeek's identity changes with it. Both are legitimate calls,
-    // but "whichever network round trip finishes last wins" is the wrong rule: if the first
-    // (empty-designers) call's fetch happens to resolve after the second (correct) one, it
-    // silently overwrites a correct render with one where every row gets skipped (schedulesObj
-    // has no entry for any designer). Only the most recently STARTED call is allowed to apply.
     const reloadSequenceRef = useRef(0);
     const persistDebounceRef      = useRef(null);
     /** Resolvers waiting for save idle (flush-before week navigate). */
     const persistIdleWaitersRef   = useRef([]);
     const weekNavLockRef          = useRef(false);
-    // Fragment ids (Rule 5a) resolved by folding a detached part back into a whole-task
-    // consolidation — collected outside the normal per-task status scan in flushPersist
-    // since those tasks are deleted from state entirely, not transitioned to "assigned".
     const extraResolvedFragmentIdsRef = useRef([]);
     /** Last successfully persisted assignment rows — used to compute incremental deltas. */
     const lastSavedAssignmentsRef = useRef([]);
@@ -1007,10 +941,6 @@ export function DesignSchedulerScreen() {
     const [showOnlyOnHold, setShowOnlyOnHold] = useState(false);
     const splitIdCounterRef = useRef(0);
     const lastOptimizerSchedulesRef = useRef(null);
-    // Tracks which (sourceDesignerId, canonicalTaskId) pairs have already had their
-    // logged timer hours deducted during this session, so handing off a task that is
-    // split across multiple blocks for the same busy designer doesn't subtract the
-    // same worked hours more than once.
     const consumedWorkedHoursRef = useRef(new Set());
     const cancelOvertimeButtonRef = useRef(null);
     const placeOnGapButtonRef = useRef(null);
@@ -1206,10 +1136,6 @@ export function DesignSchedulerScreen() {
                 a.parentId = a.parentId ?? a.taskId;
             }
         });
-        // Pass 2 — assign splitIndex/totalParts for the same task spread across different days
-        // or across different designers. Group by taskId only so cross-designer splits
-        // are also re-sorted — e.g. if Alexander's part moves to a later day than Benjamin's,
-        // the splitIndex must reflect the new dayIndex order regardless of who holds each part.
         const crossDayGroups = new Map();
         filtered.forEach((a) => {
             if (!crossDayGroups.has(a.taskId)) crossDayGroups.set(a.taskId, []);
@@ -1248,9 +1174,6 @@ export function DesignSchedulerScreen() {
             setDayLockKeys(new Set(lockKeys.filter((k) => String(k).includes("|"))));
             const freshQueueRecords = queueRecordsRef.current;
             const fetchedVersion = Number(weekPayload?.version ?? 0);
-            // Version numbers are scoped per week — comparing Jul 13's version 5 against Jul 6's
-            // cached version 161 would falsely mark the fetch stale and leave the previous week's
-            // grid on screen when navigating with ‹ ›.
             const isStaleVersion =
                 weekStartStr === weekVersionWeekStartRef.current &&
                 fetchedVersion < weekVersionRef.current;
@@ -1412,10 +1335,6 @@ export function DesignSchedulerScreen() {
         pendingOverflowRef.current = [];
         let saveSucceeded = false;
         try {
-            // A fragment (Rule 5a) is "resolved" once it's been dragged back onto the grid —
-            // buildPreparedDropAssignment carries its fragmentId onto the placed part (and
-            // only that part) so the backend row can be cleaned up in the same save. Plus
-            // any fragments folded back into a whole-task consolidation (see commitPanelDrop).
             const resolvedFragmentIds = Array.from(new Set([
                 ...Object.values(t)
                     .filter((task) => task.fragmentId && task.status !== "unassigned" && task.status !== "ON_HOLD")
@@ -1425,9 +1344,6 @@ export function DesignSchedulerScreen() {
             extraResolvedFragmentIdsRef.current = [];
             const allAssignments = buildWeekSnapshotPayload(s, t);
             const affectedTaskIds = computeAffectedTaskIds(lastSavedAssignmentsRef.current, allAssignments);
-            // Incremental path: only when something actually moved. Empty affected list with no
-            // overflow/fragments means a no-op flush — skip the PUT so we don't fall back to a
-            // full-week deleteMany+createMany for an unchanged board.
             if (
                 affectedTaskIds.length === 0 &&
                 resolvedFragmentIds.length === 0 &&
@@ -1447,10 +1363,6 @@ export function DesignSchedulerScreen() {
                 ...(pendingOverflow.length > 0 ? { overflow: pendingOverflow } : {}),
             };
 
-            // Apply corrected splitIndex/totalParts from the payload immediately so
-            // the display stays in sync with what was sent (Pass 2 may have reordered
-            // cross-designer splits). Match each entry by (designerId, dayIndex, taskId)
-            // so parts with the same taskId don't overwrite each other.
             const splitFixMap = applySplitIndexFromRows(payload.assignments, s, t);
             if (Object.keys(splitFixMap).length > 0) {
                 setTasks(prev => {
@@ -1484,9 +1396,6 @@ export function DesignSchedulerScreen() {
             if (weekStartStr === currentWeekStr) {
                 weekVersionWeekStartRef.current = weekStartStr;
                 setWeekVersion(saved.version);
-                // Reconcile split labels + fresh assignment row ids. Save recreates DB rows
-                // (deleteMany + createMany); without refreshing assignmentRowId, same-session
-                // Unassign/Hold sends a stale/empty expectedAssignmentIds set and false-conflicts.
                 if (saved.assignments?.length > 0) {
                     const backendFix = applyAssignmentMetaFromRows(saved.assignments, s, t);
                     if (Object.keys(backendFix).length > 0) {
@@ -1556,9 +1465,6 @@ export function DesignSchedulerScreen() {
             if (pendingReloadRef.current) {
                 pendingReloadRef.current = false;
                 const viewingWeekStr = formatLocalYyyyMmDd(getWeekDays(currentDateRef.current)[0]);
-                // Same week + successful save: local grid already matches what we persisted.
-                // Different week (user hit ‹ › mid-save): must reload — otherwise the header
-                // moves but the previous week's cards stay until a hard refresh.
                 const mustReloadForWeekNav = saveSucceeded && weekStartStr !== viewingWeekStr;
                 if (!saveSucceeded || mustReloadForWeekNav) {
                     pendingPersistRef.current = null;
@@ -1635,9 +1541,6 @@ export function DesignSchedulerScreen() {
         clearHoldTaskId: null,
         clearHoldPreviousStatus: null,
     });
-    // Rule 1's sequential-fill redirect: instead of silently auto-moving a drop to the
-    // earliest open day, ask the HOD to choose between the suggested gap day or pinning
-    // the task to the day they actually dropped on (exempting it from the auto-optimizer).
     const [redirectPrompt, setRedirectPrompt] = useState({
         open: false,
         gapDayLabel: '',
@@ -1700,9 +1603,6 @@ export function DesignSchedulerScreen() {
                 const serverVersion = Number(meta?.version ?? 0);
                 const versionKnownForThisWeek = weekVersionWeekStartRef.current === weekStartStr;
                 if (!versionKnownForThisWeek || serverVersion !== weekVersionRef.current) {
-                    // Defer if a local edit is mid-debounce or already saving — reloading now
-                    // would overwrite it with server state from BEFORE that edit was sent,
-                    // silently discarding a drag that never got saved.
                     if (persistInFlightRef.current || pendingPersistRef.current) {
                         pendingReloadRef.current = true;
                         return;
@@ -1745,9 +1645,6 @@ export function DesignSchedulerScreen() {
         };
     }, [currentDate]);
 
-    // Flush any debounced pending save when the user hides the tab (switches away or closes).
-    // The page is still alive at this point so the async PUT completes — prevents losing
-    // changes that were queued inside the 600ms debounce window.
     useEffect(() => {
         const onHide = () => {
             if (document.visibilityState !== 'hidden') return;
@@ -2035,16 +1932,8 @@ export function DesignSchedulerScreen() {
             toast.error(TASK_REASSIGNMENT_BLOCKED_MESSAGE);
             return;
         }
-        // Dragging a task off the ON_HOLD sidebar onto a designer's day only ever touched the
-        // schedule (assigneeId + SchedulerAssignment row) — the task's real ON_HOLD status on the
-        // backend was never cleared, so it silently reappeared in the sidebar on the next reload.
-        // Scheduling it here is the HOD's explicit signal to take it off hold.
         const wasOnHold = sourceId === "ON_HOLD";
         const holdPreviousStatusForClear = droppedTask.holdPreviousStatus;
-        // Only check eligibility for a NEW (task, designer) pairing — moving a task within
-        // its current designer's own days is never blocked, even if that designer has since
-        // left the project team. A team change should never retroactively disturb work
-        // already assigned; it only gates where a task can be assigned next.
         if (droppedTask.projectId && sourceId !== targetDesignerId) {
             const targetDesigner = designers.find((d) => d.id === targetDesignerId);
             const project = projectTeamsById[droppedTask.projectId];
@@ -2065,11 +1954,6 @@ export function DesignSchedulerScreen() {
             toast.error("Cannot schedule tasks on approved full-day leave.");
             return;
         }
-        // Handing a busy task off to a DIFFERENT designer: only the hours not yet logged by
-        // the timer should move. The original designer's card stays on their day, shrunk to
-        // exactly what they logged and locked (a real, persisted, non-draggable record) —
-        // a brand-new split part carries the unworked remainder to the new designer.
-        // Same-designer moves (reordering own days) are never touched.
         let effectiveDroppedTask = droppedTask;
         let dropTaskId = taskId;
         let loggedCardPatch = null; // { taskId, loggedHours } — applied to the prepared assignment after build
@@ -2151,10 +2035,6 @@ export function DesignSchedulerScreen() {
                 );
             }
         }
-        // Builds and commits (or opens the overtime modal for) a placement on a specific day,
-        // optionally pinned. Shared by the no-redirect path and both redirect-dialog choices
-        // below, so a pin decision and an overtime decision can be resolved as two independent
-        // steps instead of one tangled branch.
         const proceedWithPlacement = (chosenDayIndex, { isPinned = false } = {}) => {
             const chosenDayStr = chosenDayIndex.toString();
             if (hasFullDayLeaveBlock(tasks, schedules[targetDesignerId]?.[chosenDayStr] ?? [])) {
@@ -2162,9 +2042,6 @@ export function DesignSchedulerScreen() {
                 return;
             }
             const targetList = schedules[targetDesignerId]?.[chosenDayStr] ?? [];
-            // Pinning onto the originally-dropped day can honor the drop's insertion position;
-            // any other placement (the auto-suggested gap day) always appends, since
-            // targetTaskIndex was captured against a different day's list.
             const useOriginalInsertPosition = isPinned && chosenDayIndex === targetDayIndex && targetTaskIndex !== undefined;
             const rawInsertIndex = useOriginalInsertPosition
                 ? targetTaskIndex + (targetPosition === "after" ? 1 : 0)
@@ -2189,13 +2066,6 @@ export function DesignSchedulerScreen() {
                     return dayLockKeysRef.current.has(`${designerId}|${dateStr}`);
                 },
             };
-            // Pinning is a per-placement decision, not a sticky tag: every manual re-drag
-            // must explicitly set isPinned (true or false) rather than only setting it when
-            // true, otherwise buildPreparedDropAssignment's `{...droppedTask}` spread would
-            // silently carry an old pin forward into a placement that never chose "Pin".
-            // Covers every part this drop touches — the primary dropped task plus any
-            // brand-new split/overflow parts it spawned — not just the first part, so a
-            // re-drag of a previously-pinned task can't leave a stray pinned sibling behind.
             const stampPin = (preparedAssignment) => {
                 if (!preparedAssignment) return preparedAssignment;
                 const touchedIds = new Set([dropTaskId]);
@@ -2397,9 +2267,6 @@ export function DesignSchedulerScreen() {
             toast.success(newStatus === 'ON_HOLD'
                 ? "Overtime request moved to on hold."
                 : "Overtime request unassigned.");
-            // ON_HOLD also flips the parent Task's own status server-side (see
-            // updateOvertimeRequestSchedulerAction) — patch our own queue snapshot with that
-            // known outcome directly, since reloadWeek never re-fetches /tasks on its own now.
             if (newStatus === 'ON_HOLD' && isUuid(parentId)) {
                 const patchRecord = (list) => list.map((r) => (r.id === parentId ? { ...r, status: 'ON_HOLD' } : r));
                 queueRecordsRef.current = patchRecord(queueRecordsRef.current);
@@ -2414,10 +2281,6 @@ export function DesignSchedulerScreen() {
         }
     };
 
-    // Rule 5a — detaching a single split part while active siblings remain elsewhere.
-    // Only this part's own SchedulerAssignment row is removed (via the backend
-    // detach-to-fragment endpoint); siblings on other days/designers/weeks are
-    // never touched. The detached part becomes its own sidebar card.
     const detachSinglePart = async (taskId, sourceId, sourceDay, newStatus, taskBefore) => {
         const newSchedules = cloneState(schedules);
         if (sourceId !== 'unassigned' && sourceId !== 'ON_HOLD' && newSchedules[sourceId]?.[sourceDay]) {
@@ -2436,9 +2299,6 @@ export function DesignSchedulerScreen() {
         setSchedules(newSchedules);
         setTasks(nextTasks);
 
-        // Detach must run BEFORE persistWeekSnapshot — the week save does deleteMany +
-        // createMany for affected tasks, which replaces assignment row ids. Calling detach
-        // after persist would pass a stale assignmentRowId and return 404.
         if (taskBefore.assignmentRowId) {
             try {
                 const { fragmentId } = await detachAssignmentPart(taskBefore.assignmentRowId, newStatus);
@@ -2462,9 +2322,6 @@ export function DesignSchedulerScreen() {
             commitOvertimeRequestAction(taskId, sourceId, sourceDay, newStatus);
             return;
         }
-        // Already its own detached fragment (Rule 5a) — e.g. toggling ON-Hold<->Unassigned
-        // via the sidebar. It has no grid placement or siblings to consider; just flip its
-        // own status, whatever else remains of the original task elsewhere is untouched.
         if (taskBefore?.fragmentId && (newStatus === 'unassigned' || newStatus === 'ON_HOLD')) {
             const nextTaskState = {
                 ...taskBefore,
@@ -2524,16 +2381,6 @@ export function DesignSchedulerScreen() {
         })();
         setSchedules(newSchedules);
 
-        // Every part's persisted assignment row id, where known — the server compares this
-        // against what's actually still live before wiping the whole task's schedule, so a
-        // sibling scheduled in a week this tab never loaded can't be silently deleted (parts
-        // created in this same gesture have no row yet and are correctly absent from this list).
-        // Applies whether this is a recognized split (multiple parts folding into one) or a
-        // single part that merely LOOKS unsplit to this stale tab — either way, "myself plus
-        // whatever in-memory siblings I know about" is exactly what the whole-task wipe is
-        // about to remove, and nothing else should be live on the server.
-        // Prefer the sync ref (updated immediately on save/load) over React state, which can
-        // still hold a pre-save assignmentRowId until the next render.
         const expectedAssignmentIds = [taskId, ...inMemorySiblingIds]
             .map((id) => assignmentRowIdByFrontendIdRef.current[id] ?? tasks[id]?.assignmentRowId)
             .filter(Boolean);
@@ -2584,9 +2431,6 @@ export function DesignSchedulerScreen() {
             persistWeekSnapshot(newSchedules, nextTasks);
             return;
         }
-        // Optimistically mirror the same value into our own queue snapshot — this tab already
-        // knows the outcome of its own PATCH, and reloadWeek never re-fetches /tasks on its own,
-        // so without this a later reload (e.g. week navigation) would show a stale status.
         const patchQueueRecordStatus = (list) =>
             list.map((r) => (r.id === apiTaskId ? { ...r, status: backendStatus } : r));
         queueRecordsRef.current = patchQueueRecordStatus(queueRecordsRef.current);
@@ -2688,10 +2532,6 @@ export function DesignSchedulerScreen() {
                 .map((designer) => designer.id),
         );
     }, [teamFilterQuery, teamFilterProject, designers]);
-    // Shift tasks from later open days to earlier open days up to DAILY_CAPACITY.
-    // When a task from a later day is too large to move whole, it is split: the portion
-    // that fills the gap goes to the earlier day, the remainder stays.
-    // Weekends participate like weekdays; locked weekend days are skipped.
     const getOptimizedSchedule = (currentSchedules, currentTasks) => {
         const newSchedules = cloneState(currentSchedules);
         const newTasks = { ...currentTasks };
@@ -2782,10 +2622,6 @@ export function DesignSchedulerScreen() {
         }
         return { optimized: newSchedules, updatedTasks: newTasks, changed };
     };
-    // Automatically optimize schedule whenever it changes (skip when showing ERP snapshot).
-    // Guard on schedules reference: flushPersist only patches task metadata (splitIndex/totalParts)
-    // via setTasks without touching schedules — those updates must not re-trigger the optimizer
-    // because cloneState on the full schedule state per setTasks call is expensive with many splits.
     useEffect(() => {
         if (loadedFromErp) return;
         if (lastOptimizerSchedulesRef.current === schedules) return;
@@ -3285,10 +3121,6 @@ export function DesignSchedulerScreen() {
                                 const rawTaskIndex = rawTasksInDay.indexOf(taskId);
                                 const dropTaskIndex = rawTaskIndex >= 0 ? rawTaskIndex : idx;
                                 const taskWidth = `calc((100% - ${(Math.max(visualRegularTaskIds.length - 1, 0)) * 4}px) / ${Math.max(visualRegularTaskIds.length, 1)})`;
-                                // Locked cards (e.g. the shrunk "logged hours" remainder left behind on a
-                                // busy designer's day after a partial handoff) can't be dragged, but unlike
-                                // system blocks they're still a real task — clicking should still navigate.
-                                // Completed / in-review / closed tasks are also non-draggable (reopen via REWORK first).
                                 const isDragLocked = Boolean(taskInfo?.isLocked) || isTaskReassignmentBlocked(taskInfo?.taskStatus);
                                 const blockLabel = getTaskLabel(taskInfo);
                                 return (<div key={`${taskId}-${designer.id}-${dayIndex}-${idx}`} draggable={!isDragLocked} onDragStart={(e) => {
@@ -3659,9 +3491,4 @@ function ClockIcon() {
       <polyline points="12 6 12 12 16 14"></polyline>
     </svg>);
 }
-
-
-
-
-
 

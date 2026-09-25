@@ -103,10 +103,6 @@ const buildDaySlot = (taskIds, tasksMap) => {
     .filter((entry) => entry.regularHours > 0)
     .sort((a, b) => getRegularVisualOrder(a) - getRegularVisualOrder(b) || a.order - b.order);
 
-  // Pack leave + work sequentially. An HOD-overloaded day (>8h regular) keeps rendering
-  // past hour 8 up to the 12h ceiling instead of silently hiding the extra tasks. Any
-  // portion past the 8h line is HOD-forced overtime, so it renders in the red OT style
-  // even though no OvertimeRequest exists for it.
   for (const entry of regularEntries) {
     if (entry.task.requestType === "REGULARIZATION") continue;
     const { task, regularHours } = entry;

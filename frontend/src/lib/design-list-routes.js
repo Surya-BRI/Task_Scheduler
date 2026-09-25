@@ -1,7 +1,3 @@
-/**
- * Centralized paths for design-list records, project-design hub, and task flows.
- * Record `id` is the design-list row key (same as used in DesignListContext).
- */
 
 export const FROM_PROJECT_DESIGN = "project-design";
 export const FROM_PROJECTS_LIST = "projects-list";
@@ -22,17 +18,6 @@ export function isProjectsListWorkflow(from) {
   return from === FROM_PROJECTS_LIST || from === FROM_SALES_PROJECTS_LIST;
 }
 
-/**
- * Resolve the list/hub route to return to after viewing a task or record.
- * @param {string | null | undefined} from
- * @returns {string}
- */
-/**
- * Resolve back navigation for task detail pages.
- * @param {string | null | undefined} from
- * @param {string | null | undefined} backOverride
- * @returns {string}
- */
 export function resolveTaskBackPath(from, backOverride) {
   if (backOverride && String(backOverride).startsWith("/")) {
     return backOverride;
@@ -76,13 +61,6 @@ export function resolveWorkflowBackPath(from) {
   }
 }
 
-/**
- * Resolve Retail vs Project for routing.
- * Retail task rows store subtype on designType (ESTIMATION_PURPOSE, Presentation, …),
- * not the literal "Retail" — those must still open /retail-task-view.
- * @param {unknown} value
- * @returns {"retail" | "project" | "unknown"}
- */
 export function normalizeDesignType(value) {
   const v = String(value ?? "").trim().toLowerCase().replace(/[_\s-]+/g, " ");
   if (!v) return "unknown";
@@ -138,12 +116,6 @@ export function projectTaskViewPath(recordId, query = {}) {
   return buildPath("/project-task-view", recordId, query);
 }
 
-/**
- * Task view URL by record type (Retail vs Project).
- * @param {{ id?: string, designType?: string, category?: string } | null | undefined} record
- * @param {Record<string, string>} [query]
- * @returns {string}
- */
 export function taskViewPathForRecord(record, query = {}) {
   const id = record?.id;
   if (id == null || String(id).trim() === "") {
@@ -155,13 +127,6 @@ export function taskViewPathForRecord(record, query = {}) {
   return projectTaskViewPath(id, query);
 }
 
-/**
- * Task creation URL by record type (Retail vs Project).
- * Unknown type → project path + console warning (caller may also toast).
- * @param {{ id?: string, designType?: string, category?: string } | null | undefined} record
- * @param {Record<string, string>} [query]
- * @returns {string}
- */
 export function taskCreationPathForRecord(record, query = {}) {
   const id = record?.id;
   if (id == null || String(id).trim() === "") {

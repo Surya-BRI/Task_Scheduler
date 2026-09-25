@@ -4,11 +4,6 @@ import { useEffect, useState } from 'react'
 import { useRouter } from 'next/navigation'
 import { getSession, getHomeRoute, ensureSession } from '@/lib/mock-auth'
 
-/**
- * Client-side role guard backed by server session (/auth/me).
- * @param {string[]} allowedRoles
- * @returns {boolean}
- */
 export function useRoleGuard(allowedRoles) {
   const router = useRouter()
   const [authorized, setAuthorized] = useState(false)

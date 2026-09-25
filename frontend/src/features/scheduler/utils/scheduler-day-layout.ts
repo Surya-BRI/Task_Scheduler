@@ -68,13 +68,6 @@ export type DayTaskLayout = {
   overtimeTaskIds: string[];
 };
 
-/**
- * Splits a day's task ids for grid rendering.
- * Approved leave/regularization blocks always stay in the regular capacity math and are
- * never pushed into the overtime strip when other tasks are added/removed. They are
- * returned separately so the UI can render them on their own strip (avoids equal-width
- * crowding with work tasks).
- */
 export const partitionDayTaskIds = (
   rawTaskIds: string[],
   taskMap: Record<string, SchedulerDayTask | undefined>,

@@ -168,9 +168,6 @@ describe('OvertimeRequestsService', () => {
     });
   });
 
-  // ────────────────────────────────────────────────────────────────────────
-  // CREATE
-  // ────────────────────────────────────────────────────────────────────────
   describe('create', () => {
     const baseDto: CreateOvertimeRequestDto = {
       designerId: '4001',
@@ -445,9 +442,6 @@ describe('OvertimeRequestsService', () => {
     });
   });
 
-  // ────────────────────────────────────────────────────────────────────────
-  // UPDATE
-  // ────────────────────────────────────────────────────────────────────────
   describe('update', () => {
     it('should throw NotFoundException for non-existent request', async () => {
       mockPrismaService.overtimeRequest.findUnique.mockResolvedValue(null);
@@ -532,9 +526,6 @@ describe('OvertimeRequestsService', () => {
     });
   });
 
-  // ────────────────────────────────────────────────────────────────────────
-  // SUBMIT
-  // ────────────────────────────────────────────────────────────────────────
   describe('submit', () => {
     it('should throw NotFoundException if request does not exist', async () => {
       mockPrismaService.overtimeRequest.findUnique.mockResolvedValue(null);
@@ -590,9 +581,6 @@ describe('OvertimeRequestsService', () => {
     });
   });
 
-  // ────────────────────────────────────────────────────────────────────────
-  // WITHDRAW
-  // ────────────────────────────────────────────────────────────────────────
   describe('withdraw', () => {
     it('should throw NotFoundException for missing request', async () => {
       mockPrismaService.overtimeRequest.findUnique.mockResolvedValue(null);
@@ -657,9 +645,6 @@ describe('OvertimeRequestsService', () => {
     });
   });
 
-  // ────────────────────────────────────────────────────────────────────────
-  // DELETE
-  // ────────────────────────────────────────────────────────────────────────
   describe('delete', () => {
     it('should throw NotFoundException for missing request', async () => {
       mockPrismaService.overtimeRequest.findUnique.mockResolvedValue(null);
@@ -721,9 +706,6 @@ describe('OvertimeRequestsService', () => {
     });
   });
 
-  // ────────────────────────────────────────────────────────────────────────
-  // FIND ONE
-  // ────────────────────────────────────────────────────────────────────────
   describe('findOne', () => {
     it('should throw NotFoundException for non-existent request', async () => {
       mockPrismaService.overtimeRequest.findUnique.mockResolvedValue(null);
@@ -741,10 +723,6 @@ describe('OvertimeRequestsService', () => {
       await expect(service.findOne('r1', '4002', UserRole.DESIGNER)).rejects.toThrow(ForbiddenException);
     });
 
-    // Department-scoped HOD access no longer applies: ERP has no department
-    // concept on ErpAuthUsers, so any HOD may view any overtime request
-    // regardless of the designer's department (see overtime-requests.service.ts
-    // around line 1047).
     it('should allow HOD from a different department to view the request', async () => {
       mockPrismaService.overtimeRequest.findUnique.mockResolvedValue({
         id: 'r1',
@@ -789,9 +767,6 @@ describe('OvertimeRequestsService', () => {
     });
   });
 
-  // ────────────────────────────────────────────────────────────────────────
-  // FIND OWN REQUESTS
-  // ────────────────────────────────────────────────────────────────────────
   describe('findOwnRequests', () => {
     it('should return filtered list of own requests', async () => {
       mockPrismaService.overtimeRequest.findMany.mockResolvedValue([
@@ -829,9 +804,6 @@ describe('OvertimeRequestsService', () => {
     });
   });
 
-  // ────────────────────────────────────────────────────────────────────────
-  // REVIEW (Manager & HR)
-  // ────────────────────────────────────────────────────────────────────────
   describe('review', () => {
     it('should throw NotFoundException for missing request', async () => {
       mockPrismaService.overtimeRequest.findUnique.mockResolvedValue(null);
@@ -1000,13 +972,7 @@ describe('OvertimeRequestsService', () => {
     });
   });
 
-  // ────────────────────────────────────────────────────────────────────────
-  // FIND PENDING APPROVALS
-  // ────────────────────────────────────────────────────────────────────────
   describe('findPendingApprovals', () => {
-    // Department-scoped HOD filtering no longer applies: ERP has no department
-    // concept on ErpAuthUsers, so every HOD sees all pending requests
-    // company-wide (see overtime-requests.service.ts around line 1209).
     it('should not filter by department for HOD role (no department concept on ERP users)', async () => {
       mockPrismaService.overtimeRequest.findMany.mockResolvedValue([]);
 
@@ -1031,9 +997,6 @@ describe('OvertimeRequestsService', () => {
     });
   });
 
-  // ────────────────────────────────────────────────────────────────────────
-  // FIND ALL REQUESTS (HR/Admin)
-  // ────────────────────────────────────────────────────────────────────────
   describe('findAllRequests', () => {
     it('should return paginated results with total count', async () => {
       mockPrismaService.overtimeRequest.findMany.mockResolvedValue([{ id: 'r1' }]);
@@ -1078,9 +1041,6 @@ describe('OvertimeRequestsService', () => {
     });
   });
 
-  // ────────────────────────────────────────────────────────────────────────
-  // UPLOAD ATTACHMENT
-  // ────────────────────────────────────────────────────────────────────────
   describe('uploadAttachment', () => {
     it('should throw NotFoundException for non-existent request', async () => {
       mockPrismaService.overtimeRequest.findUnique.mockResolvedValue(null);
@@ -1125,9 +1085,6 @@ describe('OvertimeRequestsService', () => {
     });
   });
 
-  // ────────────────────────────────────────────────────────────────────────
-  // STATISTICS
-  // ────────────────────────────────────────────────────────────────────────
   describe('getStatistics', () => {
     it('should compute statistics from all overtime requests', async () => {
       mockPrismaService.overtimeRequest.findMany.mockResolvedValue([
@@ -1150,9 +1107,6 @@ describe('OvertimeRequestsService', () => {
     });
   });
 
-  // ────────────────────────────────────────────────────────────────────────
-  // EXPORT REPORT
-  // ────────────────────────────────────────────────────────────────────────
   describe('exportReport', () => {
     it('should export all requests when no status filter is provided', async () => {
       mockPrismaService.overtimeRequest.findMany.mockResolvedValue([{ id: 'r1' }, { id: 'r2' }]);
