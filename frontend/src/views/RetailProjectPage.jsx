@@ -327,8 +327,8 @@ export function RetailProjectPage() {
   const params = useParams()
   const projectRowId = String(params.projectRowId ?? '')
   const sessionRole = String(getSession()?.role ?? '')
-  const canAddProjectFiles = sessionRole === 'HOD' || sessionRole === 'SALESPERSON'
-  const canDeleteProjectFiles = sessionRole === 'HOD'
+  const canAddProjectFiles = sessionRole === 'HOD' || sessionRole === 'ADMIN' || sessionRole === 'SALESPERSON'
+  const canDeleteProjectFiles = sessionRole === 'HOD' || sessionRole === 'ADMIN'
 
   const row = useMemo(
     () => dummyProjects.find((p) => p.id === projectRowId && p.category === 'Retail'),

@@ -12,6 +12,7 @@ import { PrismaService } from '../prisma/prisma.service';
 import { ActivityLoggerService } from '../activities/activity-logger.service';
 import { ActivityAction } from '../activities/activity-events';
 import { UserRole } from '../common/constants/roles.enum';
+import { ERP_ROLE_MAP } from '../common/utils/erp-role-map.util';
 import { hasDepartmentManagerAccess } from '../common/utils/workflow-roles.util';
 import { DashboardRealtimeService } from '../dashboard/dashboard-realtime.service';
 import { SchedulerAssignmentsService } from '../scheduler-assignments/scheduler-assignments.service';
@@ -266,14 +267,7 @@ export class ReallocationRequestsService {
       JOIN ErpMasterRole r ON r.roleId = m.roleId AND r.isActive = 1 AND r.isDeleted = 0
       WHERE u.isActive = 1 AND u.isDeleted = 0
     `;
-    const roleMap: Record<string, UserRole> = {
-      'Design HOD': UserRole.HOD,
-      'Design Head': UserRole.HOD,
-      SalesRep: UserRole.SALESPERSON,
-      'Sales Coordinator': UserRole.SALESPERSON,
-      Designer: UserRole.DESIGNER,
-      QS: UserRole.QS,
-    };
+    const roleMap = ERP_ROLE_MAP;
     const bucketSet = new Set(buckets);
     const seen = new Set<string>();
     const result: Array<{ id: bigint; userName: string }> = [];

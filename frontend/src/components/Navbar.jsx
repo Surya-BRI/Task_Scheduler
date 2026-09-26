@@ -181,7 +181,7 @@ function ProfileDropdown({ session }) {
   }
 
   // Colour badge per role
-  const roleBadgeClass = session?.role === 'HOD'
+  const roleBadgeClass = session?.role === 'HOD' || session?.role === 'ADMIN'
     ? 'bg-violet-100 text-violet-700'
     : session?.role === 'QS'
       ? 'bg-amber-100 text-amber-700'
@@ -533,7 +533,7 @@ export function Navbar({ currentDate, onCalendarChange, dateRangeText }) {
   }, [pathname])
 
   const isDesigner = session?.role === 'DESIGNER'
-  const isHod = session?.role === 'HOD'
+  const isHod = session?.role === 'HOD' || session?.role === 'ADMIN'
   const isSalesperson = session?.role === 'SALESPERSON'
   const isQs = session?.role === 'QS'
   const canViewOverview = hasDepartmentManagerAccess(session?.role)

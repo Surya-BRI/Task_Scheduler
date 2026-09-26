@@ -36,8 +36,10 @@ ORDER BY m.mapId DESC
 
 - Password is `bcrypt.compare`d against `ErpAuthUsers.password`.
 - ERP's `roleName` is mapped to a Scheduler `UserRole` via a hardcoded
-  `ERP_ROLE_MAP` (Design HOD/Design Head → HOD, SalesRep/Sales Coordinator →
-  SALESPERSON, Designer → DESIGNER, QS → QS). Unmapped roles can't log in.
+  shared `ERP_ROLE_MAP` (`backend/src/common/utils/erp-role-map.util.ts`): Design HOD/Design
+  Head → HOD, **Admin/Sub Admin → ADMIN**, SalesRep/Sales Coordinator → SALESPERSON,
+  Designer → DESIGNER, QS → QS. Unmapped roles can't log in. (Admin was mapped to HOD until
+  2026-09-26; it is now its own role — see "Admin role" in `repo-reference.md` §9.)
 - No local shadow account is created. The returned `userId` (bigint) is the
   identity used everywhere else in the app — the Prisma `ErpUser` model
   (`@@map("ErpAuthUsers")`) is a read-only reference onto it.

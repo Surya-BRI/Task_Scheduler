@@ -33,6 +33,7 @@ import {
 } from './chatter-mentions.util';
 import { DashboardRealtimeService } from '../dashboard/dashboard-realtime.service';
 import { UserRole } from '../common/constants/roles.enum';
+import { hasHodEquivalentAccess } from '../common/utils/workflow-roles.util';
 import { buildWhere, filterValidUuids, optionalUserId, optionalUuid } from '../common/utils/sql-param.util';
 import { isSameUserId, normalizeUserId } from '../common/utils/user-id.util';
 
@@ -278,14 +279,14 @@ export class ChatterPostsService implements OnModuleInit {
     // gating is a no-op (isDesignerDepartmentMentionable treats null as mentionable).
     const resolveUserDepartmentId = (_user: (typeof allUsers)[number]) => null;
 
-    if (role === UserRole.HOD) {
+    if (hasHodEquivalentAccess(role)) {
       for (const user of allUsers) {
         if (isSameUserId(user.id, viewerId)) {
           addEligibleId(user.id);
           continue;
         }
         const userRole = user.role;
-        if (userRole === UserRole.HOD) {
+        if (hasHodEquivalentAccess(userRole)) {
           addEligibleId(user.id);
           continue;
         }
@@ -298,7 +299,7 @@ export class ChatterPostsService implements OnModuleInit {
     } else {
       addEligibleId(viewerId);
       for (const user of allUsers) {
-        if (user.role === UserRole.HOD) {
+        if (hasHodEquivalentAccess(user.role)) {
           addEligibleId(user.id);
           continue;
         }

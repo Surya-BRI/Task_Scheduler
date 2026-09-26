@@ -6,6 +6,8 @@ import { UpdateTaskDto } from './dto/update-task.dto';
 import { AssignTaskDto } from './dto/assign-task.dto';
 import { UpdateTaskStatusDto } from './dto/update-task-status.dto';
 import { UserRole } from '../common/constants/roles.enum';
+import { ERP_ROLE_MAP } from '../common/utils/erp-role-map.util';
+import { hasHodEquivalentAccess } from '../common/utils/workflow-roles.util';
 import { CreateExtendedTaskDto } from './dto/create-extended-task.dto';
 import { TaskFilesService } from './task-files.service';
 import { ActivityLoggerService } from '../activities/activity-logger.service';
@@ -325,17 +327,6 @@ export type NextPhaseQuery = {
 
 type PhaseContext = { maxPhase: number; bySignType: Map<string, number> };
 
-// ERP roleName -> Scheduler role bucket, mirrored from users.service.ts (the local
-// Role table is gone; role membership now only exists via ERP's own role tables).
-const ERP_ROLE_BUCKET: Record<string, UserRole> = {
-  'Design HOD': UserRole.HOD,
-  'Design Head': UserRole.HOD,
-  SalesRep: UserRole.SALESPERSON,
-  'Sales Coordinator': UserRole.SALESPERSON,
-  Designer: UserRole.DESIGNER,
-  QS: UserRole.QS,
-};
-
 type ErpRoleRow = { userId: bigint; userName: string; roleName: string | null };
 
 @Injectable()
@@ -361,7 +352,7 @@ export class TasksService {
     const seen = new Set<string>();
     const result: { id: string; userName: string }[] = [];
     for (const row of rows) {
-      const bucket = row.roleName ? ERP_ROLE_BUCKET[row.roleName] : undefined;
+      const bucket = row.roleName ? ERP_ROLE_MAP[row.roleName] : undefined;
       if (!bucket || !bucketSet.has(bucket)) continue;
       const id = row.userId.toString();
       if (seen.has(id)) continue;
@@ -1980,8 +1971,9 @@ export class TasksService {
         .map((line) => String(line?.hodName ?? '').trim())
         .find((name) => name.length > 0) || null;
 
+    // Reviewer HOD is a real HOD only — an Admin who assigned the task is never shown as its HOD.
     const hodAdminUsers = assignedRows.length > 0
-      ? await this.findErpUsersByRoleBuckets([UserRole.HOD, UserRole.ADMIN])
+      ? await this.findErpUsersByRoleBuckets([UserRole.HOD])
       : [];
     const hodAdminIds = new Set(hodAdminUsers.map((u) => u.id));
     const hodAssigner = assignedRows.find((row) => hodAdminIds.has(row.userId.toString()));
@@ -2184,8 +2176,8 @@ export class TasksService {
     if (!existing) throw new NotFoundException('Task not found');
 
     if (dto.hoursRequired !== undefined) {
-      if (role !== UserRole.HOD) {
-        throw new ForbiddenException('Only the Design HOD can edit task hours');
+      if (!hasHodEquivalentAccess(role)) {
+        throw new ForbiddenException('Only the Design HOD or Admin can edit task hours');
       }
       await this.applyHodHoursUpdate(existing, dto.hoursRequired);
     }
@@ -2611,7 +2603,7 @@ export class TasksService {
         },
         context: {
           source:
-            effectiveStatusApi === 'REWORK' && role === UserRole.HOD
+            effectiveStatusApi === 'REWORK' && hasHodEquivalentAccess(role)
               ? 'hod_internal_rework'
               : 'tasks.updateStatus',
         },
@@ -2855,7 +2847,7 @@ export class TasksService {
       }
 
       if (note) {
-        const isHodInternal = role === UserRole.HOD;
+        const isHodInternal = hasHodEquivalentAccess(role);
         await this.prisma.chatterPost.create({
           data: {
             taskId: id,

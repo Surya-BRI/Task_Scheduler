@@ -47,4 +47,14 @@ describe('RolesGuard', () => {
     reflector.getAllAndOverride = jest.fn().mockReturnValue([UserRole.HOD]);
     expect(guard.canActivate(makeContext())).toBe(false);
   });
+
+  it('gives ADMIN HOD-level access on HOD-only routes', () => {
+    reflector.getAllAndOverride = jest.fn().mockReturnValue([UserRole.HOD]);
+    expect(guard.canActivate(makeContext(UserRole.ADMIN))).toBe(true);
+  });
+
+  it('does not give ADMIN access to routes that exclude HOD', () => {
+    reflector.getAllAndOverride = jest.fn().mockReturnValue([UserRole.DESIGNER]);
+    expect(guard.canActivate(makeContext(UserRole.ADMIN))).toBe(false);
+  });
 });

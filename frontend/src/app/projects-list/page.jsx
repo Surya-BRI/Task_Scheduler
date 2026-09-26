@@ -20,7 +20,7 @@ export default function ProjectsListPage() {
       router.replace('/sales/projects-list')
       return
     }
-    if (session.role !== 'HOD') {
+    if (!['HOD', 'ADMIN'].includes(session.role)) {
       router.replace(getHomeRoute(session))
       return
     }

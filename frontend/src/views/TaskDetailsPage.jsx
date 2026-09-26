@@ -1665,12 +1665,12 @@ export function TaskDetailsPage() {
   const canSalesReview = ((isSales && !isTransactionsWorkflow(from)) || isAdmin)
   const isDesigner = sessionRole === 'DESIGNER'
   // Project Files: designers view-only; Sales/HOD can add; only HOD can delete.
-  const canAddProjectFiles = sessionRole === 'HOD' || sessionRole === 'SALESPERSON'
-  const canDeleteProjectFiles = sessionRole === 'HOD'
+  const canAddProjectFiles = sessionRole === 'HOD' || sessionRole === 'ADMIN' || sessionRole === 'SALESPERSON'
+  const canDeleteProjectFiles = sessionRole === 'HOD' || sessionRole === 'ADMIN'
   const isDesignerWorkMode =
-    isDesigner || (isHod && sessionRole !== 'HOD' && from === FROM_DESIGNER_QUEUE)
+    isDesigner || (isHod && sessionRole !== 'HOD' && sessionRole !== 'ADMIN' && from === FROM_DESIGNER_QUEUE)
   const isHodManagementMode = isHod && !isDesignerWorkMode && !isSales
-  const canEditTaskHours = sessionRole === 'HOD' && !isCreationRoute && hasExistingTask
+  const canEditTaskHours = (sessionRole === 'HOD' || sessionRole === 'ADMIN') && !isCreationRoute && hasExistingTask
   const savedEstimatedHours = getRecordEstimatedHours(record)
 
   useEffect(() => {

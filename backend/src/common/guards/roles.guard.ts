@@ -19,6 +19,9 @@ export class RolesGuard implements CanActivate {
 
     const request = context.switchToHttp().getRequest();
     const user = request.user as { role?: UserRole };
-    return !!user?.role && requiredRoles.includes(user.role);
+    if (!user?.role) return false;
+    if (requiredRoles.includes(user.role)) return true;
+    // ADMIN has HOD-level access: any route open to HOD is open to ADMIN.
+    return user.role === UserRole.ADMIN && requiredRoles.includes(UserRole.HOD);
   }
 }

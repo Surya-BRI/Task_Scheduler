@@ -1174,6 +1174,11 @@ All other state is local component `useState`. No Redux/Zustand.
 | `SALESPERSON` | Salesperson | Read-only project/task access |
 | `QS` | Quantity Surveyor | Manage QS sign rows and QS status on assigned projects |
 
+### Admin role (2026-09-26)
+ERP `Admin` / `Sub Admin` map to the Scheduler role **`ADMIN`** (shared map: `backend/src/common/utils/erp-role-map.util.ts`; in production `EXTERNAL_ROLE_MAP` must map them to `ADMIN` too, not `HOD`).
+- **Access:** ADMIN has every HOD permission. `RolesGuard` lets ADMIN through any route open to HOD; service-level checks use `hasHodEquivalentAccess()` / `hasHrApproverAccess()`; frontend uses `isHodRole()` (HOD or ADMIN) and lands on `/design-list`.
+- **Not an HOD:** ADMIN is excluded from HOD pick lists (`GET /users?role=HOD`, "Select HOD"), from the reviewer-HOD shown on a task, and from HOD-only notification lists (reallocation requests). Existing org-wide "HOD + Admin" alerts (task review, work submitted, deadlines, QS updates) still reach admins.
+
 ### Guards
 - **JwtAuthGuard** — applied via `@UseGuards(JwtAuthGuard)` on controller/method
   - Production: validates `Authorization: Bearer <jwt>` signed with `JWT_ACCESS_SECRET`
