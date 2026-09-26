@@ -59,32 +59,32 @@ Legend: ✅ done · ⏳ in progress · ⬜ not started · ⛔ blocked / needs an
 ### 5. Frontend (Vercel project `task-scheduler`)
 - ✅ Confirmed hosts: backend = `task-scheduler.app-brisigns.com` (nginx/Ubuntu); frontend = `designscheduler.app-brisigns.com` (Vercel, proxies `/api/v1` to the backend)
 - ✅ `COOKIE_DOMAIN`, `EXTERNAL_LOGOUT_COOKIES`, `NEXT_PUBLIC_WS_ORIGIN`, `NEXT_PUBLIC_API_BASE_URL` already correct; no database-related change needed in Vercel
-- ⛔ Add `ERP_LOGOUT_URL` (server-only, no `NEXT_PUBLIC_` prefix): needs the ERP `auth_logout` base URL — get it from the browser Network tab when clicking the ERP's own Sign Out
+- ✅ Add `ERP_LOGOUT_URL` (server-only, no `NEXT_PUBLIC_` prefix): needs the ERP `auth_logout` base URL — get it from the browser Network tab when clicking the ERP's own Sign Out — **done, confirmed by user 2026-09-26**
 - ✅ Live ERP host is `https://app-brisigns.com` (dev ERP: `dev.app-brisigns.com`); `/home` and `/auth/login` both exist on it. Repo defaults in `frontend/src/lib/env.ts` and the `.env.example` files now point at the live host (2026-09-25)
-- ⬜ In Vercel set `NEXT_PUBLIC_ERP_HOME_URL=https://app-brisigns.com/home` (currently `https://dev.app-brisigns.com/home`), and `NEXT_PUBLIC_ERP_LOGIN_URL=https://app-brisigns.com/auth/login` if set
-- ⬜ Server `CORS_ORIGIN`: add `https://app-brisigns.com` (currently lists `dev.app-brisigns.com`, not the live host); keep dev until the cutover is finished
+- ✅ In Vercel set `NEXT_PUBLIC_ERP_HOME_URL=https://app-brisigns.com/home` (currently `https://dev.app-brisigns.com/home`), and `NEXT_PUBLIC_ERP_LOGIN_URL=https://app-brisigns.com/auth/login` if set — **done, confirmed by user 2026-09-26**
+- ✅ Server `CORS_ORIGIN`: add `https://app-brisigns.com` (currently lists `dev.app-brisigns.com`, not the live host); keep dev until the cutover is finished — **done, confirmed by user 2026-09-26**
 - ✅ Live ERP logout endpoint verified 2026-09-25: `GET https://api.app-brisigns.com/api/auth/auth_logout/0` → 200 `"It's already logged out."` (probed with the non-existent session id 0, so nothing was logged out; the first call timed out at 15 s, the retry answered in 1.7 s — slow on a cold call, keep the 4 s timeout in mind, the route treats it as best-effort). Dev equivalent `dev-api…` behaves identically. Value for Vercel: `ERP_LOGOUT_URL=https://api.app-brisigns.com/api/auth/auth_logout`
 - ✅ Code fallback added in `frontend/src/app/api/auth/logout/route.ts`: production builds default `ERP_LOGOUT_URL` to `https://api.app-brisigns.com/api/auth/auth_logout` when the variable is unset (local dev stays opt-in). Vercel Preview builds also count as production, so they would hit the live ERP logout too. Type-check clean; not yet deployed
 - ✅ Backend `/health/ready` → 200, database `ok` (2 ms); direct SQL connection to ERP-Live works, 42 `ErpTS*` tables present
 - ℹ️ Cookie check (2026-09-25): user ids stored on new Live rows (1 = DennyJoseph, 216 = Gopan, 204 = Alekhya) match real Live `ErpAuthUsers`, so logins are producing Live ids, not Dev ids
-- ⬜ Redeploy on Vercel after adding variables
+- ✅ Redeploy on Vercel after adding variables — **done, confirmed by user 2026-09-26**
 
 ### 6. Verify logout end to end
-- ⬜ Sign Out: logs show `[logout] backend /auth/logout -> 200` and `[logout] ERP auth_logout -> 200`
-- ⬜ `ErpAuthSession.isLoggedOut = 1` and `ErpAuthUsers.fcmToken` cleared for that session
+- ✅ Sign Out: logs show `[logout] backend /auth/logout -> 200` and `[logout] ERP auth_logout -> 200` — **done, confirmed by user 2026-09-26**
+- ✅ `ErpAuthSession.isLoggedOut = 1` and `ErpAuthUsers.fcmToken` cleared for that session — **done, confirmed by user 2026-09-26**
 
 ### 7. Performance check on Live
-- ⬜ Time one scheduler week save and one reallocation create. In Dev, writes cost 15–20 round-trips at 0.5–1.5 s each, with 90 s route-scoped timeouts (see `TESTING_PROGRESS.md`). Live is a different server; confirm the timeouts are still enough.
+- ✅ Time one scheduler week save and one reallocation create. In Dev, writes cost 15–20 round-trips at 0.5–1.5 s each, with 90 s route-scoped timeouts (see `TESTING_PROGRESS.md`). Live is a different server; confirm the timeouts are still enough. — **done, confirmed by user 2026-09-26**
 
 ## Open items / decisions
 
 | # | Item | State |
 |---|---|---|
-| 1 | Replace the sysadmin login in `DATABASE_URL` with a limited login (read/write on `ErpTS*`, read on the ERP tables it uses) | ⬜ recommended before others use the app |
-| 2 | Rotate secrets that were pasted in chat: the Live write login password, the AWS key for the production bucket, the `Reader` password, the JWT secret | ⬜ |
+| 1 | Replace the sysadmin login in `DATABASE_URL` with a limited login (read/write on `ErpTS*`, read on the ERP tables it uses) | ✅ done (confirmed by user 2026-09-26) — recommended before others use the app |
+| 2 | Rotate secrets that were pasted in chat: the Live write login password, the AWS key for the production bucket, the `Reader` password, the JWT secret | ✅ done (confirmed by user 2026-09-26) — |
 | 3 | QS role has no users in Live; new projects auto-assign QS users, so none will be assigned until ERP admins create QS users/role | ⛔ needs ERP admin |
 | 4 | Login does not check `ErpMasterEmployee.isAllowLogin` / `defaultMiddleware` | decided: leave as is (2026-09-25). With `AUTH_MODE=external` the ERP portal's own login gate decides who gets a token |
-| 5 | `EXTERNAL_ROLE_MAP` on the server also maps ADMIN and SUB ADMIN to HOD, so more people than the two Design HOD/Head accounts can act as HOD | ℹ️ confirm intended |
+| 5 | Admin / Sub Admin are now their own `ADMIN` role (HOD-level access, not listed as HOD). **Before deploying:** change the server `EXTERNAL_ROLE_MAP` so ADMIN and SUB ADMIN map to `ADMIN` instead of `HOD`, then restart the backend | ⬜ deploy step |
 | 6 | `LOG_LEVEL=debug` on the production server (boot log still prints DEBUG lines) | ⬜ suggest `info` |
 | 10 | Server runs Node v20.14.0; the AWS SDK warns it will require Node >=22 for releases after the first week of January 2027 | ⬜ plan an upgrade before then (not urgent) |
 | 7 | Backups: confirm the new tables are covered by Live's backup job | ⬜ |
