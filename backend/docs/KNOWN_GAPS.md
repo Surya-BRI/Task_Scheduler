@@ -4,13 +4,13 @@ Issues surfaced while investigating the leave/overtime scheduler flows (see [SCH
 
 ---
 
-### 1. `placeOverflowCapacity` doesn't check the destination week's lock state
+### ~~1. `placeOverflowCapacity` doesn't check the destination week's lock state~~ — FIXED 2026-09-17
 
-Also tracked as item 11 in [SCHEDULER_FIXES_NEEDED.md](SCHEDULER_FIXES_NEEDED.md#11-placeoverflowcapacity-doesnt-check-the-destination-weeks-lock-state).
+Also item 11 in [SCHEDULER_FIXES_NEEDED.md](SCHEDULER_FIXES_NEEDED.md#11-placeoverflowcapacity-doesnt-check-the-destination-weeks-lock-state) and bug #18 in [../../TESTING_PROGRESS.md](../../TESTING_PROGRESS.md).
 
-**Issue:** the primary week-save path rejects a `PUT` against a locked week (`isLocked: true`). `placeOverflowCapacity` walks forward into other weeks and creates/upserts `SchedulerAssignment` rows there without checking whether those destination weeks are locked — overflow could silently land in a week that was locked specifically to prevent further edits.
+**Was:** overflow placement walked into later weeks and wrote `SchedulerAssignment` rows without checking `isLocked` on the destination week.
 
-**Recommended fix:** have `placeOverflowCapacity` check each candidate week's `isLocked` flag (same as the primary save path) and skip locked weeks when searching for capacity, reporting any resulting unplaceable hours via `unplacedOverflow` instead of writing into it.
+**Fix:** locked weeks for the lookahead range are loaded up front and skipped in the day-walk loop (same pattern as `applyReallocationHandoff`). Verified: overflow skips a locked week and lands on the next open one, with no rows written into the locked week.
 
 **Files:** `backend/src/scheduler-assignments/scheduler-assignments.service.ts` — `placeOverflowCapacity`
 

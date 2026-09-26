@@ -2,6 +2,8 @@
 
 _Last updated: 2026-09-17 (session 3)_
 
+> **Historical:** this log covers UAT on **ERP-Dev** (2026-09-16/17). The app moved to ERP-Live on 2026-09-25 with an empty `ErpTS*` schema, so the UAT accounts and data below are not on Live. Timings (e.g. 0.5–1.5 s per round-trip to `13.234.241.125`) are Dev numbers; re-measure on Live (`PRODUCTION_MIGRATION_PROGRESS.md` §7).
+
 Context: the app was migrated to authenticate directly against ERP's own
 `ErpAuthUsers`/`ErpAuthUserRoleMap`/`ErpMasterRole` tables (bigint `userId`
 identity), replacing the old local GUID-based `ErpTSUser` identity. Every

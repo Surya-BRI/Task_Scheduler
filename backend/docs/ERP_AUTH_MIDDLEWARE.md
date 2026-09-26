@@ -44,9 +44,9 @@ ORDER BY m.mapId DESC
 - **`ErpMasterEmployee` is not joined anywhere in this flow.** That's the gap
   this doc is mainly about.
 
-## 3. `ErpMasterEmployee` / `Middlewares` schema (ERP-Dev)
+## 3. `ErpMasterEmployee` / `Middlewares` schema (ERP-Dev at time of writing; same tables now in ERP-Live)
 
-Queried directly against ERP-Dev via `sqlcmd` (connection details in
+Queried directly against ERP-Dev (2026-09-17) via `sqlcmd` (connection details in
 `backend/.env` → `DATABASE_URL`). Columns relevant to auth/middleware:
 
 | Column | Type | Notes |
@@ -94,6 +94,13 @@ known, and not reliable to assume for real employee rows either (see §3).
 
 ## 5. What's still open
 
+> **Update 2026-09-25:** the app now runs on ERP-Live with `AUTH_MODE=external`
+> (ERP portal issues the session/JWT). Decision: Scheduler does **not** check
+> `isAllowLogin` / `defaultMiddleware` itself; the ERP portal's own login gate
+> decides who gets a token. See `PRODUCTION_MIGRATION_PROGRESS.md` (open item 4).
+> The bullets below describe the original direct-login flow and the gap as it
+> stood on 2026-09-17.
+
 - **Login doesn't check `isAllowLogin`.** Today only `ErpAuthUsers.isActive`/
   `isDeleted` gate login. An employee with `isAllowLogin = 0` in
   `ErpMasterEmployee` can still log into Scheduler as long as their
@@ -114,11 +121,12 @@ known, and not reliable to assume for real employee rows either (see §3).
 
 ## 6. Test queries
 
-Connection (from `backend/.env`, `DATABASE_URL` — dev only, never point
-these at `LIVE_DATABASE_URL`):
+Connection (from `backend/.env`, `DATABASE_URL`). Since 2026-09-25 that is **ERP-Live**, so
+run these as read-only `SELECT`s only — the UAT `INSERT`/`UPDATE` fixes in §4 were a one-off
+on ERP-Dev and must not be repeated on Live:
 
 ```bash
-sqlcmd -S <host>,1433 -U <user> -P '<password>' -d ERP-Dev -C -Q "<query>" -W -s "|"
+sqlcmd -S <host>,1433 -U <user> -P '<password>' -d <database> -C -Q "<query>" -W -s "|"
 ```
 
 **Inspect `ErpMasterEmployee` columns:**

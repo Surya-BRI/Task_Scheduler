@@ -167,7 +167,9 @@ Architectural/scalability items found while investigating [SCHEDULER_DISAPPEARIN
 
 ## Not yet done
 
-### 11. `placeOverflowCapacity` doesn't check the destination week's lock state
+### 11. `placeOverflowCapacity` doesn't check the destination week's lock state — FIXED 2026-09-17
+
+> **Status: fixed** (TESTING_PROGRESS bug #18). Locked destination weeks are now loaded up front and skipped. The text below is the original write-up.
 
 The primary week-save path rejects a `PUT` against a locked week (`isLocked: true`). `placeOverflowCapacity` (item 4 above) walks forward into other weeks and creates/upserts `SchedulerAssignment` rows there without checking whether *those* destination weeks are locked — an overflow placement could silently write into a week that was locked specifically to prevent further edits.
 

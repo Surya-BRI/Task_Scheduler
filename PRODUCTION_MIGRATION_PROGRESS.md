@@ -88,8 +88,8 @@ Legend: ✅ done · ⏳ in progress · ⬜ not started · ⛔ blocked / needs an
 | 6 | `LOG_LEVEL=debug` on the production server (boot log still prints DEBUG lines) | ⬜ suggest `info` |
 | 10 | Server runs Node v20.14.0; the AWS SDK warns it will require Node >=22 for releases after the first week of January 2027 | ⬜ plan an upgrade before then (not urgent) |
 | 7 | Backups: confirm the new tables are covered by Live's backup job | ⬜ |
-| 8 | Update stale docs (`backend/docs/API_TABLE_CONNECTIONS.md`, `repo-reference.md`, `backend/docs/KNOWN_GAPS.md` item 1 — the overflow week-lock gap was fixed 2026-09-17) | ⬜ |
-| 9 | Commit the three `live-*.sql` scripts (currently untracked) | ⬜ |
+| 8 | Update stale docs (`API_TABLE_CONNECTIONS.md`, `repo-reference.md`, `KNOWN_GAPS.md`, `SCHEDULER_FIXES_NEEDED.md`, `TEST_QUERIES.md`, `ERP_AUTH_MIDDLEWARE.md`, `DEVELOPMENT.md`, `README.md`, `TESTING_PROGRESS.md`) | ✅ 2026-09-26 |
+| 9 | Commit the three `live-*.sql` scripts | ✅ committed in `ffffba4` |
 
 ## Rollback
 

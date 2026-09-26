@@ -2,6 +2,8 @@
 
 Monorepo for task scheduling and resource workflows: **Next.js** frontend + **NestJS** backend + **Prisma** + **SQL Server**.
 
+> **Database:** production runs on **ERP-Live** (since 2026-09-25) and logs users in through the ERP portal (`AUTH_MODE=external`). Users are ERP users (`ErpAuthUsers`), not local accounts, so `prisma:seed` demo users no longer apply. See [PRODUCTION_MIGRATION_PROGRESS.md](PRODUCTION_MIGRATION_PROGRESS.md).
+
 ## Documentation
 
 | Area | Guide |
@@ -13,7 +15,11 @@ Monorepo for task scheduling and resource workflows: **Next.js** frontend + **Ne
 | Activity log event coverage | [backend/docs/ACTIVITY_LOG_COVERAGE.md](backend/docs/ACTIVITY_LOG_COVERAGE.md) |
 | Frontend guide (Next.js env + runtime) | [frontend/docs/DEVELOPMENT.md](frontend/docs/DEVELOPMENT.md) |
 | API load & efficiency playbook | [API_LOAD_EFFICIENCY_PLAYBOOK.md](API_LOAD_EFFICIENCY_PLAYBOOK.md) |
-| Full repository technical reference | [repo refrence.md](repo%20refrence.md) |
+| ERP-Live cutover checklist and rollback | [PRODUCTION_MIGRATION_PROGRESS.md](PRODUCTION_MIGRATION_PROGRESS.md) |
+| ERP auth & middleware (Scheduler) | [backend/docs/ERP_AUTH_MIDDLEWARE.md](backend/docs/ERP_AUTH_MIDDLEWARE.md) |
+| ERP auth & middleware (generic) | [docs/ERP_MIDDLEWARE_INTEGRATION.md](docs/ERP_MIDDLEWARE_INTEGRATION.md) |
+| UAT / smoke-test log | [TESTING_PROGRESS.md](TESTING_PROGRESS.md) |
+| Full repository technical reference | [repo-reference.md](repo-reference.md) |
 
 ## Recent Feature Notes
 

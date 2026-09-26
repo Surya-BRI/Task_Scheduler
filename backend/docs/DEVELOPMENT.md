@@ -27,6 +27,8 @@ Required:
 sqlserver://HOST:1433;database=YOUR_DB;user=USER;password=PASS;encrypt=true;trustServerCertificate=true
 ```
 
+Auth (production uses `AUTH_MODE=external` — the ERP portal does the login; see `backend/.env.example` for `EXTERNAL_*` and `ERP_*` options and `docs/ERP_AUTH_MIDDLEWARE.md`).
+
 Common optional:
 - `PORT` (default `4000`)
 - `API_PREFIX` (default `api/v1`)
@@ -46,7 +48,9 @@ If not regenerated, TypeScript errors appear for missing model properties/fields
 
 ### Runtime DB used by PrismaService
 - `backend/src/prisma/prisma.service.ts` uses app DB config (`database.url` / `DATABASE_URL`) for Prisma model queries.
-- Keep ERP live/read-only connection config separate from core Prisma schema DB.
+- **Production database is ERP-Live** (since 2026-09-25): `ErpTS*` app tables and the ERP tables (`ErpAuth*`, `ErpMaster*`) are in the same database, so `DATABASE_URL` is the only connection needed. `LIVE_DATABASE_URL` is optional; when unset or identical to `DATABASE_URL`, `prisma.live` reuses the main pool.
+- Against ERP-Live keep `RUNTIME_SCHEMA_BOOTSTRAP=false` (with `NODE_ENV=development` the app would otherwise run boot-time DDL). Tables are created from `backend/prisma/sql/live-*.sql`, not `migrate deploy`.
+- Local dev can point at ERP-Dev or Live; check `backend/.env` before running anything that writes. Details: `PRODUCTION_MIGRATION_PROGRESS.md`.
 
 ### Migrations and seed
 

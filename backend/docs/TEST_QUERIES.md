@@ -2,6 +2,8 @@
 
 Use these queries in SSMS or Azure Data Studio to verify task and scheduler state.
 
+> Run them against the database `DATABASE_URL` points at — **ERP-Live** in production (read-only `SELECT`s only; never run ad-hoc writes there). Users live in the ERP-owned `ErpAuthUsers` table (`userId` bigint, `userName`); the old `ErpTSUser` / `fullName` no longer exist, so user ids below are bigints, not GUIDs.
+
 ---
 
 ## Task Status
@@ -43,11 +45,11 @@ ORDER BY createdAt DESC
 
 **All assignments for a given week:**
 ```sql
-SELECT sa.*, u.fullName AS designerName
+SELECT sa.*, u.userName AS designerName
 FROM ErpTSSchedulerAssignment sa
-JOIN ErpTSUser u ON u.id = sa.designerId
+JOIN ErpAuthUsers u ON u.userId = sa.designerId
 WHERE sa.weekStart = '2026-05-25'   -- YYYY-MM-DD Monday
-ORDER BY u.fullName, sa.dayIndex
+ORDER BY u.userName, sa.dayIndex
 ```
 
 **Check scheduler assignment history (before/after snapshots):**
@@ -72,9 +74,9 @@ ORDER BY createdAt DESC
 
 **Recent activity across all tasks (last 50):**
 ```sql
-SELECT TOP 50 al.action, al.details, al.createdAt, u.fullName AS actor
+SELECT TOP 50 al.action, al.details, al.createdAt, u.userName AS actor
 FROM ErpTSActivityLog al
-LEFT JOIN ErpTSUser u ON u.id = al.userId
+LEFT JOIN ErpAuthUsers u ON u.userId = al.userId
 ORDER BY al.createdAt DESC
 ```
 
@@ -120,19 +122,19 @@ ORDER BY updatedAt DESC
 ```sql
 SELECT t.id, t.taskNo, t.title, t.status, t.updatedAt
 FROM ErpTSTask t
-JOIN ErpTSUser u ON u.id = t.assigneeId
-WHERE u.fullName = 'Alex Johnson'   -- or use u.id = '<designer-id>'
+JOIN ErpAuthUsers u ON u.userId = t.assigneeId
+WHERE u.userName = '<user-name>'   -- or use u.userId = <designer-id>
 ORDER BY t.updatedAt DESC
 ```
 
 **Scheduler hours per designer for a week:**
 ```sql
-SELECT u.fullName, sa.dayIndex, SUM(sa.assignedHours) AS totalHours
+SELECT u.userName, sa.dayIndex, SUM(sa.assignedHours) AS totalHours
 FROM ErpTSSchedulerAssignment sa
-JOIN ErpTSUser u ON u.id = sa.designerId
+JOIN ErpAuthUsers u ON u.userId = sa.designerId
 WHERE sa.weekStart = '2026-05-25'
-GROUP BY u.fullName, sa.dayIndex
-ORDER BY u.fullName, sa.dayIndex
+GROUP BY u.userName, sa.dayIndex
+ORDER BY u.userName, sa.dayIndex
 ```
 
 ---
