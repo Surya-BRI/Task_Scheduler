@@ -34,6 +34,34 @@ Common optional:
 - `API_PREFIX` (default `api/v1`)
 - `JWT_ACCESS_EXPIRES_IN` (default `1d`)
 
+## Local Login & Switching Databases (ERP-Dev ↔ ERP-Live)
+
+Production signs users in through the ERP portal (`AUTH_MODE=external`). For local work there is a
+dev-only username/password login that uses the backend's demo-mode `/auth/login` (validates against
+`ErpAuthUsers` with bcrypt).
+
+**Local login setup**
+1. `backend/.env`: leave `AUTH_MODE` **unset** (with `external` the backend rejects local sign-in) and keep `NODE_ENV=development`.
+2. `frontend/.env`: set `NEXT_PUBLIC_ENABLE_DEV_LOGIN=true`. The login page then shows the ERP username/password form instead of the "Go to ERP Sign In" button. The flag only works when `NODE_ENV=development`, so it can never appear in a Vercel/production build.
+3. Restart backend and frontend (`npm run dev`), then sign in with an ERP user that exists in the database you are pointed at (ERP-Dev: the `*-UAT` accounts listed in `TESTING_PROGRESS.md`; ERP-Live: real ERP credentials only).
+4. Login is throttled to 5 attempts per minute.
+
+**Database switch in `backend/.env`** — keep two grouped blocks with the *same variable names* and toggle by commenting:
+
+```text
+# ===== ERP-Dev (ACTIVE) =====          <- top of file, uncommented
+DB_SERVER / DB_PORT / DB_NAME / DB_USER / DB_PASSWORD / DB_ENCRYPT / DB_TRUST_SERVER_CERTIFICATE
+DATABASE_URL
+LIVE_DB_* / LIVE_DATABASE_URL          <- same values as above (one database, one pool)
+
+# ===== ERP-Live (COMMENTED) =====      <- bottom of file, every line prefixed "# "
+# DB_* / # DATABASE_URL / # LIVE_DB_* / # LIVE_DATABASE_URL
+```
+
+To switch to Live: comment out the ERP-Dev block, uncomment the ERP-Live block, restart the backend. To switch back, do the reverse. Never delete either block. `backend/.env` is gitignored — do not commit it or paste connection strings into docs/chat.
+
+**Safety:** everything you do locally writes to whichever database `DATABASE_URL` names. Do local feature work on ERP-Dev; ERP-Live holds real data (see `PRODUCTION_MIGRATION_PROGRESS.md`). Keep `RUNTIME_SCHEMA_BOOTSTRAP=false` when pointed at Live.
+
 ## Prisma in This Backend
 
 ### Schema and client

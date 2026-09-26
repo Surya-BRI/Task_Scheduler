@@ -48,6 +48,9 @@ export const env = {
   apiBaseUrl: resolveApiBaseUrl(),
   appName: process.env.NEXT_PUBLIC_APP_NAME ?? 'TaskScheduler',
   /** Where to send people who land here signed out — sign-in now happens on the ERP site (SSO cookie shared via .app-brisigns.com). */
+  /** Local development only: show a username/password form that signs in via the backend's demo-mode /auth/login. */
+  enableDevLogin:
+    process.env.NODE_ENV === 'development' && process.env.NEXT_PUBLIC_ENABLE_DEV_LOGIN === 'true',
   erpLoginUrl: process.env.NEXT_PUBLIC_ERP_LOGIN_URL ?? 'https://app-brisigns.com/auth/login',
   /** The ERP middleware portal's home — the shared .app-brisigns.com cookie carries the session over, no re-login. */
   erpHomeUrl: process.env.NEXT_PUBLIC_ERP_HOME_URL ?? 'https://app-brisigns.com/home',
