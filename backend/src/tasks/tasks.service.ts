@@ -1947,7 +1947,7 @@ export class TasksService {
       retailDetails?: Array<{ hodName?: string | null }> | null;
     },
   ) {
-    const [created, assignedRows] = await Promise.all([
+    const [created, assignedRows, reviewMoves] = await Promise.all([
       this.prisma.activityLog.findFirst({
         where: { taskId, action: ActivityAction.TASK_CREATED },
         orderBy: { createdAt: 'asc' },
@@ -1961,6 +1961,17 @@ export class TasksService {
           userId: true,
           user: { select: { userName: true } },
         },
+      }),
+      // Status moves out of HOD_REVIEW, newest first — whoever made one actually did the review.
+      this.prisma.activityLog.findMany({
+        where: {
+          taskId,
+          action: ActivityAction.STATUS_CHANGED,
+          details: { contains: '"oldStatus":"HOD_REVIEW"' },
+        },
+        orderBy: { createdAt: 'desc' },
+        take: 10,
+        select: { details: true, user: { select: { userName: true } } },
       }),
     ]);
 
@@ -1980,7 +1991,21 @@ export class TasksService {
     const anyAssigner = assignedRows[0]?.user?.userName?.trim() || null;
     const technicalHead = String(task.technicalHead ?? '').trim() || null;
 
+    // Any authorized reviewer (any HOD, or Admin) may review — the named/assigned HOD is not the only
+    // one. Once the review is completed (sent to Sales or back for rework) the reviewer shown is the
+    // person who actually did it, not the one originally assigned.
+    const completedBy = reviewMoves.find((row) => {
+      try {
+        const next = JSON.parse(row.details ?? '{}')?.changes?.newStatus;
+        return next === 'SALES_REVIEW' || next === 'REWORK';
+      } catch {
+        return false;
+      }
+    });
+    const actualReviewerName = completedBy?.user?.userName?.trim() || null;
+
     const reviewerHodName =
+      actualReviewerName ||
       hodAssigner?.user?.userName?.trim() ||
       retailHod ||
       technicalHead ||

@@ -1,5 +1,39 @@
 @import "tailwindcss";
 
+/*
+ * Tailwind v4's preflight no longer gives buttons a pointer cursor. Restore the "hand" on every
+ * interactive control so the UI feels clickable (nav icons, buttons, links, selects, checkboxes),
+ * and show a not-allowed cursor on disabled ones. Lives in the base layer, so any explicit
+ * `cursor-*` utility class on an element still wins.
+ */
+@layer base {
+  a[href],
+  button,
+  summary,
+  select,
+  label[for],
+  [role="button"],
+  [role="tab"],
+  [role="menuitem"],
+  [role="option"],
+  input[type="button"],
+  input[type="submit"],
+  input[type="reset"],
+  input[type="checkbox"],
+  input[type="radio"],
+  input[type="file"],
+  input[type="range"] {
+    cursor: pointer;
+  }
+
+  button:disabled,
+  input:disabled,
+  select:disabled,
+  [aria-disabled="true"] {
+    cursor: not-allowed;
+  }
+}
+
 html,
 body,
 #root {

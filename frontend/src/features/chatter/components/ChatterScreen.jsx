@@ -530,7 +530,7 @@ function CreatePostModal({ isOpen, onClose, onSubmit, isSubmitting }) {
           <div>
             <label className="mb-2 block text-sm font-semibold text-slate-700">File attachments</label>
             <div
-              className="rounded-xl border border-dashed border-slate-300 bg-slate-50 px-4 py-8 text-center transition-colors hover:bg-slate-100"
+              className="cursor-pointer rounded-xl border border-dashed border-slate-300 bg-slate-50 px-4 py-8 text-center transition-colors hover:bg-slate-100"
               onClick={() => document.getElementById("post-attachment").click()}
               onDragOver={handleDragOver}
               onDrop={handleDrop}
