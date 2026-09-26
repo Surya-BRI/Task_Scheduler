@@ -16,7 +16,7 @@ function DesignListPageInner() {
       router.replace('/login')
       return
     }
-    if (session.role !== 'HOD') {
+    if (!['HOD', 'ADMIN'].includes(session.role)) {
       router.replace(getHomeRoute(session))
       return
     }

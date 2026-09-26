@@ -1,7 +1,7 @@
 import { TASK_STATUSES } from '@/lib/task-status'
 import { DESIGN_LIST_BOARD_COLUMNS } from '@/features/design-list/task-view-model'
 
-export const TRANSACTION_ROLES = ['HOD', 'SALESPERSON', 'DESIGNER']
+export const TRANSACTION_ROLES = ['HOD', 'ADMIN', 'SALESPERSON', 'DESIGNER']
 
 export { DESIGN_LIST_BOARD_COLUMNS }
 
@@ -124,6 +124,7 @@ export function getTransactionDropdownItems(role) {
 
   switch (String(role ?? '')) {
     case 'HOD':
+    case 'ADMIN':
       return [...items, ...HOD_NAV_ITEMS]
     case 'DESIGNER':
       return [...items, ...DESIGNER_NAV_ITEMS]

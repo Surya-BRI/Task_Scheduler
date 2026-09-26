@@ -6,7 +6,7 @@ import { getSession, getHomeRoute } from '@/lib/mock-auth';
 import { SessionBootstrapSkeleton } from '@/components/SessionBootstrapSkeleton';
 import { ProjectsOverviewScreen } from '@/features/projects/components/ProjectsOverviewScreen';
 
-const OVERVIEW_ROLES = new Set(['HOD']);
+const OVERVIEW_ROLES = new Set(['HOD', 'ADMIN']);
 
 export default function ProjectsOverviewPage() {
   const router = useRouter();

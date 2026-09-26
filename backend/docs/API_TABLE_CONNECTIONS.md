@@ -1,5 +1,7 @@
 # Backend API and Table Connections
 
+> **Database:** since 2026-09-25 the app reads and writes a single database, **ERP-Live**. The 42 `ErpTS*` tables were created there by `backend/prisma/sql/live-create-erpts-tables.sql`; identity and role tables (`ErpAuthUsers`, `ErpAuthUserRoleMap`, `ErpMasterRole`, `ErpAuthSession`, `ErpMasterEmployee`) and master data (`ErpMasterProject`, `ErpMasterOpportunity`) are ERP-owned and read from the same database. `prisma.live` is only a separate pool if `LIVE_DATABASE_URL` differs from `DATABASE_URL`; otherwise it is the main client. See `PRODUCTION_MIGRATION_PROGRESS.md`.
+
 This document explains:
 - how backend APIs are written in this project
 - which database table(s) each API module is connected to
@@ -16,12 +18,12 @@ This document explains:
 
 ## Total Connected Tables
 
-Prisma schema models (and mapped SQL tables) in `backend/prisma/schema.prisma`: **33**
+Prisma schema models in `backend/prisma/schema.prisma`: **44** — 42 `ErpTS*` tables plus `ErpUser` (→ ERP-owned `ErpAuthUsers`, read-only) and legacy `Department` (not created on ERP-Live). The numbered list below is the original core set and is not exhaustive; models added since: `ProjectQsAssignment`, `ChatterPostMention`, `ChatterCommentMention`, `ChatterPostLike`, `ChatterPostSeen`, `ReallocationRequest`, `SchedulerTaskFragment`, `SchedulerDayUnlock`, `LeaveRescheduleSnapshot` (now a Prisma model), `TaskDesigner`.
 
 **Core**
-1. `Role` → `ErpTSRole`
-2. `Department` → `Department`
-3. `User` → `ErpTSUser`
+1. ~~`Role` → `ErpTSRole`~~ — retired; roles come from ERP's `ErpMasterRole`
+2. `Department` → `Department` (legacy, not created on ERP-Live)
+3. `ErpUser` → `ErpAuthUsers` (ERP-owned, read-only reference; replaces the local `ErpAuthUsers`)
 4. `Project` → `ErpTSProject`
 5. `Task` → `ErpTSTask`
 6. `DesignTask` → `ErpTSDesignTask`
@@ -73,12 +75,12 @@ Prisma schema models (and mapped SQL tables) in `backend/prisma/schema.prisma`: 
 ### `auth`
 - Controller: `backend/src/auth/auth.controller.ts`
 - Service: `backend/src/auth/auth.service.ts`
-- Connected tables (indirect via `UsersService`): `ErpTSUser`, `ErpTSRole`
+- Connected tables (indirect via `UsersService`): `ErpAuthUsers`, `ErpAuthUserRoleMap`, `ErpMasterRole`, `ErpAuthSession` (logout marks `isLoggedOut`, clears FCM token)
 
 ### `users`
 - Controller: `backend/src/users/users.controller.ts`
 - Service: `backend/src/users/users.service.ts`
-- Connected tables: `ErpTSUser`, `ErpTSRole`, `Department`
+- Connected tables: `ErpAuthUsers`, `ErpAuthUserRoleMap`, `ErpMasterRole`, `ErpMasterEmployee`
 
 ### `departments`
 - Controller: `backend/src/departments/departments.controller.ts`
@@ -104,7 +106,7 @@ Prisma schema models (and mapped SQL tables) in `backend/prisma/schema.prisma`: 
 ### `tasks`
 - Controller: `backend/src/tasks/tasks.controller.ts`
 - Service: `backend/src/tasks/tasks.service.ts`
-- Connected tables: `ErpTSTask`, `ErpTSUser`, `ErpTSProject`, `ErpTSActivityLog`, `ErpTSRetailTaskDetail`, `ErpTSProjectTaskDetail`, `ErpTSRetailTaskDetailAttachment`, `ErpTSProjectTaskDetailAttachment`, `ErpTSTaskWorkSession`, `ErpTSTaskWorkSessionFile`
+- Connected tables: `ErpTSTask`, `ErpAuthUsers`, `ErpTSProject`, `ErpTSActivityLog`, `ErpTSRetailTaskDetail`, `ErpTSProjectTaskDetail`, `ErpTSRetailTaskDetailAttachment`, `ErpTSProjectTaskDetailAttachment`, `ErpTSTaskWorkSession`, `ErpTSTaskWorkSessionFile`
 - Note: QS sign rows and QS status were moved out of this module into `projects` as of 2026-06-28.
 - Extended create endpoint: `POST /tasks/extended` creates **one `ErpTSTask` per `projectDetails[]` entry** for project tasks — each entry maps to one discipline for one sign type. `task.projectName` required; missing value returns `400`.
 - Task title for project tasks is built as `[opNo, signType, disciplineType, revisionCode].join(' - ')`.
@@ -131,7 +133,7 @@ Prisma schema models (and mapped SQL tables) in `backend/prisma/schema.prisma`: 
 ### `chatter-posts`
 - Controller: `backend/src/chatter-posts/chatter-posts.controller.ts`
 - Service: `backend/src/chatter-posts/chatter-posts.service.ts`
-- Connected tables: `ErpTSChatterPost`, `ErpTSChatterComment`, `ErpTSActivityLog`, `ErpTSUser`, `ErpTSTask`
+- Connected tables: `ErpTSChatterPost`, `ErpTSChatterComment`, `ErpTSActivityLog`, `ErpAuthUsers`, `ErpTSTask`
 - Endpoints:
   - `GET /chatter-posts?taskId=<uuid>&limit=<n>`
   - `GET /chatter-posts?projectId=<uuid>&limit=<n>` (project-wide feed for detail pages)
@@ -141,7 +143,7 @@ Prisma schema models (and mapped SQL tables) in `backend/prisma/schema.prisma`: 
 ### `requests` (Leave Requests)
 - Controller: `backend/src/requests/requests.controller.ts`
 - Service: `backend/src/requests/requests.service.ts`
-- Connected tables: `ErpTSLeaveRequest`, `ErpTSUser`
+- Connected tables: `ErpTSLeaveRequest`, `ErpAuthUsers`
 - Key endpoints:
   - `GET /requests` — own requests
   - `GET /requests/pending-approvals` — HOD approval queue
@@ -184,7 +186,7 @@ Prisma schema models (and mapped SQL tables) in `backend/prisma/schema.prisma`: 
 - Connected tables: `ErpTSSchedulerAssignment`, `ErpTSSchedulerWeek`, `ErpTSSchedulerAssignmentHistory`, `ErpTSHoliday`, `ErpTSLeaveRescheduleSnapshot` (raw SQL)
 - **Leave rescheduling:** `rescheduleForApprovedLeave(leave)` — displaces assignments overlapping the leave window, snapshots each to `ErpTSLeaveRescheduleSnapshot`, and reschedules them to next available working days (skips `ErpTSHoliday` + designer weekend day-locks; weekends otherwise open). Capacity cap is `DAILY_CAPACITY (8h)`, not `MAX_DAILY_HOURS (12h)`.
 - **Leave revocation:** `revokeLeaveReschedule(leaveId)` — loads unrestored snapshots, restores assignment rows, stamps `restoredAt`.
-- **Cross-week overflow placement:** `PUT /scheduler-assignments/week/:weekStart` accepts an optional `overflow[]` (`SchedulerOverflowInputDto[]`); `placeOverflowCapacity` walks forward day-by-day from the day after the saved week (skip holidays/full-day leave/designer weekend day-locks; weekends otherwise open), live-checks capacity inside the same save transaction, bounded by a 56-day lookahead. Replaces the old client-side `localStorage` overflow carry-forward. Response adds `overflowPlacements`/`unplacedOverflow`. Does **not** check the destination week's `isLocked` flag before writing — see `SCHEDULER_FIXES_NEEDED.md` item 11.
+- **Cross-week overflow placement:** `PUT /scheduler-assignments/week/:weekStart` accepts an optional `overflow[]` (`SchedulerOverflowInputDto[]`); `placeOverflowCapacity` walks forward day-by-day from the day after the saved week (skip holidays/full-day leave/designer weekend day-locks; weekends otherwise open), live-checks capacity inside the same save transaction, bounded by a 56-day lookahead. Replaces the old client-side `localStorage` overflow carry-forward. Response adds `overflowPlacements`/`unplacedOverflow`. Skips destination weeks whose `isLocked` flag is set (fixed 2026-09-17; see `SCHEDULER_FIXES_NEEDED.md` item 11).
 - `DELETE /scheduler-assignments/task/:taskId` (`clearTaskSchedule`) accepts an optional `expectedAssignmentIds` query param (comma-separated); when given, the check-then-delete runs inside one `$transaction` and throws `ConflictException` on any live row outside the set. Omitting it preserves the old unconditional wipe.
 
 ### `design-list`
@@ -196,7 +198,7 @@ Prisma schema models (and mapped SQL tables) in `backend/prisma/schema.prisma`: 
 - Controller: `backend/src/dashboard/dashboard.controller.ts`
 - Service: `backend/src/dashboard/dashboard.service.ts`
 - DTO: `backend/src/dashboard/projects-overview.dto.ts`
-- Connected tables: `ErpTSTask`, `ErpTSProject`, `ErpTSSchedulerAssignment`, `ErpTSActivityLog`, `ErpTSUser`
+- Connected tables: `ErpTSTask`, `ErpTSProject`, `ErpTSSchedulerAssignment`, `ErpTSActivityLog`, `ErpAuthUsers`
 - Endpoints:
   - `GET /dashboard/metrics` — task/project counts for current user
   - `GET /dashboard/projects-overview?weekStart=YYYY-MM-DD` — weekly snapshot: scheduled tasks, completed, on-hold, reallocated, inbox feed, donut summary

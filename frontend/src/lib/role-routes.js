@@ -1,6 +1,11 @@
 
+/**
+ * HOD-level access: HOD plus ADMIN. Admin has every HOD permission but is a separate role —
+ * it is only *not* an HOD for assignment (HOD pick lists / reviewer HOD), never for access.
+ */
 export function isHodRole(role) {
-  return String(role ?? "").toUpperCase() === "HOD";
+  const r = String(role ?? "").toUpperCase();
+  return r === "HOD" || r === "ADMIN";
 }
 
 function withSearchAndHash(base, search = "", hash = "") {

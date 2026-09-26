@@ -6,7 +6,7 @@
 
 ## 1. Project Overview
 
-**Purpose:** Task and project management system for Blue Rhine Industries (BRI). Manages design tasks, designer workload scheduling, project attachments, team collaboration (chatter), leave/overtime requests, and activity audit trails. Integrates with an existing SQL Server ERP system via ErpTS-prefixed tables.
+**Purpose:** Task and project management system for Blue Rhine Industries (BRI). Manages design tasks, designer workload scheduling, project attachments, team collaboration (chatter), leave/overtime requests, and activity audit trails. Integrates with the BRI ERP SQL Server database (**ERP-Live** since 2026-09-25): app data lives in `ErpTS*` tables, identity comes from the ERP's own `ErpAuth*` / `ErpMaster*` tables.
 
 **Monorepo Structure:**
 ```
@@ -28,8 +28,8 @@ D:\Scheduler\
 | Frontend tables | TanStack Table 8.21, TanStack Virtual 3.13 |
 | Backend framework | NestJS 11.0.1 (Express adapter) |
 | Database ORM | Prisma 6.19.3 |
-| Database | SQL Server (sqlserver provider) |
-| Auth | JWT via Passport.js (@nestjs/jwt, passport-jwt) |
+| Database | SQL Server (sqlserver provider) — ERP-Live; see `PRODUCTION_MIGRATION_PROGRESS.md` |
+| Auth | ERP session/JWT via Passport.js (`AUTH_MODE=external` in production); users validated against `ErpAuthUsers` |
 | File storage | AWS S3 (ap-south-1) |
 | Validation | class-validator + class-transformer (backend), Zod (frontend) |
 | Password hashing | bcrypt |
@@ -89,29 +89,17 @@ AppModule
 
 **Provider:** `sqlserver` — most tables have `ErpTS` prefix. Exception: `Department` maps to `Department` (no prefix).
 
-**Total Prisma models: 38** (see `backend/prisma/schema.prisma`)
+**Total Prisma models: 44** (42 `ErpTS*` tables created on ERP-Live + `ErpUser` → `ErpAuthUsers`, ERP-owned, + legacy `Department`, neither created) (see `backend/prisma/schema.prisma`)
 
-### User (ErpTSUser)
+### ErpUser (ErpAuthUsers — ERP-owned, read-only reference)
 ```
-id            String   @id @default(uuid())
-email         String   @unique
-fullName      String
-passwordHash  String
-roleId        String   → Role
-departmentId  String?  → Department
-createdAt     DateTime
-updatedAt     DateTime
+userId    BigInt  @id          ← identity every ErpTS table keys on (bigint, not GUID)
+userName  String
+isActive  Boolean
+isDeleted Boolean
 ```
+The local `ErpTSUser` / `ErpTSRole` tables no longer exist (removed in the 2026-09 ERP-auth migration; not created on ERP-Live). Login and roles come from ERP's `ErpAuthUsers` + `ErpAuthUserRoleMap` + `ErpMasterRole`; the role name is mapped to a Scheduler `UserRole` (see §9). No FK constraints point into `ErpAuthUsers` on ERP-Live — user ids are validated in the app. See `backend/docs/ERP_AUTH_MIDDLEWARE.md`.
 Relations: tasks (assignee), projects (creator), chatterPosts, chatterComments, activities, leaveRequests, notifications, inboxReadMarkers, regularizationRequests, overtimeRequests, schedulerAssignments, conversations, messages, workSessions, taskDesignerEntries
-
-### Role (ErpTSRole)
-```
-id          String @id
-name        String @unique
-permissions String?
-createdAt   DateTime
-updatedAt   DateTime
-```
 
 ### Department (Department — no ErpTS prefix)
 ```
@@ -1059,7 +1047,6 @@ frontend/src/
 │   ├── ProjectTaskTimer.jsx
 │   └── ui/ (button, input)
 ├── features/              Feature modules (services + components)
-│   ├── auth/services/auth.api.ts
 │   ├── design-list/components/, task-view-model.js
 │   ├── projects/components/
 │   ├── scheduler/services/, components/, utils/
@@ -1137,27 +1124,27 @@ export const apiClient = {
 ```
 
 **Behaviors:**
-- Auto-injects `Authorization: Bearer <token>` from `getAccessToken()` (localStorage)
+- Legacy (demo mode): injects `Authorization: Bearer <token>` from `getAccessToken()` (localStorage); in production the ERP session cookie is used instead
 - If body is `FormData`, skips `Content-Type` (browser sets multipart boundary)
 - Otherwise sends `Content-Type: application/json`
 - Parses JSON responses with `dateReviver` — auto-converts ISO strings to `Date` objects
 - On `401` → calls `clearAccessToken()`, throws `Error('Unauthorized')`
 - Base URL: `env.apiBaseUrl` → `NEXT_PUBLIC_API_BASE_URL` → `http://localhost:7000/api/v1` (dev default)
 
-### Authentication Flow
+### Authentication Flow (external / ERP portal)
 ```
-1. POST /auth/login → { accessToken, user: {id, email, fullName, role} }
-2. setAccessToken(accessToken) → localStorage['br_token']
-3. setSession({id, email, fullName, role}) → localStorage['br_session']
+1. Login page shows "Go to ERP Sign In" → env.erpLoginUrl (ERP portal). There is no username/password form in Scheduler any more.
+2. ERP portal authenticates the user and sets the session cookies (session_id, role, ...) on the shared cookie domain.
+3. User returns to Scheduler; the backend validates the ERP JWT from the cookie (JwtStrategy, AUTH_MODE=external) and resolves the role via EXTERNAL_ROLE_MAP.
 4. getHomeRoute(role) → HOD: '/design-list', Designer: '/design-list/tasks'
-5. Every request: Authorization: Bearer <token>
-6. 401 → clearAccessToken(), redirect /login
+5. Every request goes to same-origin /api/v1 (Vercel proxies to the backend) with the cookies attached.
+6. 401 → redirect to /login?expired=1
+7. Sign Out → /api/auth/logout → backend /auth/logout + ERP auth_logout → cookies cleared
 ```
 
 ### Feature API Services
 | File | Functions |
 |------|-----------|
-| `auth.api.ts` | `loginApi(email, password)` |
 | `activities.api.ts` | `fetchTeamActivities({limit})`, `fetchTaskActivities(taskId, {limit, cursor})`, `fetchProjectActivities(projectId, {limit, cursor})` |
 | `chatter-posts.api.ts` | `listChatterPosts({limit, taskId?, projectId?})`, `createChatterPost(data, files?)`, `listComments(postId)`, `createComment(postId, {message})`, `fetchMentionUsers()` |
 | `requests.api.ts` | `fetchLeaveRequests(designerId?)`, `createLeaveRequest(data)`, `updateRequestStatus(id, status)` |
@@ -1187,6 +1174,11 @@ All other state is local component `useState`. No Redux/Zustand.
 | `SALESPERSON` | Salesperson | Read-only project/task access |
 | `QS` | Quantity Surveyor | Manage QS sign rows and QS status on assigned projects |
 
+### Admin role (2026-09-26)
+ERP `Admin` / `Sub Admin` map to the Scheduler role **`ADMIN`** (shared map: `backend/src/common/utils/erp-role-map.util.ts`; in production `EXTERNAL_ROLE_MAP` must map them to `ADMIN` too, not `HOD`).
+- **Access:** ADMIN has every HOD permission. `RolesGuard` lets ADMIN through any route open to HOD; service-level checks use `hasHodEquivalentAccess()` / `hasHrApproverAccess()`; frontend uses `isHodRole()` (HOD or ADMIN) and lands on `/design-list`.
+- **Not an HOD:** ADMIN is excluded from HOD pick lists (`GET /users?role=HOD`, "Select HOD"), from the reviewer-HOD shown on a task, and from HOD-only notification lists (reallocation requests). Existing org-wide "HOD + Admin" alerts (task review, work submitted, deadlines, QS updates) still reach admins.
+
 ### Guards
 - **JwtAuthGuard** — applied via `@UseGuards(JwtAuthGuard)` on controller/method
   - Production: validates `Authorization: Bearer <jwt>` signed with `JWT_ACCESS_SECRET`
@@ -1194,8 +1186,10 @@ All other state is local component `useState`. No Redux/Zustand.
 - **RolesGuard** — applied after JwtAuthGuard, reads `@Roles()` decorator
 
 ### Auth Modes (`AUTH_MODE` env var)
-- **`demo`** (default): Internal JWT minted by backend on `/auth/login`
-- **`external`**: Validates JWT from existing ERP system using `EXTERNAL_JWT_SECRET`; maps external role labels via `EXTERNAL_ROLE_MAP` JSON
+- **`demo`** (default in code): Internal JWT minted by backend on `/auth/login`
+- **`external`** (**production, ERP-Live**): the ERP portal logs the user in and sets the cookies; the backend validates the ERP JWT using `EXTERNAL_JWT_SECRET`, reads the session from `EXTERNAL_SESSION_COOKIE` (`session_id`) and the role name from `EXTERNAL_ROLE_COOKIE`, and maps it via `EXTERNAL_ROLE_MAP` JSON. `ErpMasterEmployee.isAllowLogin` / `defaultMiddleware` are intentionally **not** checked by Scheduler — the portal's login gate decides who gets a token.
+- **Logout:** frontend route `/api/auth/logout` calls the backend `/auth/logout` (marks `ErpAuthSession.isLoggedOut`, clears the user's FCM token), then best-effort ERP `auth_logout` (`ERP_LOGOUT_URL`, defaults to `https://api.app-brisigns.com/api/auth/auth_logout` in production builds), then clears the `EXTERNAL_LOGOUT_COOKIES`.
+- **WebSocket auth on Vercel:** `/api/auth/ws-token` exchanges the session cookie for a short-lived token for the dashboard socket.
 
 ---
 
@@ -1207,8 +1201,13 @@ NODE_ENV=development
 PORT=4000
 API_PREFIX=api/v1
 
-# Database (SQL Server)
+# Database (SQL Server) — production points at ERP-Live (ErpTS* app tables + ERP tables in one DB)
 DATABASE_URL=sqlserver://SERVER:PORT;database=DBNAME;user=USER;password=PASS;encrypt=true;trustServerCertificate=true
+# Optional separate read-only connection for ERP master reads (prisma.live). Unset or equal to
+# DATABASE_URL => the main pool is used (the case since the ERP-Live cutover).
+LIVE_DATABASE_URL=
+# Must be false against ERP-Live (no boot-time DDL); defaults to false when NODE_ENV=production
+RUNTIME_SCHEMA_BOOTSTRAP=false
 # OR individual vars:
 DB_SERVER=
 DB_PORT=1433
@@ -1223,13 +1222,16 @@ JWT_ACCESS_SECRET=<min 16 chars>
 JWT_ACCESS_EXPIRES_IN=1d
 
 # Auth mode
-AUTH_MODE=demo   # or: external
-# External auth only:
+AUTH_MODE=demo   # production: external
+# External auth only (see backend/.env.example for the full list):
 EXTERNAL_JWT_SECRET=
-EXTERNAL_SUB_FIELD=sub
-EXTERNAL_EMAIL_FIELD=email
-EXTERNAL_ROLE_FIELD=role
-EXTERNAL_ROLE_MAP={"Hod":"HOD","Designer":"DESIGNER","ProjectManager":"PROJECT_MANAGER"}
+EXTERNAL_SUB_FIELD=data.user_id
+EXTERNAL_EMAIL_FIELD=data.user_name
+EXTERNAL_ROLE_COOKIE=role
+EXTERNAL_ROLE_NAME_FIELD=roleName
+EXTERNAL_ROLE_MAP={"DESIGN HOD":"HOD"}
+EXTERNAL_SESSION_COOKIE=session_id
+EXTERNAL_LOGOUT_COOKIES=role,department,session_id,user_name
 
 # CORS
 CORS_ORIGIN=http://localhost:3000,http://localhost:5000
@@ -1254,6 +1256,11 @@ NODE_ENV=development
 NEXT_PUBLIC_APP_NAME=TaskScheduler
 NEXT_PUBLIC_WEB_URL=http://localhost:5000
 NEXT_PUBLIC_API_BASE_URL=http://localhost:4000/api/v1
+# ERP links (defaults in src/lib/env.ts point at the live ERP host https://app-brisigns.com)
+NEXT_PUBLIC_ERP_HOME_URL=https://app-brisigns.com/home
+NEXT_PUBLIC_ERP_LOGIN_URL=https://app-brisigns.com/auth/login
+# Server-only (no NEXT_PUBLIC_): ERP logout base URL
+ERP_LOGOUT_URL=https://api.app-brisigns.com/api/auth/auth_logout
 ```
 
 ---
@@ -1261,7 +1268,7 @@ NEXT_PUBLIC_API_BASE_URL=http://localhost:4000/api/v1
 ## 11. Key Conventions & Patterns
 
 ### Naming Conventions
-- **Database tables:** `ErpTS` prefix (e.g., `ErpTSUser`, `ErpTSTask`, `ErpTSProject`). Exception: `Department` has no prefix.
+- **Database tables:** `ErpTS` prefix (e.g., `ErpTSTask`, `ErpTSProject`). Exceptions: `Department` (legacy, no prefix) and `ErpUser` → ERP-owned `ErpAuthUsers`.
 - **IDs:** UUIDs (`@default(dbgenerated("newid()"))`) throughout
 - **Auto-generated codes:** `taskNo` generated server-side; `revisionCode` from `/tasks/next-revision` endpoint
 - **Status enums:** UPPER_CASE or `DESIGN_NEW` for task/project status; Title Case for request status (Pending/Approved/Rejected)
@@ -1354,7 +1361,7 @@ npm run lint                 # Lint both
 npm run typecheck            # TypeScript check both
 npm run prisma:generate      # Regenerate Prisma client after schema changes
 npm run prisma:migrate       # Apply pending migrations
-npm run prisma:seed          # Seed demo roles and users
+npm run prisma:seed          # Legacy demo seed (dev only; production users come from ERP)
 npm run prisma:setup         # generate + ensure tables/FKs
 npm run prisma:audit-schema  # Check ErpTS schema integrity
 ```
@@ -1388,15 +1395,11 @@ npm run prisma:generate  # Regenerate client types
 # 2. Run manually against SQL Server OR
 npm run prisma:migrate   # via Prisma migrate
 
-# Seed initial data:
-npm run prisma:seed      # Creates roles + demo users
+# Seed (legacy, dev only — do NOT run against ERP-Live):
+npm run prisma:seed
 ```
 
-Demo users created by seed:
-- `sarah.mitchell@bluerhine.com` / `hod123` (HOD)
-- `alex.johnson@bluerhine.com` / `alex123` (Designer)
-- `alexander.allen@bluerhine.com` / `alex123` (Designer)
-- `benjamin.harris@bluerhine.com` / `ben123` (Designer)
+The seed's demo users (`*@bluerhine.com`) belong to the retired local `ErpTSUser` table and no longer log in anywhere. Real accounts are ERP users in `ErpAuthUsers`. ERP-Live tables were created with `backend/prisma/sql/live-create-erpts-tables.sql` + `live-create-erpts-indexes.sql` (rollback: `live-rollback-erpts-tables.sql`) instead of `prisma migrate`, since `prisma/migrations/` is empty. Full history: `PRODUCTION_MIGRATION_PROGRESS.md`.
 
 ### Deployment (Linux/Ubuntu via PM2)
 ```bash
@@ -1424,8 +1427,11 @@ curl https://task-scheduler.app-brisigns.com/api/v1/health
 | `create-erp-ts-activity-log.sql` | Creates ErpTSActivityLog table with FKs to User and Task |
 | `create-scheduler-acid.sql` | Scheduler transactional integrity constraints |
 | `ensure-erp-ts-foreign-keys.sql` | Ensures FK constraints across ERP tables |
-| `fix-passwords-for-login.sql` | Password field migration |
+| `fix-passwords-for-login.sql` | Legacy password field migration (local user table, retired) |
+| `live-create-erpts-tables.sql` | Creates the 42 `ErpTS*` tables + 32 FKs on ERP-Live (no FKs into `ErpAuthUsers`) |
+| `live-create-erpts-indexes.sql` | Filtered unique index on pending reallocation requests (run with `sqlcmd -I`) |
+| `live-rollback-erpts-tables.sql` | Drops the 42 `ErpTS*` tables (destroys data; only safe before real data exists) |
 
 ---
 
-*Last updated: 2026-06-28. Generated from full codebase analysis.*
+*Last updated: 2026-09-26 — reflects the ERP-Live cutover (2026-09-25).*

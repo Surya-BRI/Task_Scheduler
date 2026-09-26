@@ -55,7 +55,7 @@ export function clearLegacyAuthStorage() {
 
 export function getHomeRoute(session: AppSession | null) {
   if (!session) return '/login';
-  if (session.role === 'HOD') return '/design-list';
+  if (session.role === 'HOD' || session.role === 'ADMIN') return '/design-list';
   if (session.role === 'DESIGNER') return '/design-list/tasks';
   if (session.role === 'SALESPERSON') return '/sales/tasks';
   if (session.role === 'QS') return '/qs/projects';

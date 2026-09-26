@@ -2,19 +2,8 @@ import { ForbiddenException, Injectable, NotFoundException } from '@nestjs/commo
 import * as bcrypt from 'bcrypt';
 import { PrismaService } from '../prisma/prisma.service';
 import { UserRole } from '../common/constants/roles.enum';
-
-// ERP roleName -> Scheduler role bucket. ERP has dozens of granular roles; only
-// the ones with a real Scheduler equivalent can log into the Scheduler app.
-const ERP_ROLE_MAP: Record<string, UserRole> = {
-  'Design HOD': UserRole.HOD,
-  'Design Head': UserRole.HOD,
-  Admin: UserRole.HOD,
-  'Sub Admin': UserRole.HOD,
-  SalesRep: UserRole.SALESPERSON,
-  'Sales Coordinator': UserRole.SALESPERSON,
-  Designer: UserRole.DESIGNER,
-  QS: UserRole.QS,
-};
+import { ERP_ROLE_MAP } from '../common/utils/erp-role-map.util';
+import { hasHodEquivalentAccess } from '../common/utils/workflow-roles.util';
 
 type ErpAuthRow = { userId: bigint; userName: string; password: string; roleName: string };
 type ErpUserRow = { userId: bigint; userName: string; roleName: string | null };
@@ -88,8 +77,7 @@ export class UsersService {
   }
 
   async findByIdForViewer(id: string, viewerId: string, viewerRole: UserRole | string) {
-    const privilegedRoles = new Set<string>([UserRole.HOD, UserRole.ADMIN, UserRole.PROJECT_MANAGER]);
-    if (BigInt(viewerId) !== BigInt(id) && !privilegedRoles.has(String(viewerRole))) {
+    if (BigInt(viewerId) !== BigInt(id) && !hasHodEquivalentAccess(viewerRole) && String(viewerRole) !== UserRole.PROJECT_MANAGER) {
       throw new ForbiddenException('You can only view your own profile');
     }
     return this.findById(id);

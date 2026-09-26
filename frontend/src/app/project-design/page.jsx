@@ -20,7 +20,7 @@ export default function ProjectDesignRoutePage() {
       router.replace('/sales/project-design')
       return
     }
-    if (session.role !== 'HOD') {
+    if (!['HOD', 'ADMIN'].includes(session.role)) {
       router.replace(getHomeRoute(session))
       return
     }

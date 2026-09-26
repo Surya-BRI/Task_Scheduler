@@ -20,6 +20,7 @@ Create `frontend/.env.local` from `frontend/.env.example`.
 | `NEXT_PUBLIC_WS_ORIGIN` | Optional WebSocket origin when API is same-origin proxied (defaults to browser origin). |
 | `NEXT_PUBLIC_WEB_URL` | Public site URL (e.g. `http://localhost:5000`). |
 | `NEXT_PUBLIC_APP_NAME` | Display name in UI. |
+| `NEXT_PUBLIC_ENABLE_DEV_LOGIN` | Local dev only: `true` shows a username/password login form (uses backend demo-mode `/auth/login`; backend `AUTH_MODE` must be unset). Ignored unless `NODE_ENV=development`. See `backend/docs/DEVELOPMENT.md` → Local Login & Switching Databases. |
 
 Only variables prefixed with `NEXT_PUBLIC_` are exposed to the browser.
 

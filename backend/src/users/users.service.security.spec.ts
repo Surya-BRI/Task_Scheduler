@@ -33,14 +33,30 @@ describe('UsersService IDOR protection', () => {
     });
   });
 
-  it.each(['Admin', 'Sub Admin'])('maps the ERP "%s" role to HOD', async (roleName) => {
+  it.each(['Admin', 'Sub Admin'])('maps the ERP "%s" role to ADMIN, not HOD', async (roleName) => {
     prisma.$queryRaw.mockResolvedValue([{ userId: 44n, userName: 'boss', roleName }]);
 
-    await expect(service.findByIdForViewer('44', '44', UserRole.HOD)).resolves.toEqual({
+    await expect(service.findByIdForViewer('44', '44', UserRole.ADMIN)).resolves.toEqual({
       id: '44',
       userName: 'boss',
-      role: UserRole.HOD,
+      role: UserRole.ADMIN,
     });
+  });
+
+  it('allows ADMIN to read any profile (HOD-level access)', async () => {
+    prisma.$queryRaw.mockResolvedValue([{ userId: 43n, userName: 'other', roleName: 'SalesRep' }]);
+
+    await expect(service.findByIdForViewer('43', '99', UserRole.ADMIN)).resolves.toMatchObject({ id: '43' });
+  });
+
+  it('keeps Admin users out of the HOD role filter', async () => {
+    prisma.$queryRaw.mockResolvedValue([
+      { userId: 1n, userName: 'hod', roleName: 'Design HOD' },
+      { userId: 2n, userName: 'admin', roleName: 'Admin' },
+    ]);
+
+    const hods = await service.findAll({ role: UserRole.HOD });
+    expect(hods.map((u) => u.userName)).toEqual(['hod']);
   });
 
   it('blocks designers from reading another user profile', async () => {

@@ -93,7 +93,7 @@ type DashboardEmitter = {
   emitTimerUpdated: (userId: string, payload: TimerUpdatedPayload) => void;
 };
 
-const OVERVIEW_ROLES: UserRole[] = [UserRole.HOD, UserRole.SALESPERSON];
+const OVERVIEW_ROLES: UserRole[] = [UserRole.HOD, UserRole.ADMIN, UserRole.SALESPERSON];
 
 @Injectable()
 export class DashboardRealtimeService {
