@@ -34,6 +34,29 @@ describe('DesignListService SQL security', () => {
     }
   });
 
+  it.each(FILTER_EDGE_CASES)('parameterizes retail list search filter: $label', async ({ value }) => {
+    await service.findRetailListPage(1, 50, value);
+
+    expect(queryRaw).toHaveBeenCalled();
+    const firstQuery = queryRaw.mock.calls[0][0];
+    if (value.trim()) {
+      expectInputParameterized(firstQuery, value.trim());
+    } else {
+      const { values } = extractPrismaSqlParts(firstQuery);
+      expect(values.filter((v) => typeof v === 'string' && v.includes('%'))).toHaveLength(0);
+    }
+  });
+
+  it('restricts the retail list to recognized retail business units', async () => {
+    await service.findRetailListPage(1, 50, '');
+
+    const pageQuery = queryRaw.mock.calls[0][0];
+    const { strings } = extractPrismaSqlParts(pageQuery);
+    expect(strings.join('')).toContain(
+      "IN ('retail', 'rtl', 'r', 'prosigns-retail')",
+    );
+  });
+
   it.each(FILTER_EDGE_CASES)('parameterizes design list filters: $label', async ({ value }) => {
     await service.findDesignListPage(1, 50, {
       q: value,
