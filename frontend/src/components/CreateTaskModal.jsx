@@ -108,7 +108,7 @@ export function CreateTaskModal({ open, onClose, onCreated, submissionDate, reco
       .catch((err) => {
         if (!alive) return
         setHodUsers([])
-        setHodUsersError(toUserFacingError(err, 'Could not load HOD list'))
+        setHodUsersError(toUserFacingError(err, 'Could not load Reviewer list'))
       })
       .finally(() => {
         if (alive) setHodUsersLoading(false)
@@ -205,7 +205,7 @@ export function CreateTaskModal({ open, onClose, onCreated, submissionDate, reco
       nextFieldErrors.designType = 'Design Type is required'
     }
     if (!hod.trim()) {
-      nextFieldErrors.hod = 'HOD is required'
+      nextFieldErrors.hod = 'Reviewer is required'
     }
     if (!validSubmissionDate) {
       nextFieldErrors.deadline = 'Deadline for Task Submission is required'
@@ -513,7 +513,7 @@ export function CreateTaskModal({ open, onClose, onCreated, submissionDate, reco
             </div>
             <div>
               <label className="text-xs font-semibold text-slate-600" htmlFor="create-hod">
-                Select HOD <span className="text-red-600">*</span>
+                Select Reviewer <span className="text-red-600">*</span>
               </label>
               <select
                 id="create-hod"
@@ -527,7 +527,7 @@ export function CreateTaskModal({ open, onClose, onCreated, submissionDate, reco
                 className="mt-1.5 w-full rounded-md border border-slate-300 bg-white px-3 py-2 text-sm text-slate-900 outline-none transition-colors focus:border-blue-500 focus:ring-2 focus:ring-blue-500/20 disabled:cursor-not-allowed disabled:bg-slate-50"
               >
                 <option value="">
-                  {hodUsersLoading ? 'Loading HODs…' : hodUsersError ? 'Failed to load HODs' : 'Select'}
+                  {hodUsersLoading ? 'Loading Reviewers…' : hodUsersError ? 'Failed to load Reviewers' : 'Select'}
                 </option>
                 {hodUsers.map((user) => {
                   const name = String(user?.userName ?? '').trim()
@@ -543,10 +543,10 @@ export function CreateTaskModal({ open, onClose, onCreated, submissionDate, reco
                 <p className="mt-1 text-xs text-red-600">{hodUsersError}</p>
               ) : null}
               {!hodUsersLoading && !hodUsersError && hodUsers.length === 0 ? (
-                <p className="mt-1 text-xs text-amber-700">No HOD users found. Seed HOD accounts first.</p>
+                <p className="mt-1 text-xs text-amber-700">No Reviewer users found. Seed HOD accounts first.</p>
               ) : null}
               {((submitAttempted || touched.hod) && !hod.trim()) || fieldErrors.hod ? (
-                <p className="mt-1 text-xs text-red-600">{fieldErrors.hod || 'HOD is required'}</p>
+                <p className="mt-1 text-xs text-red-600">{fieldErrors.hod || 'Reviewer is required'}</p>
               ) : null}
             </div>
           </div>

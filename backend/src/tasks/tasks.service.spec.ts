@@ -119,6 +119,7 @@ describe('TasksService', () => {
     });
     notificationsService.create.mockResolvedValue({});
     prisma.task.findMany.mockResolvedValue([]);
+    prisma.erpUser.findMany.mockResolvedValue([]);
     prisma.chatterPost.create.mockResolvedValue({});
     prisma.$transaction.mockImplementation((cb: (tx: any) => Promise<unknown>) => cb(prisma));
     activityLogger.log.mockResolvedValue(undefined);
@@ -923,6 +924,20 @@ describe('TasksService', () => {
       expect(dashboardRealtime.notifyUserNotificationRefresh).toHaveBeenCalledWith('9002');
     });
 
+    it('also notifies listed backup HOD reviewers, not just real HOD/ADMIN', async () => {
+      const ORIGINAL_ENV = process.env.BACKUP_HOD_REVIEWER_USER_IDS;
+      process.env.BACKUP_HOD_REVIEWER_USER_IDS = '9099';
+      mockNotifyUsersByRole({ managers: [{ id: '9002' }] });
+      prisma.erpUser.findMany.mockResolvedValue([{ userId: 9099n, userName: 'ArjunEljo' }]);
+
+      await service.updateStatus(TASK_ID, '9001', UserRole.DESIGNER, { status: 'HOD_REVIEW' } as any);
+
+      expect(notificationsService.create).toHaveBeenCalledWith(
+        expect.objectContaining({ userId: '9099', title: expect.stringContaining('HOD Review') }),
+      );
+      process.env.BACKUP_HOD_REVIEWER_USER_IDS = ORIGINAL_ENV;
+    });
+
     it('CLIENT_REJECTED creates the next revision, notifies designers with the new-task link, and notifies stakeholders once', async () => {
       const revisionTask = { id: 'rev-task-1', taskNo: 'T-101' };
       prisma.task.update
@@ -1121,6 +1136,100 @@ describe('TasksService', () => {
         service.updateStatus(TASK_ID, '9001', UserRole.DESIGNER, { status: 'IN_PROGRESS' } as any),
       ).rejects.toThrow('Designers can only access tasks they have worked on or been assigned to');
     });
+
+    describe('backup HOD reviewers (BACKUP_HOD_REVIEWER_USER_IDS)', () => {
+      const ORIGINAL_ENV = process.env.BACKUP_HOD_REVIEWER_USER_IDS;
+
+      beforeEach(() => {
+        process.env.BACKUP_HOD_REVIEWER_USER_IDS = '9099';
+      });
+
+      afterEach(() => {
+        process.env.BACKUP_HOD_REVIEWER_USER_IDS = ORIGINAL_ENV;
+      });
+
+      it('lets a listed designer approve a HOD_REVIEW task they are not assigned to', async () => {
+        prisma.task.findUnique.mockResolvedValue({
+          ...existingTask,
+          status: 'HOD_REVIEW',
+          assigneeId: 'other-designer',
+        });
+        prisma.task.update.mockResolvedValue({ ...updatedTask, status: 'SALES_REVIEW' });
+        mockNotifyUsersByRole({});
+
+        await service.updateStatus(TASK_ID, '9099', UserRole.DESIGNER, {
+          status: 'SALES_REVIEW',
+        } as any);
+
+        // Bypassed the "must be involved" gate — never fell through to the findFirst check.
+        expect(prisma.task.findFirst).not.toHaveBeenCalled();
+        expect(prisma.task.update).toHaveBeenCalledWith(
+          expect.objectContaining({ data: expect.objectContaining({ status: 'SALES_REVIEW' }) }),
+        );
+      });
+
+      it('lets a listed designer start HOD review on a DESIGN_COMPLETED task they are not assigned to', async () => {
+        prisma.task.findUnique.mockResolvedValue({
+          ...existingTask,
+          status: 'DESIGN_COMPLETED',
+          assigneeId: 'other-designer',
+        });
+        prisma.task.update.mockResolvedValue({ ...updatedTask, status: 'HOD_REVIEW' });
+        mockNotifyUsersByRole({});
+
+        await service.updateStatus(TASK_ID, '9099', UserRole.DESIGNER, {
+          status: 'HOD_REVIEW',
+        } as any);
+
+        expect(prisma.task.findFirst).not.toHaveBeenCalled();
+        expect(prisma.task.update).toHaveBeenCalledWith(
+          expect.objectContaining({ data: expect.objectContaining({ status: 'HOD_REVIEW' }) }),
+        );
+      });
+
+      it('lets a listed designer send a HOD_REVIEW task back to REWORK', async () => {
+        prisma.task.findUnique.mockResolvedValue({
+          ...existingTask,
+          status: 'HOD_REVIEW',
+          assigneeId: 'other-designer',
+        });
+        prisma.task.update.mockResolvedValue({ ...updatedTask, status: 'REWORK' });
+        mockNotifyUsersByRole({});
+
+        await expect(
+          service.updateStatus(TASK_ID, '9099', UserRole.DESIGNER, {
+            status: 'REWORK',
+            reworkNote: 'Fix scale',
+          } as any),
+        ).resolves.toBeDefined();
+      });
+
+      it('still blocks a listed designer from an uninvolved task that is not in HOD_REVIEW', async () => {
+        prisma.task.findUnique.mockResolvedValue({
+          ...existingTask,
+          status: 'IN_PROGRESS',
+          assigneeId: 'other-designer',
+        });
+        prisma.task.findFirst.mockResolvedValue(null);
+
+        await expect(
+          service.updateStatus(TASK_ID, '9099', UserRole.DESIGNER, { status: 'DESIGN_COMPLETED' } as any),
+        ).rejects.toThrow('Designers can only access tasks they have worked on or been assigned to');
+      });
+
+      it('does not extend the bypass to a designer not on the list', async () => {
+        prisma.task.findUnique.mockResolvedValue({
+          ...existingTask,
+          status: 'HOD_REVIEW',
+          assigneeId: 'other-designer',
+        });
+        prisma.task.findFirst.mockResolvedValue(null);
+
+        await expect(
+          service.updateStatus(TASK_ID, '9001', UserRole.DESIGNER, { status: 'SALES_REVIEW' } as any),
+        ).rejects.toThrow('Designers can only access tasks they have worked on or been assigned to');
+      });
+    });
   });
 
   describe('assign — split-task reassignment', () => {
@@ -1219,6 +1328,116 @@ describe('TasksService', () => {
           take: 100,
         }),
       );
+    });
+  });
+
+  describe('findAll — reviewQueue (backup HOD reviewers)', () => {
+    const ORIGINAL_ENV = process.env.BACKUP_HOD_REVIEWER_USER_IDS;
+
+    beforeEach(() => {
+      process.env.BACKUP_HOD_REVIEWER_USER_IDS = '9099';
+      prisma.task.findMany.mockResolvedValue([]);
+      prisma.task.count.mockResolvedValue(0);
+    });
+
+    afterEach(() => {
+      process.env.BACKUP_HOD_REVIEWER_USER_IDS = ORIGINAL_ENV;
+    });
+
+    it('shows every DESIGN_COMPLETED/HOD_REVIEW task (any assignee) for a listed backup reviewer', async () => {
+      await service.findAll('9099', UserRole.DESIGNER, { reviewQueue: true });
+
+      expect(prisma.task.findMany).toHaveBeenCalledWith(
+        expect.objectContaining({
+          where: expect.objectContaining({
+            OR: [
+              { status: 'DESIGN_COMPLETED' },
+              { status: 'HOD_REVIEW' },
+              { status: 'ON_HOLD', holdPreviousStatus: 'DESIGN_COMPLETED' },
+              { status: 'ON_HOLD', holdPreviousStatus: 'HOD_REVIEW' },
+            ],
+          }),
+        }),
+      );
+      // Never fell back to the normal "must be involved" designer scoping.
+      expect(prisma.task.findMany).not.toHaveBeenCalledWith(
+        expect.objectContaining({
+          where: expect.objectContaining({ AND: expect.anything() }),
+        }),
+      );
+    });
+
+    it('ignores reviewQueue for a designer not on the backup-reviewer list — normal own-tasks scoping applies', async () => {
+      await service.findAll('9001', UserRole.DESIGNER, { reviewQueue: true });
+
+      expect(prisma.task.findMany).toHaveBeenCalledWith(
+        expect.objectContaining({
+          where: expect.objectContaining({ AND: expect.anything() }),
+        }),
+      );
+    });
+  });
+
+  describe('sales cannot see the submitted-work link/files on pre-review tasks', () => {
+    const shouldHide = (status: string, holdPreviousStatus: string | null = null) =>
+      (service as any).shouldHideDesignFilesFromSales(UserRole.SALESPERSON, status, holdPreviousStatus);
+
+    it.each(['DESIGN_COMPLETED', 'HOD_REVIEW'])(
+      'hides files for SALESPERSON when status is %s',
+      (status) => {
+        expect(shouldHide(status)).toBe(true);
+      },
+    );
+
+    it('hides files for SALESPERSON when on-hold from a pre-review status', () => {
+      expect(shouldHide('ON_HOLD', 'HOD_REVIEW')).toBe(true);
+    });
+
+    it('does not hide files once status is SALES_REVIEW or later', () => {
+      expect(shouldHide('SALES_REVIEW')).toBe(false);
+      expect(shouldHide('REWORK')).toBe(false);
+      expect(shouldHide('CLIENT_ACCEPTED')).toBe(false);
+    });
+
+    it('never hides files for non-sales roles', () => {
+      expect(
+        (service as any).shouldHideDesignFilesFromSales(UserRole.HOD, 'HOD_REVIEW', null),
+      ).toBe(false);
+      expect(
+        (service as any).shouldHideDesignFilesFromSales(UserRole.DESIGNER, 'DESIGN_COMPLETED', null),
+      ).toBe(false);
+    });
+
+    it('hides the submitted-work link/files for sales before Sales Review', async () => {
+      prisma.task.findUnique.mockResolvedValue({ status: 'DESIGN_COMPLETED', holdPreviousStatus: null });
+      prisma.taskWorkSession.findFirst.mockResolvedValue({
+        durationSeconds: 120,
+        submittedAt: new Date('2026-09-22T16:47:00.000Z'),
+        submissionLink: 'https://sharepoint.example/doc',
+        designer: { userName: 'Amal-UAT' },
+        files: [{ fileName: 'design.pdf', mimeType: 'application/pdf', sizeBytes: 100, fileKey: 'k1' }],
+      });
+
+      const result = await service.getSubmittedSession(TASK_ID, '9003', UserRole.SALESPERSON);
+
+      expect(result?.submissionLink).toBeNull();
+      expect(result?.files).toEqual([]);
+      expect(result?.submittedBy).toBe('Amal-UAT');
+    });
+
+    it('keeps the submitted-work link/files for sales once past Sales Review', async () => {
+      prisma.task.findUnique.mockResolvedValue({ status: 'SALES_REVIEW', holdPreviousStatus: null });
+      prisma.taskWorkSession.findFirst.mockResolvedValue({
+        durationSeconds: 120,
+        submittedAt: new Date('2026-09-22T16:47:00.000Z'),
+        submissionLink: 'https://sharepoint.example/doc',
+        designer: { userName: 'Amal-UAT' },
+        files: [],
+      });
+
+      const result = await service.getSubmittedSession(TASK_ID, '9003', UserRole.SALESPERSON);
+
+      expect(result?.submissionLink).toBe('https://sharepoint.example/doc');
     });
   });
 

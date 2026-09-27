@@ -22,7 +22,7 @@ export class SchedulerAssignmentsController {
   constructor(private readonly schedulerAssignmentsService: SchedulerAssignmentsService) {}
 
   @Get()
-  @Roles(UserRole.HOD, UserRole.DESIGNER)
+  @Roles(UserRole.HOD, UserRole.DESIGNER, UserRole.SALESPERSON)
   findForWeek(
     @Query('weekStart') weekStart?: string,
     @Query('designerId') designerId?: string,
@@ -70,7 +70,7 @@ export class SchedulerAssignmentsController {
   }
 
   @Get('week/:weekStart/meta')
-  @Roles(UserRole.HOD, UserRole.DESIGNER)
+  @Roles(UserRole.HOD, UserRole.DESIGNER, UserRole.SALESPERSON)
   getWeekMeta(@Param('weekStart') weekStart: string) {
     return this.schedulerAssignmentsService.getWeekMeta(weekStart);
   }

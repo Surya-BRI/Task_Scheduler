@@ -85,6 +85,7 @@ export class TasksController {
     @Query('limit', new DefaultValuePipe(20), ParseIntPipe) limit = 20,
     @Query('salesQueue') salesQueue?: string,
     @Query('salesHistory') salesHistory?: string,
+    @Query('reviewQueue') reviewQueue?: string,
   ) {
     return this.tasksService.findAll(user.sub, user.role, {
       projectId,
@@ -102,6 +103,7 @@ export class TasksController {
       limit,
       salesQueue: salesQueue === 'true' || salesQueue === '1',
       salesHistory: salesHistory === 'true' || salesHistory === '1',
+      reviewQueue: reviewQueue === 'true' || reviewQueue === '1',
     });
   }
 
@@ -137,7 +139,7 @@ export class TasksController {
 
   /** GET /tasks/scheduler-queue — sidebar backlog (unassigned + on-hold only). */
   @Get('scheduler-queue')
-  @Roles(UserRole.HOD)
+  @Roles(UserRole.HOD, UserRole.SALESPERSON)
   findSchedulerQueue() {
     return this.tasksService.findSchedulerQueue();
   }

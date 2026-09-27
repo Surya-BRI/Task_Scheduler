@@ -885,7 +885,7 @@ function gridContainsAnyChangedTask(schedules, tasks, changedTaskIds) {
     return false;
 }
 
-export function DesignSchedulerScreen() {
+export function DesignSchedulerScreen({ readOnly = false } = {}) {
     const router = useRouter();
     const searchParams = useSearchParams();
     const [designers, setDesigners] = useState([]);
@@ -1823,6 +1823,7 @@ export function DesignSchedulerScreen() {
         });
     };
     const handleDragStart = (e, taskId, sourceId, sourceDay) => {
+        if (readOnly) return;
         e.dataTransfer.setData("taskId", taskId);
         e.dataTransfer.setData("sourceId", sourceId);
         if (sourceDay)
@@ -1860,7 +1861,7 @@ export function DesignSchedulerScreen() {
         return `split-${splitIdCounterRef.current}`;
     };
     const handleToggleLock = async () => {
-        if (lockInFlight) return;
+        if (readOnly || lockInFlight) return;
         const weekStartStr = formatLocalYyyyMmDd(getWeekDays(currentDate)[0]);
         setLockInFlight(true);
         try {
@@ -1893,6 +1894,7 @@ export function DesignSchedulerScreen() {
     };
     const handleDropToDay = async (e, targetDesignerId, targetDayIndex, targetTaskIndex, targetPosition = "after") => {
         e.preventDefault();
+        if (readOnly) return;
         setDropIndicator(null);
         if (!visibleDays.includes(targetDayIndex))
             return;
@@ -2187,6 +2189,7 @@ export function DesignSchedulerScreen() {
     }, [isWeekLocked, currentDate, weekDates]);
 
     const toggleWeekendLock = useCallback(async (designerId, dayIndex) => {
+        if (readOnly) return;
         if (dayIndex < 5) return;
         if (isWeekLocked) {
             toast.error("This week is locked. Unlock it first to make changes.");
@@ -2215,7 +2218,7 @@ export function DesignSchedulerScreen() {
             dayLabel,
             designerName,
         });
-    }, [isWeekLocked, currentDate, weekDates, dayLockKeys, designers, applyWeekendLockChange]);
+    }, [readOnly, isWeekLocked, currentDate, weekDates, dayLockKeys, designers, applyWeekendLockChange]);
 
     const clearOnHoldStatus = (taskId, holdPreviousStatus) => {
         if (!taskId || !isUuid(taskId)) return;
@@ -2467,6 +2470,7 @@ export function DesignSchedulerScreen() {
     };
     const handleDropToPanel = (e) => {
         e.preventDefault();
+        if (readOnly) return;
         const taskId = e.dataTransfer.getData("taskId");
         const sourceId = e.dataTransfer.getData("sourceId");
         const sourceDay = e.dataTransfer.getData("sourceDay");
@@ -2728,6 +2732,7 @@ export function DesignSchedulerScreen() {
             </div>
           </div>
 
+          {!readOnly && (
           <div className="flex shrink-0 items-center gap-2">
             <button
               type="button"
@@ -2764,6 +2769,7 @@ export function DesignSchedulerScreen() {
               Overtime Request
             </button>
           </div>
+          )}
         </div>
       </div>
       {viewMode === "custom" && (<div className="flex shrink-0 items-center gap-2 border-b border-slate-200 bg-white px-6 py-2 text-xs">
@@ -2824,9 +2830,10 @@ export function DesignSchedulerScreen() {
                  const task = item.task;
                  if (item.kind === "ON_HOLD") {
                    return (
-                  <div draggable onDragStart={(e) => handleDragStart(e, task.id, "ON_HOLD")} onDragEnd={() => setDropIndicator(null)} onClick={() => router.push(taskViewPathForRecord({ id: getDesignListRoutingTaskId(task), designType: task.designType }, { from: FROM_DESIGN_SCHEDULER }))} className={`p-3.5 rounded-lg cursor-grab active:cursor-grabbing flex flex-col relative bg-white shadow-sm hover:shadow-md transition-shadow ${task.colorClass.replace(/bg-\S+/g, "").replace(/text-\S+/g, "")}`}>
+                  <div draggable={!readOnly} onDragStart={(e) => handleDragStart(e, task.id, "ON_HOLD")} onDragEnd={() => setDropIndicator(null)} onClick={() => router.push(taskViewPathForRecord({ id: getDesignListRoutingTaskId(task), designType: task.designType }, { from: FROM_DESIGN_SCHEDULER }))} className={`p-3.5 rounded-lg ${readOnly ? "cursor-pointer" : "cursor-grab active:cursor-grabbing"} flex flex-col relative bg-white shadow-sm hover:shadow-md transition-shadow ${task.colorClass.replace(/bg-\S+/g, "").replace(/text-\S+/g, "")}`}>
                     <div className="flex justify-between items-start">
                       <span className="font-semibold text-[12px] leading-tight pr-5">{getTaskLabel(task)}</span>
+                      {!readOnly && (
                       <button
                         type="button"
                         onClick={(event) => {
@@ -2837,6 +2844,7 @@ export function DesignSchedulerScreen() {
                       >
                         <PauseCircle size={10}/>
                       </button>
+                      )}
                     </div>
                     {task.projectName && <div className="text-[11px] font-semibold leading-snug mt-1">{task.projectName}</div>}
                     <div className="flex items-center justify-between mt-1.5 gap-1">
@@ -2861,9 +2869,10 @@ export function DesignSchedulerScreen() {
                    );
                  }
                  return (
-                  <div draggable onDragStart={(e) => handleDragStart(e, task.id, "unassigned")} onDragEnd={() => setDropIndicator(null)} onClick={() => router.push(taskViewPathForRecord({ id: getDesignListRoutingTaskId(task), designType: task.designType }, { from: FROM_DESIGN_SCHEDULER }))} className={`p-3 rounded cursor-grab active:cursor-grabbing flex flex-col relative group bg-white shadow-sm hover:shadow-md transition-shadow ${task.colorClass.replace(/bg-\S+/g, "").replace(/text-\S+/g, "")}`}>
+                  <div draggable={!readOnly} onDragStart={(e) => handleDragStart(e, task.id, "unassigned")} onDragEnd={() => setDropIndicator(null)} onClick={() => router.push(taskViewPathForRecord({ id: getDesignListRoutingTaskId(task), designType: task.designType }, { from: FROM_DESIGN_SCHEDULER }))} className={`p-3 rounded ${readOnly ? "cursor-pointer" : "cursor-grab active:cursor-grabbing"} flex flex-col relative group bg-white shadow-sm hover:shadow-md transition-shadow ${task.colorClass.replace(/bg-\S+/g, "").replace(/text-\S+/g, "")}`}>
                     <div className="flex justify-between items-start">
                       <span className="font-semibold text-[12px] leading-tight pr-5">{getTaskLabel(task)}</span>
+                      {!readOnly && (
                       <button
                         type="button"
                         onClick={(event) => {
@@ -2874,6 +2883,7 @@ export function DesignSchedulerScreen() {
                       >
                         <Plus size={10}/>
                       </button>
+                      )}
                     </div>
                     {task.projectName && <div className="text-[11px] font-semibold leading-snug mt-1">{task.projectName}</div>}
                     <div className="flex items-center justify-between mt-1.5 gap-1">
@@ -3020,7 +3030,7 @@ export function DesignSchedulerScreen() {
                     const dayTotalHours = dayHours + overtimeHours;
                     const isDayOverloaded = dayTotalHours > DAILY_CAPACITY;
                     const gravityPct = Math.min((dayTotalHours / DAILY_CAPACITY) * 100, 100);
-                    const dropEnabled = !weekendLocked && !isPastDay;
+                    const dropEnabled = !readOnly && !weekendLocked && !isPastDay;
                     return (<div key={dayIndex} className={`border-r relative flex flex-col transition-colors overflow-hidden
                                 ${weekendLocked
                             ? 'bg-slate-100 border-slate-200'
@@ -3032,7 +3042,7 @@ export function DesignSchedulerScreen() {
                               `}
                               onDragOver={dropEnabled ? handleDragOver : undefined}
                               onDrop={dropEnabled ? (e) => { void handleDropToDay(e, designer.id, dayIndex); } : undefined}
-                              onClick={isWeekend && !isWeekLocked && !isPastDay ? (e) => {
+                              onClick={!readOnly && isWeekend && !isWeekLocked && !isPastDay ? (e) => {
                                 // Lock only when empty. Unlock (remove lock) from locked chrome.
                                 if (rawTasksInDay.length > 0 && weekendOpen) return;
                                 if (weekendOpen && rawTasksInDay.length === 0) {
@@ -3053,8 +3063,10 @@ export function DesignSchedulerScreen() {
                                     type="button"
                                     data-weekend-chrome="1"
                                     aria-label="Unlock weekend day"
-                                    className="w-full h-full min-h-[42px] cursor-pointer hover:bg-slate-200/50 transition-colors"
+                                    disabled={readOnly}
+                                    className={`w-full h-full min-h-[42px] transition-colors ${readOnly ? "cursor-default" : "cursor-pointer hover:bg-slate-200/50"}`}
                                     onClick={(e) => {
+                                      if (readOnly) return;
                                       e.stopPropagation();
                                       void toggleWeekendLock(designer.id, dayIndex);
                                     }}
@@ -3065,19 +3077,21 @@ export function DesignSchedulerScreen() {
                                     role="button"
                                     tabIndex={0}
                                     aria-label="Lock weekend day"
-                                    className="w-full h-full min-h-[42px] cursor-pointer hover:bg-slate-100/70 transition-colors"
+                                    className={`w-full h-full min-h-[42px] transition-colors ${readOnly ? "cursor-default" : "cursor-pointer hover:bg-slate-100/70"}`}
                                     onClick={(e) => {
+                                      if (readOnly) return;
                                       e.stopPropagation();
                                       void toggleWeekendLock(designer.id, dayIndex);
                                     }}
                                     onKeyDown={(e) => {
+                                      if (readOnly) return;
                                       if (e.key !== "Enter" && e.key !== " ") return;
                                       e.preventDefault();
                                       e.stopPropagation();
                                       void toggleWeekendLock(designer.id, dayIndex);
                                     }}
-                                    onDragOver={handleDragOver}
-                                    onDrop={(e) => { void handleDropToDay(e, designer.id, dayIndex); }}
+                                    onDragOver={readOnly ? undefined : handleDragOver}
+                                    onDrop={readOnly ? undefined : (e) => { void handleDropToDay(e, designer.id, dayIndex); }}
                                   />
                                 ) : (<div className="h-full min-h-[42px] overflow-hidden flex flex-col justify-center gap-1">
                                     {systemBlockIds.length > 0 && (
@@ -3121,7 +3135,7 @@ export function DesignSchedulerScreen() {
                                 const rawTaskIndex = rawTasksInDay.indexOf(taskId);
                                 const dropTaskIndex = rawTaskIndex >= 0 ? rawTaskIndex : idx;
                                 const taskWidth = `calc((100% - ${(Math.max(visualRegularTaskIds.length - 1, 0)) * 4}px) / ${Math.max(visualRegularTaskIds.length, 1)})`;
-                                const isDragLocked = Boolean(taskInfo?.isLocked) || isTaskReassignmentBlocked(taskInfo?.taskStatus);
+                                const isDragLocked = readOnly || Boolean(taskInfo?.isLocked) || isTaskReassignmentBlocked(taskInfo?.taskStatus);
                                 const blockLabel = getTaskLabel(taskInfo);
                                 return (<div key={`${taskId}-${designer.id}-${dayIndex}-${idx}`} draggable={!isDragLocked} onDragStart={(e) => {
                                         if (isDragLocked) return;

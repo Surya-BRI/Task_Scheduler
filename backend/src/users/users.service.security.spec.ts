@@ -59,6 +59,41 @@ describe('UsersService IDOR protection', () => {
     expect(hods.map((u) => u.userName)).toEqual(['hod']);
   });
 
+  describe('backup HOD reviewers in the HOD/DESIGNER role filters', () => {
+    const ORIGINAL_ENV = process.env.BACKUP_HOD_REVIEWER_USER_IDS;
+
+    beforeEach(() => {
+      process.env.BACKUP_HOD_REVIEWER_USER_IDS = '208,202';
+      prisma.$queryRaw.mockResolvedValue([
+        { userId: 216n, userName: 'Gopan', roleName: 'Design HOD' },
+        { userId: 208n, userName: 'ArjunEljo', roleName: 'Designer' },
+        { userId: 202n, userName: 'Saji', roleName: 'Designer' },
+        { userId: 200n, userName: 'Sebastian', roleName: 'Designer' },
+      ]);
+    });
+
+    afterEach(() => {
+      process.env.BACKUP_HOD_REVIEWER_USER_IDS = ORIGINAL_ENV;
+    });
+
+    it('lists listed backup reviewers alongside real HODs when filtering role=HOD', async () => {
+      const hods = await service.findAll({ role: UserRole.HOD });
+      expect(hods.map((u) => u.userName).sort()).toEqual(['ArjunEljo', 'Gopan', 'Saji']);
+      // Their reported role stays the truth (DESIGNER) — only the filter match is widened.
+      expect(hods.find((u) => u.userName === 'ArjunEljo')?.role).toBe(UserRole.DESIGNER);
+    });
+
+    it('still lists backup reviewers when filtering role=DESIGNER (normal designer work unaffected)', async () => {
+      const designers = await service.findAll({ role: UserRole.DESIGNER });
+      expect(designers.map((u) => u.userName).sort()).toEqual(['ArjunEljo', 'Saji', 'Sebastian']);
+    });
+
+    it('does not widen the filter for a designer not on the backup-reviewer list', async () => {
+      const hods = await service.findAll({ role: UserRole.HOD });
+      expect(hods.map((u) => u.userName)).not.toContain('Sebastian');
+    });
+  });
+
   it('blocks designers from reading another user profile', async () => {
     await expect(
       service.findByIdForViewer('43', '99', UserRole.DESIGNER),

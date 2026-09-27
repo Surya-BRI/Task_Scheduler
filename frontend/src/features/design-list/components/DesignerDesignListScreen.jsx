@@ -292,6 +292,8 @@ const ListSkeleton = () => (
 export function DesignerDesignListScreen() {
   const PAGE_SIZE = 100;
   const [designerIdentity, setDesignerIdentity] = useState({ id: "", name: "Designer" });
+  const [isBackupReviewer, setIsBackupReviewer] = useState(false);
+  const [listMode, setListMode] = useState("myWork");
   const [allDesigns, setAllDesigns] = useState([]);
   const [serverTotal, setServerTotal] = useState(0);
   const [page, setPage] = useState(1);
@@ -302,13 +304,17 @@ export function DesignerDesignListScreen() {
   const [listLoading, setListLoading] = useState(true);
   const [listError, setListError] = useState("");
 
+  const isReviewQueue = isBackupReviewer && listMode === "reviewQueue";
+
   useEffect(() => {
     const session = getSession();
     if (session?.role === "DESIGNER") {
       setDesignerIdentity({ id: session.designerId || session.id, name: session.name || "Designer" });
+      setIsBackupReviewer(Boolean(session.isBackupHodReviewer));
       return;
     }
     setDesignerIdentity({ id: "", name: "Designer" });
+    setIsBackupReviewer(false);
   }, []);
 
   useEffect(() => {
@@ -316,7 +322,7 @@ export function DesignerDesignListScreen() {
     return () => clearTimeout(timer);
   }, [filters.searchQuery]);
 
-  const filterKey = `${debouncedSearchQuery}|${filters.status}|${filters.type}|${filters.startDate}|${filters.endDate}|${viewMode}`;
+  const filterKey = `${debouncedSearchQuery}|${filters.status}|${filters.type}|${filters.startDate}|${filters.endDate}|${viewMode}|${isReviewQueue}`;
   const prevFilterKeyRef = useRef(filterKey);
 
   const reloadList = useCallback(() => {
@@ -341,7 +347,11 @@ export function DesignerDesignListScreen() {
     params.set("page", String(Math.max(1, page)));
     params.set("limit", String(PAGE_SIZE));
     if (debouncedSearchQuery.trim()) params.set("search", debouncedSearchQuery.trim());
-    if (filters.status) params.set("status", filters.status);
+    if (isReviewQueue) {
+      params.set("reviewQueue", "true");
+    } else {
+      if (filters.status) params.set("status", filters.status);
+    }
     if (filters.type) params.set("type", filters.type);
     if (filters.startDate) params.set("startDate", filters.startDate);
     if (filters.endDate) params.set("endDate", filters.endDate);
@@ -359,7 +369,7 @@ export function DesignerDesignListScreen() {
       if (mounted) setListLoading(false);
     });
     return () => { mounted = false; };
-  }, [filterKey, debouncedSearchQuery, filters.status, filters.type, filters.startDate, filters.endDate, listRefreshTick, page]);
+  }, [filterKey, debouncedSearchQuery, filters.status, filters.type, filters.startDate, filters.endDate, listRefreshTick, page, isReviewQueue]);
 
   const filteredDesigns = useMemo(() => allDesigns, [allDesigns]);
   const totalPages = Math.max(1, Math.ceil(Math.max(serverTotal, 1) / PAGE_SIZE));
@@ -370,7 +380,31 @@ export function DesignerDesignListScreen() {
     <div className="app-shell h-screen flex flex-col overflow-hidden font-sans">
       <Navbar lockPrimaryNav />
       <div className="flex-1 flex flex-col min-h-0">
-        <div className="shrink-0"><Toolbar viewMode={viewMode} setViewMode={setViewMode} filters={filters} setFilters={setFilters} designerName={designerIdentity.name} /></div>
+        {isBackupReviewer ? (
+          <div className="shrink-0 border-b border-slate-200 bg-white px-4 py-2 sm:px-6">
+            <div className="inline-flex rounded-md border border-slate-300 bg-slate-50 p-0.5 text-xs font-semibold">
+              <button
+                type="button"
+                onClick={() => setListMode("myWork")}
+                className={`rounded px-3 py-1.5 transition-colors ${
+                  listMode !== "reviewQueue" ? "bg-white text-slate-900 shadow-sm" : "text-slate-500 hover:text-slate-700"
+                }`}
+              >
+                My Work
+              </button>
+              <button
+                type="button"
+                onClick={() => setListMode("reviewQueue")}
+                className={`rounded px-3 py-1.5 transition-colors ${
+                  listMode === "reviewQueue" ? "bg-white text-slate-900 shadow-sm" : "text-slate-500 hover:text-slate-700"
+                }`}
+              >
+                Review Queue
+              </button>
+            </div>
+          </div>
+        ) : null}
+        <div className="shrink-0"><Toolbar viewMode={viewMode} setViewMode={setViewMode} filters={filters} setFilters={setFilters} designerName={isReviewQueue ? "Review Queue" : designerIdentity.name} /></div>
         {listLoading ? (
           <ListSkeleton />
         ) : listError ? (
