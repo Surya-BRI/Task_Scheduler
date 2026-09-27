@@ -4,6 +4,7 @@ import {
   hasHodWorkflowAccess,
   hasHodEquivalentAccess,
   hasHrApproverAccess,
+  isBackupHodReviewer,
 } from './workflow-roles.util';
 
 describe('workflow-roles.util', () => {
@@ -31,5 +32,26 @@ describe('workflow-roles.util', () => {
     expect(hasHodEquivalentAccess(UserRole.ADMIN)).toBe(true);
     expect(hasHodEquivalentAccess(UserRole.SALESPERSON)).toBe(false);
     expect(hasHodEquivalentAccess(undefined)).toBe(false);
+  });
+
+  describe('isBackupHodReviewer', () => {
+    const ORIGINAL_ENV = process.env.BACKUP_HOD_REVIEWER_USER_IDS;
+
+    afterEach(() => {
+      process.env.BACKUP_HOD_REVIEWER_USER_IDS = ORIGINAL_ENV;
+    });
+
+    it('is false when the env var is unset', () => {
+      delete process.env.BACKUP_HOD_REVIEWER_USER_IDS;
+      expect(isBackupHodReviewer('208')).toBe(false);
+    });
+
+    it('matches ids listed in BACKUP_HOD_REVIEWER_USER_IDS, ignoring whitespace', () => {
+      process.env.BACKUP_HOD_REVIEWER_USER_IDS = '208, 202';
+      expect(isBackupHodReviewer('208')).toBe(true);
+      expect(isBackupHodReviewer('202')).toBe(true);
+      expect(isBackupHodReviewer('216')).toBe(false);
+      expect(isBackupHodReviewer(undefined)).toBe(false);
+    });
   });
 });

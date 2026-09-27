@@ -63,6 +63,7 @@ export function buildSessionForUser(user) {
   if (role === 'DESIGNER') {
     session.designerId = user.id;
     session.erpDesignerId = user.id;
+    session.isBackupHodReviewer = Boolean(user.isBackupHodReviewer);
   }
 
   return session;

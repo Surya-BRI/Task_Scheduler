@@ -3,7 +3,7 @@ import * as bcrypt from 'bcrypt';
 import { PrismaService } from '../prisma/prisma.service';
 import { UserRole } from '../common/constants/roles.enum';
 import { ERP_ROLE_MAP } from '../common/utils/erp-role-map.util';
-import { hasHodEquivalentAccess } from '../common/utils/workflow-roles.util';
+import { hasHodEquivalentAccess, isBackupHodReviewer } from '../common/utils/workflow-roles.util';
 
 type ErpAuthRow = { userId: bigint; userName: string; password: string; roleName: string };
 type ErpUserRow = { userId: bigint; userName: string; roleName: string | null };
@@ -52,7 +52,17 @@ export class UsersService {
         role: row.roleName ? (ERP_ROLE_MAP[row.roleName] ?? null) : null,
       }))
       .filter((user) => {
-        if (filters?.role && user.role !== filters.role) return false;
+        if (filters?.role) {
+          const matchesRole = user.role === filters.role;
+          // Backup HOD reviewers stay real DESIGNERs (unaffected everywhere else) but also
+          // surface in HOD listings — e.g. the task-creation reviewer/HOD pickers — so an HOD
+          // can be designated up front to one of them too, not just Gopan/Tony.
+          const matchesAsBackupReviewer =
+            filters.role === UserRole.HOD &&
+            user.role === UserRole.DESIGNER &&
+            isBackupHodReviewer(user.id);
+          if (!matchesRole && !matchesAsBackupReviewer) return false;
+        }
         if (filters?.search && !user.userName.toLowerCase().includes(filters.search.toLowerCase())) return false;
         return true;
       });

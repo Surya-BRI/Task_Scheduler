@@ -7,7 +7,11 @@ import { AssignTaskDto } from './dto/assign-task.dto';
 import { UpdateTaskStatusDto } from './dto/update-task-status.dto';
 import { UserRole } from '../common/constants/roles.enum';
 import { ERP_ROLE_MAP } from '../common/utils/erp-role-map.util';
-import { hasHodEquivalentAccess } from '../common/utils/workflow-roles.util';
+import {
+  hasHodEquivalentAccess,
+  isBackupHodReviewer,
+  listBackupHodReviewerUserIds,
+} from '../common/utils/workflow-roles.util';
 import { CreateExtendedTaskDto } from './dto/create-extended-task.dto';
 import { TaskFilesService } from './task-files.service';
 import { ActivityLoggerService } from '../activities/activity-logger.service';
@@ -309,6 +313,9 @@ export type TaskFilters = {
   salesQueue?: boolean;
   /** When true, SALESPERSON list shows tasks they already reviewed (left the queue). */
   salesHistory?: boolean;
+  /** When true and the caller is a listed backup HOD reviewer, shows ALL HOD_REVIEW tasks
+   *  (any assignee), not just the caller's own — see isBackupHodReviewer(). */
+  reviewQueue?: boolean;
 };
 
 export type NextRevisionQuery = {
@@ -358,6 +365,29 @@ export class TasksService {
       if (seen.has(id)) continue;
       seen.add(id);
       result.push({ id, userName: row.userName });
+    }
+    return result;
+  }
+
+  /** Real HOD/Admin users plus any listed backup HOD reviewers — HOD_REVIEW-stage notifications only. */
+  private async findHodReviewNotifyTargets(): Promise<{ id: string; userName: string }[]> {
+    const backupIds = listBackupHodReviewerUserIds();
+    const [hodAdmin, backupUsers] = await Promise.all([
+      this.findErpUsersByRoleBuckets([UserRole.HOD, UserRole.ADMIN]),
+      backupIds.length > 0
+        ? this.prisma.erpUser.findMany({
+            where: { userId: { in: backupIds.map((id) => BigInt(id)) } },
+            select: { userId: true, userName: true },
+          })
+        : Promise.resolve([]),
+    ]);
+    const seen = new Set(hodAdmin.map((u) => u.id));
+    const result = [...hodAdmin];
+    for (const u of backupUsers) {
+      const id = u.userId.toString();
+      if (seen.has(id)) continue;
+      seen.add(id);
+      result.push({ id, userName: u.userName });
     }
     return result;
   }
@@ -1508,6 +1538,7 @@ export class TasksService {
       limit = 20,
       salesQueue = false,
       salesHistory = false,
+      reviewQueue = false,
     } = filters;
     const skip = (page - 1) * limit;
 
@@ -1538,7 +1569,20 @@ export class TasksService {
       baseWhere.AND = [...((baseWhere.AND as Record<string, unknown>[] | undefined) ?? []), condition];
     };
 
-    if (role === UserRole.DESIGNER) {
+    if (role === UserRole.DESIGNER && reviewQueue && isBackupHodReviewer(userId)) {
+      // Backup HOD reviewer's review queue — every task awaiting HOD action (design finished,
+      // not yet started review, or already mid-review), any assignee. Starts at DESIGN_COMPLETED,
+      // not HOD_REVIEW — a real HOD hasn't necessarily clicked "Start HOD Review" yet, which is
+      // exactly the case (HOD is busy) this queue exists for.
+      baseWhere = {
+        OR: [
+          { status: 'DESIGN_COMPLETED' },
+          { status: 'HOD_REVIEW' },
+          { status: 'ON_HOLD', holdPreviousStatus: 'DESIGN_COMPLETED' },
+          { status: 'ON_HOLD', holdPreviousStatus: 'HOD_REVIEW' },
+        ],
+      };
+    } else if (role === UserRole.DESIGNER) {
       addAndFilter(designerInvolvementWhere(userId));
     }
 
@@ -1754,8 +1798,9 @@ export class TasksService {
     const taskAssigneeId = (task as { assigneeId?: bigint | null }).assigneeId;
     await this.assertDesignerTaskAccess(id, userId, role, {
       assigneeId: taskAssigneeId != null ? taskAssigneeId.toString() : null,
+      status: (task as { status?: string | null }).status,
+      holdPreviousStatus: (task as { holdPreviousStatus?: string | null }).holdPreviousStatus,
     });
-
     if (view === 'core') {
       const people = await this.getTaskPeopleLabels(id, task);
       return {
@@ -1849,6 +1894,7 @@ export class TasksService {
       select: {
         id: true,
         status: true,
+        holdPreviousStatus: true,
         assigneeId: true,
         reworkAttachmentUrl: true,
         taskDesigners: { select: { designer: { select: { userId: true } } } },
@@ -1871,8 +1917,9 @@ export class TasksService {
     await this.assertQsTaskAccess(id, userId, role);
     await this.assertDesignerTaskAccess(id, userId, role, {
       assigneeId: task.assigneeId != null ? task.assigneeId.toString() : null,
+      status: task.status,
+      holdPreviousStatus: task.holdPreviousStatus,
     });
-
     const [withUrls, schedulerHours, pendingReallocation, viewerRemainingHours] =
       await Promise.all([
         this.withSignedAttachmentUrls(task as any),
@@ -2485,6 +2532,8 @@ export class TasksService {
     if (!existing) throw new NotFoundException('Task not found');
     await this.assertDesignerTaskAccess(id, userId, role, {
       assigneeId: existing.assigneeId != null ? existing.assigneeId.toString() : null,
+      status: existing.status,
+      holdPreviousStatus: existing.holdPreviousStatus,
     });
 
     // REWORK = same revision (HOD internal or Sales). CLIENT_REJECTED = new Rn (Sales/Admin only).
@@ -2493,7 +2542,8 @@ export class TasksService {
       if (
         role !== UserRole.SALESPERSON &&
         role !== UserRole.ADMIN &&
-        role !== UserRole.HOD
+        role !== UserRole.HOD &&
+        !(role === UserRole.DESIGNER && isBackupHodReviewer(userId))
       ) {
         throw new ForbiddenException('Only HOD, SALESPERSON, or ADMIN can issue rework');
       }
@@ -2628,7 +2678,8 @@ export class TasksService {
         },
         context: {
           source:
-            effectiveStatusApi === 'REWORK' && hasHodEquivalentAccess(role)
+            effectiveStatusApi === 'REWORK' &&
+            (hasHodEquivalentAccess(role) || isBackupHodReviewer(userId))
               ? 'hod_internal_rework'
               : 'tasks.updateStatus',
         },
@@ -2695,7 +2746,7 @@ export class TasksService {
       const linkUrlHodReview =
         taskViewPath(id, (updatedTask as any).designType);
       const hodReviewMessage = `${(updatedTask as any).taskNo} — ${(updatedTask as any).project?.name ?? 'Unknown Project'} is ready for HOD review.`;
-      const hodReviewers = await this.findErpUsersByRoleBuckets([UserRole.HOD, UserRole.ADMIN]);
+      const hodReviewers = await this.findHodReviewNotifyTargets();
       for (const hod of hodReviewers) {
         this.notificationsService
           .create({ userId: hod.id, title: `Task Ready for HOD Review — ${(updatedTask as any).taskNo}`, message: hodReviewMessage, linkUrl: linkUrlHodReview })
@@ -3376,7 +3427,7 @@ export class TasksService {
           ? submittedTask.taskDesigners.map((d) => d.designer.userName).join(', ')
           : 'Designer');
       const submitMsg = `${submittedTask.taskNo} — ${submittedTask.project?.name ?? 'Unknown Project'} work submitted by ${submitterName}. Ready for review.`;
-      const hodUsers = await this.findErpUsersByRoleBuckets([UserRole.HOD, UserRole.ADMIN]);
+      const hodUsers = await this.findHodReviewNotifyTargets();
       await Promise.all(
         hodUsers.map((hod) =>
           this.notificationsService
@@ -3407,17 +3458,20 @@ export class TasksService {
       },
     });
     if (!session) return null;
+    const hideDesignFiles = await this.shouldHideDesignFilesFromSalesForTaskId(taskId, role);
     return {
       durationSeconds: session.durationSeconds,
       submittedAt: session.submittedAt,
-      submissionLink: session.submissionLink,
+      submissionLink: hideDesignFiles ? null : session.submissionLink,
       submittedBy: session.designer?.userName ?? null,
-      files: await Promise.all(session.files.map(async (f) => ({
-        fileName: f.fileName,
-        mimeType: f.mimeType,
-        sizeBytes: f.sizeBytes == null ? null : Number(f.sizeBytes),
-        fileUrl: f.fileKey ? await this.taskFilesService.createSignedReadUrl(f.fileKey) : null,
-      }))),
+      files: hideDesignFiles
+        ? []
+        : await Promise.all(session.files.map(async (f) => ({
+            fileName: f.fileName,
+            mimeType: f.mimeType,
+            sizeBytes: f.sizeBytes == null ? null : Number(f.sizeBytes),
+            fileUrl: f.fileKey ? await this.taskFilesService.createSignedReadUrl(f.fileKey) : null,
+          }))),
     };
   }
 
@@ -3852,13 +3906,16 @@ export class TasksService {
     taskId: string,
     userId?: string,
     role?: UserRole,
-    known?: { assigneeId?: string | null },
+    known?: { assigneeId?: string | null; status?: string | null; holdPreviousStatus?: string | null },
   ) {
     if (role !== UserRole.DESIGNER) return;
     if (!userId) {
       throw new ForbiddenException('Designer access requires an authenticated user');
     }
     if (known?.assigneeId === userId) return;
+    if (isBackupHodReviewer(userId) && this.isTaskAwaitingHodAction(known?.status, known?.holdPreviousStatus)) {
+      return;
+    }
     const involved = await this.prisma.task.findFirst({
       where: { id: taskId, ...designerInvolvementWhere(userId) } as Prisma.TaskWhereInput,
       select: { id: true },
@@ -3868,6 +3925,57 @@ export class TasksService {
         'Designers can only access tasks they have worked on or been assigned to',
       );
     }
+  }
+
+  /**
+   * True when a task is design-finished and waiting on the HOD step — DESIGN_COMPLETED (not yet
+   * started review) or HOD_REVIEW (already started), or on-hold from either. Backup HOD reviewers
+   * need DESIGN_COMPLETED included too: a real HOD hasn't necessarily clicked "Start HOD Review"
+   * yet, which is exactly the case (HOD is busy) this whole feature exists for.
+   */
+  private isTaskAwaitingHodAction(status?: string | null, holdPreviousStatus?: string | null): boolean {
+    const AWAITING_HOD = new Set(['DESIGN_COMPLETED', 'HOD_REVIEW']);
+    if (AWAITING_HOD.has(toApiTaskStatus(status).toUpperCase())) return true;
+    return (
+      toApiTaskStatus(status).toUpperCase() === 'ON_HOLD' &&
+      AWAITING_HOD.has(toApiTaskStatus(holdPreviousStatus).toUpperCase())
+    );
+  }
+
+  /**
+   * Sales must not see the designer's submitted-work link/files (getSubmittedSession) until the
+   * task has actually reached Sales Review — DESIGN_COMPLETED / HOD_REVIEW are pre-review stages
+   * (including an on-hold task pulled from one of those stages). Task attachments/provided assets
+   * (retailDetails/projectDetails) are intentionally NOT gated — only the work-submission link/files.
+   */
+  private shouldHideDesignFilesFromSales(
+    role?: UserRole,
+    status?: string | null,
+    holdPreviousStatus?: string | null,
+  ): boolean {
+    if (role !== UserRole.SALESPERSON) return false;
+    const PRE_REVIEW_STATUSES = new Set(['DESIGN_COMPLETED', 'HOD_REVIEW']);
+    const normalizedStatus = toApiTaskStatus(status).toUpperCase();
+    const normalizedHoldPrevious = holdPreviousStatus
+      ? toApiTaskStatus(holdPreviousStatus).toUpperCase()
+      : null;
+    return (
+      PRE_REVIEW_STATUSES.has(normalizedStatus) ||
+      (normalizedStatus === 'ON_HOLD' &&
+        normalizedHoldPrevious != null &&
+        PRE_REVIEW_STATUSES.has(normalizedHoldPrevious))
+    );
+  }
+
+  /** Same check as {@link shouldHideDesignFilesFromSales} when only the task id is on hand. */
+  private async shouldHideDesignFilesFromSalesForTaskId(taskId: string, role?: UserRole): Promise<boolean> {
+    if (role !== UserRole.SALESPERSON) return false;
+    const task = await this.prisma.task.findUnique({
+      where: { id: taskId },
+      select: { status: true, holdPreviousStatus: true },
+    });
+    if (!task) return false;
+    return this.shouldHideDesignFilesFromSales(role, task.status, task.holdPreviousStatus);
   }
 
   private async assertQsTaskAccess(taskId: string, userId?: string, role?: UserRole) {

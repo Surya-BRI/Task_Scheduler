@@ -59,12 +59,26 @@ describe('AuthService', () => {
   });
 
   describe('getMe', () => {
-    it('delegates to usersService.findById', async () => {
+    it('delegates to usersService.findById and adds the backup-HOD-reviewer flag', async () => {
       const profile = { id: '3090', userName: 'Sithara-UAT' };
       (usersService.findById as jest.Mock).mockResolvedValue(profile);
 
-      await expect(service.getMe('3090')).resolves.toEqual(profile);
+      await expect(service.getMe('3090')).resolves.toEqual({
+        ...profile,
+        isBackupHodReviewer: false,
+      });
       expect(usersService.findById).toHaveBeenCalledWith('3090');
+    });
+
+    it('flags a listed backup HOD reviewer', async () => {
+      const ORIGINAL_ENV = process.env.BACKUP_HOD_REVIEWER_USER_IDS;
+      process.env.BACKUP_HOD_REVIEWER_USER_IDS = '208';
+      const profile = { id: '208', userName: 'ArjunEljo' };
+      (usersService.findById as jest.Mock).mockResolvedValue(profile);
+
+      await expect(service.getMe('208')).resolves.toMatchObject({ isBackupHodReviewer: true });
+
+      process.env.BACKUP_HOD_REVIEWER_USER_IDS = ORIGINAL_ENV;
     });
   });
 });

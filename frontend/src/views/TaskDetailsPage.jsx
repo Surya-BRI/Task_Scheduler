@@ -1670,6 +1670,14 @@ export function TaskDetailsPage() {
   const isDesignerWorkMode =
     isDesigner || (isHod && sessionRole !== 'HOD' && sessionRole !== 'ADMIN' && from === FROM_DESIGNER_QUEUE)
   const isHodManagementMode = isHod && !isDesignerWorkMode && !isSales
+  // Backup HOD reviewer (e.g. Arjun/Saji covering for a busy HOD): a DESIGNER who may act on the
+  // HOD review step (Start HOD Review / Send to Sales / Send for Rework) once a task is design-
+  // finished, same statuses as the backend's isTaskAwaitingHodAction check — see workflow-roles.util.ts.
+  const isBackupReviewerOnThisTask =
+    isDesigner &&
+    Boolean(_session?.isBackupHodReviewer) &&
+    (['DESIGN_COMPLETED', 'HOD_REVIEW'].includes(taskStatus) ||
+      (taskStatus === 'ON_HOLD' && ['DESIGN_COMPLETED', 'HOD_REVIEW'].includes(record?.holdPreviousStatus)))
   const canEditTaskHours = (sessionRole === 'HOD' || sessionRole === 'ADMIN') && !isCreationRoute && hasExistingTask
   const savedEstimatedHours = getRecordEstimatedHours(record)
 
@@ -3006,8 +3014,9 @@ export function TaskDetailsPage() {
                           </div>
                         </div>
                       ) : null}
-                      {/* HOD action panel — any active stage except SALES_REVIEW (which belongs to salesperson) */}
-                      {isHodManagementMode && !isTerminalStatus &&
+                      {/* HOD action panel — any active stage except SALES_REVIEW (which belongs to salesperson).
+                          Also shown to a backup HOD reviewer, scoped to the review step only (see above). */}
+                      {(isHodManagementMode || isBackupReviewerOnThisTask) && !isTerminalStatus &&
                         taskStatus !== 'SALES_REVIEW' &&
                         !(taskStatus === 'ON_HOLD' && record?.holdPreviousStatus === 'SALES_REVIEW')
                       && (

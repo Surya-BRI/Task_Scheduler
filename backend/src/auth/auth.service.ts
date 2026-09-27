@@ -2,6 +2,7 @@ import { Injectable, NotFoundException, UnauthorizedException } from '@nestjs/co
 import { JwtService } from '@nestjs/jwt';
 import { UsersService, ErpLoginResult } from '../users/users.service';
 import { LoginDto } from './dto/login.dto';
+import { isBackupHodReviewer } from '../common/utils/workflow-roles.util';
 
 @Injectable()
 export class AuthService {
@@ -44,7 +45,7 @@ export class AuthService {
 
   async getMe(userId: string) {
     const user = await this.usersService.findById(userId);
-    return user;
+    return { ...user, isBackupHodReviewer: isBackupHodReviewer(userId) };
   }
 
   async mintSocketToken(userId: string, username: string, role: string): Promise<string> {
