@@ -212,7 +212,7 @@ export function CreateTaskModal({ open, onClose, onCreated, submissionDate, reco
     }
     const parsedHours = Number(hoursRequired)
     if (!hoursRequired || Number.isNaN(parsedHours) || parsedHours < 1) {
-      nextFieldErrors.hoursRequired = 'Hours Required must be a number (min 1)'
+    //  nextFieldErrors.hoursRequired = 'Hours Required must be a number (min 1)'
     }
     if (!String(record?.projectName ?? '').trim()) {
       nextFieldErrors.projectName = 'Project Name is required from source project'
@@ -224,7 +224,7 @@ export function CreateTaskModal({ open, onClose, onCreated, submissionDate, reco
         nextFieldErrors.revisionCode ||
         nextFieldErrors.designType ||
         nextFieldErrors.deadline ||
-        nextFieldErrors.hoursRequired ||
+        //nextFieldErrors.hoursRequired ||
         nextFieldErrors.projectName ||
         'Please fill required fields'
       setError(firstMsg)
@@ -571,7 +571,8 @@ export function CreateTaskModal({ open, onClose, onCreated, submissionDate, reco
             </div>
             <div>
               <label className="text-xs font-semibold text-slate-600" htmlFor="create-hours">
-                Hours Required <span className="text-red-500">*</span>
+                Hours Required 
+                {/* <span className="text-red-500">*</span> */}
               </label>
               <input
                 id="create-hours"
