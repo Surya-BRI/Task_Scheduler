@@ -139,7 +139,7 @@ export class TasksController {
 
   /** GET /tasks/scheduler-queue — sidebar backlog (unassigned + on-hold only). */
   @Get('scheduler-queue')
-  @Roles(UserRole.HOD)
+  @Roles(UserRole.HOD, UserRole.SALESPERSON)
   findSchedulerQueue() {
     return this.tasksService.findSchedulerQueue();
   }

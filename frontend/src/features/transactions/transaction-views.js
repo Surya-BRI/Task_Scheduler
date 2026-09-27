@@ -106,6 +106,7 @@ const DESIGNER_NAV_ITEMS = [
 const SALES_NAV_ITEMS = [
   { label: 'Projects List', path: '/sales/projects-list' },
   { label: 'Sales Review', path: '/sales/tasks' },
+  { label: 'Master Scheduler', path: '/sales/master-scheduler' },
   { label: 'Projects Overview', path: '/sales/projects-overview' },
   { label: 'Chatter', path: '/chatter' },
   { label: 'Team Activity Feed', path: '/sales/team-activity' },

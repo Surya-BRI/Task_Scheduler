@@ -83,12 +83,14 @@ describe('transaction views', () => {
       'Design Approval List',
       'Projects List',
       'Sales Review',
+      'Master Scheduler',
       'Projects Overview',
       'Chatter',
       'Team Activity Feed',
     ])
 
     expect(getTransactionDropdownItems('SALESPERSON').map((item) => item.path)).not.toContain('/design-scheduler')
+    expect(getTransactionDropdownItems('SALESPERSON').map((item) => item.path)).toContain('/sales/master-scheduler')
   })
 
   it('marks design completed view as active only on its route', () => {

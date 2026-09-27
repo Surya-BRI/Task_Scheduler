@@ -10,7 +10,11 @@ export async function GET(request: NextRequest) {
 
   const backendResponse = await fetch(`${resolveBackendApiBase()}/auth/ws-token`, {
     method: 'GET',
-    headers: { Authorization: `Bearer ${sessionToken}` },
+    // The backend reads the role name from the ERP `role` cookie, so forward the cookie header too.
+    headers: {
+      Authorization: `Bearer ${sessionToken}`,
+      cookie: request.headers.get('cookie') ?? '',
+    },
     cache: 'no-store',
   }).catch(() => null);
 
