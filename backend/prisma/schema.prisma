@@ -83,9 +83,12 @@ model ErpUser {
 // PROJECTS & TASKS
 // ---------------------------------------------------------
 model Project {
-  id           String   @id @default(dbgenerated("newid()")) @db.UniqueIdentifier
-  projectNo    String?  @unique
-  name         String   @db.NVarChar(200)
+  id             String   @id @default(dbgenerated("newid()")) @db.UniqueIdentifier
+  projectNo      String?  @unique
+  // Salesforce OP code — set when hydrated from an ErpMasterOpportunity that has no
+  // linked ErpMasterProject yet (projectNo stays null until a real project is created).
+  salesForceCode String?  @unique @db.NVarChar(64)
+  name           String   @db.NVarChar(200)
   category     String   @default("Project") @db.NVarChar(100)
   businessUnit String?  @db.NVarChar(255)
   description  String?  @db.NVarChar(Max)

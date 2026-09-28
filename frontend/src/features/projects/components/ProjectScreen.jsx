@@ -42,6 +42,7 @@ function ProjectTable({ data, onProjectOpen, workflowFrom }) {
         <table className="w-full text-sm text-left relative">
           <thead className="ui-table-header sticky top-0 z-10 border-b border-slate-200">
             <tr>
+              <th className="px-2 py-1.5 whitespace-nowrap">Sales Force Code</th>
               <th className="px-2 py-1.5 whitespace-nowrap">Project Code</th>
               <th className="px-2 py-1.5 whitespace-nowrap">Project Name</th>
               <th className="px-2 py-1.5 whitespace-nowrap">Sales Person</th>
@@ -63,12 +64,13 @@ function ProjectTable({ data, onProjectOpen, workflowFrom }) {
                         onClick={() => onProjectOpen?.(row)}
                         className="font-medium text-blue-600 hover:underline"
                       >
-                        {renderCell(row.projectCode)}
+                        {renderCell(row.salesForceCode)}
                       </Link>
                     ) : (
-                      <span className="font-medium text-slate-400">{renderCell(row.projectCode)}</span>
+                      <span className="font-medium text-slate-400">{renderCell(row.salesForceCode)}</span>
                     )}
                   </td>
+                  <td className="px-2 py-1 text-slate-700 whitespace-nowrap text-xs">{renderCell(row.projectCode)}</td>
                   <td className="px-2 py-1 text-slate-700 text-xs leading-tight">{renderCell(row.projectName)}</td>
                   <td className="px-2 py-1 text-slate-700 whitespace-nowrap text-xs">{renderCell(row.salesPerson)}</td>
                   <td className="px-2 py-1 whitespace-nowrap text-xs">

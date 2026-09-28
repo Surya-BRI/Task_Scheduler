@@ -18,6 +18,7 @@ import { UsersService } from '../users/users.service';
 const PROJECT_SELECT = {
   id: true,
   projectNo: true,
+  salesForceCode: true,
   name: true,
   category: true,
   businessUnit: true,
@@ -231,27 +232,31 @@ END;
   }
 
   /** Keep app project salesPerson in sync with live ERP when the local copy is blank. */
-  private async ensureSalesPersonFromErp<T extends { id: string; projectNo?: string | null; salesPerson?: string | null }>(
-    project: T,
-  ): Promise<T> {
+  private async ensureSalesPersonFromErp<
+    T extends { id: string; projectNo?: string | null; salesForceCode?: string | null; salesPerson?: string | null },
+  >(project: T): Promise<T> {
     if (String(project.salesPerson ?? '').trim()) return project;
     const projectCode = String(project.projectNo ?? '').trim();
-    if (!projectCode) return project;
+    const salesForceCode = String(project.salesForceCode ?? '').trim();
+    if (!projectCode && !salesForceCode) return project;
 
     try {
       const erpRows = await this.prisma.live.$queryRaw<Array<{ salesPerson: string | null }>>(Prisma.sql`
         SELECT TOP 1
           me.firstName + '' + me.lastName AS salesPerson
-        FROM ErpMasterProject mp
-        LEFT JOIN ErpMasterOpportunity mo ON mo.projectid = mp.projectid
+        FROM ErpMasterOpportunity mo
+        LEFT JOIN ErpMasterProject mp ON mp.projectid = mo.projectId
         LEFT JOIN ErpMasterEmployee me ON me.employeeId = mo.salesRepId
-        WHERE mp.isActive = 1
+        WHERE mo.isActive = 1
           AND (
-            mp.projectCode = ${projectCode}
-            OR REPLACE(REPLACE(LOWER(mp.projectCode), ' ', ''), '-', '') =
-               REPLACE(REPLACE(LOWER(${projectCode}), ' ', ''), '-', '')
+            (${projectCode} <> '' AND (
+              mp.projectCode = ${projectCode}
+              OR REPLACE(REPLACE(LOWER(mp.projectCode), ' ', ''), '-', '') =
+                 REPLACE(REPLACE(LOWER(${projectCode}), ' ', ''), '-', '')
+            ))
+            OR (${salesForceCode} <> '' AND LTRIM(RTRIM(mo.salesForceCode)) = ${salesForceCode})
           )
-        ORDER BY mp.createdOn DESC
+        ORDER BY mo.createdOn DESC
       `);
       const salesPerson = String(erpRows[0]?.salesPerson ?? '').trim();
       if (!salesPerson) return project;
@@ -263,7 +268,7 @@ END;
       return { ...project, salesPerson };
     } catch (err) {
       this.logger.warn(
-        `ensureSalesPersonFromErp failed for ${projectCode}: ${err instanceof Error ? err.message : String(err)}`,
+        `ensureSalesPersonFromErp failed for ${projectCode || salesForceCode}: ${err instanceof Error ? err.message : String(err)}`,
       );
       return project;
     }
@@ -274,7 +279,7 @@ END;
     if (!value) throw new NotFoundException('Project not found');
 
     const exact = await this.prisma.project.findFirst({
-      where: { projectNo: value },
+      where: { OR: [{ projectNo: value }, { salesForceCode: value }] },
       select: PROJECT_SELECT,
     });
     if (exact) {
@@ -286,16 +291,15 @@ END;
 
     const normalized = value.toLowerCase().replace(/[\s-]/g, '');
     const candidates = await this.prisma.project.findMany({
-      where: { projectNo: { not: null } },
+      where: { OR: [{ projectNo: { not: null } }, { salesForceCode: { not: null } }] },
       select: PROJECT_SELECT,
       take: 5000,
     });
     const normalizedMatch =
       candidates.find(
         (project) =>
-          (project.projectNo ?? '')
-            .toLowerCase()
-            .replace(/[\s-]/g, '') === normalized,
+          (project.projectNo ?? '').toLowerCase().replace(/[\s-]/g, '') === normalized ||
+          (project.salesForceCode ?? '').toLowerCase().replace(/[\s-]/g, '') === normalized,
       ) ?? null;
     if (normalizedMatch) {
       const hydrated = await this.ensureSalesPersonFromErp(normalizedMatch);
@@ -360,6 +364,68 @@ END;
       } catch {
         const existingAfterRace = await this.prisma.project.findFirst({
           where: { projectNo: erp.projectCode },
+          select: PROJECT_SELECT,
+        });
+        if (existingAfterRace) {
+          await this.assertProjectAccess(existingAfterRace.id, currentUserId, currentUserRole);
+          const [withStatus] = await this.withQsStatuses([existingAfterRace]);
+          return withStatus;
+        }
+      }
+    }
+
+    // Fallback: no ErpMasterProject exists at all (opportunity not promoted to a project
+    // yet) — hydrate from ErpMasterOpportunity by salesForceCode instead. projectNo stays
+    // null until a real project is created against it.
+    const oppRows = await this.prisma.live.$queryRaw<
+      Array<{
+        salesForceCode: string | null;
+        opportunityName: string | null;
+        businessUnitCode: string | null;
+        salesPerson: string | null;
+      }>
+    >(Prisma.sql`
+      SELECT TOP 1
+        mo.salesForceCode,
+        mo.opportunityName,
+        mb.businessUnitCode,
+        (me.firstName + '' + me.lastName) AS salesPerson
+      FROM ErpMasterOpportunity mo
+      LEFT JOIN ErpMasterBusinessUnit mb ON mb.businessUnitId = mo.businessUnitId
+      LEFT JOIN ErpMasterEmployee me ON me.employeeId = mo.salesRepId
+      WHERE mo.isActive = 1
+        AND LTRIM(RTRIM(mo.salesForceCode)) = ${projectCode}
+      ORDER BY mo.createdOn DESC
+    `);
+
+    const opp = oppRows[0];
+    if (opp?.salesForceCode) {
+      const bu = String(opp.businessUnitCode ?? '').trim().toLowerCase();
+      const category = bu === 'retail' || bu === 'rtl' || bu === 'r' ? 'Retail' : 'Project';
+
+      try {
+        const created = await this.prisma.project.create({
+          data: {
+            salesForceCode: opp.salesForceCode,
+            name: opp.opportunityName?.trim() || opp.salesForceCode,
+            category,
+            businessUnit: opp.businessUnitCode?.trim() || category,
+            status: 'ACTIVE',
+            salesPerson: opp.salesPerson?.trim() || null,
+            description: null,
+          },
+          select: PROJECT_SELECT,
+        });
+        await this.assignProjectToQsTeam(created.id, null, {
+          name: created.name,
+          projectNo: created.projectNo ?? created.salesForceCode,
+        });
+        await this.assertProjectAccess(created.id, currentUserId, currentUserRole);
+        const [withStatus] = await this.withQsStatuses([created]);
+        return withStatus;
+      } catch {
+        const existingAfterRace = await this.prisma.project.findFirst({
+          where: { salesForceCode: opp.salesForceCode },
           select: PROJECT_SELECT,
         });
         if (existingAfterRace) {

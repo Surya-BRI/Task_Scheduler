@@ -225,6 +225,7 @@ const TASK_STATUS_SELECT = {
 const PROJECT_LOOKUP_SELECT = {
   id: true,
   projectNo: true,
+  salesForceCode: true,
   name: true,
   category: true,
   businessUnit: true,
@@ -866,11 +867,25 @@ export class TasksService {
       );
     };
 
+    const tryFindBySalesForceCode = async (raw: string | undefined): Promise<ProjectLookup | null> => {
+      const value = (raw ?? '').trim();
+      if (!value) return null;
+      return this.prisma.project.findFirst({
+        where: { salesForceCode: value },
+        select: PROJECT_LOOKUP_SELECT,
+      });
+    };
+
     const byProjectNo = await tryFindByProjectNo(task.projectNo);
     if (byProjectNo) return byProjectNo;
 
     const byOpNoAsProjectNo = await tryFindByProjectNo(task.opNo);
     if (byOpNoAsProjectNo) return byOpNoAsProjectNo;
+
+    // Opportunity-only projects (no ErpMasterProject yet) are keyed by salesForceCode,
+    // not projectNo — see DesignListService's opportunity-driven list query.
+    const bySalesForceCode = await tryFindBySalesForceCode(task.opNo);
+    if (bySalesForceCode) return bySalesForceCode;
 
     throw new NotFoundException('Project not found (reuse existing projectNo or OP no)');
   }
