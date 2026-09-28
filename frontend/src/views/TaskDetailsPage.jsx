@@ -975,7 +975,9 @@ function mapProjectListRowToRecord(row) {
     fromTaskApi: false,
     opNo: salesForceCode ?? row?.opNo ?? row?.projectCode ?? row?.projectNo ?? '-',
     salesForceCode: salesForceCode || undefined,
-    projectNo: row?.projectCode ?? row?.projectNo ?? '-',
+    // Fall back to salesForceCode (never the '-' placeholder) so /projects/by-project-no
+    // still has a real key to hydrate from when there's no ErpMasterProject yet.
+    projectNo: row?.projectCode ?? row?.projectNo ?? salesForceCode ?? undefined,
     projectCode: row?.projectCode ?? row?.projectNo ?? undefined,
     projectId: row?.projectId ?? row?.id ?? null,
     designType: row?.designType ?? row?.category ?? 'Project',

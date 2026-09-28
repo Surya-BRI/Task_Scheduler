@@ -67,12 +67,16 @@ const RETAIL_UNIT_CODES = new Set<string>(['retail', 'rtl', 'r', 'prosigns-retai
 const PROJECT_UNIT_CODES = new Set<string>(['project', 'normal', 'prosigns-projects']);
 const DEFAULT_UNPAGINATED_LIMIT = 500;
 
+// Driven from ErpMasterOpportunity (mo), not ErpMasterProject (mp): most active opportunities
+// (~83% live) never get a linked project row, and salesForceCode/opNo — not projectId — is the
+// reliable key sales works from. Project-only fields (projectCode, projectManager, projectOwner)
+// are left/joined and null until a project is created against the opportunity.
 const DESIGN_LIST_FROM_JOINS = Prisma.sql`
-  FROM ErpMasterProject mp
-  LEFT JOIN ErpMasterOpportunity mo ON mo.projectid = mp.projectid
-  LEFT JOIN ErpMastercustomer mc ON mc.custId = mp.clientIId
-  LEFT JOIN ErpMasterBusinessUnit mb ON mb.businessUnitId = mp.businessUnitId
-  LEFT JOIN ErpMasterTaxnomy mt ON mt.taxnomyId = mp.statusId
+  FROM ErpMasterOpportunity mo
+  LEFT JOIN ErpMasterProject mp ON mp.projectid = mo.projectId
+  LEFT JOIN ErpMastercustomer mc ON mc.custId = COALESCE(mp.clientIId, mo.customerId)
+  LEFT JOIN ErpMasterBusinessUnit mb ON mb.businessUnitId = COALESCE(mp.businessUnitId, mo.businessUnitId)
+  LEFT JOIN ErpMasterTaxnomy mt ON mt.taxnomyId = COALESCE(mp.statusId, mo.projectStatusId)
   LEFT JOIN ErpMasterEmployee me ON me.employeeId = mo.salesRepId
   LEFT JOIN ErpMasterEmployee mee ON mee.employeeId = mp.projectManagerId
   LEFT JOIN ErpMasterEmployee meee ON meee.employeeId = mp.projectOwnerId
@@ -80,18 +84,18 @@ const DESIGN_LIST_FROM_JOINS = Prisma.sql`
 
 const DESIGN_LIST_SELECT = Prisma.sql`
   SELECT
-    mp.projectid AS projectId,
+    mo.opportunityId AS projectId,
     CAST(NULL AS NVARCHAR(36)) AS taskId,
     mp.projectCode,
     mo.salesForceCode,
-    mp.projectName,
+    COALESCE(mp.projectName, mo.opportunityName) AS projectName,
     mc.customerName AS clientName,
     mb.businessUnitCode,
     mt.taxnomycode AS status,
     me.firstName + '' + me.lastName AS salesPerson,
     mee.firstName + '' + mee.lastName AS projectManager,
     meee.firstName + '' + meee.lastName AS projectOwner,
-    mp.createdOn
+    mo.createdOn
 `;
 
 @Injectable()
@@ -223,6 +227,7 @@ export class DesignListService {
       mp.projectCode LIKE ${pattern}
       OR mo.salesForceCode LIKE ${pattern}
       OR mp.projectName LIKE ${pattern}
+      OR mo.opportunityName LIKE ${pattern}
       OR (me.firstName + '' + me.lastName) LIKE ${pattern}
     )`];
   }
@@ -264,12 +269,12 @@ export class DesignListService {
 
     const startDate = parseOptionalSqlDate(filters.startDate);
     if (startDate) {
-      fragments.push(Prisma.sql`CAST(mp.createdOn AS DATE) >= CAST(${startDate} AS DATE)`);
+      fragments.push(Prisma.sql`CAST(mo.createdOn AS DATE) >= CAST(${startDate} AS DATE)`);
     }
 
     const endDate = parseOptionalSqlDate(filters.endDate);
     if (endDate) {
-      fragments.push(Prisma.sql`CAST(mp.createdOn AS DATE) <= CAST(${endDate} AS DATE)`);
+      fragments.push(Prisma.sql`CAST(mo.createdOn AS DATE) <= CAST(${endDate} AS DATE)`);
     }
 
     return fragments;
@@ -288,9 +293,9 @@ export class DesignListService {
     const pagePromise = this.prisma.live.$queryRaw<DesignListRow[]>(Prisma.sql`
       ${DESIGN_LIST_SELECT}
       ${DESIGN_LIST_FROM_JOINS}
-      WHERE mp.isActive = 1
+      WHERE mo.isActive = 1
       ${whereClause}
-      ORDER BY mp.createdOn DESC
+      ORDER BY mo.createdOn DESC
       OFFSET ${offset} ROWS
       FETCH NEXT ${limit} ROWS ONLY
     `);
@@ -302,11 +307,11 @@ export class DesignListService {
 
     const countPromise = lightCount
       ? this.prisma.live.$queryRaw<Array<{ total: number }>>(Prisma.sql`
-          SELECT COUNT(DISTINCT mp.projectid) AS total
-          FROM ErpMasterProject mp
-          LEFT JOIN ErpMasterOpportunity mo ON mo.projectid = mp.projectid
+          SELECT COUNT(DISTINCT mo.opportunityId) AS total
+          FROM ErpMasterOpportunity mo
+          LEFT JOIN ErpMasterProject mp ON mp.projectid = mo.projectId
           LEFT JOIN ErpMasterEmployee me ON me.employeeId = mo.salesRepId
-          WHERE mp.isActive = 1
+          WHERE mo.isActive = 1
           ${whereClause}
         `)
       : this.prisma.live.$queryRaw<Array<{ total: number }>>(Prisma.sql`
@@ -314,7 +319,7 @@ export class DesignListService {
           FROM (
             ${DESIGN_LIST_SELECT}
             ${DESIGN_LIST_FROM_JOINS}
-            WHERE mp.isActive = 1
+            WHERE mo.isActive = 1
             ${whereClause}
           ) AS q
         `);
@@ -328,8 +333,8 @@ export class DesignListService {
       this.prisma.live.$queryRaw<DesignListRow[]>(Prisma.sql`
         ${DESIGN_LIST_SELECT}
         ${DESIGN_LIST_FROM_JOINS}
-        WHERE mp.isActive = 1
-        ORDER BY mp.createdOn DESC
+        WHERE mo.isActive = 1
+        ORDER BY mo.createdOn DESC
         OFFSET 0 ROWS
         FETCH NEXT ${DEFAULT_UNPAGINATED_LIMIT} ROWS ONLY
       `),
