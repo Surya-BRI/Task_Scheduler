@@ -227,6 +227,13 @@ export class DesignListService {
     )`];
   }
 
+  private buildRetailListWhereFragments(search: string): Prisma.Sql[] {
+    return [
+      ...this.buildSearchWhereFragments(search),
+      Prisma.sql`LOWER(LTRIM(RTRIM(COALESCE(mb.businessUnitCode, '')))) IN ('retail', 'rtl', 'r', 'prosigns-retail')`,
+    ];
+  }
+
   private buildDesignListWhereFragments(filters: DesignListPageFilters): Prisma.Sql[] {
     const fragments: Prisma.Sql[] = [];
 
@@ -346,6 +353,33 @@ export class DesignListService {
       this.queryDesignListPage(whereFragments, offset, safeLimit, {
         includeTotal,
         lightCount: true,
+      }),
+    );
+
+    const total = rows.total < 0 ? -1 : rows.total;
+    return {
+      data: this.dedupeMappedRows(rows.pageRows.map((row) => this.mapRow(row, true))),
+      page: safePage,
+      limit: safeLimit,
+      total,
+      totalPages: total < 0 ? -1 : Math.max(1, Math.ceil(total / safeLimit)),
+    };
+  }
+
+  async findRetailListPage(
+    page: number,
+    limit: number,
+    q: string,
+    includeTotal = true,
+  ): Promise<ProjectListPageResult> {
+    const safePage = Math.max(1, page);
+    const safeLimit = Math.min(200, Math.max(1, limit));
+    const offset = (safePage - 1) * safeLimit;
+    const whereFragments = this.buildRetailListWhereFragments(q);
+
+    const rows = await this.queryLive('findRetailListPage', () =>
+      this.queryDesignListPage(whereFragments, offset, safeLimit, {
+        includeTotal,
       }),
     );
 
