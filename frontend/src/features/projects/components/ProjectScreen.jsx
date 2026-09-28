@@ -96,6 +96,10 @@ function ProjectTable({ data, onProjectOpen, workflowFrom }) {
   );
 }
 
+// TEMPORARY: retail-only filter. Do not revert until the user explicitly asks to.
+// To revert: set to false (or delete this line and its usage below) to show all categories again.
+const SHOW_RETAIL_ONLY = true;
+
 export function ProjectScreen({ workflowFrom = FROM_PROJECTS_LIST }) {
   const PAGE_SIZE = 100;
   const { setRecords } = useDesignListStore();
@@ -138,20 +142,19 @@ export function ProjectScreen({ workflowFrom = FROM_PROJECTS_LIST }) {
       .then((res) => {
         if (!mounted) return;
         const data = Array.isArray(res?.data) ? res.data : [];
-        setProjects(
-          data.map((r) => ({
-            id: r.id,
-            taskId: r.taskId ?? r.taskUUID ?? r.taskUuid ?? null,
-            projectCode: r.projectCode ?? r.projectNo ?? null,
-            salesForceCode: r.salesForceCode ?? r.opNo ?? null,
-            projectName: r.projectName ?? r.name ?? null,
-            clientName: r.clientName ?? r.customerName ?? null,
-            salesPerson: r.salesPerson ?? null,
-            category: r.designType || "Project",
-            created: r.created ?? null,
-            deadline: r.deadline ?? null,
-          })),
-        );
+        const mapped = data.map((r) => ({
+          id: r.id,
+          taskId: r.taskId ?? r.taskUUID ?? r.taskUuid ?? null,
+          projectCode: r.projectCode ?? r.projectNo ?? null,
+          salesForceCode: r.salesForceCode ?? r.opNo ?? null,
+          projectName: r.projectName ?? r.name ?? null,
+          clientName: r.clientName ?? r.customerName ?? null,
+          salesPerson: r.salesPerson ?? null,
+          category: r.designType || "Project",
+          created: r.created ?? null,
+          deadline: r.deadline ?? null,
+        }));
+        setProjects(SHOW_RETAIL_ONLY ? mapped.filter((row) => row.category === "Retail") : mapped);
         const nextTotal = Number(res?.total);
         if (includeTotal || (Number.isFinite(nextTotal) && nextTotal >= 0)) {
           setTotal(Math.max(0, nextTotal));
