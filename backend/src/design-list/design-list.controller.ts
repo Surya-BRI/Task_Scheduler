@@ -54,6 +54,6 @@ export class DesignListController {
     const page = Math.max(1, Number.parseInt(pageParam ?? '1', 10) || 1);
     const limit = Math.min(200, Math.max(1, Number.parseInt(limitParam ?? '100', 10) || 100));
     const includeTotal = includeTotalParam !== '0' && includeTotalParam !== 'false';
-    return this.designListService.findProjectsListPage(page, limit, q ?? '', includeTotal);
+    return this.designListService.findRetailListPage(page, limit, q ?? '', includeTotal);
   }
 }
