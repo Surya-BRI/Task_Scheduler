@@ -226,6 +226,7 @@ export function CreateTaskModal({ open, onClose, onCreated, submissionDate, reco
       toast.error(firstMsg)
       return
     }
+    const parsedHours = Number(hoursRequired)
 
     if (validSubmissionDate && Number.isFinite(parsedHours) && parsedHours >= 1) {
       const hoursCheck = assertHoursWithinDeadline(parsedHours, validSubmissionDate)
