@@ -2758,7 +2758,7 @@ export function TaskDetailsPage() {
                       <DetailRow label="Sales Person" value={record.salesPerson ?? '-'} />
                       <DetailRow label="Business Unit" value={record.businessUnit ?? '-'} />
                       <DetailRow label="Client" value={record.client ?? '-'} />
-                      <DetailRow label="Remarks" value={record.description ?? '-'} />
+                      
                     </div>
                   </div>
 
@@ -2878,6 +2878,7 @@ export function TaskDetailsPage() {
                           <DetailRow label="Created By" value={record.createdByName || taskAuditInfo.createdByHod || '-'} />
                           <DetailRow label="Reviewer HOD" value={record.reviewerHod ?? '-'} />
                           <DetailRow label="Assigned To" value={record.assignedTo ?? 'Unassigned'} />
+                          <DetailRow label="Comments" value={record.description ?? '-'} />
                         </div>
                       </div>
                       <div className="mt-2.5">
