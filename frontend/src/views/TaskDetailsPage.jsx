@@ -218,19 +218,19 @@ function serializeSignRows(rows) {
 }
 
 const STAGE_ITEMS = [
-  { id: 'new',       label: 'Design Task New',   hint: 'Awaiting project allocation',   icon: Flag,         status: 'DESIGN_NEW' },
-  { id: 'planned',   label: 'Design Planned',    hint: 'Task scheduled for production', icon: Clock3,       status: 'DESIGN_PLANNED' },
-  { id: 'progress',  label: 'In Progress',       hint: 'Active design and drafting',    icon: Hourglass,    status: 'IN_PROGRESS' },
-  { id: 'completed', label: 'Design Completed',  hint: 'Submitted for internal review', icon: CircleCheck,  status: 'DESIGN_COMPLETED' },
-  { id: 'review',    label: 'HOD Review',        hint: 'Verified and approved by HOD',  icon: Shield,       status: 'HOD_REVIEW' },
-  { id: 'sales',     label: 'Sales Review',      hint: 'Final sales and client check',  icon: Pencil,       status: 'SALES_REVIEW' },
-  { id: 'rework',    label: 'Rework / Error',    hint: 'Corrections needed',            icon: Info,         status: 'REWORK' },
+  { id: 'new', label: 'Design Task New', hint: 'Awaiting project allocation', icon: Flag, status: 'DESIGN_NEW' },
+  { id: 'planned', label: 'Design Planned', hint: 'Task scheduled for production', icon: Clock3, status: 'DESIGN_PLANNED' },
+  { id: 'progress', label: 'In Progress', hint: 'Active design and drafting', icon: Hourglass, status: 'IN_PROGRESS' },
+  { id: 'completed', label: 'Design Completed', hint: 'Submitted for internal review', icon: CircleCheck, status: 'DESIGN_COMPLETED' },
+  { id: 'review', label: 'HOD Review', hint: 'Verified and approved by HOD', icon: Shield, status: 'HOD_REVIEW' },
+  { id: 'sales', label: 'Sales Review', hint: 'Final sales and client check', icon: Pencil, status: 'SALES_REVIEW' },
+  { id: 'rework', label: 'Rework / Error', hint: 'Corrections needed', icon: Info, status: 'REWORK' },
 ]
 
 const SPECIAL_STATUS = {
-  CLIENT_ACCEPTED:  { label: 'Client Accepted', hint: 'Task accepted by client',       icon: CheckCircle2, border: 'border-emerald-400', bg: 'bg-emerald-50', iconBg: 'bg-emerald-500', text: 'text-emerald-800', hint2: 'text-emerald-600' },
-  CLIENT_REJECTED:  { label: 'Client Rejected', hint: 'Rejected by client',           icon: Ban,          border: 'border-red-400',     bg: 'bg-red-50',     iconBg: 'bg-red-500',     text: 'text-red-800',     hint2: 'text-red-500' },
-  ON_HOLD:          { label: 'On Hold',          hint: 'Task paused',                  icon: Pause,        border: 'border-amber-400',   bg: 'bg-amber-50',   iconBg: 'bg-amber-500',   text: 'text-amber-800',   hint2: 'text-amber-600' },
+  CLIENT_ACCEPTED: { label: 'Client Accepted', hint: 'Task accepted by client', icon: CheckCircle2, border: 'border-emerald-400', bg: 'bg-emerald-50', iconBg: 'bg-emerald-500', text: 'text-emerald-800', hint2: 'text-emerald-600' },
+  CLIENT_REJECTED: { label: 'Client Rejected', hint: 'Rejected by client', icon: Ban, border: 'border-red-400', bg: 'bg-red-50', iconBg: 'bg-red-500', text: 'text-red-800', hint2: 'text-red-500' },
+  ON_HOLD: { label: 'On Hold', hint: 'Task paused', icon: Pause, border: 'border-amber-400', bg: 'bg-amber-50', iconBg: 'bg-amber-500', text: 'text-amber-800', hint2: 'text-amber-600' },
 }
 
 const TABS = [
@@ -244,13 +244,11 @@ const REWORK_TAB = { id: 'rework', label: 'Rework Instructions' }
 function StagePill({ item, active }) {
   const Icon = item.icon
   return (
-    <div className={`min-w-[148px] rounded-lg border px-2 py-1.5 transition-colors ${
-      active ? 'border-blue-500 bg-blue-50' : 'border-slate-200 bg-white'
-    }`}>
+    <div className={`min-w-[148px] rounded-lg border px-2 py-1.5 transition-colors ${active ? 'border-blue-500 bg-blue-50' : 'border-slate-200 bg-white'
+      }`}>
       <div className="flex items-start gap-1.5">
-        <div className={`mt-0.5 grid h-[18px] w-[18px] place-items-center rounded-full text-white ${
-          active ? 'bg-blue-600' : 'bg-slate-900'
-        }`}>
+        <div className={`mt-0.5 grid h-[18px] w-[18px] place-items-center rounded-full text-white ${active ? 'bg-blue-600' : 'bg-slate-900'
+          }`}>
           <Icon className="h-2.5 w-2.5" />
         </div>
         <div>
@@ -293,15 +291,15 @@ function getRecordEstimatedHours(record) {
   if (Number.isFinite(retailHours) && retailHours > 0) return retailHours
   const total = Array.isArray(record?.projectDetails)
     ? record.projectDetails.reduce(
-        (sum, detail) =>
-          sum +
-          (Number(detail?.artworkHours) || 0) +
-          (Number(detail?.technicalHours) || 0) +
-          (Number(detail?.locationHours) || 0) +
-          (Number(detail?.asBuiltHours) || 0) +
-          (Number(detail?.productionReleaseHours) || 0),
-        0,
-      )
+      (sum, detail) =>
+        sum +
+        (Number(detail?.artworkHours) || 0) +
+        (Number(detail?.technicalHours) || 0) +
+        (Number(detail?.locationHours) || 0) +
+        (Number(detail?.asBuiltHours) || 0) +
+        (Number(detail?.productionReleaseHours) || 0),
+      0,
+    )
     : 0
   return total > 0 ? total : ''
 }
@@ -311,11 +309,10 @@ function TabButton({ active, onClick, label }) {
     <button
       type="button"
       onClick={onClick}
-      className={`border-b-2 px-1 py-1.5 text-sm ${
-        active
+      className={`border-b-2 px-1 py-1.5 text-sm ${active
           ? 'border-slate-900 font-semibold text-slate-900'
           : 'border-transparent text-slate-500 hover:text-slate-700'
-      }`}
+        }`}
     >
       {label}
     </button>
@@ -630,13 +627,12 @@ function ActivityTimelinePane({
               <div className="flex items-start justify-between gap-2">
                 <p className="text-sm text-slate-800">{item.summary}</p>
                 <span
-                  className={`shrink-0 rounded px-2 py-0.5 text-[10px] font-semibold ${
-                    item.severity === 'warning'
+                  className={`shrink-0 rounded px-2 py-0.5 text-[10px] font-semibold ${item.severity === 'warning'
                       ? 'bg-amber-100 text-amber-700'
                       : item.severity === 'success'
                         ? 'bg-emerald-100 text-emerald-700'
                         : 'bg-slate-100 text-slate-700'
-                  }`}
+                    }`}
                 >
                   {item.action}
                 </span>
@@ -844,6 +840,7 @@ function mapTaskToRecord(task) {
     pendingReallocation: task.pendingReallocation ?? null,
     viewerCanRequestReallocation: Boolean(task.viewerCanRequestReallocation),
     viewerRemainingScheduledHours: Number(task.viewerRemainingScheduledHours ?? 0) || 0,
+    description: task.description ?? null,
   }
 }
 
@@ -969,6 +966,7 @@ function mapProjectListRowToRecord(row) {
   const createdOn = row?.created ?? row?.createdOn ?? null
   const dateLabel = formatDdMmYyyy(createdOn)
   const salesForceCode = row?.salesForceCode ?? (row?.opNo && /^OP-/i.test(String(row.opNo)) ? row.opNo : null) ?? null
+
   return {
     id: String(row?.id ?? ''),
     taskId: row?.taskId ?? null,
@@ -991,6 +989,7 @@ function mapProjectListRowToRecord(row) {
     clientName: row?.clientName ?? row?.customerName ?? null,
     projectName: row?.projectName ?? row?.name ?? null,
     client: row?.clientName ?? row?.customerName ?? null,
+    description: row?.description ?? null,
   }
 }
 
@@ -1004,8 +1003,8 @@ function applyLiveProjectWideFields(record, erpRow) {
   const clientName = String(erpRow.clientName ?? erpRow.customerName ?? '').trim()
   const salesForceCode = String(
     erpRow.salesForceCode ??
-      (erpRow.opNo && /^OP-/i.test(String(erpRow.opNo)) ? erpRow.opNo : '') ??
-      '',
+    (erpRow.opNo && /^OP-/i.test(String(erpRow.opNo)) ? erpRow.opNo : '') ??
+    '',
   ).trim()
 
   return {
@@ -1013,10 +1012,10 @@ function applyLiveProjectWideFields(record, erpRow) {
     ...(salesPerson ? { salesPerson } : {}),
     ...(projectName
       ? {
-          projectName,
-          // Keep task title when record came from a task; otherwise show project name.
-          ...(record.fromTaskApi ? {} : { name: projectName }),
-        }
+        projectName,
+        // Keep task title when record came from a task; otherwise show project name.
+        ...(record.fromTaskApi ? {} : { name: projectName }),
+      }
       : {}),
     ...(projectCode ? { projectNo: projectCode, projectCode } : {}),
     ...(businessUnit ? { businessUnit } : {}),
@@ -1060,15 +1059,15 @@ function isUuid(value) {
 
 function getTaskStatusBadgeClass(normalizedStatus) {
   switch (normalizedStatus) {
-    case 'IN_PROGRESS':      return 'bg-blue-100 text-blue-700'
+    case 'IN_PROGRESS': return 'bg-blue-100 text-blue-700'
     case 'DESIGN_COMPLETED': return 'bg-emerald-100 text-emerald-700'
-    case 'CLIENT_ACCEPTED':  return 'bg-emerald-100 text-emerald-700'
-    case 'HOD_REVIEW':       return 'bg-violet-100 text-violet-700'
-    case 'SALES_REVIEW':     return 'bg-indigo-100 text-indigo-700'
-    case 'REWORK':           return 'bg-red-100 text-red-700'
-    case 'ON_HOLD':          return 'bg-amber-100 text-amber-700'
-    case 'DESIGN_PLANNED':   return 'bg-sky-100 text-sky-700'
-    default:                 return 'bg-slate-100 text-slate-600'
+    case 'CLIENT_ACCEPTED': return 'bg-emerald-100 text-emerald-700'
+    case 'HOD_REVIEW': return 'bg-violet-100 text-violet-700'
+    case 'SALES_REVIEW': return 'bg-indigo-100 text-indigo-700'
+    case 'REWORK': return 'bg-red-100 text-red-700'
+    case 'ON_HOLD': return 'bg-amber-100 text-amber-700'
+    case 'DESIGN_PLANNED': return 'bg-sky-100 text-sky-700'
+    default: return 'bg-slate-100 text-slate-600'
   }
 }
 
@@ -1405,6 +1404,7 @@ export function TaskDetailsPage() {
         if (task?.id && !task?.retailDetails && !task?.projectDetails) {
           try {
             task = await fetchTaskCore(task.id)
+
           } catch {
             // Keep best-effort list payload if detail fetch fails.
           }
@@ -1524,10 +1524,10 @@ export function TaskDetailsPage() {
       setRecord((prev) =>
         prev
           ? {
-              ...prev,
-              status: apiStatus,
-              holdPreviousStatus: apiStatus === 'ON_HOLD' ? apiHoldPrev : null,
-            }
+            ...prev,
+            status: apiStatus,
+            holdPreviousStatus: apiStatus === 'ON_HOLD' ? apiHoldPrev : null,
+          }
           : prev,
       )
       // Freeze any running local timer and notify other tabs (hold / complete / etc.).
@@ -1555,7 +1555,7 @@ export function TaskDetailsPage() {
             ? applyTaskExtrasToRecord(prev, extras)
             : prev))
         })
-        .catch(() => {})
+        .catch(() => { })
     } catch (err) {
       const msg = toUserFacingError(err, 'Status update failed')
       toast.error(msg)
@@ -1846,14 +1846,14 @@ export function TaskDetailsPage() {
         const list = Array.isArray(res) ? res : (res?.data ?? [])
         setHodUsers(Array.isArray(list) ? list.map((u) => ({ ...u, fullName: u.fullName ?? u.userName })) : [])
       })
-      .catch(() => {})
+      .catch(() => { })
     apiClient
       .get('/users?role=DESIGNER&limit=200')
       .then((res) => {
         const list = Array.isArray(res) ? res : (res?.data ?? [])
         setDesignerUsers(Array.isArray(list) ? list.map((u) => ({ ...u, fullName: u.fullName ?? u.userName })) : [])
       })
-      .catch(() => {})
+      .catch(() => { })
   }, [isCreationRoute, isQs])
 
   const leadOptions = useMemo(() => {
@@ -1903,7 +1903,7 @@ export function TaskDetailsPage() {
                 if (!alive || !extras) return
                 setRecord((prev) => (prev?.id === foundId ? applyTaskExtrasToRecord(prev, extras) : prev))
               })
-              .catch(() => {})
+              .catch(() => { })
           } catch {
             // keep existing record if detail fetch fails
           }
@@ -2009,10 +2009,10 @@ export function TaskDetailsPage() {
         const filtered = isCreationRoute
           ? allItems  // creation route: show all project activity
           : allItems.filter(
-              (item) =>
-                PROJECT_FILE_ACTIONS.has(item.action) ||  // project-wide file events
-                item.task?.id === taskId                   // this task's events
-            )
+            (item) =>
+              PROJECT_FILE_ACTIONS.has(item.action) ||  // project-wide file events
+              item.task?.id === taskId                   // this task's events
+          )
         setActivityItems((prev) => (opts.append ? [...prev, ...filtered] : filtered))
         setActivityCursor(response?.pageInfo?.nextCursor ?? null)
         setActivityHasMore(Boolean(response?.pageInfo?.hasMore))
@@ -2164,7 +2164,7 @@ export function TaskDetailsPage() {
     if (mentionUsersRef.current.length === 0) {
       listChatterMentionUsers()
         .then((users) => { mentionUsersRef.current = Array.isArray(users) ? users : [] })
-        .catch(() => {})
+        .catch(() => { })
     }
   }, [activeTab, fetchChatterPosts])
 
@@ -2295,8 +2295,8 @@ export function TaskDetailsPage() {
     try {
       await Promise.all(
         files.map(async (file) => {
-        const formData = new FormData()
-        formData.append('file', file)
+          const formData = new FormData()
+          formData.append('file', file)
           await apiClient.post(`/projects/${projectId}/files`, formData)
         }),
       )
@@ -2448,10 +2448,10 @@ export function TaskDetailsPage() {
         prev.map((post) =>
           post.id === postId
             ? {
-                ...post,
-                updatedAt: new Date().toISOString(),
-                comments: [created, ...(post.comments ?? []).filter((c) => c.id !== created.id)],
-              }
+              ...post,
+              updatedAt: new Date().toISOString(),
+              comments: [created, ...(post.comments ?? []).filter((c) => c.id !== created.id)],
+            }
             : post,
         ),
       )
@@ -2757,6 +2757,8 @@ export function TaskDetailsPage() {
                     <div className="space-y-0.5">
                       <DetailRow label="Sales Person" value={record.salesPerson ?? '-'} />
                       <DetailRow label="Business Unit" value={record.businessUnit ?? '-'} />
+                      <DetailRow label="Client" value={record.client ?? '-'} />
+                      <DetailRow label="Remarks" value={record.description ?? '-'} />
                     </div>
                   </div>
 
@@ -2790,9 +2792,8 @@ export function TaskDetailsPage() {
                                       setHoursError('')
                                     }}
                                     aria-label="Hours required"
-                                    className={`w-24 rounded-md border bg-white px-2 py-1 text-[13px] font-medium text-slate-900 outline-none focus:ring-2 focus:ring-blue-500/20 ${
-                                      hoursError ? 'border-red-400 focus:border-red-400' : 'border-slate-300 focus:border-blue-500'
-                                    }`}
+                                    className={`w-24 rounded-md border bg-white px-2 py-1 text-[13px] font-medium text-slate-900 outline-none focus:ring-2 focus:ring-blue-500/20 ${hoursError ? 'border-red-400 focus:border-red-400' : 'border-slate-300 focus:border-blue-500'
+                                      }`}
                                   />
                                   <button
                                     type="button"
@@ -2823,9 +2824,9 @@ export function TaskDetailsPage() {
                                 if (record.hoursRequired > 0) return formatHoursAsHm(record.hoursRequired);
                                 const total = Array.isArray(record.projectDetails)
                                   ? record.projectDetails.reduce((sum, d) =>
-                                      sum + (Number(d.artworkHours) || 0) + (Number(d.technicalHours) || 0) +
-                                      (Number(d.locationHours) || 0) + (Number(d.asBuiltHours) || 0) +
-                                      (Number(d.productionReleaseHours) || 0), 0)
+                                    sum + (Number(d.artworkHours) || 0) + (Number(d.technicalHours) || 0) +
+                                    (Number(d.locationHours) || 0) + (Number(d.asBuiltHours) || 0) +
+                                    (Number(d.productionReleaseHours) || 0), 0)
                                   : 0;
                                 return total > 0 ? formatHoursAsHm(total) : '-';
                               })()}
@@ -3021,64 +3022,64 @@ export function TaskDetailsPage() {
                       {(isHodManagementMode || isBackupReviewerOnThisTask) && !isTerminalStatus &&
                         taskStatus !== 'SALES_REVIEW' &&
                         !(taskStatus === 'ON_HOLD' && record?.holdPreviousStatus === 'SALES_REVIEW')
-                      && (
-                        <div className="mt-4 pt-3 border-t border-slate-200">
-                          <p className="text-[10px] font-semibold text-slate-400 uppercase tracking-wide mb-2">Move Status</p>
-                          <div className="flex flex-wrap gap-2">
-                            {taskStatus === 'DESIGN_COMPLETED' && (
-                              <button
-                                type="button"
-                                onClick={() => handleStatusChange('HOD_REVIEW')}
-                                className="rounded-md bg-violet-600 px-3 py-1.5 text-xs font-semibold text-white hover:bg-violet-700 transition-colors"
-                              >
-                                Start HOD Review
-                              </button>
-                            )}
-                            {taskStatus === 'HOD_REVIEW' && (<>
-                              <button type="button" onClick={() => handleStatusChange('SALES_REVIEW')} className="rounded-md bg-orange-500 px-3 py-1.5 text-xs font-semibold text-white hover:bg-orange-600 transition-colors">Send to Sales</button>
-                              <button type="button" onClick={() => openSalesActionDialog('rework')} className="rounded-md bg-red-500 px-3 py-1.5 text-xs font-semibold text-white hover:bg-red-600 transition-colors">Send for Rework</button>
-                            </>)}
-                            {taskStatus === 'ON_HOLD' && (
-                              <button type="button" onClick={() => handleStatusChange(record?.holdPreviousStatus || 'HOD_REVIEW')} className="rounded-md bg-violet-600 px-3 py-1.5 text-xs font-semibold text-white hover:bg-violet-700 transition-colors">Resume</button>
-                            )}
-                            {taskStatus !== 'ON_HOLD' && (
-                              <button type="button" onClick={requestHold} disabled={holdImpactChecking} className="rounded-md border border-slate-300 bg-white px-3 py-1.5 text-xs font-semibold text-slate-600 hover:bg-slate-50 transition-colors disabled:opacity-50">Put On Hold</button>
-                            )}
+                        && (
+                          <div className="mt-4 pt-3 border-t border-slate-200">
+                            <p className="text-[10px] font-semibold text-slate-400 uppercase tracking-wide mb-2">Move Status</p>
+                            <div className="flex flex-wrap gap-2">
+                              {taskStatus === 'DESIGN_COMPLETED' && (
+                                <button
+                                  type="button"
+                                  onClick={() => handleStatusChange('HOD_REVIEW')}
+                                  className="rounded-md bg-violet-600 px-3 py-1.5 text-xs font-semibold text-white hover:bg-violet-700 transition-colors"
+                                >
+                                  Start HOD Review
+                                </button>
+                              )}
+                              {taskStatus === 'HOD_REVIEW' && (<>
+                                <button type="button" onClick={() => handleStatusChange('SALES_REVIEW')} className="rounded-md bg-orange-500 px-3 py-1.5 text-xs font-semibold text-white hover:bg-orange-600 transition-colors">Send to Sales</button>
+                                <button type="button" onClick={() => openSalesActionDialog('rework')} className="rounded-md bg-red-500 px-3 py-1.5 text-xs font-semibold text-white hover:bg-red-600 transition-colors">Send for Rework</button>
+                              </>)}
+                              {taskStatus === 'ON_HOLD' && (
+                                <button type="button" onClick={() => handleStatusChange(record?.holdPreviousStatus || 'HOD_REVIEW')} className="rounded-md bg-violet-600 px-3 py-1.5 text-xs font-semibold text-white hover:bg-violet-700 transition-colors">Resume</button>
+                              )}
+                              {taskStatus !== 'ON_HOLD' && (
+                                <button type="button" onClick={requestHold} disabled={holdImpactChecking} className="rounded-md border border-slate-300 bg-white px-3 py-1.5 text-xs font-semibold text-slate-600 hover:bg-slate-50 transition-colors disabled:opacity-50">Put On Hold</button>
+                              )}
+                            </div>
                           </div>
-                        </div>
-                      )}
+                        )}
                       {/* Sales / Admin action panel — SALES_REVIEW and ON_HOLD parked from SALES_REVIEW */}
                       {canSalesReview && (
                         taskStatus === 'SALES_REVIEW' ||
                         (taskStatus === 'ON_HOLD' && record?.holdPreviousStatus === 'SALES_REVIEW')
                       ) && (
-                        <div className="mt-4 pt-3 border-t border-slate-200">
-                          <p className="text-[10px] font-semibold text-slate-400 uppercase tracking-wide mb-2">Sales Review Actions</p>
-                          <div className="flex flex-wrap gap-2">
-                            {taskStatus === 'SALES_REVIEW' && (<>
-                              <button type="button" onClick={() => handleStatusChange('CLIENT_ACCEPTED')} className="rounded-md bg-emerald-600 px-3 py-1.5 text-xs font-semibold text-white hover:bg-emerald-700 transition-colors">Client Accepted</button>
-                              <button type="button" onClick={() => openSalesActionDialog('reject')} className="rounded-md bg-rose-600 px-3 py-1.5 text-xs font-semibold text-white hover:bg-rose-700 transition-colors">Client Rejected</button>
-                              <button type="button" onClick={() => openSalesActionDialog('rework')} className="rounded-md bg-red-500 px-3 py-1.5 text-xs font-semibold text-white hover:bg-red-600 transition-colors">Request Rework</button>
-                              <button type="button" onClick={requestHold} disabled={holdImpactChecking} className="rounded-md border border-slate-300 bg-white px-3 py-1.5 text-xs font-semibold text-slate-600 hover:bg-slate-50 transition-colors disabled:opacity-50">Put On Hold</button>
-                            </>)}
-                            {taskStatus === 'ON_HOLD' && (
-                              <button type="button" onClick={() => handleStatusChange(record?.holdPreviousStatus || 'SALES_REVIEW')} className="rounded-md bg-orange-500 px-3 py-1.5 text-xs font-semibold text-white hover:bg-orange-600 transition-colors">Resume</button>
-                            )}
+                          <div className="mt-4 pt-3 border-t border-slate-200">
+                            <p className="text-[10px] font-semibold text-slate-400 uppercase tracking-wide mb-2">Sales Review Actions</p>
+                            <div className="flex flex-wrap gap-2">
+                              {taskStatus === 'SALES_REVIEW' && (<>
+                                <button type="button" onClick={() => handleStatusChange('CLIENT_ACCEPTED')} className="rounded-md bg-emerald-600 px-3 py-1.5 text-xs font-semibold text-white hover:bg-emerald-700 transition-colors">Client Accepted</button>
+                                <button type="button" onClick={() => openSalesActionDialog('reject')} className="rounded-md bg-rose-600 px-3 py-1.5 text-xs font-semibold text-white hover:bg-rose-700 transition-colors">Client Rejected</button>
+                                <button type="button" onClick={() => openSalesActionDialog('rework')} className="rounded-md bg-red-500 px-3 py-1.5 text-xs font-semibold text-white hover:bg-red-600 transition-colors">Request Rework</button>
+                                <button type="button" onClick={requestHold} disabled={holdImpactChecking} className="rounded-md border border-slate-300 bg-white px-3 py-1.5 text-xs font-semibold text-slate-600 hover:bg-slate-50 transition-colors disabled:opacity-50">Put On Hold</button>
+                              </>)}
+                              {taskStatus === 'ON_HOLD' && (
+                                <button type="button" onClick={() => handleStatusChange(record?.holdPreviousStatus || 'SALES_REVIEW')} className="rounded-md bg-orange-500 px-3 py-1.5 text-xs font-semibold text-white hover:bg-orange-600 transition-colors">Resume</button>
+                              )}
+                            </div>
                           </div>
-                        </div>
-                      )}
+                        )}
                       {(record?.projectDetails?.length ?? 0) > 0 && (
                         <div className="mt-4 border-t border-slate-200 pt-3">
                           <p className="mb-2 text-xs font-semibold text-slate-700">Work Scope</p>
                           <div className="space-y-2">
                             {record.projectDetails.map((detail, idx) => {
                               const DISC_HOURS = [
-                                { key: 'artwork',   label: 'Artwork',   hours: detail.artworkHours },
+                                { key: 'artwork', label: 'Artwork', hours: detail.artworkHours },
                                 { key: 'technical', label: 'Technical', hours: detail.technicalHours },
-                                { key: 'location',  label: 'Location',  hours: detail.locationHours },
-                                { key: 'asBuilt',   label: 'As-Built',  hours: detail.asBuiltHours },
+                                { key: 'location', label: 'Location', hours: detail.locationHours },
+                                { key: 'asBuilt', label: 'As-Built', hours: detail.asBuiltHours },
                                 { key: 'productionRelease', label: 'Production Release', hours: detail.productionReleaseHours },
-                                { key: 'bim',       label: 'BIM',       hours: null },
+                                { key: 'bim', label: 'BIM', hours: null },
                               ]
                               const activeDiscipline =
                                 DISC_HOURS.find(d => d.label === record.disciplineType) ??
@@ -3138,15 +3139,15 @@ export function TaskDetailsPage() {
                         />
                       </div>
                       {!isQs && (
-                      <div className="mt-2.5 flex justify-end">
-                        <button
-                          type="button"
-                          onClick={() => setCreateModalOpen(true)}
-                          className="rounded-md bg-[#10a6e3] px-5 py-1.5 text-xs font-semibold text-white shadow-sm transition hover:bg-[#0f96cd] focus:outline-none focus-visible:ring-2 focus-visible:ring-blue-500 focus-visible:ring-offset-2"
-                        >
-                          Create
-                        </button>
-                      </div>
+                        <div className="mt-2.5 flex justify-end">
+                          <button
+                            type="button"
+                            onClick={() => setCreateModalOpen(true)}
+                            className="rounded-md bg-[#10a6e3] px-5 py-1.5 text-xs font-semibold text-white shadow-sm transition hover:bg-[#0f96cd] focus:outline-none focus-visible:ring-2 focus-visible:ring-blue-500 focus-visible:ring-offset-2"
+                          >
+                            Create
+                          </button>
+                        </div>
                       )}
                     </div>
                   ) : (
@@ -3161,17 +3162,17 @@ export function TaskDetailsPage() {
                         />
                       </div>
                       {!isQs && (
-                      <div className="mt-2.5 flex items-center justify-end gap-2.5">
-                        <p className="text-[11px] text-slate-400">{projectTaskCreateGateMessage}</p>
-                        <button
-                          type="button"
-                          onClick={() => setProjectCreateModalOpen(true)}
-                          disabled={!canCreateProjectTasks}
-                          className="rounded-md bg-[#10a6e3] px-5 py-1.5 text-xs font-semibold text-white shadow-sm transition hover:bg-[#0f96cd] focus:outline-none focus-visible:ring-2 focus-visible:ring-blue-500 focus-visible:ring-offset-2 disabled:cursor-not-allowed disabled:opacity-50 disabled:hover:bg-[#10a6e3]"
-                        >
-                          Create
-                        </button>
-                      </div>
+                        <div className="mt-2.5 flex items-center justify-end gap-2.5">
+                          <p className="text-[11px] text-slate-400">{projectTaskCreateGateMessage}</p>
+                          <button
+                            type="button"
+                            onClick={() => setProjectCreateModalOpen(true)}
+                            disabled={!canCreateProjectTasks}
+                            className="rounded-md bg-[#10a6e3] px-5 py-1.5 text-xs font-semibold text-white shadow-sm transition hover:bg-[#0f96cd] focus:outline-none focus-visible:ring-2 focus-visible:ring-blue-500 focus-visible:ring-offset-2 disabled:cursor-not-allowed disabled:opacity-50 disabled:hover:bg-[#10a6e3]"
+                          >
+                            Create
+                          </button>
+                        </div>
                       )}
                     </div>
                   )}
@@ -3271,21 +3272,21 @@ export function TaskDetailsPage() {
                             <table className="w-full min-w-[1100px] border-separate border-spacing-0 text-[11px]">
                               <thead>
                                 <tr className="bg-slate-50">
-                                  {['Actions','Sign Type','No','T.No','Est QTY','Qs QTY','Seq','Status','Cont.Ref',
-                                      'Plan Code','Area/Zone','Level/Parcel','Comment'].map((h) => (
-                                    <th
-                                      key={h}
-                                      className={`sticky top-0 z-10 border-b border-slate-200 bg-slate-50 px-2.5 py-2.5 text-left text-[10px] font-semibold uppercase tracking-wide text-slate-500 whitespace-nowrap${h === 'Sign Type' ? ' w-[220px] min-w-[220px]' : ''}${h === 'Actions' ? ' w-[88px] min-w-[88px]' : ''}${h === 'Comment' ? ' min-w-[200px]' : ''}`}
-                                    >
-                                      {h === 'Actions' ? <span className="sr-only">Actions</span> : h}
-                                      {h && h !== 'Comment' && h !== 'Actions' && <span className="ml-0.5 font-normal normal-case tracking-normal text-red-500" title="Required">*</span>}
-                                      {h === 'Comment' && (
-                                        <span className="ml-1 font-normal normal-case tracking-normal text-slate-400" title={SIGN_ROW_COMMENT_PLACEHOLDER}>
-                                          (max {SIGN_ROW_COMMENT_MAX_LENGTH})
-                                        </span>
-                                      )}
-                                    </th>
-                                  ))}
+                                  {['Actions', 'Sign Type', 'No', 'T.No', 'Est QTY', 'Qs QTY', 'Seq', 'Status', 'Cont.Ref',
+                                    'Plan Code', 'Area/Zone', 'Level/Parcel', 'Comment'].map((h) => (
+                                      <th
+                                        key={h}
+                                        className={`sticky top-0 z-10 border-b border-slate-200 bg-slate-50 px-2.5 py-2.5 text-left text-[10px] font-semibold uppercase tracking-wide text-slate-500 whitespace-nowrap${h === 'Sign Type' ? ' w-[220px] min-w-[220px]' : ''}${h === 'Actions' ? ' w-[88px] min-w-[88px]' : ''}${h === 'Comment' ? ' min-w-[200px]' : ''}`}
+                                      >
+                                        {h === 'Actions' ? <span className="sr-only">Actions</span> : h}
+                                        {h && h !== 'Comment' && h !== 'Actions' && <span className="ml-0.5 font-normal normal-case tracking-normal text-red-500" title="Required">*</span>}
+                                        {h === 'Comment' && (
+                                          <span className="ml-1 font-normal normal-case tracking-normal text-slate-400" title={SIGN_ROW_COMMENT_PLACEHOLDER}>
+                                            (max {SIGN_ROW_COMMENT_MAX_LENGTH})
+                                          </span>
+                                        )}
+                                      </th>
+                                    ))}
                                 </tr>
                               </thead>
                               <tbody>
@@ -3366,9 +3367,8 @@ export function TaskDetailsPage() {
                                       {rows.map((row, rowPos) => (
                                         <tr
                                           key={row.id ?? row._idx}
-                                          className={`border-b border-slate-100 transition-colors hover:bg-sky-50/50 ${
-                                            rowPos % 2 === 0 ? 'bg-white' : 'bg-slate-50/40'
-                                          }`}
+                                          className={`border-b border-slate-100 transition-colors hover:bg-sky-50/50 ${rowPos % 2 === 0 ? 'bg-white' : 'bg-slate-50/40'
+                                            }`}
                                         >
                                           <td className="px-2.5 py-2 align-middle">
                                             {!isQsReadOnly && !isApprovedSignRow(row) ? (
@@ -3383,62 +3383,61 @@ export function TaskDetailsPage() {
                                               </button>
                                             ) : null}
                                           </td>
-                                          {['signType','no','tNo','estQty','qsQty','sequence','status','contRef',
-                                              'planCode','areaZone','levelParcel','comment'].map((field) => (
-                                            <td
-                                              key={field}
-                                              className={`px-2.5 py-2 align-middle${field === 'signType' ? ' relative group w-[220px] min-w-[220px]' : ''}${field === 'comment' ? ' min-w-[200px]' : ''}`}
-                                            >
-                                              {isLockedSignRowStatusField(row, field) ? (
-                                                <input
-                                                  value={row[field] ?? ''}
-                                                  readOnly
-                                                  tabIndex={-1}
-                                                  title="Approved status is locked and cannot be changed."
-                                                  className={`${inputClass} cursor-not-allowed bg-slate-50 text-slate-500 shadow-none`}
-                                                />
-                                              ) : field === 'comment' ? (
-                                                <div className="relative">
+                                          {['signType', 'no', 'tNo', 'estQty', 'qsQty', 'sequence', 'status', 'contRef',
+                                            'planCode', 'areaZone', 'levelParcel', 'comment'].map((field) => (
+                                              <td
+                                                key={field}
+                                                className={`px-2.5 py-2 align-middle${field === 'signType' ? ' relative group w-[220px] min-w-[220px]' : ''}${field === 'comment' ? ' min-w-[200px]' : ''}`}
+                                              >
+                                                {isLockedSignRowStatusField(row, field) ? (
                                                   <input
-                                                    type="text"
-                                                    value={row.comment ?? ''}
-                                                    onChange={(e) => {
-                                                      const next = e.target.value.replace(/[\r\n]+/g, ' ').slice(0, SIGN_ROW_COMMENT_MAX_LENGTH)
-                                                      setSignRows((prev) => prev.map((r, i) => i === row._idx ? { ...r, comment: next } : r))
-                                                    }}
-                                                    disabled={isQsReadOnly}
-                                                    maxLength={SIGN_ROW_COMMENT_MAX_LENGTH}
-                                                    placeholder={SIGN_ROW_COMMENT_PLACEHOLDER}
-                                                    title={SIGN_ROW_COMMENT_PLACEHOLDER}
-                                                    aria-describedby={`sign-row-comment-count-${row._idx}`}
-                                                    className={`${inputClass} pr-12`}
+                                                    value={row[field] ?? ''}
+                                                    readOnly
+                                                    tabIndex={-1}
+                                                    title="Approved status is locked and cannot be changed."
+                                                    className={`${inputClass} cursor-not-allowed bg-slate-50 text-slate-500 shadow-none`}
                                                   />
-                                                  <span
-                                                    id={`sign-row-comment-count-${row._idx}`}
-                                                    className={`pointer-events-none absolute inset-y-0 right-2.5 flex items-center text-[9px] tabular-nums ${
-                                                      String(row.comment ?? '').length >= SIGN_ROW_COMMENT_MAX_LENGTH
-                                                        ? 'text-amber-700'
-                                                        : 'text-slate-400'
-                                                    }`}
-                                                  >
-                                                    {String(row.comment ?? '').length}/{SIGN_ROW_COMMENT_MAX_LENGTH}
-                                                  </span>
-                                                </div>
-                                              ) : (
-                                              <input
-                                                value={row[field] ?? ''}
-                                                onChange={(e) => setSignRows((prev) => prev.map((r, i) => i === row._idx ? { ...r, [field]: e.target.value } : r))}
-                                                disabled={isQsReadOnly}
-                                                className={inputClass}
-                                              />
-                                              )}
-                                              {field === 'signType' && row[field] && (
-                                                <div className="pointer-events-none absolute left-2.5 top-full z-50 mt-1 hidden max-w-[260px] rounded-lg border border-slate-200 bg-white px-3 py-2 text-[11px] text-slate-800 shadow-lg group-hover:block">
-                                                  {row[field]}
-                                                </div>
-                                              )}
-                                            </td>
-                                          ))}
+                                                ) : field === 'comment' ? (
+                                                  <div className="relative">
+                                                    <input
+                                                      type="text"
+                                                      value={row.comment ?? ''}
+                                                      onChange={(e) => {
+                                                        const next = e.target.value.replace(/[\r\n]+/g, ' ').slice(0, SIGN_ROW_COMMENT_MAX_LENGTH)
+                                                        setSignRows((prev) => prev.map((r, i) => i === row._idx ? { ...r, comment: next } : r))
+                                                      }}
+                                                      disabled={isQsReadOnly}
+                                                      maxLength={SIGN_ROW_COMMENT_MAX_LENGTH}
+                                                      placeholder={SIGN_ROW_COMMENT_PLACEHOLDER}
+                                                      title={SIGN_ROW_COMMENT_PLACEHOLDER}
+                                                      aria-describedby={`sign-row-comment-count-${row._idx}`}
+                                                      className={`${inputClass} pr-12`}
+                                                    />
+                                                    <span
+                                                      id={`sign-row-comment-count-${row._idx}`}
+                                                      className={`pointer-events-none absolute inset-y-0 right-2.5 flex items-center text-[9px] tabular-nums ${String(row.comment ?? '').length >= SIGN_ROW_COMMENT_MAX_LENGTH
+                                                          ? 'text-amber-700'
+                                                          : 'text-slate-400'
+                                                        }`}
+                                                    >
+                                                      {String(row.comment ?? '').length}/{SIGN_ROW_COMMENT_MAX_LENGTH}
+                                                    </span>
+                                                  </div>
+                                                ) : (
+                                                  <input
+                                                    value={row[field] ?? ''}
+                                                    onChange={(e) => setSignRows((prev) => prev.map((r, i) => i === row._idx ? { ...r, [field]: e.target.value } : r))}
+                                                    disabled={isQsReadOnly}
+                                                    className={inputClass}
+                                                  />
+                                                )}
+                                                {field === 'signType' && row[field] && (
+                                                  <div className="pointer-events-none absolute left-2.5 top-full z-50 mt-1 hidden max-w-[260px] rounded-lg border border-slate-200 bg-white px-3 py-2 text-[11px] text-slate-800 shadow-lg group-hover:block">
+                                                    {row[field]}
+                                                  </div>
+                                                )}
+                                              </td>
+                                            ))}
                                         </tr>
                                       ))}
                                       {!isQsReadOnly ? (
@@ -3450,8 +3449,10 @@ export function TaskDetailsPage() {
                                                 setSignRows((prev) => {
                                                   const lastInGroup = rows[rows.length - 1]
                                                   const insertAt = lastInGroup ? lastInGroup._idx + 1 : prev.length
-                                                  const newRow = { tNo: '', no: '', signType: '', planCode: '', estQty: '', qsQty: '',
-                                                    areaZone: '', levelParcel: '', sequence: '', status: '', comment: '', contRef: '', signFamily: family === 'Other' ? '' : family }
+                                                  const newRow = {
+                                                    tNo: '', no: '', signType: '', planCode: '', estQty: '', qsQty: '',
+                                                    areaZone: '', levelParcel: '', sequence: '', status: '', comment: '', contRef: '', signFamily: family === 'Other' ? '' : family
+                                                  }
                                                   const next = [...prev]
                                                   next.splice(insertAt, 0, newRow)
                                                   return next
@@ -3569,15 +3570,14 @@ export function TaskDetailsPage() {
                             key={level}
                             type="button"
                             onClick={() => setChatterPriority((prev) => (prev === level ? '' : level))}
-                            className={`rounded-md border px-2 py-1 text-[10px] font-semibold ${
-                              chatterPriority === level
+                            className={`rounded-md border px-2 py-1 text-[10px] font-semibold ${chatterPriority === level
                                 ? level === 'High'
                                   ? 'border-red-500 bg-red-500 text-white'
                                   : level === 'Medium'
                                     ? 'border-amber-400 bg-amber-400 text-white'
                                     : 'border-emerald-500 bg-emerald-500 text-white'
                                 : 'border-slate-200 bg-white text-slate-600'
-                            }`}
+                              }`}
                           >
                             {level}
                           </button>
@@ -3627,49 +3627,49 @@ export function TaskDetailsPage() {
                     ) : (
                       chatterPosts.map((entry) => (
                         <article key={entry.id} id={`chatter-post-${entry.id}`} className="overflow-visible rounded-md border border-slate-200 bg-white px-2.5 py-2 text-xs text-slate-800">
-  <div className="flex items-start justify-between gap-2">
-    <div className="min-w-0">
-      <p className="text-[11px] font-semibold text-slate-900 truncate">
-        {resolveEmbeddedChatterTitle(entry, record?.opNo, record?.projectNo)}
-      </p>
-      {normalizePriority(entry.priority) ? (
-        <span className="mt-0.5 inline-block rounded-full bg-slate-100 px-2 py-0.5 text-[9px] font-semibold uppercase text-slate-600">
-          {normalizePriority(entry.priority)}
-        </span>
-      ) : null}
-      <p className="text-[10px] text-slate-500">
-        {entry.authorName ? `${entry.authorName}${entry.authorRole ? ` (${entry.authorRole})` : ''}` : (entry.authorId ? `User ${entry.authorId.slice(0, 8)}` : 'Unknown')}
-      </p>
-    </div>
-    <p className="shrink-0 text-[10px] text-slate-500">{formatChatterDateTime(entry.createdAt)}</p>
-  </div>
-  <ChatterMentionText
-    message={entry.message}
-    users={resolveMentionUsersForDisplay(entry.message, entry.mentionedUsers, chatterMentionDirectory)}
-    className="mt-1 block"
-  />
-  <div className="mt-2 space-y-1">
-    {(entry.comments ?? []).map((comment) => (
-      <div
-        key={comment.id}
-        id={`chatter-comment-${comment.id}`}
-        className={`rounded border border-slate-200 bg-slate-50 px-2 py-1 ${focusCommentId === comment.id ? 'ring-2 ring-blue-400' : ''}`}
-      >
-        <div className="flex items-start justify-between gap-2">
-          <p className="text-[10px] font-semibold text-slate-700">
-            {comment.authorName ? `${comment.authorName}${comment.authorRole ? ` (${comment.authorRole})` : ''}` : (comment.authorId ? `User ${comment.authorId.slice(0, 8)}` : 'Unknown')}
-          </p>
-          <p className="shrink-0 text-[10px] text-slate-500">{formatChatterDateTime(comment.createdAt)}</p>
-        </div>
-        <ChatterMentionText
-          message={comment.message}
-          users={resolveMentionUsersForDisplay(comment.message, comment.mentionedUsers, chatterMentionDirectory)}
-          className="mt-1 block"
-        />
-      </div>
-    ))}
-  </div>
-  <EmbeddedChatterCommentComposer
+                          <div className="flex items-start justify-between gap-2">
+                            <div className="min-w-0">
+                              <p className="text-[11px] font-semibold text-slate-900 truncate">
+                                {resolveEmbeddedChatterTitle(entry, record?.opNo, record?.projectNo)}
+                              </p>
+                              {normalizePriority(entry.priority) ? (
+                                <span className="mt-0.5 inline-block rounded-full bg-slate-100 px-2 py-0.5 text-[9px] font-semibold uppercase text-slate-600">
+                                  {normalizePriority(entry.priority)}
+                                </span>
+                              ) : null}
+                              <p className="text-[10px] text-slate-500">
+                                {entry.authorName ? `${entry.authorName}${entry.authorRole ? ` (${entry.authorRole})` : ''}` : (entry.authorId ? `User ${entry.authorId.slice(0, 8)}` : 'Unknown')}
+                              </p>
+                            </div>
+                            <p className="shrink-0 text-[10px] text-slate-500">{formatChatterDateTime(entry.createdAt)}</p>
+                          </div>
+                          <ChatterMentionText
+                            message={entry.message}
+                            users={resolveMentionUsersForDisplay(entry.message, entry.mentionedUsers, chatterMentionDirectory)}
+                            className="mt-1 block"
+                          />
+                          <div className="mt-2 space-y-1">
+                            {(entry.comments ?? []).map((comment) => (
+                              <div
+                                key={comment.id}
+                                id={`chatter-comment-${comment.id}`}
+                                className={`rounded border border-slate-200 bg-slate-50 px-2 py-1 ${focusCommentId === comment.id ? 'ring-2 ring-blue-400' : ''}`}
+                              >
+                                <div className="flex items-start justify-between gap-2">
+                                  <p className="text-[10px] font-semibold text-slate-700">
+                                    {comment.authorName ? `${comment.authorName}${comment.authorRole ? ` (${comment.authorRole})` : ''}` : (comment.authorId ? `User ${comment.authorId.slice(0, 8)}` : 'Unknown')}
+                                  </p>
+                                  <p className="shrink-0 text-[10px] text-slate-500">{formatChatterDateTime(comment.createdAt)}</p>
+                                </div>
+                                <ChatterMentionText
+                                  message={comment.message}
+                                  users={resolveMentionUsersForDisplay(comment.message, comment.mentionedUsers, chatterMentionDirectory)}
+                                  className="mt-1 block"
+                                />
+                              </div>
+                            ))}
+                          </div>
+                          <EmbeddedChatterCommentComposer
                             value={commentByPostId[entry.id] ?? ''}
                             onChange={(value) => handleCommentDraftChange(entry.id, value)}
                             onMentionIdsChange={(ids) => handleCommentMentionIdsChange(entry.id, ids)}
@@ -3751,45 +3751,45 @@ export function TaskDetailsPage() {
                         )
                       }
                       return (
-                      <div className="min-w-0 overflow-hidden rounded-lg border border-slate-200 bg-slate-50 divide-y divide-slate-200">
-                        <div className="flex flex-wrap gap-x-6 gap-y-1 px-3 py-2.5 text-xs text-slate-600">
-                          {reworkSubmission.submittedBy && (
-                            <span><span className="font-semibold text-slate-500">Submitted by: </span>{reworkSubmission.submittedBy}</span>
+                        <div className="min-w-0 overflow-hidden rounded-lg border border-slate-200 bg-slate-50 divide-y divide-slate-200">
+                          <div className="flex flex-wrap gap-x-6 gap-y-1 px-3 py-2.5 text-xs text-slate-600">
+                            {reworkSubmission.submittedBy && (
+                              <span><span className="font-semibold text-slate-500">Submitted by: </span>{reworkSubmission.submittedBy}</span>
+                            )}
+                            {reworkSubmission.submittedAt && (
+                              <span><span className="font-semibold text-slate-500">Date: </span>{new Date(reworkSubmission.submittedAt).toLocaleString('en-GB', { day: '2-digit', month: 'short', year: 'numeric', hour: '2-digit', minute: '2-digit' })}</span>
+                            )}
+                            {reworkSubmission.durationSeconds > 0 && (
+                              <span><span className="font-semibold text-slate-500">Duration: </span>{Math.floor(reworkSubmission.durationSeconds / 3600)}h {Math.floor((reworkSubmission.durationSeconds % 3600) / 60)}m</span>
+                            )}
+                          </div>
+                          {reworkSubmission.files?.length > 0 && (
+                            <div className="px-3 py-2.5 space-y-1.5">
+                              <p className="text-[11px] font-semibold text-slate-400 uppercase tracking-wide mb-1">Files</p>
+                              {reworkSubmission.files.map((f, i) => (
+                                <a key={i} href={f.fileUrl} target="_blank" rel="noopener noreferrer"
+                                  className="flex min-w-0 items-center gap-2 rounded-md border border-slate-200 bg-white px-2.5 py-2 text-sm text-blue-700 hover:bg-slate-50 hover:underline">
+                                  <FileText className="h-4 w-4 shrink-0 text-slate-400" />
+                                  <span className="min-w-0 flex-1 truncate font-medium">{f.fileName}</span>
+                                  {f.sizeBytes && <span className="ml-auto shrink-0 text-xs text-slate-400">{(Number(f.sizeBytes) / 1024).toFixed(1)} KB</span>}
+                                </a>
+                              ))}
+                            </div>
                           )}
-                          {reworkSubmission.submittedAt && (
-                            <span><span className="font-semibold text-slate-500">Date: </span>{new Date(reworkSubmission.submittedAt).toLocaleString('en-GB', { day: '2-digit', month: 'short', year: 'numeric', hour: '2-digit', minute: '2-digit' })}</span>
-                          )}
-                          {reworkSubmission.durationSeconds > 0 && (
-                            <span><span className="font-semibold text-slate-500">Duration: </span>{Math.floor(reworkSubmission.durationSeconds / 3600)}h {Math.floor((reworkSubmission.durationSeconds % 3600) / 60)}m</span>
-                          )}
-                        </div>
-                        {reworkSubmission.files?.length > 0 && (
-                          <div className="px-3 py-2.5 space-y-1.5">
-                            <p className="text-[11px] font-semibold text-slate-400 uppercase tracking-wide mb-1">Files</p>
-                            {reworkSubmission.files.map((f, i) => (
-                              <a key={i} href={f.fileUrl} target="_blank" rel="noopener noreferrer"
+                          {reworkSubmission.submissionLink && (
+                            <div className="min-w-0 px-3 py-2.5">
+                              <p className="text-[11px] font-semibold text-slate-400 uppercase tracking-wide mb-1">Submitted Docs</p>
+                              <a href={reworkSubmission.submissionLink} target="_blank" rel="noopener noreferrer"
                                 className="flex min-w-0 items-center gap-2 rounded-md border border-slate-200 bg-white px-2.5 py-2 text-sm text-blue-700 hover:bg-slate-50 hover:underline">
                                 <FileText className="h-4 w-4 shrink-0 text-slate-400" />
-                                <span className="min-w-0 flex-1 truncate font-medium">{f.fileName}</span>
-                                {f.sizeBytes && <span className="ml-auto shrink-0 text-xs text-slate-400">{(Number(f.sizeBytes) / 1024).toFixed(1)} KB</span>}
+                                <span className="min-w-0 flex-1 truncate">{reworkSubmission.submissionLink}</span>
                               </a>
-                            ))}
-                          </div>
-                        )}
-                        {reworkSubmission.submissionLink && (
-                          <div className="min-w-0 px-3 py-2.5">
-                            <p className="text-[11px] font-semibold text-slate-400 uppercase tracking-wide mb-1">Submitted Docs</p>
-                            <a href={reworkSubmission.submissionLink} target="_blank" rel="noopener noreferrer"
-                              className="flex min-w-0 items-center gap-2 rounded-md border border-slate-200 bg-white px-2.5 py-2 text-sm text-blue-700 hover:bg-slate-50 hover:underline">
-                              <FileText className="h-4 w-4 shrink-0 text-slate-400" />
-                              <span className="min-w-0 flex-1 truncate">{reworkSubmission.submissionLink}</span>
-                            </a>
-                          </div>
-                        )}
-                        {!reworkSubmission.files?.length && !reworkSubmission.submissionLink && (
-                          <div className="px-3 py-2.5 text-sm text-slate-500 italic">No files or links were submitted.</div>
-                        )}
-                      </div>
+                            </div>
+                          )}
+                          {!reworkSubmission.files?.length && !reworkSubmission.submissionLink && (
+                            <div className="px-3 py-2.5 text-sm text-slate-500 italic">No files or links were submitted.</div>
+                          )}
+                        </div>
                       )
                     })()}
                   </div>
@@ -3817,17 +3817,17 @@ export function TaskDetailsPage() {
                 />
               )}
 
-      <FilesPanel
-        projectId={projectId}
-        files={projectFiles}
-        uploading={uploadingProjectFiles}
-        resolvingProjectId={resolvingProjectId}
-        onPick={handleProjectFilesPicked}
-        onAddLink={handleProjectFileLinkAdd}
-        onDelete={handleDeleteProjectFile}
-        canAdd={canAddProjectFiles}
-        canDelete={canDeleteProjectFiles}
-      />
+              <FilesPanel
+                projectId={projectId}
+                files={projectFiles}
+                uploading={uploadingProjectFiles}
+                resolvingProjectId={resolvingProjectId}
+                onPick={handleProjectFilesPicked}
+                onAddLink={handleProjectFileLinkAdd}
+                onDelete={handleDeleteProjectFile}
+                canAdd={canAddProjectFiles}
+                canDelete={canDeleteProjectFiles}
+              />
             </aside>
           </div>
         </div>
@@ -4012,11 +4012,10 @@ export function TaskDetailsPage() {
                   <div className="flex gap-2">
                     <input
                       type="url"
-                      className={`flex-1 rounded-md border px-2.5 py-1.5 text-xs text-slate-800 focus:outline-none focus:ring-2 ${
-                        reworkLinkError
+                      className={`flex-1 rounded-md border px-2.5 py-1.5 text-xs text-slate-800 focus:outline-none focus:ring-2 ${reworkLinkError
                           ? 'border-red-400 focus:ring-red-400'
                           : 'border-slate-300 focus:ring-red-400'
-                      }`}
+                        }`}
                       placeholder="https://…"
                       value={reworkLink.url}
                       onChange={(e) => {
@@ -4071,9 +4070,8 @@ export function TaskDetailsPage() {
                   setReworkDialogOpen(false)
                   setReworkSubmitting(false)
                 }}
-                className={`rounded-md px-4 py-1.5 text-xs font-semibold text-white disabled:opacity-50 transition-colors ${
-                  reworkDialogMode === 'reject' ? 'bg-rose-600 hover:bg-rose-700' : 'bg-red-500 hover:bg-red-600'
-                }`}
+                className={`rounded-md px-4 py-1.5 text-xs font-semibold text-white disabled:opacity-50 transition-colors ${reworkDialogMode === 'reject' ? 'bg-rose-600 hover:bg-rose-700' : 'bg-red-500 hover:bg-red-600'
+                  }`}
               >
                 {reworkSubmitting
                   ? (reworkDialogMode === 'reject' ? 'Creating revision…' : 'Sending…')
