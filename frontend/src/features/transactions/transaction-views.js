@@ -27,7 +27,7 @@ export const TRANSACTION_VIEWS = [
     label: 'Design Completed',
     path: '/transactions/design-completed',
     from: 'transactions-design-completed',
-    statuses: ['DESIGN_COMPLETED'],
+    statuses: ['CLIENT_ACCEPTED'],
   },
   {
     id: 'design-rework',
@@ -49,17 +49,7 @@ export const TRANSACTION_VIEWS = [
     label: 'Design Approval List',
     path: '/transactions/design-approval',
     from: 'transactions-design-approval',
-    statuses: [
-      'DESIGN_NEW',
-      'DESIGN_PLANNED',
-      'IN_PROGRESS',
-      'DESIGN_COMPLETED',
-      'HOD_REVIEW',
-      'SALES_REVIEW',
-      'REWORK',
-      'CLIENT_ACCEPTED',
-      'CLIENT_REJECTED',
-    ],
+    statuses: ['SALES_REVIEW'],
   },
 ]
 

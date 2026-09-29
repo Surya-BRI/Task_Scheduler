@@ -369,6 +369,7 @@ export function DesignListScreen({
   allowedStatuses = null,
   hideReallocation = false,
   lockBoardView = false,
+  forceEmptyList = false,
 }) {
   const PAGE_SIZE = 100;
   const searchParams = useSearchParams();
@@ -425,6 +426,13 @@ export function DesignListScreen({
   useTaskLifecycleRefresh({ onRefresh: reloadList, debounceMs: 400 });
 
   useEffect(() => {
+    if (forceEmptyList) {
+      setAllDesigns([]);
+      setServerTotal(0);
+      setListLoading(false);
+      setListError("");
+      return undefined;
+    }
     if (isReallocation) return undefined;
     if (prevFilterKeyRef.current !== filterKey) {
       prevFilterKeyRef.current = filterKey;
@@ -463,7 +471,7 @@ export function DesignListScreen({
       if (mounted) setListLoading(false);
     });
     return () => { mounted = false; };
-  }, [filterKey, debouncedSearchQuery, filters.status, filters.type, filters.salesPerson, filters.startDate, filters.endDate, listRefreshTick, isReallocation, page, allowedStatuses]);
+  }, [filterKey, debouncedSearchQuery, filters.status, filters.type, filters.salesPerson, filters.startDate, filters.endDate, listRefreshTick, isReallocation, page, allowedStatuses, forceEmptyList]);
 
   const filteredDesigns = useMemo(() => allDesigns.filter((d) => {
     if (
