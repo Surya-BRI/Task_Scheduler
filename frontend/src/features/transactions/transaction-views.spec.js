@@ -33,11 +33,12 @@ describe('transaction views', () => {
       'On Hold',
     ])
     expect(getTransactionBoardColumns('design-completed').map((col) => col.status)).toEqual([
-      'DESIGN_COMPLETED',
+      'CLIENT_ACCEPTED',
     ])
     expect(getTransactionBoardColumns('design-rework')).toHaveLength(7)
-    expect(getTransactionBoardColumns('design-approval').map((col) => col.status)).not.toContain('ON_HOLD')
-    expect(getTransactionBoardColumns('design-approval')).toHaveLength(9)
+    expect(getTransactionBoardColumns('design-approval').map((col) => col.status)).toEqual([
+      'SALES_REVIEW',
+    ])
   })
 
   it('treats only HOD, Sales, and Designer as transaction roles', () => {
