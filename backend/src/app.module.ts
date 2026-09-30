@@ -25,6 +25,7 @@ import { DashboardModule } from './dashboard/dashboard.module';
 import { ChatModule } from './chat/chat.module';
 import { NotificationsModule } from './notifications/notifications.module';
 import { DeadlineAlertsModule } from './deadline-alerts/deadline-alerts.module';
+import { SchedulerCarryoverModule } from './scheduler-carryover/scheduler-carryover.module';
 
 @Module({
   imports: [
@@ -55,6 +56,7 @@ import { DeadlineAlertsModule } from './deadline-alerts/deadline-alerts.module';
     ChatModule,
     NotificationsModule,
     DeadlineAlertsModule,
+    SchedulerCarryoverModule,
   ],
   providers: [
     {

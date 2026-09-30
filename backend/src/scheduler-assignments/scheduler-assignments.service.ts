@@ -189,6 +189,11 @@ const DEFAULT_SPLIT_RECOMPUTE_WEEK_WINDOW = 26;
 /** Keep SchedulerAssignmentHistory for this many months (0 disables purge). */
 const DEFAULT_HISTORY_RETENTION_MONTHS = 18;
 const HISTORY_PURGE_CRON_LOCK = 'TaskScheduler:SchedulerHistoryPurgeCron';
+/** Gulf Standard Time (Asia/Dubai) — UTC+4 year-round, no DST. Matches deadline-alerts.service.ts's convention. */
+const GST_UTC_OFFSET_MS = 4 * 60 * 60 * 1000;
+/** Statuses whose scheduled hours still need work — past-due assignments on any other status are left alone. */
+const CARRYOVER_ELIGIBLE_STATUSES = ['DESIGN_NEW', 'DESIGN_PLANNED', 'IN_PROGRESS', 'REWORK'];
+const CARRYOVER_LOOKAHEAD_DAYS = 56;
 
 type LeaveRescheduleSnapshotRow = {
   assignmentId: string;
@@ -363,6 +368,18 @@ export class SchedulerAssignmentsService implements OnModuleInit {
     if (isMinutes) return parsed / 60;
 
     return parsed;
+  }
+
+  private async fetchHodUserIds(): Promise<string[]> {
+    type Row = { userId: bigint; roleName: string | null };
+    const rows = await this.prisma.$queryRaw<Row[]>`
+      SELECT u.userId, r.roleName
+      FROM ErpAuthUsers u
+      LEFT JOIN ErpAuthUserRoleMap m ON m.userId = u.userId AND m.isActive = 1
+      LEFT JOIN ErpMasterRole r ON r.roleId = m.roleId AND r.isActive = 1 AND r.isDeleted = 0
+      WHERE u.isActive = 1 AND u.isDeleted = 0 AND r.roleName = 'Design HOD'
+    `;
+    return rows.map((r) => r.userId.toString());
   }
 
   private weekStartForDate(date: Date): Date {
@@ -1406,6 +1423,7 @@ export class SchedulerAssignmentsService implements OnModuleInit {
           dayIndex = v.dayIndex,
           [position] = v.position,
           assignedBy = v.assignedBy,
+          isLocked = 0,
           updatedAt = SYSUTCDATETIME()
         FROM dbo.ErpTSSchedulerAssignment AS a
         INNER JOIN (VALUES ${Prisma.join(
@@ -1850,6 +1868,414 @@ export class SchedulerAssignmentsService implements OnModuleInit {
     }
 
     return result;
+  }
+
+  /** "Today" as a GST calendar date (UTC-midnight Date representing that day) — same convention as deadline-alerts.service.ts. */
+  private todayGstDate(): Date {
+    const gstShifted = new Date(Date.now() + GST_UTC_OFFSET_MS);
+    return this.startOfUtcDay(gstShifted);
+  }
+
+  /**
+   * Nightly carryover: any SchedulerAssignment row whose scheduled day has already
+   * passed (GST) while its task never reached DESIGN_COMPLETED is rolled forward onto
+   * the designer's next available open day. Additive placement only — it never moves
+   * or resizes any OTHER task's assignments already sitting on those future days; it
+   * just finds spare capacity ahead, spilling across multiple days if each is already
+   * full (same idea as cross-week overflow via placeOverflowCapacity). Self-healing:
+   * re-scans ALL past-due incomplete rows every run, so a skipped/failed cron just
+   * catches up on the next successful run — no watermark table needed.
+   */
+  async carryOverPastDueAssignments(actorUserId: string): Promise<{
+    processedGroups: number;
+    skippedGroups: number;
+    movedCount: number;
+    totalUnplacedHours: number;
+    affectedWeeks: string[];
+  }> {
+    const todayGst = this.todayGstDate();
+
+    const candidateRows = await this.prisma.schedulerAssignment.findMany({
+      where: {
+        weekStartDate: { lte: this.weekStartForDate(todayGst) },
+        designerId: { not: null },
+        taskId: { not: null },
+        task: { status: { in: CARRYOVER_ELIGIBLE_STATUSES } },
+      },
+      select: { id: true, designerId: true, taskId: true, dayIndex: true, weekStartDate: true },
+      orderBy: [{ weekStartDate: 'asc' }, { dayIndex: 'asc' }, { position: 'asc' }],
+    });
+
+    const pastDueRows = candidateRows.filter((row) => {
+      if (row.weekStartDate == null || row.dayIndex == null) return false;
+      return this.dateForDayIndex(new Date(row.weekStartDate), row.dayIndex) < todayGst;
+    });
+
+    let processedGroups = 0;
+    let skippedGroups = 0;
+    let movedCount = 0;
+    let totalUnplacedHours = 0;
+    const affectedWeeksAll = new Set<string>();
+
+    if (pastDueRows.length === 0) {
+      return { processedGroups, skippedGroups, movedCount, totalUnplacedHours, affectedWeeks: [] };
+    }
+
+    // Group by designer — all past-due rows for a designer are placed together in original
+    // day order so Monday tasks come before Tuesday tasks, and split parts maintain sequence.
+    const groupsByDesigner = new Map<string, { designerId: string; rowIds: string[] }>();
+    for (const row of pastDueRows) {
+      if (!row.taskId || row.designerId == null) continue;
+      const key = String(row.designerId);
+      const group = groupsByDesigner.get(key) ?? { designerId: key, rowIds: [] };
+      group.rowIds.push(row.id);
+      groupsByDesigner.set(key, group);
+    }
+
+    // Sequential — one transaction per designer, no cross-designer contention.
+    for (const group of groupsByDesigner.values()) {
+      try {
+        const outcome = await this.carryOverDesigner(group, todayGst, actorUserId);
+        if (outcome.skipped) {
+          skippedGroups += 1;
+          continue;
+        }
+        processedGroups += 1;
+        movedCount += outcome.movedCount;
+        totalUnplacedHours = Math.round((totalUnplacedHours + outcome.unplacedHours) * 100) / 100;
+        for (const w of outcome.affectedWeeks) affectedWeeksAll.add(w);
+      } catch (err) {
+        skippedGroups += 1;
+        const detail = err instanceof Error ? err.message : String(err);
+        this.logger.warn(`Carryover skipped for designer ${group.designerId}: ${detail}`);
+      }
+    }
+
+    return {
+      processedGroups,
+      skippedGroups,
+      movedCount,
+      totalUnplacedHours,
+      affectedWeeks: Array.from(affectedWeeksAll).sort(),
+    };
+  }
+
+  /** All past-due rows for one designer placed together in original day order.
+   *  Monday slots come before Tuesday slots, split parts maintain sequence. */
+  private async carryOverDesigner(
+    group: { designerId: string; rowIds: string[] },
+    todayGst: Date,
+    actorUserId: string,
+  ): Promise<{ skipped: boolean; movedCount: number; unplacedHours: number; affectedWeeks: string[] }> {
+    const rangeEnd = this.addUtcDays(todayGst, CARRYOVER_LOOKAHEAD_DAYS);
+
+    const result = await this.prisma.$transaction(
+      async (tx) => {
+        // Fetch all past-due rows sorted by original schedule order.
+        const liveRows = await tx.schedulerAssignment.findMany({
+          where: { id: { in: group.rowIds } },
+          orderBy: [{ weekStartDate: 'asc' }, { dayIndex: 'asc' }, { position: 'asc' }],
+        });
+        if (liveRows.length === 0) return { skipped: true as const };
+
+        // Re-verify each row is still past-due (HOD may have moved it since outer scan).
+        const stillPastDue = liveRows.filter((r) => {
+          if (r.weekStartDate == null || r.dayIndex == null) return false;
+          return this.dateForDayIndex(new Date(r.weekStartDate), r.dayIndex) < todayGst;
+        });
+        if (stillPastDue.length === 0) return { skipped: true as const };
+
+        // Re-verify task eligibility per row — task status may have changed.
+        const uniqueTaskIds = [...new Set(stillPastDue.map((r) => r.taskId).filter(Boolean))] as string[];
+        const tasks = await tx.task.findMany({
+          where: { id: { in: uniqueTaskIds } },
+          select: { id: true, status: true, title: true, taskNo: true },
+        });
+        const taskMap = new Map(tasks.map((t) => [t.id, t]));
+        const placeableRows = stillPastDue.filter((r) => {
+          const t = taskMap.get(r.taskId ?? '');
+          return t && CARRYOVER_ELIGIBLE_STATUSES.includes(t.status);
+        });
+        if (placeableRows.length === 0) return { skipped: true as const };
+
+        const [holidayKeys, approvedLeaves, dayLocks, lockedWeeks, existingRows] = await Promise.all([
+          this.loadHolidayKeys(tx, todayGst, rangeEnd),
+          tx.leaveRequest.findMany({
+            where: {
+              userId: BigInt(group.designerId),
+              status: { in: ['Approved', 'APPROVED', 'approved'] },
+              revokedAt: null,
+              startDate: { lte: rangeEnd },
+              OR: [{ endDate: null }, { endDate: { gte: todayGst } }],
+            },
+            select: { type: true, startDate: true, endDate: true },
+          }),
+          this.loadDayLocksForRange(todayGst, rangeEnd, group.designerId),
+          tx.schedulerWeek.findMany({
+            where: {
+              weekStartDate: { gte: this.weekStartForDate(todayGst), lte: this.weekStartForDate(rangeEnd) },
+              isLocked: true,
+            },
+            select: { weekStartDate: true },
+          }),
+          tx.schedulerAssignment.findMany({
+            where: {
+              designerId: BigInt(group.designerId),
+              weekStartDate: { gte: this.weekStartForDate(todayGst), lte: this.weekStartForDate(rangeEnd) },
+            },
+            select: { id: true, weekStartDate: true, dayIndex: true, assignedHours: true, position: true, taskId: true, parentId: true },
+            orderBy: [{ weekStartDate: 'asc' }, { dayIndex: 'asc' }, { position: 'asc' }],
+          }),
+        ]);
+
+        const lockedKeys = new Set(dayLocks.map((u) => this.dayLockKey(u.designerId, u.date)));
+        const lockedWeekKeys = new Set(lockedWeeks.map((w) => this.dateKey(new Date(w.weekStartDate))));
+        const leaveHoursForCandidate = (date: Date): number => {
+          let hours = 0;
+          for (const leave of approvedLeaves) hours += this.leaveHoursForDate(leave, date);
+          return Math.min(DAILY_CAPACITY, hours);
+        };
+
+        const pastDueIds = new Set(placeableRows.map((r) => r.id));
+
+        // Rows in locked weeks stay put — seed their capacity but don't cascade them.
+        // Rows in unlocked weeks cascade forward alongside the past-due rows (domino effect).
+        const lockedWeekExistingRows = existingRows.filter((r) =>
+          lockedWeekKeys.has(this.dateKey(new Date(r.weekStartDate!))),
+        );
+        const futureMovableRows = existingRows.filter(
+          (r) =>
+            !pastDueIds.has(r.id) &&
+            !lockedWeekKeys.has(this.dateKey(new Date(r.weekStartDate!))) &&
+            // Only cascade rows whose scheduled day is today or later — past-dated rows belonging
+            // to non-eligible tasks (e.g. DESIGN_COMPLETED) should never be pulled forward.
+            r.weekStartDate != null &&
+            r.dayIndex != null &&
+            this.dateForDayIndex(new Date(r.weekStartDate), r.dayIndex) >= todayGst,
+        );
+
+        const usedByDay = new Map<string, number>();
+        const maxPosByDay = new Map<string, number>();
+        const taskOnDay = new Set<string>(); // taskId|dayKey for non-split rows
+
+        // Seed capacity from locked-week rows — they won't move but they consume capacity.
+        for (const r of lockedWeekExistingRows) {
+          const wk = this.dateKey(new Date(r.weekStartDate!));
+          const key = `${wk}|${r.dayIndex ?? 0}`;
+          usedByDay.set(key, (usedByDay.get(key) ?? 0) + this.toHours(r.assignedHours));
+          maxPosByDay.set(key, Math.max(maxPosByDay.get(key) ?? -1, Number(r.position ?? 0)));
+          if (r.taskId && !r.parentId) taskOnDay.add(`${r.taskId}|${key}`);
+        }
+
+        // Past-due rows first, then future unlocked rows in their original schedule order.
+        // This inserts past-due work at the front and naturally cascades everything else forward.
+        const allToPlace = [...placeableRows, ...futureMovableRows];
+
+        const changedRows: Array<{
+          id: string;
+          taskId: string;
+          toWeekStartDate: Date;
+          toWeekEndDate: Date;
+          toDayIndex: number;
+          toPosition: number;
+        }> = [];
+        const unplacedByTask = new Map<string, number>(); // taskId → unplaced hours (past-due only)
+        let cursorDate = todayGst;
+
+        for (const row of allToPlace) {
+          const assignedHours = this.toHours(row.assignedHours);
+          const taskId = row.taskId ?? '';
+          if (assignedHours <= 0 || assignedHours > DAILY_CAPACITY) {
+            if (pastDueIds.has(row.id)) {
+              unplacedByTask.set(taskId, (unplacedByTask.get(taskId) ?? 0) + assignedHours);
+            }
+            continue;
+          }
+
+          // Past-due rows always start searching from the cursor (today or later).
+          // Future rows start from their original scheduled date so they aren't pulled earlier —
+          // but if the cascade cursor has already passed that date, they follow the cursor.
+          const rowOriginalDate =
+            row.weekStartDate != null && row.dayIndex != null
+              ? this.dateForDayIndex(new Date(row.weekStartDate), row.dayIndex)
+              : todayGst;
+          const searchStart = pastDueIds.has(row.id)
+            ? cursorDate
+            : this.maxUtcDate(cursorDate, rowOriginalDate);
+
+          let targetDate = searchStart;
+          let placed = false;
+          while (targetDate < rangeEnd) {
+            const weekStart = this.weekStartForDate(targetDate);
+            const weekKey = this.dateKey(weekStart);
+            const leaveBlocked = this.blockedHoursForDesignerDay(targetDate, group.designerId, {
+              holidayKeys,
+              lockedKeys,
+              leaveHours: leaveHoursForCandidate(targetDate),
+            });
+            if (lockedWeekKeys.has(weekKey) || leaveBlocked >= DAILY_CAPACITY) {
+              targetDate = this.addUtcDays(targetDate, 1);
+              continue;
+            }
+            const dayIndex = this.dayIndexForDate(targetDate, weekStart);
+            const dayKey = `${weekKey}|${dayIndex}`;
+            // Non-split rows: skip days where this task already has a row (avoids duplicates).
+            // Split parts (parentId set) may share a day with their siblings.
+            if (!row.parentId && taskOnDay.has(`${taskId}|${dayKey}`)) {
+              targetDate = this.addUtcDays(targetDate, 1);
+              continue;
+            }
+            const used = usedByDay.get(dayKey) ?? 0;
+            const available = Math.max(0, DAILY_CAPACITY - used - leaveBlocked);
+            if (assignedHours <= available + 0.001) {
+              usedByDay.set(dayKey, used + assignedHours);
+              const nextPos = (maxPosByDay.get(dayKey) ?? -1) + 1;
+              maxPosByDay.set(dayKey, nextPos);
+              if (!row.parentId) taskOnDay.add(`${taskId}|${dayKey}`);
+              // Only record as changed if the day or position actually shifted.
+              const origWeekKey = row.weekStartDate ? this.dateKey(new Date(row.weekStartDate)) : '';
+              const origDayKey = `${origWeekKey}|${row.dayIndex ?? 0}`;
+              if (origDayKey !== dayKey || Number(row.position ?? 0) !== nextPos) {
+                changedRows.push({
+                  id: row.id,
+                  taskId,
+                  toWeekStartDate: weekStart,
+                  toWeekEndDate: this.weekEndForWeekStart(weekStart),
+                  toDayIndex: dayIndex,
+                  toPosition: nextPos,
+                });
+              }
+              cursorDate = targetDate;
+              placed = true;
+              break;
+            }
+            targetDate = this.addUtcDays(targetDate, 1);
+          }
+          if (!placed && pastDueIds.has(row.id)) {
+            unplacedByTask.set(taskId, (unplacedByTask.get(taskId) ?? 0) + assignedHours);
+          }
+        }
+
+        const totalUnplacedHours = [...unplacedByTask.values()].reduce((s, h) => s + h, 0);
+
+        if (changedRows.length === 0) {
+          return { skipped: false as const, movedCount: 0, totalUnplacedHours, affectedWeeks: [] as string[], changedRows, unplacedByTask, taskMap };
+        }
+
+        const changedIds = new Set(changedRows.map((r) => r.id));
+        const affectedWeekByKey = new Map<string, Date>();
+        // Collect original weeks of every row that actually moved (past-due + cascaded future).
+        for (const row of allToPlace) {
+          if (row.weekStartDate && changedIds.has(row.id)) {
+            affectedWeekByKey.set(this.dateKey(new Date(row.weekStartDate)), new Date(row.weekStartDate));
+          }
+        }
+        for (const row of changedRows) {
+          affectedWeekByKey.set(this.dateKey(row.toWeekStartDate), row.toWeekStartDate);
+        }
+        const affectedWeeks = [...affectedWeekByKey.values()].sort((a, b) => a.getTime() - b.getTime());
+
+        const beforeRowsByWeek = await this.loadWeekAssignmentBuckets(tx, affectedWeeks);
+
+        await this.batchUpdateLeavePlacementMoves(
+          tx,
+          changedRows.map((row) => ({
+            id: row.id,
+            toWeekStartDate: row.toWeekStartDate,
+            toWeekEndDate: row.toWeekEndDate,
+            toDayIndex: row.toDayIndex,
+            toPosition: row.toPosition,
+            assignedBy: actorUserId,
+          })),
+        );
+
+        const afterRowsByWeek = this.applyAssignmentPatchesToBuckets(
+          beforeRowsByWeek,
+          changedRows.map((row) => ({
+            id: row.id,
+            weekStartDate: row.toWeekStartDate,
+            weekEndDate: row.toWeekEndDate,
+            dayIndex: row.toDayIndex,
+            position: row.toPosition,
+            assignedBy: actorUserId,
+          })),
+        );
+
+        await this.bumpWeeksAndWriteHistory(tx, {
+          affectedWeeks,
+          beforeByWeek: beforeRowsByWeek,
+          afterByWeek: afterRowsByWeek,
+          actorUserId,
+        });
+
+        return {
+          skipped: false as const,
+          movedCount: changedRows.length,
+          totalUnplacedHours,
+          affectedWeeks: affectedWeeks.map((d) => this.dateKey(d)),
+          changedRows,
+          unplacedByTask,
+          taskMap,
+        };
+      },
+      { timeout: 60_000, maxWait: 20_000 },
+    );
+
+    if (result.skipped) {
+      return { skipped: true, movedCount: 0, unplacedHours: 0, affectedWeeks: [] };
+    }
+
+    const affectedWeeks = result.affectedWeeks;
+    const allMovedTaskIds = [...new Set(result.changedRows.map((r) => r.taskId))];
+
+    // Fetch HOD IDs once; used for both moved and unplaced notifications.
+    const hodUserIds = await this.fetchHodUserIds().catch(() => [] as string[]);
+
+    if (result.movedCount > 0) {
+      // Log one activity entry per affected task.
+      for (const taskId of allMovedTaskIds) {
+        const taskMovedCount = result.changedRows.filter((r) => r.taskId === taskId).length;
+        await this.activityLogger.log({
+          action: ActivityAction.SCHEDULER_CARRYOVER,
+          userId: actorUserId,
+          taskId,
+          details: {
+            event: ActivityAction.SCHEDULER_CARRYOVER,
+            messageKey: 'scheduler_carryover',
+            changes: { movedAssignments: taskMovedCount, affectedWeeks },
+            context: { source: 'scheduler.carryover', designerId: group.designerId },
+          },
+        });
+      }
+      this.dashboardRealtime?.notifyOverviewRefresh('scheduler_carryover', {
+        affectedWeekStarts: affectedWeeks,
+        changedTaskIds: allMovedTaskIds,
+      });
+      // Notify designer.
+      const taskCount = allMovedTaskIds.length;
+      const designerMovedMsg = `${result.movedCount} scheduled ${result.movedCount === 1 ? 'slot was' : 'slots were'} rolled forward across ${taskCount} ${taskCount === 1 ? 'task' : 'tasks'} (past-due work not yet marked complete). Check the scheduler to see where they landed.`;
+      this.notificationsService
+        .create({ userId: group.designerId, title: 'Schedule Auto-Updated', message: designerMovedMsg, linkUrl: '/scheduler' })
+        .catch((err) => this.logger.error('Failed to send carryover notification', err));
+      this.dashboardRealtime?.notifyUserNotificationRefresh(group.designerId);
+      // Notify HODs (skip if HOD is the designer themselves).
+      const hodMovedMsg = `Auto-carryover: ${result.movedCount} past-due ${result.movedCount === 1 ? 'slot' : 'slots'} rolled forward for designer #${group.designerId} across ${taskCount} ${taskCount === 1 ? 'task' : 'tasks'}.`;
+      for (const hodId of hodUserIds) {
+        if (hodId === group.designerId) continue;
+        this.notificationsService
+          .create({ userId: hodId, title: 'Schedule Auto-Updated', message: hodMovedMsg, linkUrl: '/scheduler' })
+          .catch((err) => this.logger.error('Failed to send carryover HOD notification', err));
+        this.dashboardRealtime?.notifyUserNotificationRefresh(hodId);
+      }
+    }
+
+
+    return {
+      skipped: false,
+      movedCount: result.movedCount,
+      unplacedHours: result.totalUnplacedHours,
+      affectedWeeks,
+    };
   }
 
   async rescheduleAfterLeaveRevocation(

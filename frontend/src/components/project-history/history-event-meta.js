@@ -85,6 +85,8 @@ const EVENT_META = {
   CREATED_CHATTER_COMMENT: { title: 'Comment Added', icon: MessageSquare, tone: 'gray' },
   SCHEDULER_WEEK_SAVED: { title: 'Schedule Saved', icon: History, tone: 'gray' },
   SCHEDULER_LEAVE_RESCHEDULED: { title: 'Leave Rescheduled', icon: History, tone: 'gray' },
+  SCHEDULER_CARRYOVER: { title: 'Schedule Rolled Forward', icon: History, tone: 'gray' },
+  SCHEDULER_CARRYOVER_UNPLACED: { title: 'Carryover Incomplete', icon: History, tone: 'orange' },
   LEAVE_REQUEST_SUBMITTED: { title: 'Leave Requested', icon: History, tone: 'gray' },
   LEAVE_REQUEST_UPDATED: { title: 'Leave Updated', icon: History, tone: 'gray' },
   LEAVE_REQUEST_CANCELLED: { title: 'Leave Cancelled', icon: History, tone: 'gray' },

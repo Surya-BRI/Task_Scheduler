@@ -24,7 +24,7 @@ describe('SchedulerAssignmentsService', () => {
     taskWorkSession: { findMany: jest.fn() },
     schedulerTaskFragment: { findMany: jest.fn() },
     erpUser: { findMany: jest.fn(), findFirst: jest.fn(), findUnique: jest.fn() },
-    task: { findMany: jest.fn(), update: jest.fn() },
+    task: { findMany: jest.fn(), update: jest.fn(), findUnique: jest.fn() },
     schedulerWeek: {
       create: jest.fn(),
       findUnique: jest.fn(),
@@ -68,6 +68,7 @@ describe('SchedulerAssignmentsService', () => {
     prisma.erpUser.findFirst.mockResolvedValue(null);
     prisma.erpUser.findUnique.mockResolvedValue(null);
     prisma.task.findMany.mockResolvedValue([]);
+    prisma.task.findUnique.mockResolvedValue(null);
     prisma.schedulerWeek.create.mockResolvedValue({});
     prisma.schedulerWeek.findUnique.mockResolvedValue({ version: 0 });
     prisma.schedulerWeek.update.mockResolvedValue({});
@@ -1492,5 +1493,125 @@ describe('SchedulerAssignmentsService', () => {
 
     expect(result.version).toBe(2);
     expect(prisma.taskDesigner.deleteMany).toHaveBeenCalled();
+  });
+
+  describe('carryOverPastDueAssignments', () => {
+    const GST_OFFSET_MS = 4 * 60 * 60 * 1000;
+    function todayGstUtcMidnight(): Date {
+      const shifted = new Date(Date.now() + GST_OFFSET_MS);
+      return new Date(Date.UTC(shifted.getUTCFullYear(), shifted.getUTCMonth(), shifted.getUTCDate()));
+    }
+    function daysBefore(date: Date, days: number): Date {
+      return new Date(date.getTime() - days * 24 * 60 * 60 * 1000);
+    }
+
+    it('does nothing when there are no past-due incomplete assignments', async () => {
+      prisma.schedulerAssignment.findMany.mockResolvedValueOnce([]);
+
+      const result = await service.carryOverPastDueAssignments('3001');
+
+      expect(result).toEqual({
+        processedGroups: 0,
+        skippedGroups: 0,
+        movedCount: 0,
+        totalUnplacedHours: 0,
+        affectedWeeks: [],
+      });
+      expect(prisma.task.findUnique).not.toHaveBeenCalled();
+    });
+
+    it('rolls a past-due row on an incomplete task forward onto today, and notifies the designer', async () => {
+      const yesterday = daysBefore(todayGstUtcMidnight(), 1);
+
+      prisma.schedulerAssignment.findMany
+        .mockResolvedValueOnce([
+          { id: 'row-1', designerId: '2001', taskId: 'task-1', dayIndex: 0, weekStartDate: yesterday },
+        ])
+        .mockResolvedValueOnce([
+          {
+            id: 'row-1',
+            designerId: '2001',
+            taskId: 'task-1',
+            dayIndex: 0,
+            weekStartDate: yesterday,
+            assignedHours: 3,
+            isLocked: false,
+            position: 0,
+          },
+        ])
+        .mockResolvedValueOnce([]) // existingRows in the forward-scan range
+        .mockResolvedValueOnce([]); // loadWeekAssignmentBuckets before-snapshot
+
+      prisma.task.findUnique.mockResolvedValueOnce({
+        status: 'IN_PROGRESS',
+        title: 'Banner Design',
+        taskNo: 'T-100',
+      });
+
+      const result = await service.carryOverPastDueAssignments('3001');
+
+      expect(prisma.schedulerAssignment.findMany.mock.calls[0][0].where.task.status.in).toEqual([
+        'DESIGN_NEW',
+        'DESIGN_PLANNED',
+        'IN_PROGRESS',
+        'REWORK',
+      ]);
+      expect(result.processedGroups).toBe(1);
+      expect(result.skippedGroups).toBe(0);
+      expect(result.movedCount).toBe(1);
+      expect(prisma.$executeRaw).toHaveBeenCalled(); // batched move
+      expect(activityLogger.log).toHaveBeenCalledWith(
+        expect.objectContaining({
+          action: 'SCHEDULER_CARRYOVER',
+          taskId: 'task-1',
+        }),
+      );
+      expect(notificationsService.create).toHaveBeenCalledWith(
+        expect.objectContaining({ userId: '2001', title: 'Schedule Auto-Updated' }),
+      );
+    });
+
+    it('skips a group when the live rows no longer match what detection found (concurrency guard)', async () => {
+      const yesterday = daysBefore(todayGstUtcMidnight(), 1);
+
+      prisma.schedulerAssignment.findMany
+        .mockResolvedValueOnce([
+          { id: 'row-1', designerId: '2001', taskId: 'task-1', dayIndex: 0, weekStartDate: yesterday },
+        ])
+        .mockResolvedValueOnce([]); // liveRows re-fetch comes back empty — someone already moved/deleted it
+
+      prisma.task.findUnique.mockResolvedValueOnce({
+        status: 'IN_PROGRESS',
+        title: 'Banner Design',
+        taskNo: 'T-100',
+      });
+
+      const result = await service.carryOverPastDueAssignments('3001');
+
+      expect(result.processedGroups).toBe(0);
+      expect(result.skippedGroups).toBe(1);
+      expect(result.movedCount).toBe(0);
+      expect(activityLogger.log).not.toHaveBeenCalled();
+      expect(notificationsService.create).not.toHaveBeenCalled();
+    });
+
+    it('skips a group whose task already reached a gate status (e.g. completed since detection ran)', async () => {
+      const yesterday = daysBefore(todayGstUtcMidnight(), 1);
+
+      prisma.schedulerAssignment.findMany.mockResolvedValueOnce([
+        { id: 'row-1', designerId: '2001', taskId: 'task-1', dayIndex: 0, weekStartDate: yesterday },
+      ]);
+      prisma.task.findUnique.mockResolvedValueOnce({
+        status: 'DESIGN_COMPLETED',
+        title: 'Banner Design',
+        taskNo: 'T-100',
+      });
+
+      const result = await service.carryOverPastDueAssignments('3001');
+
+      expect(result.skippedGroups).toBe(1);
+      expect(result.movedCount).toBe(0);
+      expect(prisma.$executeRaw).not.toHaveBeenCalled();
+    });
   });
 });
