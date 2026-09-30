@@ -1704,21 +1704,21 @@ export class TasksService {
           .map((v) => v.trim())
           .filter(Boolean),
       )];
-      addAndFilter({
-        OR: [
-          ...nameVariants.map((variant) => ({
-            project: { salesPerson: { contains: variant } },
-          })),
-          // Projects this sales user created locally
-          { project: { createdById: userId } },
-          // Tasks they personally created (even on another salesPerson's OP)
-          {
-            activityLogs: {
-              some: { userId, action: ActivityAction.TASK_CREATED },
-            },
-          },
-        ],
-      });
+      // addAndFilter({
+      //   OR: [
+      //     ...nameVariants.map((variant) => ({
+      //       project: { salesPerson: { contains: variant } },
+      //     })),
+      //     // Projects this sales user created locally
+      //     { project: { createdById: userId } },
+      //     // Tasks they personally created (even on another salesPerson's OP)
+      //     {
+      //       activityLogs: {
+      //         some: { userId, action: ActivityAction.TASK_CREATED },
+      //       },
+      //     },
+      //   ],
+      // });
     }
 
     const [data, total] = await Promise.all([
