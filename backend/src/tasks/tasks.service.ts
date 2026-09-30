@@ -626,6 +626,8 @@ export class TasksService {
     overallMaxRevision: string | null;
     /** True when the highest revision in scope was client-rejected (next Rn is allowed). */
     canBumpAfterReject: boolean;
+    /** True when the highest revision in scope was client-accepted (next Rn is allowed). */
+    canBumpAfterAccept: boolean;
     blocker: { taskNo: string | null; revisionCode: string | null; status: string } | null;
   }> {
     const rows = await tx.task.findMany({
@@ -641,6 +643,7 @@ export class TasksService {
     let openMax = -1;
     let overallMax = -1;
     let rejectedAtOverallMax = false;
+    let acceptedAtOverallMax = false;
     let blocker: { taskNo: string | null; revisionCode: string | null; status: string } | null = null;
 
     for (const row of rows) {
@@ -650,8 +653,10 @@ export class TasksService {
       if (n > overallMax) {
         overallMax = n;
         rejectedAtOverallMax = api === 'CLIENT_REJECTED';
-      } else if (n === overallMax && api === 'CLIENT_REJECTED') {
-        rejectedAtOverallMax = true;
+        acceptedAtOverallMax = api === 'CLIENT_ACCEPTED';
+      } else if (n === overallMax) {
+        if (api === 'CLIENT_REJECTED') rejectedAtOverallMax = true;
+        if (api === 'CLIENT_ACCEPTED') acceptedAtOverallMax = true;
       }
       if (this.isRevisionOpenStatus(row.status) && n >= openMax) {
         openMax = n;
@@ -663,9 +668,10 @@ export class TasksService {
       }
     }
 
-    // If any open task sits on overall max, that line is not "rejected-only".
+    // If any open task sits on overall max, that line is not closed.
     if (openMax >= 0 && openMax === overallMax) {
       rejectedAtOverallMax = false;
+      acceptedAtOverallMax = false;
     }
 
     return {
@@ -673,6 +679,7 @@ export class TasksService {
       openMaxRevision: openMax >= 0 ? `R${openMax}` : null,
       overallMaxRevision: overallMax >= 0 ? `R${overallMax}` : null,
       canBumpAfterReject: overallMax >= 0 && rejectedAtOverallMax,
+      canBumpAfterAccept: overallMax >= 0 && acceptedAtOverallMax,
       blocker,
     };
   }
@@ -684,7 +691,7 @@ export class TasksService {
     const state = await this.findOpenRevisionState(tx, params);
     if (state.openMaxRevision) return state.openMaxRevision;
     if (!state.hasTasks) return 'R0';
-    if (state.canBumpAfterReject && state.overallMaxRevision) {
+    if ((state.canBumpAfterReject || state.canBumpAfterAccept) && state.overallMaxRevision) {
       return `R${this.getRevisionNumber(state.overallMaxRevision) + 1}`;
     }
     throw new BadRequestException(TasksService.REVISION_BUMP_BLOCKED_MESSAGE);
@@ -721,10 +728,10 @@ export class TasksService {
       return params.requestedRevision ?? 'R0';
     }
 
-    if (state.canBumpAfterReject && state.overallMaxRevision) {
+    if ((state.canBumpAfterReject || state.canBumpAfterAccept) && state.overallMaxRevision) {
       const next = `R${this.getRevisionNumber(state.overallMaxRevision) + 1}`;
       if (!params.requestedRevision) return next;
-      // Stale form still sending closed Rn → promote to the post-reject revision.
+      // Stale form still sending closed Rn → promote to the post-closed revision.
       if (this.getRevisionNumber(params.requestedRevision) <= this.getRevisionNumber(state.overallMaxRevision)) {
         return next;
       }
