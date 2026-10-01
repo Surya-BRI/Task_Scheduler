@@ -71,6 +71,7 @@ describe('SchedulerAssignmentsService', () => {
     prisma.task.findUnique.mockResolvedValue(null);
     prisma.schedulerWeek.create.mockResolvedValue({});
     prisma.schedulerWeek.findUnique.mockResolvedValue({ version: 0 });
+    prisma.schedulerWeek.findMany.mockResolvedValue([]);
     prisma.schedulerWeek.update.mockResolvedValue({});
     prisma.schedulerWeek.upsert.mockResolvedValue({});
     prisma.schedulerAssignment.update.mockResolvedValue({});
@@ -1542,11 +1543,9 @@ describe('SchedulerAssignmentsService', () => {
         .mockResolvedValueOnce([]) // existingRows in the forward-scan range
         .mockResolvedValueOnce([]); // loadWeekAssignmentBuckets before-snapshot
 
-      prisma.task.findUnique.mockResolvedValueOnce({
-        status: 'IN_PROGRESS',
-        title: 'Banner Design',
-        taskNo: 'T-100',
-      });
+      prisma.task.findMany.mockResolvedValueOnce([
+        { id: 'task-1', status: 'IN_PROGRESS', title: 'Banner Design', taskNo: 'T-100' },
+      ]);
 
       const result = await service.carryOverPastDueAssignments('3001');
 
@@ -1598,14 +1597,34 @@ describe('SchedulerAssignmentsService', () => {
     it('skips a group whose task already reached a gate status (e.g. completed since detection ran)', async () => {
       const yesterday = daysBefore(todayGstUtcMidnight(), 1);
 
-      prisma.schedulerAssignment.findMany.mockResolvedValueOnce([
-        { id: 'row-1', designerId: '2001', taskId: 'task-1', dayIndex: 0, weekStartDate: yesterday },
+      prisma.schedulerAssignment.findMany
+        .mockResolvedValueOnce([
+          { id: 'row-1', designerId: '2001', taskId: 'task-1', dayIndex: 0, weekStartDate: yesterday },
+        ])
+        .mockResolvedValueOnce([
+          {
+            id: 'row-1',
+            designerId: BigInt('2001'),
+            taskId: 'task-1',
+            dayIndex: 0,
+            weekStartDate: yesterday,
+            weekEndDate: new Date(yesterday.getTime() + 6 * 86400000),
+            assignedHours: 4,
+            parentId: null,
+            splitIndex: null,
+            totalParts: null,
+            notes: null,
+            position: 0,
+            isLocked: false,
+            isPinned: false,
+            assignedBy: BigInt('3001'),
+            createdAt: yesterday,
+            updatedAt: yesterday,
+          },
+        ]);
+      prisma.task.findMany.mockResolvedValueOnce([
+        { id: 'task-1', status: 'DESIGN_COMPLETED', title: 'Banner Design', taskNo: 'T-100' },
       ]);
-      prisma.task.findUnique.mockResolvedValueOnce({
-        status: 'DESIGN_COMPLETED',
-        title: 'Banner Design',
-        taskNo: 'T-100',
-      });
 
       const result = await service.carryOverPastDueAssignments('3001');
 
