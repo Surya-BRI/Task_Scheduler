@@ -785,14 +785,18 @@ describe('TasksService', () => {
       expect(result.revisionCode).toBe('R1');
     });
 
-    it('getNextRevision blocks when only CLIENT_ACCEPTED tasks exist', async () => {
+    it('getNextRevision returns R1 after CLIENT_ACCEPTED (closed revision allows next)', async () => {
       prisma.task.findMany.mockResolvedValue([
         { taskNo: 'T-1', revisionCode: 'R0', status: 'CLIENT_ACCEPTED' },
       ]);
 
-      await expect(
-        service.getNextRevision({ projectId: 'project-1', opNo: 'OP-1', designType: 'Project' }),
-      ).rejects.toThrow(REVISION_MSG);
+      const result = await service.getNextRevision({
+        projectId: 'project-1',
+        opNo: 'OP-1',
+        designType: 'Project',
+      });
+
+      expect(result.revisionCode).toBe('R1');
     });
 
     it('createExtended rejects explicit R1 while R0 is still open', async () => {
@@ -885,30 +889,35 @@ describe('TasksService', () => {
       expect(prisma.task.create).not.toHaveBeenCalled();
     });
 
-    it('createExtended blocks a new revision when only CLIENT_ACCEPTED tasks exist', async () => {
+    it('createExtended allows R1 when R0 is CLIENT_ACCEPTED (canBumpAfterAccept)', async () => {
       prisma.project.findFirst.mockResolvedValue(projectRow);
       prisma.$queryRaw.mockResolvedValue([{ status: 'completed' }]);
-      prisma.task.findMany.mockReset();
-      prisma.task.findMany.mockResolvedValue([
-        { taskNo: 'T-1', revisionCode: 'R0', status: 'CLIENT_ACCEPTED' },
-      ]);
+      prisma.user.findMany.mockResolvedValue([]);
+      prisma.task.findMany
+        .mockResolvedValueOnce([{ taskNo: 'T-1', revisionCode: 'R0', status: 'CLIENT_ACCEPTED' }]) // assertRevisionAllowedForCreate
+        .mockResolvedValue([]); // duplicate check, getPhaseContext, and any further calls
+      prisma.task.create.mockResolvedValue({ id: 'task-new' });
+      prisma.projectTaskDetail.create.mockResolvedValue({ id: 'detail-1' });
+      prisma.task.findUnique.mockResolvedValue({
+        id: 'task-new',
+        taskNo: 'T-new',
+        opNo: 'OP-1',
+        title: 'Signage',
+        status: 'DESIGN_NEW',
+        assigneeId: null,
+        assignee: null,
+        project: { id: 'project-1', projectNo: 'P-1', name: 'Project One' },
+      });
 
-      await expect(
-        service.createExtended('user-1', {
-          designType: 'Project',
-          task: {
-            projectNo: 'P-1',
-            projectName: 'Project One',
-            opNo: 'OP-1',
-            revisionCode: 'R1',
-          },
-          projectDetails: [
-            { signType: 'Pylon', disciplineType: 'Artwork', artwork: true, artworkHours: 2 },
-          ],
-        } as any),
-      ).rejects.toThrow(REVISION_MSG);
+      await service.createExtended('user-1', {
+        designType: 'Project',
+        task: { projectNo: 'P-1', projectName: 'Project One', opNo: 'OP-1', revisionCode: 'R1', phase: 1 },
+        projectDetails: [
+          { signType: 'Pylon', disciplineType: 'Artwork', artwork: true, artworkHours: 2 },
+        ],
+      } as any);
 
-      expect(prisma.task.create).not.toHaveBeenCalled();
+      expect(prisma.task.create.mock.calls[0][0].data.revisionCode).toBe('R1');
     });
   });
 
@@ -947,7 +956,9 @@ describe('TasksService', () => {
         .mockResolvedValueOnce({ ...existingTask, status: 'SALES_REVIEW' })
         .mockResolvedValueOnce({ retailDetails: [], projectDetails: [] });
       prisma.task.create.mockResolvedValue(revisionTask);
-      prisma.task.findMany.mockResolvedValue([{ revisionCode: 'R0' }]);
+      prisma.task.findMany
+        .mockResolvedValueOnce([{ revisionCode: 'R0', status: 'CLIENT_REJECTED' }]) // getNextRevision scan
+        .mockResolvedValueOnce([]);  // duplicate check — no existing R1
       mockNotifyUsersByRole({
         managers: [{ id: '9002' }],
         sales: [
