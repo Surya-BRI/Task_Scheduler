@@ -15,27 +15,20 @@ describe('transaction views', () => {
       'Design WIP',
       'Design Completed',
       'Design Rework / Error List',
-      'Design Approval List',
+      'Sales Approval List',
     ])
   })
 
   it('maps each view to the required Kanban columns', () => {
     expect(getTransactionBoardColumns('design-wip').map((col) => col.title)).toEqual([
-      'Design Task New',
       'Design Planned',
       'In Progress',
       'Design Completed',
-      'HOD Review',
-      'Sales Review',
-      'Rework / Error',
-      'Client Accepted',
-      'Client Rejected',
-      'On Hold',
     ])
     expect(getTransactionBoardColumns('design-completed').map((col) => col.status)).toEqual([
       'CLIENT_ACCEPTED',
     ])
-    expect(getTransactionBoardColumns('design-rework')).toHaveLength(7)
+    expect(getTransactionBoardColumns('design-rework')).toHaveLength(2)
     expect(getTransactionBoardColumns('design-approval').map((col) => col.status)).toEqual([
       'SALES_REVIEW',
     ])
@@ -58,7 +51,7 @@ describe('transaction views', () => {
       'Design WIP',
       'Design Completed',
       'Design Rework / Error List',
-      'Design Approval List',
+      'Sales Approval List',
       'Projects List',
       'Master Scheduler',
       'Projects Overview',
@@ -70,7 +63,7 @@ describe('transaction views', () => {
       'Design WIP',
       'Design Completed',
       'Design Rework / Error List',
-      'Design Approval List',
+      'Sales Approval List',
       'Design List',
       'Scheduler Dashboard',
       'Chatter',
@@ -81,7 +74,7 @@ describe('transaction views', () => {
       'Design WIP',
       'Design Completed',
       'Design Rework / Error List',
-      'Design Approval List',
+      'Sales Approval List',
       'Projects List',
       'Sales Review',
       'Master Scheduler',
