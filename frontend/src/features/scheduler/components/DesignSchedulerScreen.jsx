@@ -2,7 +2,7 @@
 
 import { useState, useEffect, useRef, useMemo, useCallback } from "react";
 import { toast } from "sonner";
-import { Search, Plus, PauseCircle, AlertTriangle, LayoutDashboard, Lock, Unlock, Calendar, ClipboardList } from "lucide-react";
+import { Search, Plus, PauseCircle, AlertTriangle, LayoutDashboard, Lock, Unlock, Calendar, ClipboardList, CalendarClock } from "lucide-react";
 import { useRouter, useSearchParams } from "next/navigation";
 import { Navbar } from "@/components/Navbar";
 import { VirtualScrollList } from "@/components/VirtualScrollList";
@@ -23,6 +23,8 @@ import {
     updateOvertimeRequestSchedulerAction,
     createSchedulerDayLock,
     deleteSchedulerDayLock,
+    triggerSchedulerCarryover,
+    getCarryoverLastRun,
 } from "../services/scheduler-assignments.api";
 import { freezeDraftWorkSession, peekDraftWorkSession } from "../services/task-timer.api";
 import {
@@ -916,6 +918,10 @@ export function DesignSchedulerScreen({ readOnly = false } = {}) {
     const [isWeekLocked, setIsWeekLocked] = useState(false);
     const isWeekLockedRef = useRef(false);
     const [lockInFlight, setLockInFlight] = useState(false);
+    const [lockDialogOpen, setLockDialogOpen] = useState(false);
+    const [carryoverInFlight, setCarryoverInFlight] = useState(false);
+    const [carryoverDialogOpen, setCarryoverDialogOpen] = useState(false);
+    const [carryoverLastRun, setCarryoverLastRun] = useState(undefined); // null = never ran, string = ISO date, undefined = loading
     const [weekNavBusy, setWeekNavBusy] = useState(false);
     const [, weekVersionRef, setWeekVersion] = useStateRef(0);
     /** Which weekStart (YYYY-MM-DD) weekVersionRef belongs to — versions are per-week, not global. */
@@ -1860,24 +1866,73 @@ export function DesignSchedulerScreen({ readOnly = false } = {}) {
         splitIdCounterRef.current += 1;
         return `split-${splitIdCounterRef.current}`;
     };
-    const handleToggleLock = async () => {
+    const handleOpenCarryoverDialog = async () => {
+        setCarryoverDialogOpen(true);
+        setCarryoverLastRun(undefined);
+        try {
+            const data = await getCarryoverLastRun();
+            setCarryoverLastRun(data.lastRunAt);
+        } catch {
+            setCarryoverLastRun(null);
+        }
+    };
+    const handleConfirmCarryover = async () => {
+        if (carryoverInFlight) return;
+        setCarryoverInFlight(true);
+        try {
+            const result = await triggerSchedulerCarryover();
+            setCarryoverDialogOpen(false);
+            if (result.movedCount > 0) {
+                toast.success(`Carryover complete — ${result.movedCount} assignment${result.movedCount === 1 ? '' : 's'} rolled forward across ${result.processedGroups} designer${result.processedGroups === 1 ? '' : 's'}.${result.totalUnplacedHours > 0 ? ` ${result.totalUnplacedHours}h could not be placed (fully booked).` : ''}`);
+                reloadWeek();
+            } else if (result.processedGroups === 0 && result.skippedGroups === 0) {
+                toast.info('No past-due assignments found — schedule is up to date.');
+            } else {
+                toast.info(`Carryover ran — nothing moved. ${result.skippedGroups} group${result.skippedGroups === 1 ? '' : 's'} skipped (locked or already placed).`);
+            }
+        } catch {
+            toast.error('Carryover failed. Check the console or try again.');
+        } finally {
+            setCarryoverInFlight(false);
+        }
+    };
+
+    const handleToggleLock = () => {
+        if (readOnly || lockInFlight) return;
+        if (isWeekLocked) {
+            // Unlock is reversible — no dialog needed.
+            handleConfirmUnlock();
+        } else {
+            setLockDialogOpen(true);
+        }
+    };
+    const handleConfirmUnlock = async () => {
         if (readOnly || lockInFlight) return;
         const weekStartStr = formatLocalYyyyMmDd(getWeekDays(currentDate)[0]);
         setLockInFlight(true);
         try {
-            if (isWeekLocked) {
-                await unlockSchedulerWeek(weekStartStr);
-                setIsWeekLocked(false);
-                isWeekLockedRef.current = false;
-                toast.success("Week unlocked — changes are now allowed.");
-            } else {
-                await lockSchedulerWeek(weekStartStr);
-                setIsWeekLocked(true);
-                isWeekLockedRef.current = true;
-                toast.success("Week locked — no further changes can be made.");
-            }
+            await unlockSchedulerWeek(weekStartStr);
+            setIsWeekLocked(false);
+            isWeekLockedRef.current = false;
+            toast.success("Week unlocked — changes are now allowed.");
         } catch {
-            toast.error("Failed to change lock status. Please try again.");
+            toast.error("Failed to unlock week. Please try again.");
+        } finally {
+            setLockInFlight(false);
+        }
+    };
+    const handleConfirmLock = async () => {
+        if (readOnly || lockInFlight) return;
+        const weekStartStr = formatLocalYyyyMmDd(getWeekDays(currentDate)[0]);
+        setLockInFlight(true);
+        try {
+            await lockSchedulerWeek(weekStartStr);
+            setIsWeekLocked(true);
+            isWeekLockedRef.current = true;
+            setLockDialogOpen(false);
+            toast.success("Week locked — no further changes can be made.");
+        } catch {
+            toast.error("Failed to lock week. Please try again.");
         } finally {
             setLockInFlight(false);
         }
@@ -2683,65 +2738,116 @@ export function DesignSchedulerScreen({ readOnly = false } = {}) {
         dateRangeText={dateRangeText}
       />
 
-      <div className="relative z-10 flex shrink-0 items-center border-b border-slate-200 bg-white px-4 py-2 text-sm font-medium text-slate-700 sm:px-6">
-        <div className="w-64 shrink-0 border-r border-slate-200 pr-4 font-medium text-slate-800">
+      <div className="relative z-10 flex shrink-0 items-stretch border-b border-slate-200 bg-white text-sm">
+        {/* Left label */}
+        <div className="flex w-64 shrink-0 items-center border-r border-slate-200 px-4 py-2.5 font-semibold text-slate-700">
           Unassigned &amp; On-HOLD
         </div>
-        <div className="flex min-w-0 flex-1 items-center justify-between gap-3 px-3 sm:px-6">
-          <div className="flex min-w-0 flex-1 flex-wrap items-center justify-center gap-x-4 gap-y-2 px-2">
-            <div><span className="mr-1 font-medium text-slate-500">Designers:</span>{isWeekLoading ? <span className="inline-block h-3 w-4 align-middle bg-slate-200 rounded animate-pulse" /> : totalDesignersCount}</div>
-            <div className="flex items-center gap-2"><div className="h-2.5 w-2.5 rounded-sm bg-green-400" /> Scheduled: {isWeekLoading ? <span className="inline-block h-3 w-4 align-middle bg-slate-200 rounded animate-pulse" /> : totalScheduledTaskCount}</div>
-            <div className="flex items-center gap-2"><div className="h-2.5 w-2.5 rounded-sm bg-orange-400" /> Total Hours: {isWeekLoading ? <span className="inline-block h-3 w-8 align-middle bg-slate-200 rounded animate-pulse" /> : formatHoursAsHm(totalScheduledHours)}</div>
-            <div className="flex items-center gap-2 text-red-500"><AlertTriangle size={14}/> Overloaded: {isWeekLoading ? <span className="inline-block h-3 w-4 align-middle bg-slate-200 rounded animate-pulse" /> : overloadedCount}</div>
-            <div className="flex items-center gap-2">
-              <button
-                type="button"
-                disabled={weekNavBusy}
-                onClick={() => {
-                  void changeSchedulerWeek((d) => {
-                    const p = new Date(d);
-                    p.setDate(p.getDate() - 7);
-                    return p;
-                  });
-                }}
-                className={`ui-chip-button px-2${weekNavBusy ? " opacity-50 cursor-not-allowed" : ""}`}
-                title={weekNavBusy ? "Saving before changing week…" : "Previous week"}
-              >‹</button>
-              <span className="whitespace-nowrap rounded-md border border-slate-200 bg-slate-100 px-2.5 py-1 text-xs font-medium text-slate-600">{dateRangeText}</span>
-              <button
-                type="button"
-                disabled={weekNavBusy}
-                onClick={() => {
-                  void changeSchedulerWeek((d) => {
-                    const n = new Date(d);
-                    n.setDate(n.getDate() + 7);
-                    return n;
-                  });
-                }}
-                className={`ui-chip-button px-2${weekNavBusy ? " opacity-50 cursor-not-allowed" : ""}`}
-                title={weekNavBusy ? "Saving before changing week…" : "Next week"}
-              >›</button>
-              <div className="mx-1 h-4 w-px bg-slate-200" />
-              <button type="button" onClick={() => setViewMode("week")} className={`ui-chip-button ${viewMode === "week" ? "ui-chip-button-active" : ""}`}>Week</button>
-              <button type="button" onClick={() => {
+
+        {/* Stats + week nav */}
+        <div className="flex min-w-0 flex-1 items-center gap-0 px-4 py-2.5">
+          {/* Stat tiles */}
+          <div className="flex items-center gap-0">
+            <div className="flex flex-col items-start pr-4">
+              <span className="text-[10px] font-semibold uppercase tracking-wide text-slate-400">Designers</span>
+              <span className="mt-0.5 text-sm font-bold text-slate-800">
+                {isWeekLoading ? <span className="inline-block h-3.5 w-5 animate-pulse rounded bg-slate-200 align-middle" /> : totalDesignersCount}
+              </span>
+            </div>
+            <div className="mx-1 h-8 w-px bg-slate-200" />
+            <div className="flex flex-col items-start px-4">
+              <span className="text-[10px] font-semibold uppercase tracking-wide text-slate-400">Scheduled</span>
+              <div className="mt-0.5 flex items-center gap-1.5">
+                <div className="h-2 w-2 shrink-0 rounded-sm bg-green-400" />
+                <span className="text-sm font-bold text-slate-800">
+                  {isWeekLoading ? <span className="inline-block h-3.5 w-5 animate-pulse rounded bg-slate-200 align-middle" /> : totalScheduledTaskCount}
+                </span>
+              </div>
+            </div>
+            <div className="mx-1 h-8 w-px bg-slate-200" />
+            <div className="flex flex-col items-start px-4">
+              <span className="text-[10px] font-semibold uppercase tracking-wide text-slate-400">Total Hours</span>
+              <div className="mt-0.5 flex items-center gap-1.5">
+                <div className="h-2 w-2 shrink-0 rounded-sm bg-orange-400" />
+                <span className="text-sm font-bold text-slate-800">
+                  {isWeekLoading ? <span className="inline-block h-3.5 w-12 animate-pulse rounded bg-slate-200 align-middle" /> : formatHoursAsHm(totalScheduledHours)}
+                </span>
+              </div>
+            </div>
+            <div className="mx-1 h-8 w-px bg-slate-200" />
+            <div className="flex flex-col items-start px-4">
+              <span className="text-[10px] font-semibold uppercase tracking-wide text-slate-400">Overloaded</span>
+              <div className="mt-0.5 flex items-center gap-1.5">
+                <AlertTriangle size={12} className={overloadedCount > 0 ? "text-red-500" : "text-slate-300"} />
+                <span className={`text-sm font-bold ${overloadedCount > 0 ? "text-red-600" : "text-slate-800"}`}>
+                  {isWeekLoading ? <span className="inline-block h-3.5 w-4 animate-pulse rounded bg-slate-200 align-middle" /> : overloadedCount}
+                </span>
+              </div>
+            </div>
+          </div>
+
+          {/* Separator */}
+          <div className="mx-4 h-8 w-px bg-slate-200" />
+
+          {/* Week navigation */}
+          <div className="flex items-center gap-2">
+            <button
+              type="button"
+              disabled={weekNavBusy}
+              onClick={() => {
+                void changeSchedulerWeek((d) => {
+                  const p = new Date(d);
+                  p.setDate(p.getDate() - 7);
+                  return p;
+                });
+              }}
+              className={`flex h-7 w-7 items-center justify-center rounded-md border border-slate-200 bg-white text-slate-500 transition-colors hover:bg-slate-50 hover:text-slate-700${weekNavBusy ? " cursor-not-allowed opacity-50" : ""}`}
+              title={weekNavBusy ? "Saving before changing week…" : "Previous week"}
+            >‹</button>
+            <span className="whitespace-nowrap rounded-md border border-slate-200 bg-slate-50 px-3 py-1 text-xs font-semibold text-slate-600">{dateRangeText}</span>
+            <button
+              type="button"
+              disabled={weekNavBusy}
+              onClick={() => {
+                void changeSchedulerWeek((d) => {
+                  const n = new Date(d);
+                  n.setDate(n.getDate() + 7);
+                  return n;
+                });
+              }}
+              className={`flex h-7 w-7 items-center justify-center rounded-md border border-slate-200 bg-white text-slate-500 transition-colors hover:bg-slate-50 hover:text-slate-700${weekNavBusy ? " cursor-not-allowed opacity-50" : ""}`}
+              title={weekNavBusy ? "Saving before changing week…" : "Next week"}
+            >›</button>
+            <div className="mx-1 h-4 w-px bg-slate-200" />
+            <button
+              type="button"
+              onClick={() => setViewMode("week")}
+              className={`rounded-md border px-2.5 py-1 text-xs font-semibold transition-colors ${viewMode === "week" ? "border-blue-200 bg-blue-50 text-blue-700" : "border-slate-200 bg-white text-slate-500 hover:bg-slate-50 hover:text-slate-700"}`}
+            >Week</button>
+            <button
+              type="button"
+              onClick={() => {
                 const workingCurrentDay = isWorkingDayIndex(currentDay) ? currentDay : WORKING_DAY_INDICES[0];
                 setViewMode("custom");
                 setCurrentDay(workingCurrentDay);
                 setSelectedDays([workingCurrentDay]);
-              }} className={`ui-chip-button ${viewMode === "custom" ? "ui-chip-button-active" : ""}`}>Custom</button>
-            </div>
+              }}
+              className={`rounded-md border px-2.5 py-1 text-xs font-semibold transition-colors ${viewMode === "custom" ? "border-blue-200 bg-blue-50 text-blue-700" : "border-slate-200 bg-white text-slate-500 hover:bg-slate-50 hover:text-slate-700"}`}
+            >Custom</button>
           </div>
+        </div>
 
-          {!readOnly && (
-          <div className="flex shrink-0 items-center gap-2">
+        {/* Action buttons */}
+        {!readOnly && (
+          <div className="flex shrink-0 items-center gap-2 border-l border-slate-200 px-4 py-2.5">
             <button
               type="button"
               onClick={handleToggleLock}
               disabled={lockInFlight}
-              className={`ui-chip-button flex items-center gap-1.5 whitespace-nowrap font-semibold ${
+              className={`flex items-center gap-1.5 whitespace-nowrap rounded-md px-3 py-1.5 text-sm font-semibold transition-colors ${
                 isWeekLocked
                   ? "border border-amber-300 bg-amber-50 text-amber-700 hover:bg-amber-100"
-                  : "border border-slate-200 bg-white text-slate-600 hover:bg-slate-50"
+                  : "border border-red-200 bg-red-50 text-red-600 hover:bg-red-100"
               } ${lockInFlight ? "opacity-50 cursor-not-allowed" : ""}`}
               title={isWeekLocked ? "Unlock this week" : "Lock this week"}
             >
@@ -2754,7 +2860,7 @@ export function DesignSchedulerScreen({ readOnly = false } = {}) {
                 const role = getSession()?.role;
                 router.push(leavePlannerPath(role));
               }}
-              className="ui-chip-button border border-[#f8d2d2] bg-[#fce8e6] font-semibold text-[#af5b5b] hover:bg-[#fbd8d8] whitespace-nowrap"
+              className="flex items-center gap-1.5 whitespace-nowrap rounded-md border border-[#f8d2d2] bg-[#fce8e6] px-3 py-1.5 text-sm font-semibold text-[#af5b5b] transition-colors hover:bg-[#fbd8d8]"
             >
               Leave Request
             </button>
@@ -2764,14 +2870,121 @@ export function DesignSchedulerScreen({ readOnly = false } = {}) {
                 const role = getSession()?.role;
                 router.push(requestsPath(role));
               }}
-              className="ui-chip-button border border-[#d2d5f8] bg-[#e6e8fc] font-semibold text-[#5d5baf] hover:bg-[#d8dcfb] whitespace-nowrap"
+              className="flex items-center gap-1.5 whitespace-nowrap rounded-md border border-[#d2d5f8] bg-[#e6e8fc] px-3 py-1.5 text-sm font-semibold text-[#5d5baf] transition-colors hover:bg-[#d8dcfb]"
             >
               Overtime Request
             </button>
+            <button
+              type="button"
+              onClick={handleOpenCarryoverDialog}
+              className="flex items-center gap-1.5 whitespace-nowrap rounded-md border border-amber-300 bg-amber-50 px-3 py-1.5 text-sm font-semibold text-amber-700 transition-colors hover:bg-amber-100"
+              title="Manually run the nightly carryover — only if the cron missed today"
+            >
+              <CalendarClock size={13} />
+              Run Carryover
+            </button>
           </div>
-          )}
-        </div>
+        )}
       </div>
+
+      {carryoverDialogOpen && (
+        <div className="ui-modal-overlay" onClick={() => { if (!carryoverInFlight) setCarryoverDialogOpen(false); }}>
+          <div className="ui-modal-panel max-w-md" onClick={(e) => e.stopPropagation()}>
+            <div className="flex items-start gap-4 mb-5">
+              <div className="flex h-10 w-10 shrink-0 items-center justify-center rounded-full bg-amber-100">
+                <AlertTriangle size={20} className="text-amber-600" />
+              </div>
+              <div>
+                <h3 className="text-base font-semibold text-slate-900">Run Carryover Manually?</h3>
+                <p className="mt-1.5 text-sm text-slate-500 leading-relaxed">
+                  The nightly cron runs automatically at <span className="font-semibold text-slate-700">06:20 GST</span>. Only use this if you are sure the cron missed today — running it again when the cron already ran is safe but unnecessary.
+                </p>
+              </div>
+            </div>
+            <div className="rounded-lg bg-slate-50 border border-slate-200 px-4 py-3 mb-5">
+              <p className="text-xs font-semibold uppercase tracking-wide text-slate-400 mb-1">Last carryover ran</p>
+              <p className="text-sm font-medium text-slate-700">
+                {carryoverLastRun === undefined
+                  ? <span className="text-slate-400 font-normal">Checking…</span>
+                  : carryoverLastRun === null
+                    ? <span className="text-slate-400 font-normal">Never — no record found</span>
+                    : new Date(carryoverLastRun).toLocaleString('en-AE', { timeZone: 'Asia/Dubai', dateStyle: 'medium', timeStyle: 'short' }) + ' GST'
+                }
+              </p>
+            </div>
+            <div className="flex gap-3 justify-end">
+              <button
+                type="button"
+                onClick={() => setCarryoverDialogOpen(false)}
+                disabled={carryoverInFlight}
+                className="ui-btn-cancel"
+              >
+                Cancel
+              </button>
+              <button
+                type="button"
+                onClick={handleConfirmCarryover}
+                disabled={carryoverInFlight}
+                className="ui-btn-primary"
+              >
+                <CalendarClock size={14} className="mr-1.5" />
+                {carryoverInFlight ? "Running…" : "Yes, Run Now"}
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
+      {lockDialogOpen && (
+        <div className="ui-modal-overlay" onClick={() => { if (!lockInFlight) setLockDialogOpen(false); }}>
+          <div className="ui-modal-panel max-w-md" onClick={(e) => e.stopPropagation()}>
+            <div className="flex items-start gap-4 mb-5">
+              <div className="flex h-10 w-10 shrink-0 items-center justify-center rounded-full bg-amber-100">
+                <Lock size={20} className="text-amber-600" />
+              </div>
+              <div>
+                <h3 className="text-base font-semibold text-slate-900">Lock This Week?</h3>
+                <p className="mt-1.5 text-sm text-slate-500 leading-relaxed">
+                  Locking <span className="font-semibold text-slate-700">{dateRangeText}</span> will prevent any further scheduling changes to this week. HODs can still drag and reassign tasks, but designers will not be able to drag, add, or remove tasks.
+                </p>
+              </div>
+            </div>
+            <div className="rounded-lg bg-slate-50 border border-slate-200 px-4 py-3 mb-5 space-y-1.5">
+              <p className="text-xs text-red-600 flex items-start gap-2">
+                <span className="mt-0.5 shrink-0">•</span>
+                Tasks cannot be moved, added, or removed while the week is locked.
+              </p>
+              <p className="text-xs text-slate-600 flex items-start gap-2">
+                <span className="mt-0.5 shrink-0 text-slate-400">•</span>
+                The nightly cron job (06:20 GST daily) will skip this week — past-due work lands on the next available week instead.
+              </p>
+              <p className="text-xs text-slate-600 flex items-start gap-2">
+                <span className="mt-0.5 shrink-0 text-slate-400">•</span>
+                You can unlock the week at any time to make changes.
+              </p>
+            </div>
+            <div className="flex gap-3 justify-end">
+              <button
+                type="button"
+                onClick={() => setLockDialogOpen(false)}
+                disabled={lockInFlight}
+                className="ui-btn-cancel"
+              >
+                Cancel
+              </button>
+              <button
+                type="button"
+                onClick={handleConfirmLock}
+                disabled={lockInFlight}
+                className="ui-btn-primary"
+              >
+                <Lock size={14} className="mr-1.5" />
+                {lockInFlight ? "Locking…" : "Yes, Lock Week"}
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
+
       {viewMode === "custom" && (<div className="flex shrink-0 items-center gap-2 border-b border-slate-200 bg-white px-6 py-2 text-xs">
           <div className="w-64 border-r border-slate-200 pr-4 font-medium text-slate-500">Visible Days</div>
           <div className="flex-1 flex items-center gap-1 px-6">

@@ -280,3 +280,19 @@ export function getDesignerStatsBar(designerId: string, weekStart: string) {
     `/scheduler-assignments/designer-stats?designerId=${d}&weekStart=${q}`,
   );
 }
+
+export type CarryoverResult = {
+  processedGroups: number;
+  skippedGroups: number;
+  movedCount: number;
+  totalUnplacedHours: number;
+  affectedWeeks: string[];
+};
+
+export function triggerSchedulerCarryover() {
+  return apiClient.post<CarryoverResult>('/scheduler-carryover/trigger', {});
+}
+
+export function getCarryoverLastRun() {
+  return apiClient.get<{ lastRunAt: string | null }>('/scheduler-carryover/last-run');
+}

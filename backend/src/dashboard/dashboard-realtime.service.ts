@@ -15,6 +15,7 @@ export type DashboardRealtimeEvent =
   | 'overtime_leave_conflict_cancelled'
   | 'scheduler_week_saved'
   | 'scheduler_leave_rescheduled'
+  | 'scheduler_carryover'
   | 'scheduler_week_locked'
   | 'scheduler_week_unlocked'
   | 'scheduler_day_locked'
