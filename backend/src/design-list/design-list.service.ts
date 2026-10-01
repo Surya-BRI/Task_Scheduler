@@ -73,7 +73,7 @@ const DEFAULT_UNPAGINATED_LIMIT = 500;
 // are left/joined and null until a project is created against the opportunity.
 const DESIGN_LIST_FROM_JOINS = Prisma.sql`
   FROM ErpMasterOpportunity mo
-  LEFT JOIN ErpMasterProject mp ON mp.projectid = mo.projectId
+  FULL OUTER JOIN ErpMasterProject mp ON mp.projectid = mo.projectId
   LEFT JOIN ErpMastercustomer mc ON mc.custId = COALESCE(mp.clientIId, mo.customerId)
   LEFT JOIN ErpMasterBusinessUnit mb ON mb.businessUnitId = COALESCE(mp.businessUnitId, mo.businessUnitId)
   LEFT JOIN ErpMasterTaxnomy mt ON mt.taxnomyId = COALESCE(mp.statusId, mo.projectStatusId)
