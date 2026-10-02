@@ -157,6 +157,13 @@ function calculateLeaveDurationDays(leave) {
   return days;
 }
 
+function weekdayLabel(dateStr) {
+  if (!dateStr) return "";
+  const date = new Date(`${dateStr}T00:00:00`);
+  if (Number.isNaN(date.getTime())) return "";
+  return date.toLocaleDateString("en-US", { weekday: "long" });
+}
+
 function leaveDurationLabel(leave) {
   if (leave?.leaveDurationLabel) return leave.leaveDurationLabel;
   const days = calculateLeaveDurationDays(leave);
@@ -1418,11 +1425,14 @@ export default function LeavePlannerClient() {
                     className="w-full rounded-xl border border-slate-200 px-4 py-2.5 text-sm text-slate-800 focus:outline-none focus:ring-2 focus:ring-[#5d5baf]/20 focus:border-[#5d5baf] shadow-sm bg-slate-50 focus:bg-white transition-all cursor-pointer"
                     required
                   />
+                  {formData.fromDate ? (
+                    <p className="mt-1 text-xs text-slate-500">{weekdayLabel(formData.fromDate)}</p>
+                  ) : null}
                 </div>
                 <div>
                   <label className="block text-sm font-medium text-slate-700 mb-2">To Date</label>
-                  <input 
-                    type="date" 
+                  <input
+                    type="date"
                     value={formData.toDate}
                     min={formData.fromDate || todayStr}
                     disabled={normalizeLeaveType(formData.leaveType) === "Half Day"}
@@ -1430,6 +1440,9 @@ export default function LeavePlannerClient() {
                     className="w-full rounded-xl border border-slate-200 px-4 py-2.5 text-sm text-slate-800 focus:outline-none focus:ring-2 focus:ring-[#5d5baf]/20 focus:border-[#5d5baf] shadow-sm bg-slate-50 focus:bg-white transition-all cursor-pointer disabled:cursor-not-allowed disabled:bg-slate-100 disabled:text-slate-500"
                     required
                   />
+                  {formData.toDate ? (
+                    <p className="mt-1 text-xs text-slate-500">{weekdayLabel(formData.toDate)}</p>
+                  ) : null}
                 </div>
               </div>
               <div className="rounded-xl border border-slate-100 bg-slate-50 px-4 py-3 text-sm text-slate-700">
