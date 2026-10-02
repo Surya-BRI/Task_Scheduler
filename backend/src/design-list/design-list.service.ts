@@ -293,7 +293,7 @@ export class DesignListService {
     const pagePromise = this.prisma.live.$queryRaw<DesignListRow[]>(Prisma.sql`
       ${DESIGN_LIST_SELECT}
       ${DESIGN_LIST_FROM_JOINS}
-      WHERE mo.isActive = 1
+      WHERE (mo.isActive = 1 OR mo.opportunityId IS NULL)
       ${whereClause}
       ORDER BY mo.createdOn DESC
       OFFSET ${offset} ROWS
