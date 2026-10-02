@@ -83,5 +83,11 @@ export default () => {
       /** Months to retain SchedulerAssignmentHistory rows; 0 disables the daily purge cron. */
       historyRetentionMonths: Number(process.env.SCHEDULER_HISTORY_RETENTION_MONTHS ?? 18),
     },
+    graph: {
+      tenantId: process.env.GRAPH_TENANT_ID ?? '',
+      clientId: process.env.GRAPH_CLIENT_ID ?? '',
+      clientSecret: process.env.GRAPH_CLIENT_SECRET ?? '',
+      senderUserId: process.env.GRAPH_SENDER_USER_ID ?? '',
+    },
   };
 };

@@ -19,6 +19,7 @@ import {
 } from '../requests/leave-request.validation';
 import { Decimal } from '@prisma/client/runtime/library';
 import { DashboardRealtimeService } from '../dashboard/dashboard-realtime.service';
+import { GraphMailService } from '../graph-mail/graph-mail.service';
 
 export type OvertimeTaskOption = {
   id: string;
@@ -42,6 +43,7 @@ export class OvertimeRequestsService {
     private readonly taskFilesService: TaskFilesService,
     private readonly activityLogger: ActivityLoggerService,
     @Optional() private readonly dashboardRealtime?: DashboardRealtimeService,
+    @Optional() private readonly graphMail?: GraphMailService,
   ) {}
 
   /**
@@ -379,6 +381,8 @@ export class OvertimeRequestsService {
     title: true,
     taskNo: true,
     opNo: true,
+    designType: true,
+    revisionCode: true,
     project: { select: { name: true, projectNo: true } },
   } as const;
 
@@ -1366,11 +1370,26 @@ export class OvertimeRequestsService {
     return hods[0]?.userName?.trim() || 'HOD';
   }
 
+  /** `"<taskNo> (<designType>, <revisionCode>)"` — omits either bracket part when unset. */
+  private taskNoWithDetails(taskNo: string, designType?: string | null, revisionCode?: string | null): string {
+    const details = [designType?.trim(), revisionCode?.trim()].filter(Boolean);
+    return details.length > 0 ? `${taskNo} (${details.join(', ')})` : taskNo;
+  }
+
   private async notifyApprovers(request: any) {
     const hods = await this.findHodUsers();
 
     const taskLabel = request.task?.title?.trim() || request.task?.taskNo?.trim() || 'task';
     const designerId = request.designerId != null ? String(request.designerId) : undefined;
+    const designerName = request.designer?.userName ?? 'A designer';
+    const emailMessage = `${designerName} has submitted an overtime request for ${request.totalHours} hours on ${request.date.toISOString().split('T')[0]} (${taskLabel}).`;
+    const emailBody = [
+      `Designer: ${designerName}`,
+      `Task: ${this.taskNoWithDetails(request.task?.taskNo ?? taskLabel, request.task?.designType, request.task?.revisionCode)}`,
+      ...(request.task?.opNo?.trim() ? [`OP No: ${request.task.opNo.trim()}`] : []),
+      `Hours: ${request.totalHours}`,
+      `Date: ${request.date.toISOString().split('T')[0]}`,
+    ].join('\n');
     for (const hod of hods) {
       try {
         await this.prisma.notification.create({
@@ -1378,7 +1397,7 @@ export class OvertimeRequestsService {
             id: randomUUID(),
             userId: hod.id,
             title: 'New Overtime Request Submitted',
-            message: `${request.designer?.userName ?? 'A designer'} has submitted an overtime request for ${request.totalHours} hours on ${request.date.toISOString().split('T')[0]} (${taskLabel}).`,
+            message: emailMessage,
             linkUrl: this.overtimeLink(request.id, designerId, true),
           },
         });
@@ -1387,20 +1406,40 @@ export class OvertimeRequestsService {
         this.logger.warn(`Failed to notify HOD ${hod.id}: ${err instanceof Error ? err.message : err}`);
       }
     }
+
+    this.graphMail
+      ?.notify(
+        hods.map((hod) => hod.id),
+        `Overtime Request — ${designerName}`,
+        emailBody,
+      )
+      .catch((err) => this.logger.warn(`Graph email for overtime request failed: ${err}`));
   }
 
   private async notifyDesignerOfReview(request: any, action: string, comments?: string) {
     const actionLabel = action.replace(/_/g, ' ');
+    const emailMessage = `Your overtime request for ${request.date.toISOString().split('T')[0]} has been ${actionLabel.toLowerCase()}.${
+      comments ? ` Comment: "${comments}"` : ''
+    }`;
+    const taskLabelReview = request.task?.title?.trim() || request.task?.taskNo?.trim() || 'task';
+    const emailBodyReview = [
+      `Task: ${this.taskNoWithDetails(request.task?.taskNo ?? taskLabelReview, request.task?.designType, request.task?.revisionCode)}`,
+      ...(request.task?.opNo?.trim() ? [`OP No: ${request.task.opNo.trim()}`] : []),
+      `Date: ${request.date.toISOString().split('T')[0]}`,
+      `Status: ${actionLabel}`,
+      ...(comments ? [`Comment: "${comments}"`] : []),
+    ].join('\n');
     await this.prisma.notification.create({
       data: {
         id: randomUUID(),
         userId: request.designerId,
         title: `Overtime Request: ${actionLabel}`,
-        message: `Your overtime request for ${request.date.toISOString().split('T')[0]} has been ${actionLabel.toLowerCase()}.${
-          comments ? ` Comment: "${comments}"` : ''
-        }`,
+        message: emailMessage,
         linkUrl: this.overtimeLink(request.id, request.designerId != null ? String(request.designerId) : undefined),
       },
     });
+    this.graphMail
+      ?.notify([request.designerId], `Overtime Request: ${actionLabel}`, emailBodyReview)
+      .catch((err) => this.logger.warn(`Graph email for overtime review failed: ${err}`));
   }
 }
