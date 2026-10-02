@@ -235,7 +235,7 @@ export class DesignListService {
   private buildRetailListWhereFragments(search: string): Prisma.Sql[] {
     return [
       ...this.buildSearchWhereFragments(search),
-      Prisma.sql`LOWER(LTRIM(RTRIM(COALESCE(mb.businessUnitCode, '')))) IN ('retail', 'rtl', 'r', 'prosigns-retail')`,
+      Prisma.sql`LOWER(LTRIM(RTRIM(COALESCE(mb.businessUnitCode, '')))) IN ('retail', 'rtl', 'r', 'prosigns-retail','Maintenance')`,
     ];
   }
 
