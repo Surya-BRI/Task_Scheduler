@@ -51,9 +51,10 @@ describe('DesignListService SQL security', () => {
     await service.findRetailListPage(1, 50, '');
 
     const pageQuery = queryRaw.mock.calls[0][0];
-    const { strings } = extractPrismaSqlParts(pageQuery);
-    expect(strings.join('')).toContain(
-      "IN ('retail', 'rtl', 'r', 'prosigns-retail','maintenance')",
+    const { strings, values } = extractPrismaSqlParts(pageQuery);
+    expect(strings.join('')).toContain('IN (');
+    expect(values).toEqual(
+      expect.arrayContaining(['retail', 'rtl', 'r', 'prosigns-retail', 'maintenance']),
     );
   });
 

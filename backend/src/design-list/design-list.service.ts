@@ -8,6 +8,7 @@ import {
 } from '../common/utils/sql-param.util';
 import { getCircuitBreaker } from '../common/utils/circuit-breaker.util';
 import { withRetry } from '../common/utils/retry.util';
+import { RETAIL_BUSINESS_UNIT_CODES, isRetailBusinessUnitCode } from '../common/utils/business-unit.util';
 
 type SignTypeRawRow = {
   signTypeId: number | bigint;
@@ -63,7 +64,6 @@ function toDdMmYyyy(value: Date): string {
   return `${day}/${month}/${year}`;
 }
 
-const RETAIL_UNIT_CODES = new Set<string>(['retail', 'rtl', 'r', 'prosigns-retail']);
 const PROJECT_UNIT_CODES = new Set<string>(['project', 'normal', 'prosigns-projects']);
 const DEFAULT_UNPAGINATED_LIMIT = 500;
 
@@ -134,7 +134,7 @@ export class DesignListService {
 
   private resolveDesignType(businessUnitCode: string | null): 'Retail' | 'Project' {
     const normalized = (businessUnitCode ?? '').trim().toLowerCase();
-    if (RETAIL_UNIT_CODES.has(normalized)) return 'Retail';
+    if (isRetailBusinessUnitCode(normalized)) return 'Retail';
     if (PROJECT_UNIT_CODES.has(normalized)) return 'Project';
 
     if (normalized.length > 0 && normalized !== 'project') {
@@ -232,11 +232,28 @@ export class DesignListService {
     )`];
   }
 
-  private buildRetailListWhereFragments(search: string): Prisma.Sql[] {
-    return [
+  /** `IN (...)` fragment over every code the Retail bucket folds in — see RETAIL_BUSINESS_UNIT_CODES. */
+  private retailBusinessUnitCodesSql(): Prisma.Sql {
+    return Prisma.join([...RETAIL_BUSINESS_UNIT_CODES], ', ');
+  }
+
+  private buildRetailListWhereFragments(search: string, category?: string): Prisma.Sql[] {
+    const fragments = [
       ...this.buildSearchWhereFragments(search),
-      Prisma.sql`LOWER(LTRIM(RTRIM(COALESCE(mb.businessUnitCode, '')))) IN ('retail', 'rtl', 'r', 'prosigns-retail','maintenance')`,
+      Prisma.sql`LOWER(LTRIM(RTRIM(COALESCE(mb.businessUnitCode, '')))) IN (${this.retailBusinessUnitCodesSql()})`,
     ];
+    const normalizedCategory = (category ?? '').trim().toLowerCase();
+    if (normalizedCategory === 'maintenance') {
+      fragments.push(
+        Prisma.sql`LOWER(LTRIM(RTRIM(COALESCE(mb.businessUnitCode, '')))) = 'maintenance'`,
+      );
+    } else if (normalizedCategory === 'retail') {
+      // Within the Retail bucket but NOT the Maintenance subset — "true" retail only.
+      fragments.push(
+        Prisma.sql`LOWER(LTRIM(RTRIM(COALESCE(mb.businessUnitCode, '')))) <> 'maintenance'`,
+      );
+    }
+    return fragments;
   }
 
   private buildDesignListWhereFragments(filters: DesignListPageFilters): Prisma.Sql[] {
@@ -247,11 +264,11 @@ export class DesignListService {
     const type = filters.type.trim().toLowerCase();
     if (type === 'retail') {
       fragments.push(
-        Prisma.sql`LOWER(LTRIM(RTRIM(COALESCE(mb.businessUnitCode, '')))) IN ('retail', 'rtl', 'r')`,
+        Prisma.sql`LOWER(LTRIM(RTRIM(COALESCE(mb.businessUnitCode, '')))) IN (${this.retailBusinessUnitCodesSql()})`,
       );
     } else if (type === 'project') {
       fragments.push(
-        Prisma.sql`LOWER(LTRIM(RTRIM(COALESCE(mb.businessUnitCode, '')))) NOT IN ('retail', 'rtl', 'r')`,
+        Prisma.sql`LOWER(LTRIM(RTRIM(COALESCE(mb.businessUnitCode, '')))) NOT IN (${this.retailBusinessUnitCodesSql()})`,
       );
     }
 
@@ -376,11 +393,12 @@ export class DesignListService {
     limit: number,
     q: string,
     includeTotal = true,
+    category?: string,
   ): Promise<ProjectListPageResult> {
     const safePage = Math.max(1, page);
     const safeLimit = Math.min(200, Math.max(1, limit));
     const offset = (safePage - 1) * safeLimit;
-    const whereFragments = this.buildRetailListWhereFragments(q);
+    const whereFragments = this.buildRetailListWhereFragments(q, category);
 
     const rows = await this.queryLive('findRetailListPage', () =>
       this.queryDesignListPage(whereFragments, offset, safeLimit, {

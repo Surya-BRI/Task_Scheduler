@@ -1,5 +1,6 @@
 import { useEffect, useId, useRef, useState } from 'react'
-import { Pencil, X } from 'lucide-react'
+import { createPortal } from 'react-dom'
+import { Pencil, X, ChevronDown } from 'lucide-react'
 import DatePicker from 'react-datepicker'
 import { apiClient } from '@/lib/api-client'
 import { assertHoursWithinDeadline } from '@/lib/task-deadline-hours'
@@ -52,6 +53,105 @@ function deriveFileNameFromUrl(value) {
   } catch {
     return 'linked-file'
   }
+}
+
+// Native <select> popups are rendered by the browser, so they ignore CSS and can flip
+// upward / show every option with no scrollbar when there isn't room below. This dropdown
+// is a portal-rendered list we fully control: always opens downward, height capped to
+// whatever space is actually available, scrollable past that.
+function ReviewerDropdown({ id, value, onChange, onBlur, options, loading, errorMessage, disabled }) {
+  const [menuOpen, setMenuOpen] = useState(false)
+  const [menuStyle, setMenuStyle] = useState(null)
+  const triggerRef = useRef(null)
+  const menuRef = useRef(null)
+
+  useEffect(() => {
+    if (!menuOpen) return undefined
+    function updatePosition() {
+      const rect = triggerRef.current?.getBoundingClientRect()
+      if (!rect) return
+      const spaceBelow = window.innerHeight - rect.bottom - 12
+      setMenuStyle({
+        position: 'fixed',
+        top: rect.bottom + 4,
+        left: rect.left,
+        width: rect.width,
+        maxHeight: Math.max(160, Math.min(240, spaceBelow)),
+      })
+    }
+    updatePosition()
+    window.addEventListener('resize', updatePosition)
+    window.addEventListener('scroll', updatePosition, true)
+    return () => {
+      window.removeEventListener('resize', updatePosition)
+      window.removeEventListener('scroll', updatePosition, true)
+    }
+  }, [menuOpen])
+
+  useEffect(() => {
+    if (!menuOpen) return undefined
+    function closeMenu() {
+      setMenuOpen(false)
+      onBlur?.()
+    }
+    function onDocMouseDown(e) {
+      if (triggerRef.current?.contains(e.target)) return
+      if (menuRef.current?.contains(e.target)) return
+      closeMenu()
+    }
+    function onKeyDown(e) {
+      if (e.key === 'Escape') closeMenu()
+    }
+    document.addEventListener('mousedown', onDocMouseDown)
+    document.addEventListener('keydown', onKeyDown)
+    return () => {
+      document.removeEventListener('mousedown', onDocMouseDown)
+      document.removeEventListener('keydown', onKeyDown)
+    }
+  }, [menuOpen, onBlur])
+
+  const label = loading ? 'Loading Reviewers…' : errorMessage ? 'Failed to load Reviewers' : value || 'Select'
+
+  return (
+    <>
+      <button
+        type="button"
+        id={id}
+        ref={triggerRef}
+        disabled={disabled}
+        onClick={() => setMenuOpen((v) => !v)}
+        className={`mt-1.5 flex w-full items-center justify-between rounded-md border border-slate-300 bg-white px-3 py-2 text-left text-sm outline-none transition-colors focus:border-blue-500 focus:ring-2 focus:ring-blue-500/20 disabled:cursor-not-allowed disabled:bg-slate-50 ${value ? 'text-slate-900' : 'text-slate-400'}`}
+      >
+        <span className="truncate">{label}</span>
+        <ChevronDown className="h-4 w-4 shrink-0 text-slate-400" aria-hidden />
+      </button>
+      {menuOpen && !disabled && typeof document !== 'undefined'
+        ? createPortal(
+            <div
+              ref={menuRef}
+              style={menuStyle ?? undefined}
+              className="z-50 overflow-y-auto rounded-md border border-slate-200 bg-white py-1 text-sm shadow-lg"
+            >
+              {options.map((name) => (
+                <button
+                  type="button"
+                  key={name}
+                  onClick={() => {
+                    onChange(name)
+                    setMenuOpen(false)
+                    onBlur?.()
+                  }}
+                  className={`block w-full truncate px-3 py-1.5 text-left hover:bg-slate-50 ${name === value ? 'bg-blue-50 font-medium text-blue-700' : 'text-slate-800'}`}
+                >
+                  {name}
+                </button>
+              ))}
+            </div>,
+            document.body,
+          )
+        : null}
+    </>
+  )
 }
 
 export function CreateTaskModal({ open, onClose, onCreated, submissionDate, record }) {
@@ -332,9 +432,9 @@ export function CreateTaskModal({ open, onClose, onCreated, submissionDate, reco
         role="dialog"
         aria-modal="true"
         aria-labelledby={titleId}
-        className="ui-surface relative z-10 w-full max-w-lg overflow-hidden shadow-xl"
+        className="ui-surface relative z-10 w-full max-w-2xl overflow-hidden shadow-xl"
       >
-        <div className="flex items-start justify-between gap-3 bg-slate-800 px-5 py-4 text-white">
+        <div className="flex items-start justify-between gap-3 bg-slate-800 px-5 py-3 text-white">
           <div className="flex items-start gap-3">
             <span className="mt-0.5 grid h-9 w-9 shrink-0 place-items-center rounded-md bg-white/15">
               <Pencil className="h-4 w-4" aria-hidden />
@@ -356,10 +456,10 @@ export function CreateTaskModal({ open, onClose, onCreated, submissionDate, reco
           </button>
         </div>
 
-        <form className="space-y-4 p-5" onSubmit={handleSubmit}>
+        <form className="space-y-3 p-4" onSubmit={handleSubmit}>
           <fieldset>
             <legend className="text-xs font-semibold text-slate-600">Select design type <span className="text-red-600">*</span></legend>
-            <div className="mt-2 grid gap-2 sm:grid-cols-2">
+            <div className="mt-2 grid gap-2 sm:grid-cols-3">
               {DESIGN_OPTIONS.map((opt) => (
                 <label key={opt.value} className="flex items-center gap-2 text-sm text-slate-800">
                   <input
@@ -489,7 +589,7 @@ export function CreateTaskModal({ open, onClose, onCreated, submissionDate, reco
             ) : null}
           </div>
 
-          <div className="grid grid-cols-2 gap-3">
+          <div className="grid grid-cols-3 gap-3">
             <div>
               <label className="text-xs font-semibold text-slate-600" htmlFor="create-revision-code">
                 Revision <span className="text-red-600">*</span>
@@ -507,47 +607,6 @@ export function CreateTaskModal({ open, onClose, onCreated, submissionDate, reco
                 <p className="mt-1 text-xs text-red-600">{fieldErrors.revisionCode || 'Must be R0, R1, R2…'}</p>
               ) : null}
             </div>
-            <div>
-              <label className="text-xs font-semibold text-slate-600" htmlFor="create-hod">
-                Select Reviewer <span className="text-red-600">*</span>
-              </label>
-              <select
-                id="create-hod"
-                value={hod}
-                onChange={(e) => {
-                  setHod(e.target.value)
-                  setFieldErrors((prev) => ({ ...prev, hod: '' }))
-                }}
-                onBlur={() => setTouched((prev) => ({ ...prev, hod: true }))}
-                disabled={hodUsersLoading || Boolean(hodUsersError)}
-                className="mt-1.5 w-full rounded-md border border-slate-300 bg-white px-3 py-2 text-sm text-slate-900 outline-none transition-colors focus:border-blue-500 focus:ring-2 focus:ring-blue-500/20 disabled:cursor-not-allowed disabled:bg-slate-50"
-              >
-                <option value="">
-                  {hodUsersLoading ? 'Loading Reviewers…' : hodUsersError ? 'Failed to load Reviewers' : 'Select'}
-                </option>
-                {hodUsers.map((user) => {
-                  const name = String(user?.userName ?? '').trim()
-                  if (!name) return null
-                  return (
-                    <option key={user.id ?? name} value={name}>
-                      {name}
-                    </option>
-                  )
-                })}
-              </select>
-              {hodUsersError ? (
-                <p className="mt-1 text-xs text-red-600">{hodUsersError}</p>
-              ) : null}
-              {!hodUsersLoading && !hodUsersError && hodUsers.length === 0 ? (
-                <p className="mt-1 text-xs text-amber-700">No Reviewer users found. Seed HOD accounts first.</p>
-              ) : null}
-              {((submitAttempted || touched.hod) && !hod.trim()) || fieldErrors.hod ? (
-                <p className="mt-1 text-xs text-red-600">{fieldErrors.hod || 'Reviewer is required'}</p>
-              ) : null}
-            </div>
-          </div>
-
-          <div className="grid gap-3 sm:grid-cols-2">
             <div>
               <label className="text-xs font-semibold text-slate-600" htmlFor="create-priority">
                 Priority Level
@@ -587,31 +646,60 @@ export function CreateTaskModal({ open, onClose, onCreated, submissionDate, reco
             </div>
           </div>
 
-          <div>
-            <label className="mb-2 block text-xs font-semibold text-slate-600" htmlFor="create-deadline">
-              Deadline for Task Submission <span className="text-red-600">*</span>
-            </label>
-            <DatePicker
-              id="create-deadline"
-              selected={localDeadline}
-              onChange={(date) => {
-                setLocalDeadline(date)
-                setFieldErrors((prev) => ({ ...prev, deadline: '' }))
-              }}
-              minDate={startOfToday}
-              dateFormat="dd/MM/yyyy"
-              showMonthDropdown
-              showYearDropdown
-              dropdownMode="select"
-              placeholderText="dd/mm/yyyy"
-              className="mt-1.5 w-full rounded-md border border-slate-300 bg-white px-3 py-2 text-sm text-slate-900 outline-none transition-colors focus:border-blue-500 focus:ring-2 focus:ring-blue-500/20"
-            />
-            <p className="mt-1 text-xs text-slate-500">
-              {daysFromToday == null ? 'Pick a submission date' : `${daysFromToday} day(s) from today`}
-            </p>
-            {(submitAttempted && !validSubmissionDate) || fieldErrors.deadline ? (
-              <p className="mt-1 text-xs text-red-600">{fieldErrors.deadline || 'Deadline for Task Submission is required'}</p>
-            ) : null}
+          <div className="grid grid-cols-2 gap-3">
+            <div>
+              <label className="mb-2 block text-xs font-semibold text-slate-600" htmlFor="create-deadline">
+                Deadline for Task Submission <span className="text-red-600">*</span>
+              </label>
+              <DatePicker
+                id="create-deadline"
+                selected={localDeadline}
+                onChange={(date) => {
+                  setLocalDeadline(date)
+                  setFieldErrors((prev) => ({ ...prev, deadline: '' }))
+                }}
+                minDate={startOfToday}
+                dateFormat="dd/MM/yyyy"
+                showMonthDropdown
+                showYearDropdown
+                dropdownMode="select"
+                placeholderText="dd/mm/yyyy"
+                className="mt-1.5 w-full rounded-md border border-slate-300 bg-white px-3 py-2 text-sm text-slate-900 outline-none transition-colors focus:border-blue-500 focus:ring-2 focus:ring-blue-500/20"
+              />
+              <p className="mt-1 text-xs text-slate-500">
+                {daysFromToday == null ? 'Pick a submission date' : `${daysFromToday} day(s) from today`}
+              </p>
+              {(submitAttempted && !validSubmissionDate) || fieldErrors.deadline ? (
+                <p className="mt-1 text-xs text-red-600">{fieldErrors.deadline || 'Deadline for Task Submission is required'}</p>
+              ) : null}
+            </div>
+            <div>
+              <label className="text-xs font-semibold text-slate-600" htmlFor="create-hod">
+                Select Reviewer <span className="text-red-600">*</span>
+              </label>
+              <ReviewerDropdown
+                id="create-hod"
+                value={hod}
+                onChange={(name) => {
+                  setHod(name)
+                  setFieldErrors((prev) => ({ ...prev, hod: '' }))
+                }}
+                onBlur={() => setTouched((prev) => ({ ...prev, hod: true }))}
+                options={hodUsers.map((user) => String(user?.userName ?? '').trim()).filter(Boolean)}
+                loading={hodUsersLoading}
+                errorMessage={hodUsersError}
+                disabled={hodUsersLoading || Boolean(hodUsersError)}
+              />
+              {hodUsersError ? (
+                <p className="mt-1 text-xs text-red-600">{hodUsersError}</p>
+              ) : null}
+              {!hodUsersLoading && !hodUsersError && hodUsers.length === 0 ? (
+                <p className="mt-1 text-xs text-amber-700">No Reviewer users found. Seed HOD accounts first.</p>
+              ) : null}
+              {((submitAttempted || touched.hod) && !hod.trim()) || fieldErrors.hod ? (
+                <p className="mt-1 text-xs text-red-600">{fieldErrors.hod || 'Reviewer is required'}</p>
+              ) : null}
+            </div>
           </div>
 
           <div>
@@ -622,7 +710,7 @@ export function CreateTaskModal({ open, onClose, onCreated, submissionDate, reco
               id="create-comment"
               value={comment}
               onChange={(e) => setComment(e.target.value)}
-              rows={4}
+              rows={3}
               className="mt-1.5 w-full resize-y rounded-md border border-slate-300 bg-white px-3 py-2 text-sm text-slate-900 outline-none transition-colors focus:border-blue-500 focus:ring-2 focus:ring-blue-500/20"
             />
           </div>
