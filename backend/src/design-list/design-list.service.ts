@@ -311,7 +311,7 @@ export class DesignListService {
           FROM ErpMasterOpportunity mo
           LEFT JOIN ErpMasterProject mp ON mp.projectid = mo.projectId
           LEFT JOIN ErpMasterEmployee me ON me.employeeId = mo.salesRepId
-          WHERE mo.isActive = 1
+          WHERE (mo.isActive = 1 OR mo.opportunityId IS NULL)
           ${whereClause}
         `)
       : this.prisma.live.$queryRaw<Array<{ total: number }>>(Prisma.sql`
@@ -319,7 +319,7 @@ export class DesignListService {
           FROM (
             ${DESIGN_LIST_SELECT}
             ${DESIGN_LIST_FROM_JOINS}
-            WHERE mo.isActive = 1
+            WHERE (mo.isActive = 1 OR mo.opportunityId IS NULL)
             ${whereClause}
           ) AS q
         `);
