@@ -88,6 +88,11 @@ export default () => {
       clientId: process.env.GRAPH_CLIENT_ID ?? '',
       clientSecret: process.env.GRAPH_CLIENT_SECRET ?? '',
       senderUserId: process.env.GRAPH_SENDER_USER_ID ?? '',
+      /** Comma-separated addresses always CC'd on every outgoing notification email. */
+      additionalCcEmails: (process.env.GRAPH_ADDITIONAL_CC_EMAILS ?? '')
+        .split(',')
+        .map((e) => e.trim())
+        .filter(Boolean),
     },
   };
 };

@@ -9,6 +9,7 @@ interface GraphConfig {
   clientId: string;
   clientSecret: string;
   senderUserId: string;
+  additionalCcEmails: string[];
 }
 
 const GRAPH_SCOPE = ['https://graph.microsoft.com/.default'];
@@ -34,6 +35,7 @@ export class GraphMailService {
       clientId: configService.get<string>('graph.clientId') ?? '',
       clientSecret: configService.get<string>('graph.clientSecret') ?? '',
       senderUserId: configService.get<string>('graph.senderUserId') ?? '',
+      additionalCcEmails: configService.get<string[]>('graph.additionalCcEmails') ?? [],
     };
   }
 
@@ -110,8 +112,16 @@ export class GraphMailService {
     return `<div style="font-family:-apple-system,Segoe UI,Roboto,Helvetica,Arial,sans-serif;font-size:14px;color:#1e293b;">${paragraphs}</div>`;
   }
 
-  private async sendMail(to: string[], subject: string, bodyText: string): Promise<void> {
+  private async sendMail(to: string[], subject: string, bodyText: string, cc: string[] = []): Promise<void> {
     const token = await this.getGraphToken();
+    const message: Record<string, unknown> = {
+      subject,
+      body: { contentType: 'HTML', content: GraphMailService.renderEmailHtml(subject, bodyText) },
+      toRecipients: to.map((address) => ({ emailAddress: { address } })),
+    };
+    if (cc.length > 0) {
+      message.ccRecipients = cc.map((address) => ({ emailAddress: { address } }));
+    }
     const response = await fetch(
       `https://graph.microsoft.com/v1.0/users/${encodeURIComponent(this.config.senderUserId)}/sendMail`,
       {
@@ -120,14 +130,7 @@ export class GraphMailService {
           Authorization: `Bearer ${token}`,
           'Content-Type': 'application/json',
         },
-        body: JSON.stringify({
-          message: {
-            subject,
-            body: { contentType: 'HTML', content: GraphMailService.renderEmailHtml(subject, bodyText) },
-            toRecipients: to.map((address) => ({ emailAddress: { address } })),
-          },
-          saveToSentItems: false,
-        }),
+        body: JSON.stringify({ message, saveToSentItems: false }),
       },
     );
     if (!response.ok) {
@@ -149,6 +152,6 @@ export class GraphMailService {
       this.logger.warn(`No resolvable email addresses for userIds [${userIds.join(', ')}] — skipping Graph email`);
       return;
     }
-    await this.sendMail(emails, subject, bodyText);
+    await this.sendMail(emails, subject, bodyText, this.config.additionalCcEmails);
   }
 }

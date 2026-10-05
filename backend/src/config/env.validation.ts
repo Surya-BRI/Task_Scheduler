@@ -84,6 +84,8 @@ export const envValidationSchema = Joi.object({
   GRAPH_CLIENT_SECRET: Joi.string().optional(),
   /** Mailbox the emails are sent from (UPN or object id of a licensed mailbox the app has Mail.Send for) */
   GRAPH_SENDER_USER_ID: Joi.string().optional(),
+  /** Comma-separated addresses to CC on every outgoing notification email (e.g. testers, service accounts). */
+  GRAPH_ADDITIONAL_CC_EMAILS: Joi.string().optional(),
 }).custom((value, helpers) => {
   const hasDatabaseUrl = !!value.DATABASE_URL;
   const hasDbParts =
