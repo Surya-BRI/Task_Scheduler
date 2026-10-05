@@ -14,6 +14,7 @@ import { SaveSignRowsDto, SIGN_ROW_COMMENT_MAX_LENGTH } from '../tasks/dto/save-
 import { QsStatusValue, UpdateQsStatusDto } from '../tasks/dto/update-qs-status.dto';
 import { shouldRunRuntimeSchemaBootstrap } from '../common/utils/runtime-schema-bootstrap.util';
 import { UsersService } from '../users/users.service';
+import { isRetailBusinessUnitCode } from '../common/utils/business-unit.util';
 
 const PROJECT_SELECT = {
   id: true,
@@ -339,7 +340,7 @@ END;
     const erp = erpRows[0];
     if (erp?.projectCode) {
       const bu = String(erp.businessUnitCode ?? '').trim().toLowerCase();
-      const category = bu === 'retail' || bu === 'rtl' || bu === 'r' ? 'Retail' : 'Project';
+      const category = isRetailBusinessUnitCode(bu) ? 'Retail' : 'Project';
 
       try {
         const created = await this.prisma.project.create({
@@ -401,7 +402,7 @@ END;
     const opp = oppRows[0];
     if (opp?.salesForceCode) {
       const bu = String(opp.businessUnitCode ?? '').trim().toLowerCase();
-      const category = bu === 'retail' || bu === 'rtl' || bu === 'r' ? 'Retail' : 'Project';
+      const category = isRetailBusinessUnitCode(bu) ? 'Retail' : 'Project';
 
       try {
         const created = await this.prisma.project.create({

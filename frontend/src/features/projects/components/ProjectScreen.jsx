@@ -32,8 +32,11 @@ const renderCell = (value) => {
   return String(value);
 };
 
-const getCategoryColor = (category) =>
-  category === "Retail" ? "text-blue-600" : "text-orange-500";
+const getCategoryColor = (categoryLabel) => {
+  if (categoryLabel === "Retail") return "text-blue-600";
+  if (categoryLabel === "Maintenance") return "text-emerald-600";
+  return "text-orange-500";
+};
 
 function ProjectTable({ data, onProjectOpen, workflowFrom }) {
   return (
@@ -78,13 +81,13 @@ function ProjectTable({ data, onProjectOpen, workflowFrom }) {
                       <Link
                         href={projectHref}
                         onClick={() => onProjectOpen?.(row)}
-                        className={`font-semibold hover:underline ${getCategoryColor(row.category)}`}
+                        className={`font-semibold hover:underline ${getCategoryColor(row.categoryLabel)}`}
                       >
-                        {row.category}
+                        {row.categoryLabel}
                       </Link>
                     ) : (
-                      <span className={`font-semibold ${getCategoryColor(row.category)}`}>
-                        {row.category}
+                      <span className={`font-semibold ${getCategoryColor(row.categoryLabel)}`}>
+                        {row.categoryLabel}
                       </span>
                     )}
                   </td>
@@ -102,11 +105,20 @@ function ProjectTable({ data, onProjectOpen, workflowFrom }) {
 // To revert: set to false (or delete this line and its usage below) to show all categories again.
 const SHOW_RETAIL_ONLY = true;
 
+// businessUnitCode values the backend buckets under designType "Retail" but that are really
+// Maintenance tickets — see RETAIL_UNIT_CODES in design-list.service.ts.
+function categoryLabelFor(row) {
+  const normalizedUnit = String(row.businessUnit ?? "").trim().toLowerCase();
+  if (normalizedUnit === "maintenance") return "Maintenance";
+  return row.category;
+}
+
 export function ProjectScreen({ workflowFrom = FROM_PROJECTS_LIST }) {
   const PAGE_SIZE = 100;
   const { setRecords } = useDesignListStore();
   const [searchQuery, setSearchQuery] = useState("");
   const [debouncedQuery, setDebouncedQuery] = useState("");
+  const [categoryFilter, setCategoryFilter] = useState("all");
   const [page, setPage] = useState(1);
   const [projects, setProjects] = useState([]);
   const [total, setTotal] = useState(0);
@@ -119,7 +131,7 @@ export function ProjectScreen({ workflowFrom = FROM_PROJECTS_LIST }) {
     return () => clearTimeout(timer);
   }, [searchQuery]);
 
-  const filterKey = debouncedQuery;
+  const filterKey = `${debouncedQuery}::${categoryFilter}`;
   const prevFilterKeyRef = useRef(filterKey);
   const [listError, setListError] = useState("");
   const [listLoading, setListLoading] = useState(true);
@@ -137,25 +149,30 @@ export function ProjectScreen({ workflowFrom = FROM_PROJECTS_LIST }) {
     setListError("");
     const q = debouncedQuery.trim();
     const includeTotal = page <= 1;
+    const categoryParam = categoryFilter === "all" ? "" : `&category=${encodeURIComponent(categoryFilter)}`;
     apiClient
       .get(
-        `/design-list/projects-list?page=${page}&limit=${PAGE_SIZE}&q=${encodeURIComponent(q)}&includeTotal=${includeTotal ? "1" : "0"}`,
+        `/design-list/projects-list?page=${page}&limit=${PAGE_SIZE}&q=${encodeURIComponent(q)}&includeTotal=${includeTotal ? "1" : "0"}${categoryParam}`,
       )
       .then((res) => {
         if (!mounted) return;
         const data = Array.isArray(res?.data) ? res.data : [];
-        const mapped = data.map((r) => ({
-          id: r.id,
-          taskId: r.taskId ?? r.taskUUID ?? r.taskUuid ?? null,
-          projectCode: r.projectCode ?? r.projectNo ?? null,
-          salesForceCode: r.salesForceCode ?? r.opNo ?? null,
-          projectName: r.projectName ?? r.name ?? null,
-          clientName: r.clientName ?? r.customerName ?? null,
-          salesPerson: r.salesPerson ?? null,
-          category: r.designType || "Project",
-          created: r.created ?? null,
-          deadline: r.deadline ?? null,
-        }));
+        const mapped = data.map((r) => {
+          const row = {
+            id: r.id,
+            taskId: r.taskId ?? r.taskUUID ?? r.taskUuid ?? null,
+            projectCode: r.projectCode ?? r.projectNo ?? null,
+            salesForceCode: r.salesForceCode ?? r.opNo ?? null,
+            projectName: r.projectName ?? r.name ?? null,
+            clientName: r.clientName ?? r.customerName ?? null,
+            salesPerson: r.salesPerson ?? null,
+            category: r.designType || "Project",
+            businessUnit: r.businessUnit ?? null,
+            created: r.created ?? null,
+            deadline: r.deadline ?? null,
+          };
+          return { ...row, categoryLabel: categoryLabelFor(row) };
+        });
         setProjects(SHOW_RETAIL_ONLY ? mapped.filter((row) => row.category === "Retail") : mapped);
         const nextTotal = Number(res?.total);
         if (includeTotal || (Number.isFinite(nextTotal) && nextTotal >= 0)) {
@@ -179,7 +196,7 @@ export function ProjectScreen({ workflowFrom = FROM_PROJECTS_LIST }) {
     return () => {
       mounted = false;
     };
-  }, [debouncedQuery, filterKey, page]);
+  }, [debouncedQuery, categoryFilter, filterKey, page]);
 
   const currentPage = Math.min(page, totalPages);
 
@@ -219,17 +236,28 @@ export function ProjectScreen({ workflowFrom = FROM_PROJECTS_LIST }) {
       <div className="flex-1 flex flex-col min-h-0">
         <div className="mb-4 mt-4 flex shrink-0 items-center justify-between px-4 sm:px-6">
           <h1 className="text-2xl font-semibold tracking-tight text-slate-900">Project Design</h1>
-          <div className="relative">
-            <div className="pointer-events-none absolute inset-y-0 left-0 flex items-center pl-3">
-              <Search className="h-4 w-4 text-slate-400" />
+          <div className="flex items-center gap-2">
+            <select
+              value={categoryFilter}
+              onChange={(e) => setCategoryFilter(e.target.value)}
+              className="py-1.5 px-3 border border-slate-300 rounded-md text-sm focus:outline-none focus:ring-2 focus:ring-blue-500/25 focus:border-blue-500 bg-white text-slate-900"
+            >
+              <option value="all">All Categories</option>
+              <option value="Retail">Retail</option>
+              <option value="Maintenance">Maintenance</option>
+            </select>
+            <div className="relative">
+              <div className="pointer-events-none absolute inset-y-0 left-0 flex items-center pl-3">
+                <Search className="h-4 w-4 text-slate-400" />
+              </div>
+              <input
+                type="text"
+                value={searchQuery}
+                onChange={(e) => setSearchQuery(e.target.value)}
+                placeholder="Search by Project Code..."
+                className="pl-9 pr-4 py-1.5 border border-slate-300 rounded-md text-sm w-60 focus:outline-none focus:ring-2 focus:ring-blue-500/25 focus:border-blue-500 bg-white text-slate-900"
+              />
             </div>
-            <input
-              type="text"
-              value={searchQuery}
-              onChange={(e) => setSearchQuery(e.target.value)}
-              placeholder="Search by Project Code..."
-              className="pl-9 pr-4 py-1.5 border border-slate-300 rounded-md text-sm w-60 focus:outline-none focus:ring-2 focus:ring-blue-500/25 focus:border-blue-500 bg-white text-slate-900"
-            />
           </div>
         </div>
 
