@@ -39,10 +39,6 @@ export default function TransactionsViewPage() {
       hideReallocation
       boardColumns={getTransactionBoardColumns(view.id)}
       allowedStatuses={view.statuses}
-      // TODO: design-rework status filtering is still being decided — keep the
-      // list empty for now while leaving nav/filters/board chrome intact.
-      // Revert by removing this prop.
-      forceEmptyList={view.id === 'design-rework'}
     />
   )
 }
