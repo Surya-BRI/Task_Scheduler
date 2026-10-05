@@ -6,9 +6,10 @@ import { TaskFilesService } from './task-files.service';
 import { ActivitiesModule } from '../activities/activities.module';
 import { DashboardModule } from '../dashboard/dashboard.module';
 import { NotificationsModule } from '../notifications/notifications.module';
+import { GraphMailModule } from '../graph-mail/graph-mail.module';
 
 @Module({
-  imports: [PrismaModule, ActivitiesModule, DashboardModule, NotificationsModule],
+  imports: [PrismaModule, ActivitiesModule, DashboardModule, NotificationsModule, GraphMailModule],
   controllers: [TasksController],
   providers: [TasksService, TaskFilesService],
   exports: [TaskFilesService, TasksService],

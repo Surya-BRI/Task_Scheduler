@@ -38,6 +38,7 @@ import {
   type LeaveDateRange,
 } from './leave-request.validation';
 import { DashboardRealtimeService } from '../dashboard/dashboard-realtime.service';
+import { GraphMailService } from '../graph-mail/graph-mail.service';
 
 // designerId/userId (ERP ErpAuthUsers.userId) is now a decimal bigint, not a GUID.
 const NUMERIC_ID_RE = /^\d+$/;
@@ -75,6 +76,7 @@ export class RequestsService implements OnModuleInit {
     private readonly activityLogger: ActivityLoggerService,
     @Optional() private readonly schedulerAssignments?: SchedulerAssignmentsService,
     @Optional() private readonly dashboardRealtime?: DashboardRealtimeService,
+    @Optional() private readonly graphMail?: GraphMailService,
   ) {}
 
   async onModuleInit(): Promise<void> {
@@ -389,6 +391,20 @@ export class RequestsService implements OnModuleInit {
     return from === to ? from : `${from} to ${to}`;
   }
 
+  private formatDateWithWeekday(dateStr: string): string {
+    const weekday = new Date(`${dateStr}T00:00:00Z`).toLocaleDateString('en-US', {
+      weekday: 'long',
+      timeZone: 'UTC',
+    });
+    return `${dateStr} (${weekday})`;
+  }
+
+  private formatLeaveDatesWithWeekday(from: string, to: string): string {
+    return from === to
+      ? this.formatDateWithWeekday(from)
+      : `${this.formatDateWithWeekday(from)} to ${this.formatDateWithWeekday(to)}`;
+  }
+
   private formatLeaveTypeAndDuration(
     view: Pick<LeaveRequestView, 'type' | 'halfDaySession' | 'leaveDurationLabel'>,
   ): string {
@@ -402,9 +418,11 @@ export class RequestsService implements OnModuleInit {
     const messageBase = `Leave request ${view.id.slice(0, 8)}… for ${dates} (${leaveDetails}). Reason: ${view.reason ?? '—'}.`;
 
     const targets = await this.findDepartmentHods();
+    const notifyIds: string[] = [];
 
     for (const approver of targets) {
       if (approver.id === view.designerId) continue;
+      notifyIds.push(approver.id);
       try {
         await this.prisma.notification.create({
           data: {
@@ -420,6 +438,18 @@ export class RequestsService implements OnModuleInit {
         this.logger.warn(`Leave approver notification failed for ${approver.id}: ${err}`);
       }
     }
+
+    const emailBody = [
+      `${view.requesterName} submitted a leave request.`,
+      '',
+      `Dates: ${this.formatLeaveDatesWithWeekday(view.fromDate, view.toDate)}`,
+      `Type: ${leaveDetails}`,
+      `Reason: ${view.reason ?? '—'}`,
+    ].join('\n');
+
+    this.graphMail
+      ?.notify(notifyIds, `Leave Request — ${view.requesterName} — ${dates}`, emailBody)
+      .catch((err) => this.logger.warn(`Graph email for leave request failed: ${err}`));
   }
 
   private async notifyHodsOnLeaveChange(
@@ -458,6 +488,7 @@ export class RequestsService implements OnModuleInit {
     const dates = this.formatLeaveDates(view.fromDate, view.toDate);
     const leaveDetails = this.formatLeaveTypeAndDuration(view);
     const reason = view.revocationReason?.trim() || '—';
+    const emailMessage = `Your approved leave (${dates}, ${leaveDetails}) was revoked by ${revokerName}. Reason: ${reason}`;
 
     try {
       await this.prisma.notification.create({
@@ -465,10 +496,13 @@ export class RequestsService implements OnModuleInit {
           id: randomUUID(),
           userId: BigInt(view.designerId),
           title: 'Leave Request Revoked',
-          message: `Your approved leave (${dates}, ${leaveDetails}) was revoked by ${revokerName}. Reason: ${reason}`,
+          message: emailMessage,
           linkUrl: this.leaveLink(view.id, view.designerId),
         },
       });
+      this.graphMail
+        ?.notify([view.designerId], 'Leave Request Revoked', emailMessage)
+        .catch((err) => this.logger.warn(`Graph email for leave revocation failed: ${err}`));
     } catch (err) {
       this.logger.warn(`Leave revocation notification failed: ${err}`);
     }
@@ -488,6 +522,7 @@ export class RequestsService implements OnModuleInit {
       action === 'REJECTED' && view.approverRemarks
         ? ` Remarks: "${view.approverRemarks}"`
         : '';
+    const emailMessage = `Leave ${view.id.slice(0, 8)}… (${dates}, ${leaveDetails}) was ${actionLabel.toLowerCase()} by ${reviewerName} at ${timestamp}.${remarks}`;
 
     try {
       await this.prisma.notification.create({
@@ -495,10 +530,13 @@ export class RequestsService implements OnModuleInit {
           id: randomUUID(),
           userId: BigInt(view.designerId),
           title: `Leave Request ${actionLabel}`,
-          message: `Leave ${view.id.slice(0, 8)}… (${dates}, ${leaveDetails}) was ${actionLabel.toLowerCase()} by ${reviewerName} at ${timestamp}.${remarks}`,
+          message: emailMessage,
           linkUrl: this.leaveLink(view.id, view.designerId),
         },
       });
+      this.graphMail
+        ?.notify([view.designerId], `Leave Request ${actionLabel}`, emailMessage)
+        .catch((err) => this.logger.warn(`Graph email for leave review failed: ${err}`));
     } catch (err) {
       this.logger.warn(`Leave requester notification failed: ${err}`);
     }
