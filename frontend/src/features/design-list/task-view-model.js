@@ -160,6 +160,7 @@ export function mapTaskToDesignRow(task) {
         ? task.taskDesigners.map((d) => d.designer.fullName).join(', ')
         : null),
     revisionCode: task?.revisionCode || "—",
+    createdByName: String(task?.createdByName ?? task?.activityLogs?.[0]?.user?.userName ?? '').trim() || null,
     submittedDurationSeconds:
       typeof task?.submittedDurationSeconds === "number"
         ? task.submittedDurationSeconds

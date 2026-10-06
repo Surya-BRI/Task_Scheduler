@@ -133,6 +133,12 @@ const TASK_SELECT = {
   assigneeId: true,
   assignee: { select: { userId: true, userName: true } },
   taskDesigners: { select: { designer: { select: { userId: true, userName: true } } } },
+  activityLogs: {
+    where: { action: 'TASK_CREATED' },
+    orderBy: { createdAt: 'asc' as const },
+    take: 1,
+    select: { user: { select: { userName: true } } },
+  },
   retailDetails: {
     select: {
       ...TASK_RETAIL_DETAIL_CORE_SELECT,
@@ -191,6 +197,12 @@ const TASK_CORE_SELECT = {
   assigneeId: true,
   assignee: { select: { userId: true, userName: true } },
   taskDesigners: { select: { designer: { select: { userId: true, userName: true } } } },
+  activityLogs: {
+    where: { action: 'TASK_CREATED' },
+    orderBy: { createdAt: 'asc' as const },
+    take: 1,
+    select: { user: { select: { userName: true } } },
+  },
   retailDetails: { select: TASK_RETAIL_DETAIL_CORE_SELECT },
   projectDetails: { select: TASK_PROJECT_DETAIL_CORE_SELECT },
   createdAt: true,
@@ -288,6 +300,12 @@ const TASK_LIST_SELECT = {
   assigneeId: true,
   assignee: { select: { userId: true, userName: true } },
   taskDesigners: { select: { designer: { select: { userId: true, userName: true } } } },
+  activityLogs: {
+    where: { action: 'TASK_CREATED' },
+    orderBy: { createdAt: 'asc' as const },
+    take: 1,
+    select: { user: { select: { userName: true } } },
+  },
   retailDetails: { select: { hoursRequired: true, designTypes: true } },
   projectDetails: { select: { artworkHours: true, technicalHours: true, locationHours: true, asBuiltHours: true } },
   createdAt: true,
@@ -1822,6 +1840,7 @@ export class TasksService {
       data: data.map((task) => ({
         ...this.normalizeTaskForApi(task),
         submittedDurationSeconds: submittedDurationByTaskId.get(task.id) ?? null,
+        createdByName: String((task as any).activityLogs?.[0]?.user?.userName ?? '').trim() || null,
       })),
       total,
       page,
