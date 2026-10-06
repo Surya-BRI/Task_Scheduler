@@ -1135,7 +1135,7 @@ export class TasksService {
             `New Task Created — ${created.taskNo}`,
             createdEmailBody,
           )
-          .catch((err) => this.logger.error('Failed to send task-created Graph email', err));
+          .catch((err: unknown) => this.logger.error('Failed to send task-created Graph email', err));
 
         return created;
       } catch (error) {
@@ -1397,7 +1397,7 @@ export class TasksService {
           ].join('\n');
           this.graphMail
             ?.notify([reviewer.id], `New Task Awaiting Review — ${created.taskNo}`, reviewEmailBody)
-            .catch((err) => this.logger.error('Failed to send Reviewer Graph email on task create', err));
+            .catch((err: unknown) => this.logger.error('Failed to send Reviewer Graph email on task create', err));
         } else {
           this.logger.warn(`Selected Reviewer "${selectedReviewerName}" did not match any real HOD user — no notification sent`);
         }
@@ -2584,7 +2584,7 @@ export class TasksService {
     this.dashboardRealtime?.notifyUserNotificationRefresh(dto.assigneeId);
     this.graphMail
       ?.notify([dto.assigneeId], `Task Assigned — ${updatedTask.taskNo}`, assignEmailBody)
-      .catch((err) => this.logger.error('Failed to send assign Graph email to designer', err));
+      .catch((err: unknown) => this.logger.error('Failed to send assign Graph email to designer', err));
     for (const stakeholderId of stakeholderIdsAssign) {
       if (stakeholderId !== dto.assigneeId) {
         this.notificationsService
@@ -2866,7 +2866,7 @@ export class TasksService {
           `Task ${effectiveStatusApi} — ${(updatedTask as any).taskNo}`,
           statusEmailBody,
         )
-        .catch((err) => this.logger.error('Failed to send task-completion Graph email to HOD', err));
+        .catch((err: unknown) => this.logger.error('Failed to send task-completion Graph email to HOD', err));
     }
 
     // HOD_REVIEW — notify HOD/ADMIN users that a task is waiting for their review
@@ -2991,7 +2991,7 @@ export class TasksService {
       }
       this.graphMail
         ?.notify(salesReviewers, `Task Ready for Review — ${(updatedTask as any).taskNo}`, salesEmailBody)
-        .catch((err) => this.logger.error('Failed to send sales-review Graph email', err));
+        .catch((err: unknown) => this.logger.error('Failed to send sales-review Graph email', err));
     }
 
     // REWORK — same task stays with current designer(s); notify designers + stakeholders
@@ -3593,7 +3593,7 @@ export class TasksService {
           `Work Submitted — ${submittedTask.taskNo}`,
           submitEmailBody,
         )
-        .catch((err) => this.logger.error('Failed to send work-submitted Graph email', err));
+        .catch((err: unknown) => this.logger.error('Failed to send work-submitted Graph email', err));
     } catch (err) {
       this.logger.error('Failed to send work-submitted notifications to HOD', err);
     }
