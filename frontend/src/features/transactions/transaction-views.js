@@ -20,7 +20,7 @@ export const TRANSACTION_VIEWS = [
     label: 'Design WIP',
     path: '/transactions/design-wip',
     from: 'transactions-design-wip',
-    statuses: ['DESIGN_PLANNED', 'IN_PROGRESS', 'DESIGN_COMPLETED'],
+    statuses: ['DESIGN_NEW', 'DESIGN_PLANNED', 'IN_PROGRESS', 'DESIGN_COMPLETED'],
   },
   {
     id: 'design-completed',
