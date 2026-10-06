@@ -7,6 +7,7 @@ import { hasHodEquivalentAccess, isBackupHodReviewer } from '../common/utils/wor
 
 type ErpAuthRow = { userId: bigint; userName: string; password: string; roleName: string };
 type ErpUserRow = { userId: bigint; userName: string; roleName: string | null };
+type ErpSalesRow = { userId: bigint; userName: string; firstName: string | null; lastName: string | null; roleName: string };
 
 export type ErpLoginResult = { userId: bigint; userName: string; role: UserRole };
 
@@ -36,6 +37,31 @@ export class UsersService {
   }
 
   async findAll(filters?: { role?: string; search?: string }) {
+    if (filters?.role === UserRole.SALESPERSON) {
+      const rows = await this.prisma.$queryRaw<ErpSalesRow[]>`
+        SELECT E.userId, Au.userName, E.firstName, E.lastName, MR.roleName
+        FROM ErpMasterEmployee E
+        INNER JOIN ErpAuthUserRoleMap AURM ON E.userId = AURM.userId AND AURM.isActive = 1
+        INNER JOIN ErpMasterRole MR ON AURM.roleId = MR.roleId AND MR.isActive = 1 AND MR.isDeleted = 0
+        INNER JOIN ErpAuthUsers Au ON E.userId = Au.userId
+        WHERE E.isActive = 1 AND E.isDeleted = 0 AND E.isAllowLogin = 1
+          AND Au.isActive = 1 AND Au.isDeleted = 0
+          AND MR.roleName IN ('SalesRep', 'Sales Coordinator', 'SalesManagerRetail', 'Director Of Retail')
+          AND Au.userName NOT IN ('-', '')
+        ORDER BY Au.userName ASC
+      `;
+      return rows
+        .map((row) => ({
+          id: row.userId.toString(),
+          userName: row.userName,
+          displayName: [row.firstName, row.lastName].filter(Boolean).join(' ') || row.userName,
+          salesPersonName: `${row.firstName ?? ''}${row.lastName ?? ''}`.trim() || row.userName,
+          role: ERP_ROLE_MAP[row.roleName] ?? UserRole.SALESPERSON,
+          erpRole: row.roleName,
+        }))
+        .filter((user) => !filters.search || user.userName.toLowerCase().includes(filters.search.toLowerCase()));
+    }
+
     const rows = await this.prisma.$queryRaw<ErpUserRow[]>`
       SELECT u.userId, u.userName, r.roleName
       FROM ErpAuthUsers u

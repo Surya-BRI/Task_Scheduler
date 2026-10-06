@@ -108,6 +108,7 @@ const Toolbar = ({
   filters,
   setFilters,
   salesPersons,
+  salesCoordinators,
   statusOptions,
   showViewToggle = true,
 }) => {
@@ -118,6 +119,7 @@ const Toolbar = ({
     filters.type,
     filters.status,
     filters.salesPerson,
+    filters.createdBy,
     filters.startDate,
     filters.endDate,
   ].filter(Boolean).length;
@@ -184,7 +186,7 @@ const Toolbar = ({
                 {activeCount > 0 && (
                   <button
                     type="button"
-                    onClick={() => setFilters({ type: "", status: "", salesPerson: "", startDate: "", endDate: "", searchQuery: filters.searchQuery })}
+                    onClick={() => setFilters({ type: "", status: "", salesPerson: "", createdBy: "", startDate: "", endDate: "", searchQuery: filters.searchQuery })}
                     className="cursor-pointer rounded bg-red-50 px-2 py-1 text-xs font-medium text-red-500 transition-colors hover:text-red-700"
                   >
                     Clear All
@@ -239,9 +241,18 @@ const Toolbar = ({
                 <label className="text-xs font-semibold text-slate-500 uppercase">Sales Person</label>
                 <select className="text-sm bg-slate-50 border border-slate-200 rounded-lg px-3 py-2 outline-none text-slate-700 cursor-pointer w-full" value={filters.salesPerson} onChange={(e) => setFilters({ ...filters, salesPerson: e.target.value })}>
                   <option value="">All Sales Persons</option>
-                  {salesPersons.map((sp) => (<option key={sp} value={sp}>{sp}</option>))}
+                  {salesPersons.map((sp) => (<option key={sp.userName} value={sp.salesPersonName}>{sp.displayName}</option>))}
                 </select>
               </div>
+              {salesCoordinators?.length > 0 && (
+                <div className="flex flex-col gap-1.5">
+                  <label className="text-xs font-semibold text-slate-500 uppercase">Created By (Sales Coordinator)</label>
+                  <select className="text-sm bg-slate-50 border border-slate-200 rounded-lg px-3 py-2 outline-none text-slate-700 cursor-pointer w-full" value={filters.createdBy} onChange={(e) => setFilters({ ...filters, createdBy: e.target.value })}>
+                    <option value="">All</option>
+                    {salesCoordinators.map((sc) => (<option key={sc.userName} value={sc.userName}>{sc.displayName}</option>))}
+                  </select>
+                </div>
+              )}
               <div className="flex flex-col gap-1.5">
                 <label className="text-xs font-semibold text-slate-500 uppercase">Date Range</label>
                 <div className="grid grid-cols-2 gap-2">
@@ -396,6 +407,22 @@ export function DesignListScreen({
   const [allDesigns, setAllDesigns] = useState([]);
   const [serverTotal, setServerTotal] = useState(0);
   const [listError, setListError] = useState("");
+  const [salesPersonUsers, setSalesPersonUsers] = useState([]);
+  const [salesCoordinatorUsers, setSalesCoordinatorUsers] = useState([]);
+
+  useEffect(() => {
+    apiClient.get("/users?role=SALESPERSON").then((res) => {
+      const users = Array.isArray(res) ? res : [];
+      const toOption = (u) => ({ userName: u.userName, displayName: u.displayName || u.userName, salesPersonName: u.salesPersonName || u.userName });
+      const allUsers = users.filter((u) => u.userName && u.userName.trim() && u.userName.trim() !== '-')
+        .map(toOption).sort((a, b) => a.displayName.localeCompare(b.displayName));
+      setSalesPersonUsers(allUsers);
+      setSalesCoordinatorUsers(
+        users.filter((u) => u.erpRole === 'Sales Coordinator' && u.userName && u.userName.trim() && u.userName.trim() !== '-')
+             .map(toOption).sort((a, b) => a.displayName.localeCompare(b.displayName))
+      );
+    }).catch(() => {});
+  }, []);
   const [viewMode, setViewMode] = useState(() => {
     if (lockBoardView) return "board";
     if (isTransactionsWorkflow(workflowFrom)) {
@@ -404,7 +431,7 @@ export function DesignListScreen({
     return defaultViewMode;
   });
   const [page, setPage] = useState(1);
-  const [filters, setFilters] = useState({ type: "", status: "", salesPerson: "", startDate: "", endDate: "", searchQuery: "" });
+  const [filters, setFilters] = useState({ type: "", status: "", salesPerson: "", createdBy: "", startDate: "", endDate: "", searchQuery: "" });
   const [debouncedSearchQuery, setDebouncedSearchQuery] = useState("");
   const [listRefreshTick, setListRefreshTick] = useState(0);
   const [listLoading, setListLoading] = useState(true);
@@ -430,7 +457,7 @@ export function DesignListScreen({
   }, [filters.searchQuery]);
 
   const allowedStatusKey = Array.isArray(allowedStatuses) ? allowedStatuses.join(",") : "";
-  const filterKey = `${debouncedSearchQuery}|${filters.status}|${filters.type}|${filters.salesPerson}|${filters.startDate}|${filters.endDate}|${viewMode}|${listMode}|${allowedStatusKey}`;
+  const filterKey = `${debouncedSearchQuery}|${filters.status}|${filters.type}|${filters.salesPerson}|${filters.createdBy}|${filters.startDate}|${filters.endDate}|${viewMode}|${listMode}|${allowedStatusKey}`;
   const prevFilterKeyRef = useRef(filterKey);
 
   const reloadList = useCallback(() => {
@@ -469,6 +496,7 @@ export function DesignListScreen({
     }
     if (filters.type) params.set("type", filters.type);
     if (filters.salesPerson) params.set("salesPerson", filters.salesPerson);
+    if (filters.createdBy) params.set("createdBy", filters.createdBy);
     if (filters.startDate) params.set("startDate", filters.startDate);
     if (filters.endDate) params.set("endDate", filters.endDate);
     apiClient.get(`/tasks?${params.toString()}`).then((res) => {
@@ -485,7 +513,7 @@ export function DesignListScreen({
       if (mounted) setListLoading(false);
     });
     return () => { mounted = false; };
-  }, [filterKey, debouncedSearchQuery, filters.status, filters.type, filters.salesPerson, filters.startDate, filters.endDate, listRefreshTick, isReallocation, page, allowedStatuses, forceEmptyList]);
+  }, [filterKey, debouncedSearchQuery, filters.status, filters.type, filters.salesPerson, filters.createdBy, filters.startDate, filters.endDate, listRefreshTick, isReallocation, page, allowedStatuses, forceEmptyList]);
 
   const filteredDesigns = useMemo(() => allDesigns.filter((d) => {
     if (
@@ -504,7 +532,6 @@ export function DesignListScreen({
   const currentPage = Math.min(page, totalPages);
   const start = (currentPage - 1) * PAGE_SIZE;
   const endShown = total === 0 ? 0 : start + designs.length;
-  const uniqueSalesPersons = Array.from(new Set(allDesigns.map((d) => d.salesPerson).filter(Boolean))).sort();
 
   const statusOptions = Array.isArray(allowedStatuses) && allowedStatuses.length > 0
     ? allowedStatuses
@@ -554,7 +581,8 @@ export function DesignListScreen({
                 setViewMode={setViewMode}
                 filters={filters}
                 setFilters={setFilters}
-                salesPersons={uniqueSalesPersons}
+                salesPersons={salesPersonUsers}
+                salesCoordinators={salesCoordinatorUsers}
                 statusOptions={statusOptions}
                 showViewToggle={!lockBoardView}
               />

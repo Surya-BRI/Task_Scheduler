@@ -324,6 +324,7 @@ export type TaskFilters = {
   /** Project category filter (Retail / Project) — matches design-list type filter. */
   type?: string;
   salesPerson?: string;
+  createdBy?: string;
   startDate?: string;
   endDate?: string;
   page?: number;
@@ -1572,6 +1573,7 @@ export class TasksService {
       search,
       type,
       salesPerson,
+      createdBy,
       startDate,
       endDate,
       page = 1,
@@ -1692,6 +1694,17 @@ export class TasksService {
     if (Object.keys(projectFilter).length > 0) {
       addAndFilter({ project: projectFilter });
     }
+    const createdByNorm = String(createdBy ?? '').trim();
+    if (createdByNorm) {
+      addAndFilter({
+        activityLogs: {
+          some: {
+            action: 'TASK_CREATED',
+            user: { userName: createdByNorm },
+          },
+        },
+      });
+    }
 
     const dueRange: Record<string, Date> = {};
     const start = String(startDate ?? '').trim();
@@ -1773,12 +1786,21 @@ export class TasksService {
       }
     }
 
+    const creatorLoginByTaskId = new Map<string, string | null>(
+      data.map((task) => [task.id, String((task as any).activityLogs?.[0]?.user?.userName ?? '').trim() || null]),
+    );
+    const creatorDisplayNames = await this.findErpDisplayNames([...creatorLoginByTaskId.values()]);
+
     return {
-      data: data.map((task) => ({
-        ...this.normalizeTaskForApi(task),
-        submittedDurationSeconds: submittedDurationByTaskId.get(task.id) ?? null,
-        createdByName: String((task as any).activityLogs?.[0]?.user?.userName ?? '').trim() || null,
-      })),
+      data: data.map((task) => {
+        const createdByName = creatorLoginByTaskId.get(task.id) ?? null;
+        return {
+          ...this.normalizeTaskForApi(task),
+          submittedDurationSeconds: submittedDurationByTaskId.get(task.id) ?? null,
+          createdByName,
+          createdByDisplayName: createdByName ? (creatorDisplayNames.get(createdByName) ?? createdByName) : null,
+        };
+      }),
       total,
       page,
       limit,
@@ -2028,6 +2050,23 @@ export class TasksService {
     };
   }
 
+  private async findErpDisplayNames(logins: Array<string | null>): Promise<Map<string, string>> {
+    const userNames = [...new Set(logins.filter((v): v is string => !!v))];
+    const displayNames = new Map<string, string>();
+    if (userNames.length === 0) return displayNames;
+    const rows = await this.prisma.$queryRaw<Array<{ userName: string; firstName: string | null; lastName: string | null }>>(Prisma.sql`
+      SELECT Au.userName, E.firstName, E.lastName
+      FROM ErpAuthUsers Au
+      INNER JOIN ErpMasterEmployee E ON E.userId = Au.userId
+      WHERE Au.userName IN (${Prisma.join(userNames)})
+    `);
+    for (const row of rows) {
+      const name = [row.firstName, row.lastName].filter(Boolean).join(' ');
+      if (name) displayNames.set(row.userName, name);
+    }
+    return displayNames;
+  }
+
   private async getTaskPeopleLabels(
     taskId: string,
     task: {
@@ -2063,7 +2102,10 @@ export class TasksService {
       }),
     ]);
 
-    const createdByName = created?.user?.userName?.trim() || null;
+    const createdLogin = created?.user?.userName?.trim() || null;
+    const createdByName = createdLogin
+      ? ((await this.findErpDisplayNames([createdLogin])).get(createdLogin) ?? createdLogin)
+      : null;
 
     const retailHod =
       (task.retailDetails ?? [])
