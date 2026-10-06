@@ -21,6 +21,7 @@ describe('transaction views', () => {
 
   it('maps each view to the required Kanban columns', () => {
     expect(getTransactionBoardColumns('design-wip').map((col) => col.title)).toEqual([
+      'Design Task New',
       'Design Planned',
       'In Progress',
       'Design Completed',
