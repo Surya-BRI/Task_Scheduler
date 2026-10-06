@@ -793,8 +793,9 @@ export function DesignSchedulerScreen() {
                         designerId,
                         taskId: canonicalTaskId,
                         dayIndex,
-                        // Use || not ?? so a zero scheduledHours falls through to estimatedHours
-                        assignedHours: Number(task.scheduledHours || task.estimatedHours) || 0,
+                        // Use || not ?? so a zero scheduledHours falls through to estimatedHours.
+                        // Round to 2dp to satisfy the backend @IsNumber({ maxDecimalPlaces: 2 }) constraint.
+                        assignedHours: Math.round((Number(task.scheduledHours || task.estimatedHours) || 0) * 100) / 100,
                         parentId: isUuid(task.parentId) ? task.parentId : null,
                         splitIndex: Number.isFinite(task.splitIndex) ? Number(task.splitIndex) : null,
                         totalParts: Number.isFinite(task.totalParts) ? Number(task.totalParts) : null,
