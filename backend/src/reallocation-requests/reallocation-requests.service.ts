@@ -15,6 +15,7 @@ import { UserRole } from '../common/constants/roles.enum';
 import { ERP_ROLE_MAP } from '../common/utils/erp-role-map.util';
 import { hasDepartmentManagerAccess } from '../common/utils/workflow-roles.util';
 import { DashboardRealtimeService } from '../dashboard/dashboard-realtime.service';
+import { GraphMailService } from '../graph-mail/graph-mail.service';
 import { SchedulerAssignmentsService } from '../scheduler-assignments/scheduler-assignments.service';
 import { taskViewPath } from '../common/utils/design-type.util';
 import {
@@ -38,6 +39,7 @@ const INCLUDE = {
       opNo: true,
       status: true,
       designType: true,
+      revisionCode: true,
       projectId: true,
       project: { select: { id: true, name: true, projectNo: true } },
     },
@@ -88,6 +90,7 @@ export class ReallocationRequestsService {
     private readonly activityLogger: ActivityLoggerService,
     private readonly schedulerAssignments: SchedulerAssignmentsService,
     @Optional() private readonly dashboardRealtime?: DashboardRealtimeService,
+    @Optional() private readonly graphMail?: GraphMailService,
   ) {}
 
   private toView(row: ReallocationFull, remainingHours: number | null = null): ReallocationRequestView {
@@ -594,6 +597,12 @@ export class ReallocationRequestsService {
     );
   }
 
+  /** `"<taskNo> (<designType>, <revisionCode>)"` — omits either bracket part when unset. */
+  private taskNoWithDetails(taskNo: string, designType?: string | null, revisionCode?: string | null): string {
+    const details = [designType?.trim(), revisionCode?.trim()].filter(Boolean);
+    return details.length > 0 ? `${taskNo} (${details.join(', ')})` : taskNo;
+  }
+
   private async notifyRequester(
     request: ReallocationFull,
     action: 'Approved' | 'Rejected',
@@ -604,17 +613,27 @@ export class ReallocationRequestsService {
       action === 'Approved'
         ? `Your reallocation request for ${request.task.taskNo} was approved.`
         : `Your reallocation request for ${request.task.taskNo} was disagreed.${remarks ? ` Reason: ${remarks}` : ''}`;
+    const title = `Reallocation Request ${action === 'Approved' ? 'Approved' : 'Disagreed'}`;
+    const emailBody = [
+      `Task: ${this.taskNoWithDetails(request.task.taskNo, request.task.designType, request.task.revisionCode)}`,
+      ...(request.task.opNo?.trim() ? [`OP No: ${request.task.opNo.trim()}`] : []),
+      `Status: ${action}`,
+      ...(remarks ? [`Reason: ${remarks}`] : []),
+    ].join('\n');
     try {
       await this.prisma.notification.create({
         data: {
           id: randomUUID(),
           userId: request.requesterId,
-          title: `Reallocation Request ${action === 'Approved' ? 'Approved' : 'Disagreed'}`,
+          title,
           message,
           linkUrl,
         },
       });
       this.dashboardRealtime?.notifyUserNotificationRefresh(String(request.requesterId));
+      this.graphMail
+        ?.notify([request.requesterId], title, emailBody)
+        .catch((err) => this.logger.error('Failed to send reallocation review Graph email', err));
     } catch (err) {
       this.logger.error('Failed to notify requester of reallocation review', err);
     }

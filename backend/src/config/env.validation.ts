@@ -78,6 +78,14 @@ export const envValidationSchema = Joi.object({
   AWS_FOLDER: Joi.string().max(128).pattern(/^[a-zA-Z0-9/_-]+$/).optional(),
   /** When true, services run boot-time CREATE/ALTER DDL. Default: true in dev/test, false in production. */
   RUNTIME_SCHEMA_BOOTSTRAP: Joi.boolean().truthy('true').falsy('false').optional(),
+  // ─── Microsoft Graph email notifications (optional — unset disables emails entirely) ──
+  GRAPH_TENANT_ID: Joi.string().optional(),
+  GRAPH_CLIENT_ID: Joi.string().optional(),
+  GRAPH_CLIENT_SECRET: Joi.string().optional(),
+  /** Mailbox the emails are sent from (UPN or object id of a licensed mailbox the app has Mail.Send for) */
+  GRAPH_SENDER_USER_ID: Joi.string().optional(),
+  /** Comma-separated addresses to CC on every outgoing notification email (e.g. testers, service accounts). */
+  GRAPH_ADDITIONAL_CC_EMAILS: Joi.string().optional(),
 }).custom((value, helpers) => {
   const hasDatabaseUrl = !!value.DATABASE_URL;
   const hasDbParts =

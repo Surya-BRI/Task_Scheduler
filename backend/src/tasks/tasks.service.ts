@@ -19,6 +19,7 @@ import { ActivityAction } from '../activities/activity-events';
 import { SubmitWorkDto } from './dto/submit-work.dto';
 import { SaveTimerStateDto } from './dto/save-timer-state.dto';
 import { DashboardRealtimeService } from '../dashboard/dashboard-realtime.service';
+import { GraphMailService } from '../graph-mail/graph-mail.service';
 import { COMPLETED_STATUS_FILTER, isTaskReassignmentBlocked, TASK_REASSIGNMENT_BLOCKED_MESSAGE } from '../dashboard/task-status-buckets.util';
 import { toApiTaskStatus, toDbTaskStatus } from './task-status.util';
 import { NotificationsService } from '../notifications/notifications.service';
@@ -365,7 +366,19 @@ export class TasksService {
     private readonly activityLogger: ActivityLoggerService,
     private readonly notificationsService: NotificationsService,
     @Optional() private readonly dashboardRealtime?: DashboardRealtimeService,
+    @Optional() private readonly graphMail?: GraphMailService,
   ) {}
+
+  /** `["OP No: <value>"]` when opNo is set, else `[]` — spread into email-body line arrays. */
+  private opNoLine(opNo?: string | null): string[] {
+    return opNo?.trim() ? [`OP No: ${opNo.trim()}`] : [];
+  }
+
+  /** `"<taskNo> (<designType>, <revisionCode>)"` — omits either bracket part when unset. */
+  private taskNoWithDetails(taskNo: string, designType?: string | null, revisionCode?: string | null): string {
+    const details = [designType?.trim(), revisionCode?.trim()].filter(Boolean);
+    return details.length > 0 ? `${taskNo} (${details.join(', ')})` : taskNo;
+  }
 
   private async findErpUsersByRoleBuckets(buckets: UserRole[]): Promise<{ id: string; userName: string }[]> {
     const rows = await this.prisma.$queryRaw<ErpRoleRow[]>`
@@ -1109,6 +1122,22 @@ export class TasksService {
             context: { source: 'tasks.create' },
           },
         });
+
+        const hodReviewers = await this.findHodReviewNotifyTargets();
+        const createdEmailBody = [
+          `Task: ${this.taskNoWithDetails(created.taskNo, created.designType, created.revisionCode)}`,
+          ...this.opNoLine(created.opNo),
+          `Project: ${created.project?.name ?? 'Unknown Project'}`,
+          `Status: Awaiting review`,
+        ].join('\n');
+        this.graphMail
+          ?.notify(
+            hodReviewers.map((hod) => hod.id),
+            `New Task Created — ${created.taskNo}`,
+            createdEmailBody,
+          )
+          .catch((err: unknown) => this.logger.error('Failed to send task-created Graph email', err));
+
         return created;
       } catch (error) {
         if (
@@ -1338,6 +1367,40 @@ export class TasksService {
               .catch((err) => this.logger.error('Failed to notify HOD on task create', err));
             this.dashboardRealtime?.notifyUserNotificationRefresh(stakeholderId);
           }
+        }
+      }
+
+      // Notify the Reviewer selected by Sales on the retail detail line (retailDetails[].hodName
+      // is the chosen reviewer's userName, not a userId — resolve it against the same pool the
+      // "Select Reviewer" dropdown offers: real HOD/Admin users PLUS backup HOD reviewers, who
+      // are real DESIGNER-role accounts (see UsersService.findAll's role=HOD filter).
+      const selectedReviewerName = (dto.retailDetails ?? [])
+        .map((line) => String(line?.hodName ?? '').trim())
+        .find((name) => name.length > 0);
+      if (selectedReviewerName) {
+        const reviewerPool = await this.findHodReviewNotifyTargets();
+        const reviewer = reviewerPool.find(
+          (u) => u.userName.trim().toLowerCase() === selectedReviewerName.toLowerCase(),
+        );
+        if (reviewer) {
+          const reviewTaskLink = `/retail-task-view/${created.id}`;
+          const reviewMsg = `${created.taskNo} — ${created.project?.name ?? 'Unknown Project'} was created and is awaiting your review.`;
+          this.notificationsService
+            .create({ userId: reviewer.id, title: `New Task Awaiting Review — ${created.taskNo}`, message: reviewMsg, linkUrl: reviewTaskLink })
+            .catch((err) => this.logger.error('Failed to notify selected Reviewer on task create', err));
+          this.dashboardRealtime?.notifyUserNotificationRefresh(reviewer.id);
+
+          const reviewEmailBody = [
+            `Task: ${this.taskNoWithDetails(created.taskNo, created.designType, created.revisionCode)}`,
+            ...this.opNoLine(created.opNo),
+            `Project: ${created.project?.name ?? 'Unknown Project'}`,
+            `Status: You have been selected as the Reviewer`,
+          ].join('\n');
+          this.graphMail
+            ?.notify([reviewer.id], `New Task Awaiting Review — ${created.taskNo}`, reviewEmailBody)
+            .catch((err: unknown) => this.logger.error('Failed to send Reviewer Graph email on task create', err));
+        } else {
+          this.logger.warn(`Selected Reviewer "${selectedReviewerName}" did not match any real HOD user — no notification sent`);
         }
       }
 
@@ -2548,6 +2611,12 @@ export class TasksService {
     const linkUrlAssign =
       taskViewPath(id, updatedTask.designType);
     const assignMessage = `${updatedTask.taskNo} — ${updatedTask.project?.name ?? 'Unknown Project'} has been assigned to ${assignee.userName}`;
+    const assignEmailBody = [
+      `Task: ${this.taskNoWithDetails(updatedTask.taskNo, updatedTask.designType, updatedTask.revisionCode)}`,
+      ...this.opNoLine(updatedTask.opNo),
+      `Project: ${updatedTask.project?.name ?? 'Unknown Project'}`,
+      `Assigned to: ${assignee.userName}`,
+    ].join('\n');
     const stakeholderIdsAssign = await this.resolveHodAdminAndSalesNotifyIds(updatedTask.project, {
       taskId: id,
     });
@@ -2555,6 +2624,9 @@ export class TasksService {
       .create({ userId: dto.assigneeId, title: 'Task Assigned to You', message: assignMessage, linkUrl: linkUrlAssign })
       .catch((err) => this.logger.error('Failed to send assign notification to designer', err));
     this.dashboardRealtime?.notifyUserNotificationRefresh(dto.assigneeId);
+    this.graphMail
+      ?.notify([dto.assigneeId], `Task Assigned — ${updatedTask.taskNo}`, assignEmailBody)
+      .catch((err: unknown) => this.logger.error('Failed to send assign Graph email to designer', err));
     for (const stakeholderId of stakeholderIdsAssign) {
       if (stakeholderId !== dto.assigneeId) {
         this.notificationsService
@@ -2787,6 +2859,12 @@ export class TasksService {
       const linkUrlStatus =
         taskViewPath(id, (updatedTask as any).designType);
       const statusMessage = `${(updatedTask as any).taskNo} — ${(updatedTask as any).project?.name ?? 'Unknown Project'} status changed to ${effectiveStatusApi}`;
+      const statusEmailBody = [
+        `Task: ${this.taskNoWithDetails((updatedTask as any).taskNo, (updatedTask as any).designType, (updatedTask as any).revisionCode)}`,
+        ...this.opNoLine((updatedTask as any).opNo),
+        `Project: ${(updatedTask as any).project?.name ?? 'Unknown Project'}`,
+        `Status: ${effectiveStatusApi}`,
+      ].join('\n');
       const stakeholderIdsStatus = await this.resolveHodAdminAndSalesNotifyIds(
         (updatedTask as any).project,
         { taskId: id },
@@ -2822,6 +2900,15 @@ export class TasksService {
           this.dashboardRealtime?.notifyUserNotificationRefresh(stakeholderId);
         }
       }
+
+      const hodReviewersStatus = await this.findHodReviewNotifyTargets();
+      this.graphMail
+        ?.notify(
+          hodReviewersStatus.map((hod) => hod.id),
+          `Task ${effectiveStatusApi} — ${(updatedTask as any).taskNo}`,
+          statusEmailBody,
+        )
+        .catch((err: unknown) => this.logger.error('Failed to send task-completion Graph email to HOD', err));
     }
 
     // HOD_REVIEW — notify HOD/ADMIN users that a task is waiting for their review
@@ -2929,6 +3016,12 @@ export class TasksService {
       const linkUrlSales =
         taskViewPath(id, (updatedTask as any).designType);
       const salesMessage = `${(updatedTask as any).taskNo} — ${(updatedTask as any).project?.name ?? 'Unknown Project'} is ready for your review.`;
+      const salesEmailBody = [
+        `Task: ${this.taskNoWithDetails((updatedTask as any).taskNo, (updatedTask as any).designType, (updatedTask as any).revisionCode)}`,
+        ...this.opNoLine((updatedTask as any).opNo),
+        `Project: ${(updatedTask as any).project?.name ?? 'Unknown Project'}`,
+        `Status: Ready for review`,
+      ].join('\n');
       const salesReviewers = await this.resolveSalesReviewNotifyIds((updatedTask as any).project, {
         taskId: id,
       });
@@ -2938,6 +3031,9 @@ export class TasksService {
           .catch((err) => this.logger.error('Failed to send sales-review notification', err));
         this.dashboardRealtime?.notifyUserNotificationRefresh(spId);
       }
+      this.graphMail
+        ?.notify(salesReviewers, `Task Ready for Review — ${(updatedTask as any).taskNo}`, salesEmailBody)
+        .catch((err: unknown) => this.logger.error('Failed to send sales-review Graph email', err));
     }
 
     // REWORK — same task stays with current designer(s); notify designers + stakeholders
@@ -3495,7 +3591,9 @@ export class TasksService {
         where: { id: taskId },
         select: {
           taskNo: true,
+          opNo: true,
           designType: true,
+          revisionCode: true,
           project: { select: { name: true } },
           assignee: { select: { userName: true } },
           taskDesigners: { select: { designer: { select: { userName: true } } } },
@@ -3510,6 +3608,13 @@ export class TasksService {
           ? submittedTask.taskDesigners.map((d) => d.designer.userName).join(', ')
           : 'Designer');
       const submitMsg = `${submittedTask.taskNo} — ${submittedTask.project?.name ?? 'Unknown Project'} work submitted by ${submitterName}. Ready for review.`;
+      const submitEmailBody = [
+        `Task: ${this.taskNoWithDetails(submittedTask.taskNo, submittedTask.designType, submittedTask.revisionCode)}`,
+        ...this.opNoLine(submittedTask.opNo),
+        `Project: ${submittedTask.project?.name ?? 'Unknown Project'}`,
+        `Submitted by: ${submitterName}`,
+        `Status: Ready for review`,
+      ].join('\n');
       const hodUsers = await this.findHodReviewNotifyTargets();
       await Promise.all(
         hodUsers.map((hod) =>
@@ -3524,6 +3629,13 @@ export class TasksService {
             .catch((err) => this.logger.error('Failed to send work-submitted notification', err)),
         ),
       );
+      this.graphMail
+        ?.notify(
+          hodUsers.map((hod) => hod.id),
+          `Work Submitted — ${submittedTask.taskNo}`,
+          submitEmailBody,
+        )
+        .catch((err: unknown) => this.logger.error('Failed to send work-submitted Graph email', err));
     } catch (err) {
       this.logger.error('Failed to send work-submitted notifications to HOD', err);
     }

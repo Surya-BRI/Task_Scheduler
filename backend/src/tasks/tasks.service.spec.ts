@@ -944,7 +944,11 @@ describe('TasksService', () => {
       expect(notificationsService.create).toHaveBeenCalledWith(
         expect.objectContaining({ userId: '9099', title: expect.stringContaining('HOD Review') }),
       );
-      process.env.BACKUP_HOD_REVIEWER_USER_IDS = ORIGINAL_ENV;
+      if (ORIGINAL_ENV === undefined) {
+        delete process.env.BACKUP_HOD_REVIEWER_USER_IDS;
+      } else {
+        process.env.BACKUP_HOD_REVIEWER_USER_IDS = ORIGINAL_ENV;
+      }
     });
 
     it('CLIENT_REJECTED creates the next revision, notifies designers with the new-task link, and notifies stakeholders once', async () => {

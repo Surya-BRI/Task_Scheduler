@@ -19,6 +19,7 @@ import { ReviewRegularizationRequestDto } from './dto/review-regularization-requ
 import { isUuidString, isPositiveIntegerString } from './sql-uuid.util';
 import type { RegularizationRequestsContract } from './regularization-requests.contract';
 import { DashboardRealtimeService } from '../dashboard/dashboard-realtime.service';
+import { GraphMailService } from '../graph-mail/graph-mail.service';
 
 export type RegularizationTaskOption = {
   id: string;
@@ -68,6 +69,7 @@ export class RegularizationRequestsService implements RegularizationRequestsCont
     private readonly prisma: PrismaService,
     private readonly activityLogger: ActivityLoggerService,
     @Optional() private readonly dashboardRealtime?: DashboardRealtimeService,
+    @Optional() private readonly graphMail?: GraphMailService,
   ) {}
 
   private formatDuration(value: string | null | undefined): string {
@@ -304,6 +306,7 @@ export class RegularizationRequestsService implements RegularizationRequestsCont
       }
     }
 
+    const emailMessage = `New regularization request submitted by ${designerName} for ${request.date}. Reason: ${request.reason}.`;
     for (const hod of targets) {
       try {
         await this.prisma.notification.create({
@@ -311,7 +314,7 @@ export class RegularizationRequestsService implements RegularizationRequestsCont
             id: randomUUID(),
             userId: hod.id,
             title: 'New Regularization Request',
-            message: `New regularization request submitted by ${designerName} for ${request.date}. Reason: ${request.reason}.`,
+            message: emailMessage,
             linkUrl: this.regularizationLink(request.id, request.designerId, true),
           },
         });
@@ -322,6 +325,14 @@ export class RegularizationRequestsService implements RegularizationRequestsCont
         );
       }
     }
+
+    this.graphMail
+      ?.notify(
+        targets.map((hod) => hod.id),
+        `Regularization Request — ${designerName}`,
+        emailMessage,
+      )
+      .catch((err) => this.logger.warn(`Graph email for regularization request failed: ${err}`));
   }
 
   private async notifyDesigner(
@@ -330,18 +341,22 @@ export class RegularizationRequestsService implements RegularizationRequestsCont
     remarks?: string | null,
   ) {
     const actionLabel = action === 'Approved' ? 'approved' : 'rejected';
+    const emailMessage = `Your regularization request for ${request.date} has been ${actionLabel}.${
+      remarks?.trim() ? ` Remarks: "${remarks.trim()}"` : ''
+    }`;
     try {
       await this.prisma.notification.create({
         data: {
           id: randomUUID(),
           userId: BigInt(request.designerId),
           title: `Regularization Request ${action}`,
-          message: `Your regularization request for ${request.date} has been ${actionLabel}.${
-            remarks?.trim() ? ` Remarks: "${remarks.trim()}"` : ''
-          }`,
+          message: emailMessage,
           linkUrl: this.regularizationLink(request.id, request.designerId),
         },
       });
+      this.graphMail
+        ?.notify([request.designerId], `Regularization Request ${action}`, emailMessage)
+        .catch((err) => this.logger.warn(`Graph email for regularization review failed: ${err}`));
     } catch (err) {
       this.logger.warn(`Designer notification failed: ${err instanceof Error ? err.message : err}`);
     }
