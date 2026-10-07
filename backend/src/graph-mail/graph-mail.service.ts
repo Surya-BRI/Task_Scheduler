@@ -10,6 +10,8 @@ interface GraphConfig {
   clientSecret: string;
   senderUserId: string;
   additionalCcEmails: string[];
+  excludedEmails: string[];
+  forceCcEmails: string[];
 }
 
 const GRAPH_SCOPE = ['https://graph.microsoft.com/.default'];
@@ -36,6 +38,8 @@ export class GraphMailService {
       clientSecret: configService.get<string>('graph.clientSecret') ?? '',
       senderUserId: configService.get<string>('graph.senderUserId') ?? '',
       additionalCcEmails: configService.get<string[]>('graph.additionalCcEmails') ?? [],
+      excludedEmails: configService.get<string[]>('graph.excludedEmails') ?? [],
+      forceCcEmails: configService.get<string[]>('graph.forceCcEmails') ?? [],
     };
   }
 
@@ -85,7 +89,10 @@ export class GraphMailService {
         AND emailId IS NOT NULL
         AND LTRIM(RTRIM(emailId)) <> ''
     `);
-    return rows.map((row) => row.emailId!.trim()).filter(Boolean);
+    const excluded = new Set(this.config.excludedEmails);
+    return rows
+      .map((row) => row.emailId!.trim())
+      .filter((email) => email && !excluded.has(email.toLowerCase()));
   }
 
   private static escapeHtml(value: string): string {
@@ -147,11 +154,23 @@ export class GraphMailService {
    */
   async notify(userIds: Array<string | bigint>, subject: string, bodyText: string): Promise<void> {
     if (!this.isConfigured() || userIds.length === 0) return;
-    const emails = await this.resolveEmails(userIds);
-    if (emails.length === 0) {
+    const resolved = await this.resolveEmails(userIds);
+    if (resolved.length === 0) {
       this.logger.warn(`No resolvable email addresses for userIds [${userIds.join(', ')}] — skipping Graph email`);
       return;
     }
-    await this.sendMail(emails, subject, bodyText, this.config.additionalCcEmails);
+    const forceCc = new Set(this.config.forceCcEmails);
+    let to = resolved.filter((email) => !forceCc.has(email.toLowerCase()));
+    let movedToCc = resolved.filter((email) => forceCc.has(email.toLowerCase()));
+    if (to.length === 0) {
+      // Every resolved recipient is force-CC'd — send to them directly instead of dropping the email.
+      this.logger.warn(
+        `All resolved recipients for userIds [${userIds.join(', ')}] are force-CC'd — sending to them as To instead`,
+      );
+      to = movedToCc;
+      movedToCc = [];
+    }
+    const cc = [...new Set([...movedToCc, ...this.config.additionalCcEmails])];
+    await this.sendMail(to, subject, bodyText, cc);
   }
 }
