@@ -93,6 +93,16 @@ export default () => {
         .split(',')
         .map((e) => e.trim())
         .filter(Boolean),
+      /** Comma-separated addresses never sent a Graph email, regardless of ERP role (e.g. stray test accounts). */
+      excludedEmails: (process.env.GRAPH_EXCLUDED_EMAILS ?? '')
+        .split(',')
+        .map((e) => e.trim().toLowerCase())
+        .filter(Boolean),
+      /** Comma-separated addresses that are always moved from To into Cc on every outgoing notification email. */
+      forceCcEmails: (process.env.GRAPH_FORCE_CC_EMAILS ?? '')
+        .split(',')
+        .map((e) => e.trim().toLowerCase())
+        .filter(Boolean),
     },
   };
 };
