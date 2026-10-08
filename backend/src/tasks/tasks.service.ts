@@ -23,6 +23,7 @@ import { GraphMailService } from '../graph-mail/graph-mail.service';
 import { COMPLETED_STATUS_FILTER, isTaskReassignmentBlocked, TASK_REASSIGNMENT_BLOCKED_MESSAGE } from '../dashboard/task-status-buckets.util';
 import { toApiTaskStatus, toDbTaskStatus } from './task-status.util';
 import { NotificationsService } from '../notifications/notifications.service';
+import { isRetailBusinessUnitCode } from '../common/utils/business-unit.util';
 import {
   mapSchedulerTaskSummary,
   SCHEDULER_TASK_SUMMARY_SELECT,
@@ -926,7 +927,115 @@ export class TasksService {
     const bySalesForceCode = await tryFindBySalesForceCode(task.opNo);
     if (bySalesForceCode) return bySalesForceCode;
 
+    // Nothing hydrated locally yet — mirrors ProjectsService.findByProjectNo's ERP fallback
+    // so a brand-new OP (valid in ERP, never opened in the app before) doesn't 404 here.
+    const hydrated = await this.hydrateProjectFromErp({ projectNo: task.projectNo, opNo: task.opNo });
+    if (hydrated) return hydrated;
+
     throw new NotFoundException('Project not found (reuse existing projectNo or OP no)');
+  }
+
+  /** Auto-create a local Project row from ERP master data when nothing was hydrated yet. */
+  private async hydrateProjectFromErp(params: { projectNo?: string; opNo?: string }): Promise<ProjectLookup | null> {
+    const projectCode = (params.projectNo ?? params.opNo ?? '').trim();
+    if (projectCode) {
+      const erpRows = await this.prisma.live.$queryRaw<
+        Array<{
+          projectCode: string | null;
+          projectName: string | null;
+          businessUnitCode: string | null;
+          salesPerson: string | null;
+        }>
+      >(Prisma.sql`
+        SELECT TOP 1
+          mp.projectCode,
+          mp.projectName,
+          mb.businessUnitCode,
+          (me.firstName + '' + me.lastName) AS salesPerson
+        FROM ErpMasterProject mp
+        LEFT JOIN ErpMasterOpportunity mo ON mo.projectid = mp.projectid
+        LEFT JOIN ErpMasterBusinessUnit mb ON mb.businessUnitId = mp.businessUnitId
+        LEFT JOIN ErpMasterEmployee me ON me.employeeId = mo.salesRepId
+        WHERE mp.isActive = 1
+          AND (
+            mp.projectCode = ${projectCode}
+            OR REPLACE(REPLACE(LOWER(mp.projectCode), ' ', ''), '-', '') = REPLACE(REPLACE(LOWER(${projectCode}), ' ', ''), '-', '')
+          )
+        ORDER BY mp.createdOn DESC
+      `);
+      const erp = erpRows[0];
+      if (erp?.projectCode) {
+        const bu = String(erp.businessUnitCode ?? '').trim().toLowerCase();
+        const category = isRetailBusinessUnitCode(bu) ? 'Retail' : 'Project';
+        try {
+          return await this.prisma.project.create({
+            data: {
+              projectNo: erp.projectCode,
+              name: erp.projectName?.trim() || erp.projectCode,
+              category,
+              businessUnit: erp.businessUnitCode?.trim() || category,
+              status: 'ACTIVE',
+              salesPerson: erp.salesPerson?.trim() || null,
+            },
+            select: PROJECT_LOOKUP_SELECT,
+          });
+        } catch {
+          const existingAfterRace = await this.prisma.project.findFirst({
+            where: { projectNo: erp.projectCode },
+            select: PROJECT_LOOKUP_SELECT,
+          });
+          if (existingAfterRace) return existingAfterRace;
+        }
+      }
+    }
+
+    const salesForceCode = (params.opNo ?? '').trim();
+    if (!salesForceCode) return null;
+
+    const oppRows = await this.prisma.live.$queryRaw<
+      Array<{
+        salesForceCode: string | null;
+        opportunityName: string | null;
+        businessUnitCode: string | null;
+        salesPerson: string | null;
+      }>
+    >(Prisma.sql`
+      SELECT TOP 1
+        mo.salesForceCode,
+        mo.opportunityName,
+        mb.businessUnitCode,
+        (me.firstName + '' + me.lastName) AS salesPerson
+      FROM ErpMasterOpportunity mo
+      LEFT JOIN ErpMasterBusinessUnit mb ON mb.businessUnitId = mo.businessUnitId
+      LEFT JOIN ErpMasterEmployee me ON me.employeeId = mo.salesRepId
+      WHERE mo.isActive = 1
+        AND LTRIM(RTRIM(mo.salesForceCode)) = ${salesForceCode}
+      ORDER BY mo.createdOn DESC
+    `);
+    const opp = oppRows[0];
+    if (!opp?.salesForceCode) return null;
+
+    const bu = String(opp.businessUnitCode ?? '').trim().toLowerCase();
+    const category = isRetailBusinessUnitCode(bu) ? 'Retail' : 'Project';
+    try {
+      return await this.prisma.project.create({
+        data: {
+          salesForceCode: opp.salesForceCode,
+          name: opp.opportunityName?.trim() || opp.salesForceCode,
+          category,
+          businessUnit: opp.businessUnitCode?.trim() || category,
+          status: 'ACTIVE',
+          salesPerson: opp.salesPerson?.trim() || null,
+        },
+        select: PROJECT_LOOKUP_SELECT,
+      });
+    } catch {
+      const existingAfterRace = await this.prisma.project.findFirst({
+        where: { salesForceCode: opp.salesForceCode },
+        select: PROJECT_LOOKUP_SELECT,
+      });
+      return existingAfterRace ?? null;
+    }
   }
 
   /** Live ERP sales person for a project code / Salesforce OP (best-effort). */
