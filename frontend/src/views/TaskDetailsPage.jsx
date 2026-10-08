@@ -1399,7 +1399,9 @@ export function TaskDetailsPage() {
         if (!task && lookupOpNo) {
           const result = await apiClient.get(`/tasks?search=${encodeURIComponent(lookupOpNo)}&limit=20`)
           const rows = result?.data ?? []
-          task = rows.find((item) => String(item?.opNo ?? '') === lookupOpNo) ?? rows[0] ?? null
+          // Only accept an exact opNo match — `search` also matches title/description text,
+          // so an unrelated task that merely *mentions* this OP must not be picked as a fallback.
+          task = rows.find((item) => String(item?.opNo ?? '') === lookupOpNo) ?? null
         }
         if (task?.id && !task?.retailDetails && !task?.projectDetails) {
           try {
