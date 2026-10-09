@@ -27,7 +27,7 @@ export const TRANSACTION_VIEWS = [
     label: 'Design Completed',
     path: '/transactions/design-completed',
     from: 'transactions-design-completed',
-    statuses: ['CLIENT_ACCEPTED'],
+    statuses: ['CLIENT_ACCEPTED', 'CLIENT_REJECTED'],
   },
   {
     id: 'design-rework',

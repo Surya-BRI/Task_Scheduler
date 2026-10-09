@@ -28,6 +28,7 @@ describe('transaction views', () => {
     ])
     expect(getTransactionBoardColumns('design-completed').map((col) => col.status)).toEqual([
       'CLIENT_ACCEPTED',
+      'CLIENT_REJECTED',
     ])
     expect(getTransactionBoardColumns('design-rework')).toHaveLength(2)
     expect(getTransactionBoardColumns('design-approval').map((col) => col.status)).toEqual([
