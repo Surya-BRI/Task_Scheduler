@@ -796,6 +796,76 @@ export class TasksService {
     );
   }
 
+  /**
+   * When Create Task bumps to a new revision, auto-close every older
+   * revision in scope that is still sitting at CLIENT_ACCEPTED (not just the
+   * immediate predecessor) — starting a new revision supersedes the whole
+   * older chain, so no earlier revision can be left open/accepted once a
+   * newer one exists. No-op for R0 (no older revisions) or when an older
+   * revision is already CLIENT_REJECTED (the normal reject-driven bump
+   * already handles that line).
+   */
+  private async closeAcceptedPredecessorOnBump(
+    tx: Prisma.TransactionClient,
+    params: { projectId: string; opNo: string; designType: string; revisionCode: string },
+  ): Promise<{ id: string; taskNo: string; title: string | null }[]> {
+    const n = this.getRevisionNumber(params.revisionCode);
+    if (n <= 0) return [];
+    const olderTasks = await tx.task.findMany({
+      where: {
+        projectId: params.projectId,
+        opNo: params.opNo,
+        designType: params.designType,
+        revisionCode: { not: null },
+      },
+      select: { id: true, taskNo: true, title: true, status: true, revisionCode: true },
+    });
+    const toClose = olderTasks.filter((t) => {
+      if (!t.revisionCode) return false;
+      const rn = this.getRevisionNumber(t.revisionCode);
+      return rn >= 0 && rn < n && toApiTaskStatus(t.status) === 'CLIENT_ACCEPTED';
+    });
+    if (toClose.length === 0) return [];
+    await tx.task.updateMany({
+      where: { id: { in: toClose.map((t) => t.id) } },
+      data: { status: 'CLIENT_REJECTED' },
+    });
+    return toClose.map((t) => ({ id: t.id, taskNo: t.taskNo, title: t.title }));
+  }
+
+  private async logAutoRejectedPredecessors(
+    userId: string,
+    closed: { id: string; taskNo: string; title: string | null }[],
+    newTask: { id: string; taskNo: string },
+  ): Promise<void> {
+    if (closed.length === 0) return;
+    await Promise.all(
+      closed.map((old) =>
+        this.activityLogger.log({
+          action: ActivityAction.CLIENT_REJECTED_TASK,
+          userId,
+          taskId: old.id,
+          details: {
+            event: ActivityAction.CLIENT_REJECTED_TASK,
+            messageKey: 'client_rejected_task',
+            taskSnapshot: {
+              id: old.id,
+              taskNo: old.taskNo,
+              title: old.title ?? undefined,
+              status: 'CLIENT_REJECTED',
+            },
+            changes: { oldStatus: 'CLIENT_ACCEPTED', newStatus: 'CLIENT_REJECTED' },
+            context: {
+              source: 'tasks.autoRejectOnRevisionBump',
+              newRevisionTaskId: newTask.id,
+              newRevisionTaskNo: newTask.taskNo,
+            },
+          },
+        }),
+      ),
+    );
+  }
+
   /** True max+1 — used only by createRevisionFromClientReject. */
   private async resolveNextRevisionCode(
     tx: Prisma.TransactionClient | PrismaService,
@@ -1181,8 +1251,14 @@ export class TasksService {
           this.throwRevisionSlotTaken(duplicate, revisionCode);
         }
 
-        const createdId = await this.prisma.$transaction(
+        const { createdId, closedPredecessors } = await this.prisma.$transaction(
           async (tx) => {
+            const closedPredecessors = await this.closeAcceptedPredecessorOnBump(tx, {
+              projectId: project.id,
+              opNo: normalizedOpNo,
+              designType: normalizedDesignType,
+              revisionCode,
+            });
             const created = await tx.task.create({
               data: {
                 taskNo: this.buildTaskNo(dto.opNo),
@@ -1198,7 +1274,7 @@ export class TasksService {
               },
               select: { id: true },
             });
-            return created.id;
+            return { createdId: created.id, closedPredecessors };
           },
           { timeout: 15_000 },
         );
@@ -1208,6 +1284,7 @@ export class TasksService {
           select: TASK_SELECT,
         });
         if (!created) throw new NotFoundException('Task not found after create');
+        await this.logAutoRejectedPredecessors(userId, closedPredecessors, created);
 
         await this.activityLogger.log({
           action: ActivityAction.TASK_CREATED,
@@ -1349,8 +1426,14 @@ export class TasksService {
         this.throwRevisionSlotTaken(duplicate, revisionCode);
       }
 
-      const taskId = await this.prisma.$transaction(
+      const { taskId, closedPredecessors } = await this.prisma.$transaction(
         async (tx) => {
+          const closedPredecessors = await this.closeAcceptedPredecessorOnBump(tx, {
+            projectId: project.id,
+            opNo: normalizedOpNo,
+            designType: normalizedDesignType,
+            revisionCode,
+          });
           let createdTaskId: string | null = null;
           for (let attempt = 0; attempt < 5; attempt++) {
             try {
@@ -1432,7 +1515,7 @@ export class TasksService {
             }
           }
 
-          return createdTaskId;
+          return { taskId: createdTaskId, closedPredecessors };
         },
         { timeout: 15_000 },
       );
@@ -1442,6 +1525,7 @@ export class TasksService {
         select: TASK_SELECT,
       });
       if (!created) throw new NotFoundException('Task not found after create');
+      await this.logAutoRejectedPredecessors(userId, closedPredecessors, created);
       await this.activityLogger.log({
         action: ActivityAction.TASK_CREATED,
         userId,
@@ -1553,7 +1637,13 @@ export class TasksService {
       }
     }
 
-    const created = await this.prisma.$transaction(async (tx) => {
+    const { created, closedPredecessors } = await this.prisma.$transaction(async (tx) => {
+      const closedPredecessors = await this.closeAcceptedPredecessorOnBump(tx, {
+        projectId: project.id,
+        opNo: normalizedOpNo,
+        designType: normalizedDesignType,
+        revisionCode,
+      });
       const results: { taskId: string; detailId: string }[] = [];
 
       // Phase is project-scoped (not per-opNo/signType like revision), so it's
@@ -1635,7 +1725,7 @@ export class TasksService {
         results.push({ taskId, detailId: createdLine.id });
       }
 
-      return results;
+      return { created: results, closedPredecessors };
     }, { timeout: 30000 });
 
     // One createMany for all attachments across all tasks (same files on every task).
@@ -1658,6 +1748,11 @@ export class TasksService {
     const createdTasks = await Promise.all(
       created.map(({ taskId }) => this.prisma.task.findUnique({ where: { id: taskId }, select: TASK_SELECT })),
     );
+
+    const firstCreatedTask = createdTasks.find((t): t is NonNullable<typeof t> => t !== null);
+    if (firstCreatedTask) {
+      await this.logAutoRejectedPredecessors(userId, closedPredecessors, firstCreatedTask);
+    }
 
     // Log activity + notify for each created task
     await Promise.all(createdTasks.filter((t): t is NonNullable<typeof t> => t !== null).map((task) =>
@@ -2012,6 +2107,19 @@ export class TasksService {
       orderBy: { createdAt: 'desc' },
     });
     return { data: rows.map((task) => mapSchedulerTaskSummary(task)) };
+  }
+
+  /** Exact opNo -> task lookup (no title/description fuzzy matching — see findAll's `search`). */
+  async findByOpNo(opNo: string, userId?: string, role?: UserRole) {
+    const value = String(opNo ?? '').trim();
+    if (!value) throw new BadRequestException('opNo is required');
+    const task = await this.prisma.task.findFirst({
+      where: { opNo: value },
+      select: { id: true },
+      orderBy: { createdAt: 'desc' },
+    });
+    if (!task) return null;
+    return this.findOne(task.id, userId, role, { view: 'core' });
   }
 
   async findOne(
