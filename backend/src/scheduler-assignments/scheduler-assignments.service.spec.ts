@@ -1497,6 +1497,9 @@ describe('SchedulerAssignmentsService', () => {
 
     expect(result.version).toBe(2);
     expect(prisma.taskDesigner.deleteMany).toHaveBeenCalled();
+    // notifyAfterWeekSave runs unawaited (void ...catch(...)) so the PUT response doesn't
+    // block on email delivery — flush the microtask queue to let that background chain finish.
+    await new Promise((resolve) => setImmediate(resolve));
     expect(graphMail.notify).toHaveBeenCalledTimes(1);
     expect(graphMail.notify).toHaveBeenCalledWith(
       [designerB],
