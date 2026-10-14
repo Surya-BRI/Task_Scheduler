@@ -20,6 +20,7 @@ describe('UsersService IDOR protection', () => {
       id: '42',
       userName: 'me',
       role: UserRole.DESIGNER,
+      profileImageUrl: null,
     });
   });
 
@@ -30,6 +31,7 @@ describe('UsersService IDOR protection', () => {
       id: '43',
       userName: 'other',
       role: UserRole.SALESPERSON,
+      profileImageUrl: null,
     });
   });
 
@@ -40,6 +42,7 @@ describe('UsersService IDOR protection', () => {
       id: '44',
       userName: 'boss',
       role: UserRole.ADMIN,
+      profileImageUrl: null,
     });
   });
 
