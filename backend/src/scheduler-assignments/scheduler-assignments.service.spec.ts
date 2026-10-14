@@ -43,12 +43,15 @@ describe('SchedulerAssignmentsService', () => {
   const cronLockService: any = {
     tryAcquire: jest.fn().mockResolvedValue(async () => undefined),
   };
+  const graphMail: any = { notify: jest.fn().mockResolvedValue(undefined) };
   const service = new SchedulerAssignmentsService(
     prisma,
     {} as any,
     activityLogger,
     notificationsService,
     cronLockService,
+    undefined,
+    graphMail,
   );
 
   beforeEach(async () => {
@@ -1457,7 +1460,7 @@ describe('SchedulerAssignmentsService', () => {
       ),
     );
     prisma.task.findMany.mockResolvedValue([
-      { id: taskId, status: 'REWORK', assigneeId: designerA, projectId: null, project: null },
+      { id: taskId, taskNo: 'T-100', designType: 'DESIGN', status: 'REWORK', assigneeId: designerA, projectId: null, project: null },
     ]);
     prisma.schedulerAssignment.findMany
       .mockResolvedValueOnce(existingRows)
@@ -1494,6 +1497,12 @@ describe('SchedulerAssignmentsService', () => {
 
     expect(result.version).toBe(2);
     expect(prisma.taskDesigner.deleteMany).toHaveBeenCalled();
+    expect(graphMail.notify).toHaveBeenCalledTimes(1);
+    expect(graphMail.notify).toHaveBeenCalledWith(
+      [designerB],
+      'Task Scheduled — T-100',
+      'Tasks scheduled for you:\n- T-100',
+    );
   });
 
   describe('carryOverPastDueAssignments', () => {

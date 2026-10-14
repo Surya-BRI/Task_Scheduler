@@ -153,6 +153,13 @@ export class TasksController {
     return this.tasksService.getRunningTimerForDesigner(user.sub);
   }
 
+  /** GET /tasks/by-op/:opNo — exact opNo lookup (no title/description fuzzy matching). */
+  @Get('by-op/:opNo')
+  @Roles(UserRole.HOD, UserRole.DESIGNER, UserRole.SALESPERSON, UserRole.QS)
+  findByOpNo(@Param('opNo') opNo: string, @CurrentUser() user: JwtPayload) {
+    return this.tasksService.findByOpNo(opNo, user.sub, user.role);
+  }
+
   /** GET /tasks/:id/extras — signed attachments, scheduler hours, reallocation CTA. */
   @Get(':id/extras')
   @Roles(UserRole.HOD, UserRole.DESIGNER, UserRole.SALESPERSON, UserRole.QS)

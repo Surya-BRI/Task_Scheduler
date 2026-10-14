@@ -4,10 +4,18 @@ import { PrismaService } from '../prisma/prisma.service';
 import { UserRole } from '../common/constants/roles.enum';
 import { ERP_ROLE_MAP } from '../common/utils/erp-role-map.util';
 import { hasHodEquivalentAccess, isBackupHodReviewer } from '../common/utils/workflow-roles.util';
+import { signErpAssetUrl } from '../common/utils/erp-asset-url.util';
 
 type ErpAuthRow = { userId: bigint; userName: string; password: string; roleName: string };
-type ErpUserRow = { userId: bigint; userName: string; roleName: string | null };
-type ErpSalesRow = { userId: bigint; userName: string; firstName: string | null; lastName: string | null; roleName: string };
+type ErpUserRow = { userId: bigint; userName: string; roleName: string | null; profileImageUrl: string | null };
+type ErpSalesRow = {
+  userId: bigint;
+  userName: string;
+  firstName: string | null;
+  lastName: string | null;
+  roleName: string;
+  profileImageUrl: string | null;
+};
 
 export type ErpLoginResult = { userId: bigint; userName: string; role: UserRole };
 
@@ -39,43 +47,51 @@ export class UsersService {
   async findAll(filters?: { role?: string; search?: string }) {
     if (filters?.role === UserRole.SALESPERSON) {
       const rows = await this.prisma.$queryRaw<ErpSalesRow[]>`
-        SELECT E.userId, Au.userName, E.firstName, E.lastName, MR.roleName
+        SELECT E.userId, Au.userName, E.firstName, E.lastName, MR.roleName, Ass.assetsURL AS profileImageUrl
         FROM ErpMasterEmployee E
         INNER JOIN ErpAuthUserRoleMap AURM ON E.userId = AURM.userId AND AURM.isActive = 1
         INNER JOIN ErpMasterRole MR ON AURM.roleId = MR.roleId AND MR.isActive = 1 AND MR.isDeleted = 0
         INNER JOIN ErpAuthUsers Au ON E.userId = Au.userId
+        LEFT JOIN ErpAssets Ass ON Ass.parentId = E.employeeId AND Ass.parentType = 'ProfileImage'
         WHERE E.isActive = 1 AND E.isDeleted = 0 AND E.isAllowLogin = 1
           AND Au.isActive = 1 AND Au.isDeleted = 0
           AND MR.roleName IN ('SalesRep', 'Sales Coordinator', 'SalesManagerRetail', 'Director Of Retail')
           AND Au.userName NOT IN ('-', '')
         ORDER BY Au.userName ASC
       `;
-      return rows
-        .map((row) => ({
+      const mapped = await Promise.all(
+        rows.map(async (row) => ({
           id: row.userId.toString(),
           userName: row.userName,
           displayName: [row.firstName, row.lastName].filter(Boolean).join(' ') || row.userName,
           salesPersonName: `${row.firstName ?? ''}${row.lastName ?? ''}`.trim() || row.userName,
           role: ERP_ROLE_MAP[row.roleName] ?? UserRole.SALESPERSON,
           erpRole: row.roleName,
-        }))
-        .filter((user) => !filters.search || user.userName.toLowerCase().includes(filters.search.toLowerCase()));
+          profileImageUrl: await signErpAssetUrl(row.profileImageUrl),
+        })),
+      );
+      return mapped.filter(
+        (user) => !filters.search || user.userName.toLowerCase().includes(filters.search.toLowerCase()),
+      );
     }
 
     const rows = await this.prisma.$queryRaw<ErpUserRow[]>`
-      SELECT u.userId, u.userName, r.roleName
+      SELECT u.userId, u.userName, r.roleName, Ass.assetsURL AS profileImageUrl
       FROM ErpAuthUsers u
       LEFT JOIN ErpAuthUserRoleMap m ON m.userId = u.userId AND m.isActive = 1
       LEFT JOIN ErpMasterRole r ON r.roleId = m.roleId AND r.isActive = 1 AND r.isDeleted = 0
+      LEFT JOIN ErpMasterEmployee E ON E.userId = u.userId AND E.isActive = 1 AND E.isDeleted = 0
+      LEFT JOIN ErpAssets Ass ON Ass.parentId = E.employeeId AND Ass.parentType = 'ProfileImage' AND Ass.isActive = 1
       WHERE u.isActive = 1 AND u.isDeleted = 0
       ORDER BY u.userName ASC
     `;
 
-    return rows
+    const filtered = rows
       .map((row) => ({
         id: row.userId.toString(),
         userName: row.userName,
         role: row.roleName ? (ERP_ROLE_MAP[row.roleName] ?? null) : null,
+        profileImageUrl: row.profileImageUrl,
       }))
       .filter((user) => {
         if (filters?.role) {
@@ -92,15 +108,21 @@ export class UsersService {
         if (filters?.search && !user.userName.toLowerCase().includes(filters.search.toLowerCase())) return false;
         return true;
       });
+
+    return Promise.all(
+      filtered.map(async (user) => ({ ...user, profileImageUrl: await signErpAssetUrl(user.profileImageUrl) })),
+    );
   }
 
   async findById(id: string) {
     const userId = BigInt(id);
     const rows = await this.prisma.$queryRaw<ErpUserRow[]>`
-      SELECT TOP 1 u.userId, u.userName, r.roleName
+      SELECT TOP 1 u.userId, u.userName, r.roleName, Ass.assetsURL AS profileImageUrl
       FROM ErpAuthUsers u
       LEFT JOIN ErpAuthUserRoleMap m ON m.userId = u.userId AND m.isActive = 1
       LEFT JOIN ErpMasterRole r ON r.roleId = m.roleId AND r.isActive = 1 AND r.isDeleted = 0
+      LEFT JOIN ErpMasterEmployee E ON E.userId = u.userId AND E.isActive = 1 AND E.isDeleted = 0
+      LEFT JOIN ErpAssets Ass ON Ass.parentId = E.employeeId AND Ass.parentType = 'ProfileImage' AND Ass.isActive = 1
       WHERE u.userId = ${userId}
     `;
     const user = rows[0];
@@ -109,6 +131,7 @@ export class UsersService {
       id: user.userId.toString(),
       userName: user.userName,
       role: user.roleName ? (ERP_ROLE_MAP[user.roleName] ?? null) : null,
+      profileImageUrl: await signErpAssetUrl(user.profileImageUrl),
     };
   }
 

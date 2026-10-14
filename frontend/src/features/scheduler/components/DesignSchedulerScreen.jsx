@@ -1006,6 +1006,7 @@ export function DesignSchedulerScreen({ readOnly = false } = {}) {
                         id: String(user?.id ?? "").trim(),
                         name: String(user?.fullName ?? user?.userName ?? "Designer"),
                         initials: toInitials(user?.fullName ?? user?.userName),
+                        profileImageUrl: user?.profileImageUrl || null,
                     })).filter((d) => d.id)
                     : [];
                 const hodOption = session?.role === "HOD" && isNumericId(session.id)

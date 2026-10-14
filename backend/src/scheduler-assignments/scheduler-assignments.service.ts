@@ -27,6 +27,7 @@ import { ActivityAction } from '../activities/activity-events';
 import { SaveSchedulerWeekDto } from './dto/save-scheduler-week.dto';
 import { UserRole } from '../common/constants/roles.enum';
 import { NotificationsService } from '../notifications/notifications.service';
+import { GraphMailService } from '../graph-mail/graph-mail.service';
 import { DashboardRealtimeService } from '../dashboard/dashboard-realtime.service';
 import {
   LEAVE_TYPE_HALF_DAY,
@@ -212,6 +213,7 @@ export class SchedulerAssignmentsService implements OnModuleInit {
     private readonly notificationsService: NotificationsService,
     private readonly cronLockService: CronLockService,
     @Optional() private readonly dashboardRealtime?: DashboardRealtimeService,
+    @Optional() private readonly graphMail?: GraphMailService,
   ) {}
 
   async onModuleInit(): Promise<void> {
@@ -4034,6 +4036,13 @@ export class SchedulerAssignmentsService implements OnModuleInit {
       );
 
       const hodUsers: Array<{ id: string }> = [];
+      // One scheduler email per designer per save, listing every task they were given
+      const mailTaskNosByDesigner = new Map<string, string[]>();
+      const addMailTask = (designerId: string, taskNo: string) => {
+        const taskNos = mailTaskNosByDesigner.get(designerId) ?? [];
+        if (!taskNos.includes(taskNo)) taskNos.push(taskNo);
+        mailTaskNosByDesigner.set(designerId, taskNos);
+      };
       for (const r of result.reassignedTasks) {
         const task = taskById.get(r.taskId);
         if (!task) continue;
@@ -4045,6 +4054,7 @@ export class SchedulerAssignmentsService implements OnModuleInit {
           .create({ userId: r.newAssigneeId, title: 'Task Scheduled for You', message: designerMsg, linkUrl: taskLink })
           .catch((err) => this.logger.error('Failed to notify designer on scheduler assign', err));
         this.dashboardRealtime?.notifyUserNotificationRefresh(r.newAssigneeId);
+        addMailTask(r.newAssigneeId, task.taskNo);
         for (const hod of hodUsers) {
           if (hod.id !== r.newAssigneeId) {
             this.notificationsService
@@ -4072,6 +4082,7 @@ export class SchedulerAssignmentsService implements OnModuleInit {
           const taskLink = taskViewPath(taskId, task.designType);
           const designerNames = designerIds.map((id) => splitNameById.get(id) ?? 'Designer').join(', ');
           for (const designerId of designerIds) {
+            addMailTask(designerId, task.taskNo);
             this.notificationsService
               .create({ userId: designerId, title: 'Task Scheduled for You', message: `${task.taskNo} has been scheduled for you.`, linkUrl: taskLink })
               .catch((err) => this.logger.error('Failed to notify split designer on scheduler save', err));
@@ -4084,6 +4095,14 @@ export class SchedulerAssignmentsService implements OnModuleInit {
             this.dashboardRealtime?.notifyUserNotificationRefresh(hod.id);
           }
         }
+      }
+
+      for (const [designerId, taskNos] of mailTaskNosByDesigner) {
+        const subject = taskNos.length === 1 ? `Task Scheduled — ${taskNos[0]}` : `${taskNos.length} Tasks Scheduled for You`;
+        const bodyText = ['Tasks scheduled for you:', ...taskNos.map((taskNo) => `- ${taskNo}`)].join('\n');
+        this.graphMail
+          ?.notify([designerId], subject, bodyText)
+          .catch((err: unknown) => this.logger.error('Failed to send scheduler Graph email to designer', err));
       }
     }
 

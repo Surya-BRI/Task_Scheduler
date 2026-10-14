@@ -12,6 +12,7 @@ type MeResponse = {
   userName: string;
   role: string | null;
   isBackupHodReviewer?: boolean;
+  profileImageUrl?: string | null;
 };
 
 function mapMeToSession(user: MeResponse) {
@@ -20,6 +21,7 @@ function mapMeToSession(user: MeResponse) {
     userName: user.userName,
     role: user.role ?? 'DESIGNER',
     isBackupHodReviewer: user.isBackupHodReviewer,
+    profileImageUrl: user.profileImageUrl,
   });
 }
 
