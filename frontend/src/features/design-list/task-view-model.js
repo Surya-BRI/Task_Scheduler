@@ -154,6 +154,7 @@ export function mapTaskToDesignRow(task) {
     submissionDate: deadlineDate,
     agingDays: computeAgingDays(createdDate),
     assigneeId: task?.assigneeId || null,
+    assignees: Array.isArray(task?.assignees) ? task.assignees : [],
     designerNames:
       task?.assignee?.fullName ||
       (task?.taskDesigners?.length > 0
@@ -161,6 +162,7 @@ export function mapTaskToDesignRow(task) {
         : null),
     revisionCode: task?.revisionCode || "—",
     createdByName: String(task?.createdByDisplayName ?? task?.createdByName ?? task?.activityLogs?.[0]?.user?.userName ?? '').trim() || null,
+    createdByProfileImageUrl: task?.createdByProfileImageUrl || null,
     submittedDurationSeconds:
       typeof task?.submittedDurationSeconds === "number"
         ? task.submittedDurationSeconds

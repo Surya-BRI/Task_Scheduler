@@ -27,6 +27,47 @@ import { ReallocationQueuePanel } from "./ReallocationQueuePanel";
 
 const TRANSACTIONS_VIEW_MODE_KEY = "transactions-view-mode";
 
+const ASSIGNEE_AVATARS_VISIBLE = 3;
+
+function AssigneeAvatars({ assignees, size = "h-5 w-5" }) {
+  if (!assignees || assignees.length === 0) {
+    return (
+      <span className={`grid ${size} place-items-center rounded-full bg-white/90 ring-1 ring-slate-200 text-slate-400`}>
+        <UserRound className="h-3.5 w-3.5" />
+      </span>
+    );
+  }
+  const visible = assignees.slice(0, ASSIGNEE_AVATARS_VISIBLE);
+  const overflow = assignees.length - visible.length;
+  return (
+    <span className="flex items-center" style={{ paddingLeft: visible.length > 1 ? "6px" : 0 }}>
+      {visible.map((person, idx) => (
+        <span
+          key={person.userId ?? idx}
+          title={person.name}
+          className={`grid ${size} place-items-center overflow-hidden rounded-full bg-slate-200 text-slate-700 ring-2 ring-white text-[9px] font-bold`}
+          style={{ marginLeft: idx === 0 ? 0 : "-6px" }}
+        >
+          {person.profileImageUrl ? (
+            <img src={person.profileImageUrl} alt="" className="h-full w-full object-cover" referrerPolicy="no-referrer" />
+          ) : (
+            (person.name || "?").trim().charAt(0).toUpperCase()
+          )}
+        </span>
+      ))}
+      {overflow > 0 && (
+        <span
+          title={assignees.slice(ASSIGNEE_AVATARS_VISIBLE).map((p) => p.name).join(", ")}
+          className={`grid ${size} place-items-center rounded-full bg-slate-700 text-white ring-2 ring-white text-[8px] font-bold`}
+          style={{ marginLeft: "-6px" }}
+        >
+          +{overflow}
+        </span>
+      )}
+    </span>
+  );
+}
+
 function readTransactionsViewMode(defaultMode) {
   if (typeof window === "undefined") return defaultMode;
   try {
@@ -278,7 +319,7 @@ const Toolbar = ({
 const Table = ({ data, workflowFrom }) => {
   const router = useRouter();
   return (
-    <div className="flex min-h-0 flex-1 flex-col px-4 pb-4 sm:px-6"><div className="ui-surface flex min-h-0 flex-1 flex-col overflow-hidden"><div className="min-h-0 flex-1 overflow-auto"><table className="w-full min-w-[1220px] border-collapse text-left text-[11px] text-slate-700"><thead className="sticky top-0 z-10 border-b border-slate-200 bg-slate-100"><tr><th className="px-2 py-1.5">OP No</th><th className="px-2 py-1.5">Project No</th><th className="px-2 py-1.5">Business Unit</th><th className="px-2 py-1.5">Design Type</th><th className="px-2 py-1.5">Revision</th><th className="px-2 py-1.5">Project Name</th><th className="px-2 py-1.5">Status</th><th className="px-2 py-1.5">Sales Person</th><th className="px-2 py-1.5">Created By</th><th className="px-2 py-1.5">Created</th><th className="px-2 py-1.5">Deadline</th><th className="px-2 py-1.5 text-right">Aging</th><th className="px-2 py-1.5 text-center">Actions</th></tr></thead><tbody className="divide-y divide-slate-100">{data.map((row, index) => { const overdue = isOverdue(row); return (<tr key={`${row.id}-${index}`} className={`transition-colors hover:bg-blue-50/40 ${overdue ? "bg-red-50/40" : index % 2 === 0 ? "bg-white" : "bg-slate-50/60"}`}><td className="px-2 py-1.5">{row.opNo ? (<button type="button" onClick={() => router.push(recordDetailPath(row, workflowFrom))} className="text-left text-xs font-medium text-blue-600 hover:text-blue-700 hover:underline">{row.opNo}</button>) : (<span className="text-xs font-medium text-slate-800">{"—"}</span>)}</td><td className="px-2 py-1.5"><span className="text-xs text-slate-700">{row.projectNo || "—"}</span></td><td className="px-2 py-1.5">{row.businessUnit || "�"}</td><td className="px-2 py-1.5 font-medium text-slate-800 whitespace-nowrap" ><TypeOfDesignChip value={row.typeOfDesign} /></td><td className="px-2 py-1.5">{row.revisionCode}</td><td className="px-2 py-1.5 w-[200px] whitespace-nowrap" title={row.projectName || "�"}>{truncateText(row.projectName, 20)}</td><td className="px-2 py-1.5"><span className={`inline-flex items-center rounded-full border px-1.5 py-px text-[9px] font-semibold leading-tight ${getStatusColor(row.status)}`}>{getStatusLabel(row.status)}</span></td><td className="px-2 py-1.5">{row.salesPerson || "Unassigned"}</td><td className="px-2 py-1.5">{row.createdByName || "—"}</td><td className="px-2 py-1.5 whitespace-nowrap">{row.created || "�"}</td><td className={`px-2 py-1.5 whitespace-nowrap font-medium ${overdue ? "text-red-600" : "text-slate-700"}`}>{overdue ? <span className="inline-flex items-center gap-1"><span className="inline-block h-1.5 w-1.5 rounded-full bg-red-500 shrink-0" />{row.deadline}</span> : (row.deadline || "�")}</td><td className={`px-2 py-1.5 whitespace-nowrap text-right font-semibold ${row.agingDays > 20 ? "text-red-600" : "text-slate-600"}`}>{row.agingDays != null ? `${row.agingDays} d` : "�"}</td><td className="px-2 py-1.5"><div className="flex items-center justify-center gap-1.5 text-slate-400"><button type="button" onClick={() => router.push(recordDetailPath(row, workflowFrom))} className="rounded p-0.5 transition-colors hover:bg-slate-100 hover:text-blue-600" title="View details"><Eye className="h-3.5 w-3.5" /></button><button type="button" onClick={() => router.push(recordTabPath(row, "chatter", workflowFrom))} className="rounded p-0.5 transition-colors hover:bg-slate-100 hover:text-slate-600" title="Links & chatter"><Link2 className="h-3.5 w-3.5" /></button><button type="button" onClick={() => router.push(recordTabPath(row, "activity", workflowFrom))} className="rounded p-0.5 transition-colors hover:bg-slate-100 hover:text-emerald-600" title="Activity history"><History className="h-3.5 w-3.5" /></button><button type="button" onClick={() => router.push(recordDetailPath(row, workflowFrom))} className="rounded p-0.5 transition-colors hover:bg-slate-100 hover:text-violet-600" title="Assignee"><UserRound className="h-3.5 w-3.5" /></button></div></td></tr>); })}</tbody></table></div></div></div>
+    <div className="flex min-h-0 flex-1 flex-col px-4 pb-4 sm:px-6"><div className="ui-surface flex min-h-0 flex-1 flex-col overflow-hidden"><div className="min-h-0 flex-1 overflow-auto"><table className="w-full min-w-[1220px] border-collapse text-left text-[11px] text-slate-700"><thead className="sticky top-0 z-10 border-b border-slate-200 bg-slate-100"><tr><th className="px-2 py-1.5">OP No</th><th className="px-2 py-1.5">Project No</th><th className="px-2 py-1.5">Business Unit</th><th className="px-2 py-1.5">Design Type</th><th className="px-2 py-1.5">Revision</th><th className="px-2 py-1.5">Project Name</th><th className="px-2 py-1.5">Status</th><th className="px-2 py-1.5">Sales Person</th><th className="px-2 py-1.5">Created By</th><th className="px-2 py-1.5">Created</th><th className="px-2 py-1.5">Deadline</th><th className="px-2 py-1.5 text-right">Aging</th><th className="px-2 py-1.5 text-center">Actions</th></tr></thead><tbody className="divide-y divide-slate-100">{data.map((row, index) => { const overdue = isOverdue(row); return (<tr key={`${row.id}-${index}`} className={`transition-colors hover:bg-blue-50/40 ${overdue ? "bg-red-50/40" : index % 2 === 0 ? "bg-white" : "bg-slate-50/60"}`}><td className="px-2 py-1.5">{row.opNo ? (<button type="button" onClick={() => router.push(recordDetailPath(row, workflowFrom))} className="text-left text-xs font-medium text-blue-600 hover:text-blue-700 hover:underline">{row.opNo}</button>) : (<span className="text-xs font-medium text-slate-800">{"—"}</span>)}</td><td className="px-2 py-1.5"><span className="text-xs text-slate-700">{row.projectNo || "—"}</span></td><td className="px-2 py-1.5">{row.businessUnit || "�"}</td><td className="px-2 py-1.5 font-medium text-slate-800 whitespace-nowrap" ><TypeOfDesignChip value={row.typeOfDesign} /></td><td className="px-2 py-1.5">{row.revisionCode}</td><td className="px-2 py-1.5 w-[200px] whitespace-nowrap" title={row.projectName || "�"}>{truncateText(row.projectName, 20)}</td><td className="px-2 py-1.5"><span className={`inline-flex items-center rounded-full border px-1.5 py-px text-[9px] font-semibold leading-tight ${getStatusColor(row.status)}`}>{getStatusLabel(row.status)}</span></td><td className="px-2 py-1.5">{row.salesPerson || "Unassigned"}</td><td className="px-2 py-1.5">{row.createdByName || "—"}</td><td className="px-2 py-1.5 whitespace-nowrap">{row.created || "�"}</td><td className={`px-2 py-1.5 whitespace-nowrap font-medium ${overdue ? "text-red-600" : "text-slate-700"}`}>{overdue ? <span className="inline-flex items-center gap-1"><span className="inline-block h-1.5 w-1.5 rounded-full bg-red-500 shrink-0" />{row.deadline}</span> : (row.deadline || "�")}</td><td className={`px-2 py-1.5 whitespace-nowrap text-right font-semibold ${row.agingDays > 20 ? "text-red-600" : "text-slate-600"}`}>{row.agingDays != null ? `${row.agingDays} d` : "�"}</td><td className="px-2 py-1.5"><div className="flex items-center justify-center gap-1.5 text-slate-400"><button type="button" onClick={() => router.push(recordDetailPath(row, workflowFrom))} className="rounded p-0.5 transition-colors hover:bg-slate-100 hover:text-blue-600" title="View details"><Eye className="h-3.5 w-3.5" /></button><button type="button" onClick={() => router.push(recordTabPath(row, "chatter", workflowFrom))} className="rounded p-0.5 transition-colors hover:bg-slate-100 hover:text-slate-600" title="Links & chatter"><Link2 className="h-3.5 w-3.5" /></button><button type="button" onClick={() => router.push(recordTabPath(row, "activity", workflowFrom))} className="rounded p-0.5 transition-colors hover:bg-slate-100 hover:text-emerald-600" title="Activity history"><History className="h-3.5 w-3.5" /></button><button type="button" onClick={() => router.push(recordDetailPath(row, workflowFrom))} className="rounded-full hover:ring-2 hover:ring-violet-300" title="Assignee"><AssigneeAvatars assignees={row.assignees} size="h-5 w-5" /></button></div></td></tr>); })}</tbody></table></div></div></div>
   );
 };
 
@@ -316,8 +357,20 @@ const Board = ({ data, workflowFrom, columns = DESIGN_LIST_BOARD_COLUMNS }) => {
                 </div>
                 <div className="flex items-center justify-between mb-1.5 gap-1">
                   {item.createdByName && (
-                    <div className="text-[10px] font-semibold text-slate-600 truncate" title={`Created by ${item.createdByName}`}>
-                      Created by {item.createdByName}
+                    <div className="flex items-center gap-1 min-w-0 text-[10px] font-semibold text-slate-600 truncate" title={`Created by ${item.createdByName}`}>
+                      {item.createdByProfileImageUrl ? (
+                        <img
+                          src={item.createdByProfileImageUrl}
+                          alt=""
+                          className="w-3.5 h-3.5 rounded-full object-cover shrink-0"
+                          referrerPolicy="no-referrer"
+                        />
+                      ) : (
+                        <span className="w-3.5 h-3.5 rounded-full bg-slate-300 text-slate-700 flex items-center justify-center text-[8px] font-bold shrink-0 leading-none">
+                          {item.createdByName.trim().charAt(0).toUpperCase()}
+                        </span>
+                      )}
+                      <span className="truncate">Created by {item.createdByName}</span>
                     </div>
                   )}
                   <button
@@ -370,10 +423,10 @@ const Board = ({ data, workflowFrom, columns = DESIGN_LIST_BOARD_COLUMNS }) => {
                     <button
                       type="button"
                       onClick={() => router.push(recordDetailPath(item, workflowFrom))}
-                      className="grid h-6 w-6 place-items-center rounded-full bg-white/90 ring-1 ring-slate-200 hover:text-violet-600"
+                      className="rounded-full hover:ring-2 hover:ring-violet-300"
                       title="Assignee"
                     >
-                      <UserRound className="h-3.5 w-3.5" />
+                      <AssigneeAvatars assignees={item.assignees} size="h-6 w-6" />
                     </button>
                   </div>
                 </div>

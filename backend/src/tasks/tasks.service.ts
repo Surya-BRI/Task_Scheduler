@@ -7,6 +7,7 @@ import { AssignTaskDto } from './dto/assign-task.dto';
 import { UpdateTaskStatusDto } from './dto/update-task-status.dto';
 import { UserRole } from '../common/constants/roles.enum';
 import { ERP_ROLE_MAP } from '../common/utils/erp-role-map.util';
+import { signErpAssetUrl } from '../common/utils/erp-asset-url.util';
 import {
   hasHodEquivalentAccess,
   isBackupHodReviewer,
@@ -2056,16 +2057,45 @@ export class TasksService {
     const creatorLoginByTaskId = new Map<string, string | null>(
       data.map((task) => [task.id, String((task as any).activityLogs?.[0]?.user?.userName ?? '').trim() || null]),
     );
-    const creatorDisplayNames = await this.findErpDisplayNames([...creatorLoginByTaskId.values()]);
+    // Primary assignee first, then any co-assigned designers (taskDesigners), deduped by userId —
+    // a task split across multiple designers has no single `assignee`, just taskDesigners rows.
+    const designersByTaskId = new Map<string, Array<{ userId: string; userName: string }>>(
+      data.map((task) => {
+        const assignee = (task as any).assignee as { userId: bigint; userName: string } | null;
+        const junction = ((task as any).taskDesigners ?? []) as Array<{ designer: { userId: bigint; userName: string } }>;
+        const seen = new Set<string>();
+        const list: Array<{ userId: string; userName: string }> = [];
+        for (const person of [assignee, ...junction.map((j) => j.designer)]) {
+          if (!person) continue;
+          const userId = person.userId.toString();
+          if (seen.has(userId)) continue;
+          seen.add(userId);
+          list.push({ userId, userName: person.userName });
+        }
+        return [task.id, list];
+      }),
+    );
+    const erpDisplayNames = await this.findErpDisplayNames([
+      ...creatorLoginByTaskId.values(),
+      ...[...designersByTaskId.values()].flatMap((list) => list.map((d) => d.userName)),
+    ]);
 
     return {
       data: data.map((task) => {
         const createdByName = creatorLoginByTaskId.get(task.id) ?? null;
+        const creatorInfo = createdByName ? erpDisplayNames.get(createdByName) : undefined;
+        const assignees = (designersByTaskId.get(task.id) ?? []).map((d) => ({
+          userId: d.userId,
+          name: erpDisplayNames.get(d.userName)?.displayName ?? d.userName,
+          profileImageUrl: erpDisplayNames.get(d.userName)?.profileImageUrl ?? null,
+        }));
         return {
           ...this.normalizeTaskForApi(task),
           submittedDurationSeconds: submittedDurationByTaskId.get(task.id) ?? null,
           createdByName,
-          createdByDisplayName: createdByName ? (creatorDisplayNames.get(createdByName) ?? createdByName) : null,
+          createdByDisplayName: creatorInfo?.displayName ?? createdByName,
+          createdByProfileImageUrl: creatorInfo?.profileImageUrl ?? null,
+          assignees,
         };
       }),
       total,
@@ -2330,20 +2360,31 @@ export class TasksService {
     };
   }
 
-  private async findErpDisplayNames(logins: Array<string | null>): Promise<Map<string, string>> {
+  private async findErpDisplayNames(
+    logins: Array<string | null>,
+  ): Promise<Map<string, { displayName: string; profileImageUrl: string | null }>> {
     const userNames = [...new Set(logins.filter((v): v is string => !!v))];
-    const displayNames = new Map<string, string>();
+    const displayNames = new Map<string, { displayName: string; profileImageUrl: string | null }>();
     if (userNames.length === 0) return displayNames;
-    const rows = await this.prisma.$queryRaw<Array<{ userName: string; firstName: string | null; lastName: string | null }>>(Prisma.sql`
-      SELECT Au.userName, E.firstName, E.lastName
+    const rows = await this.prisma.$queryRaw<
+      Array<{ userName: string; firstName: string | null; lastName: string | null; profileImageUrl: string | null }>
+    >(Prisma.sql`
+      SELECT Au.userName, E.firstName, E.lastName, Ass.assetsURL AS profileImageUrl
       FROM ErpAuthUsers Au
       INNER JOIN ErpMasterEmployee E ON E.userId = Au.userId
+      LEFT JOIN ErpAssets Ass ON Ass.parentId = E.employeeId AND Ass.parentType = 'ProfileImage' AND Ass.isActive = 1
       WHERE Au.userName IN (${Prisma.join(userNames)})
     `);
-    for (const row of rows) {
-      const name = [row.firstName, row.lastName].filter(Boolean).join(' ');
-      if (name) displayNames.set(row.userName, name);
-    }
+    await Promise.all(
+      rows.map(async (row) => {
+        const name = [row.firstName, row.lastName].filter(Boolean).join(' ');
+        if (!name) return;
+        displayNames.set(row.userName, {
+          displayName: name,
+          profileImageUrl: await signErpAssetUrl(row.profileImageUrl),
+        });
+      }),
+    );
     return displayNames;
   }
 
@@ -2384,7 +2425,7 @@ export class TasksService {
 
     const createdLogin = created?.user?.userName?.trim() || null;
     const createdByName = createdLogin
-      ? ((await this.findErpDisplayNames([createdLogin])).get(createdLogin) ?? createdLogin)
+      ? ((await this.findErpDisplayNames([createdLogin])).get(createdLogin)?.displayName ?? createdLogin)
       : null;
 
     const retailHod =

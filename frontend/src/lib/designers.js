@@ -58,6 +58,7 @@ export function buildSessionForUser(user) {
       .join('')
       .slice(0, 2)
       .toUpperCase(),
+    profileImageUrl: user.profileImageUrl || null,
   };
 
   if (role === 'DESIGNER') {

@@ -192,12 +192,21 @@ function ProfileDropdown({ session }) {
       <button
         type="button"
         onClick={() => setOpen((v) => !v)}
-        className="grid h-10 w-10 place-items-center rounded-full bg-[#c5d9ed] text-slate-700 shadow-sm transition hover:bg-[#b5cee6] focus:outline-none focus-visible:ring-2 focus-visible:ring-blue-400 focus-visible:ring-offset-2"
+        className="grid h-10 w-10 place-items-center overflow-hidden rounded-full bg-[#c5d9ed] text-slate-700 shadow-sm transition hover:bg-[#b5cee6] focus:outline-none focus-visible:ring-2 focus-visible:ring-blue-400 focus-visible:ring-offset-2"
         aria-expanded={open}
         aria-haspopup="menu"
         aria-label="Account menu"
       >
-        <Users className="h-5 w-5" strokeWidth={1.75} aria-hidden />
+        {session?.profileImageUrl ? (
+          <img
+            src={session.profileImageUrl}
+            alt=""
+            className="h-full w-full object-cover"
+            referrerPolicy="no-referrer"
+          />
+        ) : (
+          <Users className="h-5 w-5" strokeWidth={1.75} aria-hidden />
+        )}
       </button>
 
       {open && (
@@ -208,8 +217,17 @@ function ProfileDropdown({ session }) {
         >
           {/* User header */}
           <div className="px-4 py-3 border-b border-slate-100 flex items-start gap-3">
-            <div className="w-9 h-9 rounded-full bg-[#1a3c6e] text-white flex items-center justify-center text-sm font-bold shrink-0">
-              {session?.initials || '?'}
+            <div className="w-9 h-9 rounded-full bg-[#1a3c6e] text-white flex items-center justify-center text-sm font-bold shrink-0 overflow-hidden">
+              {session?.profileImageUrl ? (
+                <img
+                  src={session.profileImageUrl}
+                  alt=""
+                  className="h-full w-full object-cover"
+                  referrerPolicy="no-referrer"
+                />
+              ) : (
+                session?.initials || '?'
+              )}
             </div>
             <div className="flex flex-col min-w-0">
               <p className="text-sm font-semibold text-slate-900 truncate">{displayName}</p>
