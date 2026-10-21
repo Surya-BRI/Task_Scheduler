@@ -6,7 +6,7 @@ BEGIN
   CREATE TABLE dbo.ErpTSChatterPostMention (
     id        UNIQUEIDENTIFIER NOT NULL DEFAULT NEWID() PRIMARY KEY,
     postId    UNIQUEIDENTIFIER NOT NULL,
-    userId    UNIQUEIDENTIFIER NOT NULL,
+    userId    BIGINT           NOT NULL,
     createdAt DATETIME         NOT NULL DEFAULT SYSUTCDATETIME(),
     CONSTRAINT UQ_ErpTSChatterPostMention_post_user UNIQUE (postId, userId)
   );
@@ -19,7 +19,7 @@ BEGIN
   CREATE TABLE dbo.ErpTSChatterCommentMention (
     id        UNIQUEIDENTIFIER NOT NULL DEFAULT NEWID() PRIMARY KEY,
     commentId UNIQUEIDENTIFIER NOT NULL,
-    userId    UNIQUEIDENTIFIER NOT NULL,
+    userId    BIGINT           NOT NULL,
     createdAt DATETIME         NOT NULL DEFAULT SYSUTCDATETIME(),
     CONSTRAINT UQ_ErpTSChatterCommentMention_comment_user UNIQUE (commentId, userId)
   );
@@ -32,7 +32,7 @@ BEGIN
   CREATE TABLE dbo.ErpTSChatterPostLike (
     id        UNIQUEIDENTIFIER NOT NULL DEFAULT NEWID() PRIMARY KEY,
     postId    UNIQUEIDENTIFIER NOT NULL,
-    userId    UNIQUEIDENTIFIER NOT NULL,
+    userId    BIGINT           NOT NULL,
     createdAt DATETIME         NOT NULL DEFAULT SYSUTCDATETIME(),
     CONSTRAINT UQ_ErpTSChatterPostLike_post_user UNIQUE (postId, userId)
   );

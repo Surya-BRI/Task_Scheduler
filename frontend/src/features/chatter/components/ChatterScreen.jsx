@@ -1239,11 +1239,11 @@ export function ChatterScreen() {
   const applySeenUpdates = useCallback((updates) => {
     if (!Array.isArray(updates) || updates.length === 0) return;
     const byId = new Map(
-      updates.map((update) => [normalizeUserId(update.postId) ?? update.postId, update]),
+      updates.map((update) => [update.postId?.trim().toLowerCase(), update]),
     );
     const patchFeed = (prev) =>
       prev.map((post) => {
-        const update = byId.get(normalizeUserId(post.id) ?? post.id);
+        const update = byId.get(post.id?.trim().toLowerCase());
         if (!update) return post;
         return {
           ...post,
@@ -1260,7 +1260,7 @@ export function ChatterScreen() {
     const ids = [...seenPendingRef.current];
     seenPendingRef.current.clear();
     if (!ids.length) return;
-    const keys = ids.map((id) => normalizeUserId(id)).filter(Boolean);
+    const keys = ids.map((id) => id?.trim().toLowerCase()).filter(Boolean);
     try {
       // Local-only path: POST /seen returns patches — never reloadPosts/reloadPrivateFeeds here.
       // Backend must not notifyChatterRefresh on seen (that caused full-list storms).
@@ -1276,13 +1276,13 @@ export function ChatterScreen() {
 
   const queueMarkPostSeen = useCallback((postId) => {
     if (!currentUserId || !postId) return;
-    const key = normalizeUserId(postId);
+    const key = postId?.trim().toLowerCase();
     if (!key || seenRecordedRef.current.has(key)) return;
     seenPendingRef.current.add(postId);
 
     setPosts((prev) =>
       prev.map((post) => {
-        if (!isSameUserId(post.id, postId)) return post;
+        if (post.id?.trim().toLowerCase() !== key) return post;
         const alreadyListed = (post.seenByUsers ?? []).some((user) =>
           isSameUserId(user.id, currentUserId),
         );
@@ -1308,7 +1308,7 @@ export function ChatterScreen() {
         isSameUserId(user.id, currentUserId),
       );
       if (alreadySeen) {
-        const key = normalizeUserId(post.id);
+        const key = post.id?.trim().toLowerCase();
         if (key) seenRecordedRef.current.add(key);
       }
     }
