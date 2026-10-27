@@ -25,6 +25,7 @@ describe('transaction views', () => {
       'Design Planned',
       'In Progress',
       'Design Completed',
+      'HOD Review',
     ])
     expect(getTransactionBoardColumns('design-completed').map((col) => col.status)).toEqual([
       'CLIENT_ACCEPTED',
