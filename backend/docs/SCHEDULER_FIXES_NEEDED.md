@@ -165,12 +165,16 @@ Architectural/scalability items found while investigating [SCHEDULER_DISAPPEARIN
 
 ---
 
+### 11. Overflow placement skips locked destination weeks — FIXED 2026-09-17
+
+**Was:** the primary week-save path rejects a `PUT` against a locked week, but `placeOverflowCapacity` (item 4) walked forward into other weeks and wrote `SchedulerAssignment` rows there without checking whether *those* weeks were locked.
+
+**Fix:** locked weeks for the lookahead range are loaded up front and skipped in the day-walk loop (same pattern as `applyReallocationHandoff`); hours that can't be placed come back in `unplacedOverflow`. Verified live — see `TESTING_PROGRESS.md` bug #18.
+
+**Files:** `backend/src/scheduler-assignments/scheduler-assignments.service.ts` — `placeOverflowCapacity`
+
+---
+
 ## Not yet done
 
-### 11. `placeOverflowCapacity` doesn't check the destination week's lock state — FIXED 2026-09-17
-
-> **Status: fixed** (TESTING_PROGRESS bug #18). Locked destination weeks are now loaded up front and skipped. The text below is the original write-up.
-
-The primary week-save path rejects a `PUT` against a locked week (`isLocked: true`). `placeOverflowCapacity` (item 4 above) walks forward into other weeks and creates/upserts `SchedulerAssignment` rows there without checking whether *those* destination weeks are locked — an overflow placement could silently write into a week that was locked specifically to prevent further edits.
-
-**Fix:** have `placeOverflowCapacity` check each candidate week's `isLocked` flag (same as the primary save path) and skip locked weeks when searching for capacity, reporting any resulting unplaceable hours via `unplacedOverflow` instead.
+Nothing open from this investigation. Remaining scheduler items live in [KNOWN_GAPS.md](KNOWN_GAPS.md) and [REALLOCATION_GAPS.md](REALLOCATION_GAPS.md).

@@ -16,6 +16,7 @@ export type DashboardRealtimeEvent =
   | 'scheduler_week_saved'
   | 'scheduler_leave_rescheduled'
   | 'scheduler_carryover'
+  | 'scheduler_completion_trimmed'
   | 'scheduler_week_locked'
   | 'scheduler_week_unlocked'
   | 'scheduler_day_locked'

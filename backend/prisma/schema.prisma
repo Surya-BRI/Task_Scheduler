@@ -160,6 +160,9 @@ model Task {
   dueDate     DateTime?
   startedAt          DateTime?
   completedAt        DateTime?
+  /// When the designer finished the design (entered DESIGN_COMPLETED). Unlike completedAt it is
+  /// NOT overwritten when the client later accepts/rejects. Drives the scheduler's completion day.
+  designCompletedAt  DateTime?
   holdPreviousStatus String?   @db.NVarChar(50)
 
   // Rework context — populated when rework/client-reject instructions are issued

@@ -115,6 +115,9 @@ export function buildLiveScheduleFromAssignments(assignments, tasksArr) {
       overtimeColorClass: "bg-red-100 border border-red-300 text-red-800",
       splitIndex: a.splitIndex,
       totalParts: a.totalParts,
+      taskStatus: apiTask?.status ? String(apiTask.status).trim().toUpperCase() : null,
+      designCompletedAt: apiTask?.designCompletedAt ?? null,
+      dueDate: apiTask?.dueDate ?? null,
     };
     const dayStr = String(a.dayIndex);
     if (!scheduleByDayIndex[dayStr]) scheduleByDayIndex[dayStr] = [];

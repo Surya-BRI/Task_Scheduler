@@ -17,6 +17,8 @@ describe('scheduler-task-summary.util', () => {
     holdPreviousStatus: null,
     projectId: 'proj-1',
     updatedAt: new Date('2026-07-01T00:00:00.000Z'),
+    dueDate: new Date('2026-07-10T00:00:00.000Z'),
+    designCompletedAt: null as Date | null,
     project: {
       id: 'proj-1',
       name: 'Retail rollout',

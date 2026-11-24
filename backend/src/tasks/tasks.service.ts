@@ -21,7 +21,13 @@ import { SubmitWorkDto } from './dto/submit-work.dto';
 import { SaveTimerStateDto } from './dto/save-timer-state.dto';
 import { DashboardRealtimeService } from '../dashboard/dashboard-realtime.service';
 import { GraphMailService } from '../graph-mail/graph-mail.service';
-import { COMPLETED_STATUS_FILTER, isTaskReassignmentBlocked, TASK_REASSIGNMENT_BLOCKED_MESSAGE } from '../dashboard/task-status-buckets.util';
+import {
+  ACTIVE_TASK_STATUSES,
+  COMPLETED_STATUS_FILTER,
+  isTaskReassignmentBlocked,
+  TASK_REASSIGNMENT_BLOCKED_MESSAGE,
+} from '../dashboard/task-status-buckets.util';
+import { SchedulerAssignmentsService } from '../scheduler-assignments/scheduler-assignments.service';
 import { toApiTaskStatus, toDbTaskStatus } from './task-status.util';
 import { NotificationsService } from '../notifications/notifications.service';
 import { isRetailBusinessUnitCode } from '../common/utils/business-unit.util';
@@ -110,6 +116,7 @@ const TASK_SELECT = {
   dueDate: true,
   startedAt: true,
   completedAt: true,
+  designCompletedAt: true,
   holdPreviousStatus: true,
   reworkNote: true,
   reworkAttachmentUrl: true,
@@ -174,6 +181,7 @@ const TASK_CORE_SELECT = {
   dueDate: true,
   startedAt: true,
   completedAt: true,
+  designCompletedAt: true,
   holdPreviousStatus: true,
   reworkNote: true,
   reworkAttachmentUrl: true,
@@ -278,6 +286,7 @@ const TASK_LIST_SELECT = {
   dueDate: true,
   startedAt: true,
   completedAt: true,
+  designCompletedAt: true,
   holdPreviousStatus: true,
   reworkNote: true,
   reworkAttachmentUrl: true,
@@ -369,7 +378,27 @@ export class TasksService {
     private readonly notificationsService: NotificationsService,
     @Optional() private readonly dashboardRealtime?: DashboardRealtimeService,
     @Optional() private readonly graphMail?: GraphMailService,
+    @Optional() private readonly schedulerAssignments?: SchedulerAssignmentsService,
   ) {}
+
+  /**
+   * Rule 16: after a task's design is finished, drop its scheduled rows on later days so the
+   * grid shows it on the real completion day and the freed hours can be re-planned. Best-effort:
+   * the status change has already committed, so a failure here is logged, not thrown.
+   */
+  private async trimScheduleAfterDesignCompletion(taskId: string, completedAt: Date, actorUserId: string) {
+    if (!this.schedulerAssignments) return;
+    try {
+      const result = await this.schedulerAssignments.trimScheduleAfterDesignCompletion(taskId, completedAt, actorUserId);
+      if (result.removedCount > 0) {
+        this.logger.log(
+          `Early completion: removed ${result.removedCount} later scheduler row(s) (${result.removedHours}h) for task ${taskId}`,
+        );
+      }
+    } catch (err) {
+      this.logger.error(`Failed to trim schedule after completion for task ${taskId}`, err);
+    }
+  }
 
   /** `["OP No: <value>"]` when opNo is set, else `[]` — spread into email-body line arrays. */
   private opNoLine(opNo?: string | null): string[] {
@@ -3006,6 +3035,14 @@ export class TasksService {
     if (effectiveStatusApi === 'IN_PROGRESS' && !existing.startedAt) extraData.startedAt = now;
     if (COMPLETED_STATUS_FILTER.includes(effectiveStatusApi)) extraData.completedAt = now;
 
+    // Design finished: active (new/planned/in-progress/rework) → any done status. Usually that is
+    // DESIGN_COMPLETED, but a direct jump to a review/client status counts too. Hold-restore
+    // never re-stamps (current status is ON_HOLD, not active). Rule 16 trims the schedule after.
+    const enteringDesignDone =
+      (ACTIVE_TASK_STATUSES as readonly string[]).includes(currentStatusApi) &&
+      isTaskReassignmentBlocked(effectiveStatusApi);
+    if (enteringDesignDone) extraData.designCompletedAt = now;
+
     // REWORK stays on the same task — persist instructions alongside the status flip
     if (effectiveStatusApi === 'REWORK') {
       extraData.reworkNote = dto.reworkNote?.trim() || null;
@@ -3056,6 +3093,10 @@ export class TasksService {
         data: { status: newStatusDb, ...extraData },
         select: TASK_STATUS_SELECT,
       });
+    }
+
+    if (enteringDesignDone) {
+      await this.trimScheduleAfterDesignCompletion(id, now, userId);
     }
 
     const milestoneAction =
@@ -3684,6 +3725,7 @@ export class TasksService {
     );
 
     // Create/promote work session + files in a transaction, then update task status
+    const submittedAt = new Date();
     const session = await this.prisma.$transaction(async (tx) => {
       const draft = await tx.taskWorkSession.findFirst({
         where: { taskId, designerId: BigInt(userId), status: { in: ['Draft', 'HandedOff'] } },
@@ -3711,7 +3753,7 @@ export class TasksService {
             pauseLog: dto.pauseLog || draft.pauseLog || null,
             runStartedAt: null,
             status: 'Submitted',
-            submittedAt: new Date(),
+            submittedAt,
           },
         });
       } else {
@@ -3743,13 +3785,17 @@ export class TasksService {
         where: { id: taskId },
         data: {
           status: 'DESIGN_COMPLETED',
-          completedAt: new Date(),
-          ...(task.startedAt ? {} : { startedAt: new Date() }),
+          completedAt: submittedAt,
+          designCompletedAt: submittedAt,
+          ...(task.startedAt ? {} : { startedAt: submittedAt }),
         },
       });
 
       return session;
     }, { timeout: 15_000 });
+
+    // Rule 16: drop scheduled rows after today so the grid shows the real completion day.
+    await this.trimScheduleAfterDesignCompletion(taskId, submittedAt, userId);
 
     // Realtime first so other tabs update as soon as the DB commit succeeds.
     this.dashboardRealtime?.notifyTimerUpdated(userId, {
