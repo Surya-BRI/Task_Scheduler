@@ -3171,6 +3171,144 @@ export class SchedulerAssignmentsService implements OnModuleInit {
     }, { timeout: 15_000 });
   }
 
+  /**
+   * Early completion (SCHEDULER_RULES Rule 16): once a task reaches DESIGN_COMPLETED, remove its
+   * scheduled rows on days AFTER the completion day (GST) so that capacity is freed and the grid
+   * shows the task only up to the day it was really finished. Rows on/before the completion day
+   * stay. Locked rows (logged-time remainders) and rows in locked weeks are never touched.
+   * Remaining parts are renumbered, affected weeks get a version bump + history entry.
+   */
+  async trimScheduleAfterDesignCompletion(
+    taskId: string,
+    completedAt: Date,
+    actorUserId: string,
+  ): Promise<{ removedCount: number; removedHours: number; affectedWeeks: string[] }> {
+    const completionDay = this.startOfUtcDay(new Date(completedAt.getTime() + GST_UTC_OFFSET_MS));
+    const completionWeekStart = this.weekStartForDate(completionDay);
+
+    const result = await this.prisma.$transaction(
+      async (tx) => {
+        const candidates = await tx.schedulerAssignment.findMany({
+          where: { taskId, weekStartDate: { gte: completionWeekStart } },
+          select: { id: true, weekStartDate: true, dayIndex: true, assignedHours: true, isLocked: true },
+        });
+        const afterCompletion = candidates.filter(
+          (r) =>
+            !r.isLocked &&
+            r.weekStartDate != null &&
+            r.dayIndex != null &&
+            this.dateForDayIndex(new Date(r.weekStartDate), r.dayIndex) > completionDay,
+        );
+        if (afterCompletion.length === 0) return null;
+
+        const candidateWeeks = [
+          ...new Map(
+            afterCompletion.map((r) => [this.dateKey(new Date(r.weekStartDate!)), new Date(r.weekStartDate!)]),
+          ).values(),
+        ];
+        const lockedWeeks = await tx.schedulerWeek.findMany({
+          where: { weekStartDate: { in: candidateWeeks }, isLocked: true },
+          select: { weekStartDate: true },
+        });
+        const lockedWeekKeys = new Set(lockedWeeks.map((w) => this.dateKey(new Date(w.weekStartDate))));
+        const toRemove = afterCompletion.filter(
+          (r) => !lockedWeekKeys.has(this.dateKey(new Date(r.weekStartDate!))),
+        );
+        if (toRemove.length === 0) return null;
+
+        const removeIds = new Set(toRemove.map((r) => r.id));
+        const affectedWeeks = candidateWeeks
+          .filter((w) => !lockedWeekKeys.has(this.dateKey(w)))
+          .sort((a, b) => a.getTime() - b.getTime());
+
+        // Remaining parts of this task (any week) may need renumbering; include their weeks in history.
+        const remaining = await tx.schedulerAssignment.findMany({
+          where: { taskId, id: { notIn: [...removeIds] } },
+          orderBy: [{ weekStartDate: 'asc' }, { dayIndex: 'asc' }, { position: 'asc' }],
+          select: { id: true, parentId: true, weekStartDate: true, splitIndex: true, totalParts: true },
+        });
+        const splitPatches: Array<{ id: string; splitIndex: number | null; totalParts: number | null; parentId: string | null }> =
+          remaining.length <= 1
+            ? remaining.map((part) => ({ id: part.id, splitIndex: null, totalParts: null, parentId: null }))
+            : remaining.map((part, idx) => ({
+                id: part.id,
+                splitIndex: idx + 1,
+                totalParts: remaining.length,
+                parentId: part.parentId ?? taskId,
+              }));
+        const changedSplitPatches = splitPatches.filter((patch) => {
+          const part = remaining.find((p) => p.id === patch.id)!;
+          return (
+            (part.splitIndex ?? null) !== patch.splitIndex ||
+            (part.totalParts ?? null) !== patch.totalParts ||
+            (part.parentId ?? null) !== patch.parentId
+          );
+        });
+        const historyWeeks = new Map(affectedWeeks.map((w) => [this.dateKey(w), w]));
+        for (const patch of changedSplitPatches) {
+          const part = remaining.find((p) => p.id === patch.id)!;
+          if (part.weekStartDate) historyWeeks.set(this.dateKey(new Date(part.weekStartDate)), new Date(part.weekStartDate));
+        }
+        const allHistoryWeeks = [...historyWeeks.values()].sort((a, b) => a.getTime() - b.getTime());
+
+        const beforeByWeek = await this.loadWeekAssignmentBuckets(tx, allHistoryWeeks);
+
+        await tx.schedulerAssignment.deleteMany({ where: { id: { in: [...removeIds] } } });
+        if (remaining.length <= 1) {
+          // Single surviving part is no longer a split — clear its split metadata.
+          for (const p of changedSplitPatches) {
+            await tx.schedulerAssignment.update({
+              where: { id: p.id },
+              data: { splitIndex: null, totalParts: null, parentId: null },
+            });
+          }
+        } else {
+          await this.batchUpdateSplitIndicesWithParents(
+            tx,
+            changedSplitPatches.map((p) => ({
+              id: p.id,
+              splitIndex: p.splitIndex as number,
+              totalParts: p.totalParts as number,
+              parentId: p.parentId as string,
+            })),
+          );
+        }
+
+        const patchedByWeek = this.applyAssignmentPatchesToBuckets(beforeByWeek, changedSplitPatches);
+        const afterByWeek = new Map<string, Array<Record<string, unknown>>>();
+        for (const [key, rows] of patchedByWeek) {
+          afterByWeek.set(key, rows.filter((row) => !removeIds.has(String(row.id))));
+        }
+
+        await this.bumpWeeksAndWriteHistory(tx, {
+          affectedWeeks: allHistoryWeeks,
+          beforeByWeek,
+          afterByWeek,
+          actorUserId,
+        });
+
+        const removedHours =
+          Math.round(toRemove.reduce((sum, r) => sum + this.toHours(r.assignedHours), 0) * 100) / 100;
+        return {
+          removedCount: toRemove.length,
+          removedHours,
+          affectedWeeks: allHistoryWeeks.map((w) => this.dateKey(w)),
+        };
+      },
+      { timeout: 30_000, maxWait: 15_000 },
+    );
+
+    if (!result) return { removedCount: 0, removedHours: 0, affectedWeeks: [] };
+
+    this.dashboardRealtime?.notifyOverviewRefresh('scheduler_completion_trimmed', {
+      affectedWeekStarts: result.affectedWeeks,
+      changedTaskIds: [taskId],
+      taskId,
+      updatedBy: actorUserId,
+    });
+    return result;
+  }
+
   async detachAssignmentPart(assignmentId: string, status: 'UNASSIGNED' | 'ON_HOLD'): Promise<{ fragmentId: string }> {
     return this.prisma.$transaction(async (tx) => {
       const row = await tx.schedulerAssignment.findUnique({ where: { id: assignmentId } });
@@ -4693,6 +4831,7 @@ export class SchedulerAssignmentsService implements OnModuleInit {
           },
           select: {
             status: true,
+            designCompletedAt: true,
             completedAt: true,
             updatedAt: true,
             createdAt: true,

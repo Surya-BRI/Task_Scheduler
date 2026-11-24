@@ -3,14 +3,13 @@
 **Purpose:** Reduce load on the production API (`task-scheduler` on PM2) so more Designers and HODs can use the app concurrently without pool exhaustion or slow pages.
 
 **Audience:** Engineers working the Task Scheduler monorepo.  
-**Last updated:** 2026-08-07  
+**Last updated:** 2026-08-07 (doc sync 2026-11-24: overflow lock + handoff batching marked fixed, PM2 name corrected)  
 
 **Sources reviewed:**
 - `HOD_PERFORMANCE_REPORT.md`, `AJ DESIGNER_PERF_REORT.md`, `SALES_QA_PERFORMANCE_REPORT_SUMMARY.md` (**historical QA baselines** — late July; many Critical rows are already fixed in tree)
 - `backend/docs/RELIABILITY.md`, `DEVOPS.md`, `SCHEDULER_FIXES_NEEDED.md`, `KNOWN_GAPS.md`, `REALLOCATION_GAPS.md`, `DATABASE_ACCESS_PATTERNS.md`
 - `DEPLOYMENT_RUNBOOK.md`, `backend/ecosystem.config.cjs`, `backend/src/prisma/prisma-pool.util.ts`
 - Current frontend helpers: `frontend/src/lib/singleflight.ts`, `api-client` GET inflight, `realtime.ts` shared socket
-- Code cross-check inventory: [Explore load/perf docs](f0a5a2d2-9ef8-4b75-bd8d-f84c922b5428)
 
 > **Important:** Re-measure chatter, requests, overview, and activities after the fixes below before treating old QA “Critical” IDs as still open.
 
@@ -20,7 +19,7 @@
 
 | Fact | Value | Implication |
 |------|--------|-------------|
-| PM2 app | `task-scheduler` (fork mode) | **One** Nest Node process |
+| PM2 app | `task-sc` (fork mode, `backend/ecosystem.config.cjs`) | **One** Nest Node process |
 | Instances | `1` (`ecosystem.config.cjs`) | No horizontal Node scaling today |
 | Prisma pool | `DB_CONNECTION_LIMIT` default **30** | Concurrent queries share ~30 SQL connections |
 | Pool wait | `DB_POOL_TIMEOUT` default **30s** | Then P2024 / timeouts under stampede |
@@ -77,7 +76,6 @@
 | Item | Why it still matters | Primary touchpoints |
 |------|----------------------|---------------------|
 | Scheduler week **grid** payload/DOM | Dense board (sidebar already virtualized + DTO slimmed) | assignments mapper, scheduler grid UI |
-| Overflow into locked weeks | Correctness + wasted writes | `placeOverflowCapacity` |
 | Single PM2 fork + pool 30 | Hard ceiling | ops — only after code wins |
 
 ### 3c. Landed in efficiency sprint 2026-08-07 (2→1→3→4)
@@ -156,7 +154,7 @@ QA (July) saw 2×–4× GETs. **Many mitigated** via singleflight; residual risk
 | `GET /scheduler-assignments` (week) | Tens of KB | Slim embed DTO **done**; grid virtualize still open |
 | `GET /tasks/scheduler-queue` | Full backlog (by design) | Slim select + sidebar virtualize **done** |
 | `PUT` week save | Long txn (up to ~30s) | Incremental + no-op skip (done) |
-| Reallocation handoff | Up to ~60s txn | Freeze-in-txn done; batch split updates still open |
+| Reallocation handoff | Up to ~30s on remote DB (90s route timeout) | Freeze-in-txn done; split/remainder updates batched (2026-09-16); ~15–20 fixed round-trips remain |
 | ERP `design-list` | Huge join | Skip on task lists (done); hub paginate + `fields=hub` **done** |
 
 ### E. WebSocket / polling
@@ -230,7 +228,7 @@ Work top-down. Each phase should reduce concurrent DB usage on the single PM2 wo
 | 4.1 | Batch reallocation remaining-hours queries | `REALLOCATION_GAPS` #11 | **Done** |
 | 4.2 | `listEligibleDesigners` — team-first then users | #12 | **Done** |
 | 4.3 | Index / query plan check for overview + design-list COUNT | Avoid full join counts where possible | P8 |
-| 4.4 | Keep long transactions rare; skip locked weeks in overflow (correctness + less thrash) | `SCHEDULER_FIXES_NEEDED` #11 | |
+| 4.4 | Keep long transactions rare (overflow already skips locked weeks — fixed 2026-09-17) | `SCHEDULER_FIXES_NEEDED` #11 | |
 | 4.5 | Confirm ERP circuit breaker stays effective under live ERP slowness | `RELIABILITY.md` | |
 
 ### Phase 5 — Capacity (only after Phases 1–3)
@@ -355,6 +353,6 @@ After each phase:
 6. ~~Scheduler sidebar slim + sales history DISTINCT ids~~ **done**  
 7. ~~Designer dashboard poll~~ **done**  
 8. ~~Leave planner WS-first + tab-lazy team history~~ **done**  
-9. Next: projects-overview deeper cut, scheduler **grid** (careful), overflow locked weeks.
+9. Next: projects-overview deeper cut, scheduler **grid** (careful). (Overflow locked weeks — fixed 2026-09-17.)
 
 Re-measure designer tasks + design-list + sales queue periodically to confirm July Critical items stay fixed.

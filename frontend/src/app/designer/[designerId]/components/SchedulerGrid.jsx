@@ -7,6 +7,7 @@ import {
   getSystemBlockHatchStyle,
 } from "@/features/scheduler/utils/scheduler-system-block.ui";
 import { formatRetailDesignTypeLabel } from "@/lib/ui/design-type-colors";
+import { isTaskReassignmentBlocked } from "@/features/scheduler/utils/designer-task-stats.util";
 import { getSession } from "@/lib/mock-auth";
 import { requestsPath } from "@/lib/role-routes";
 
@@ -54,7 +55,20 @@ function SystemBlockIcon({ requestType }) {
   return null;
 }
 
-function TaskBlock({ task, onOtClick, onOpenTask }) {
+function sameLocalDay(a, b) {
+  const x = a instanceof Date ? a : new Date(a);
+  const y = b instanceof Date ? b : new Date(b);
+  if (Number.isNaN(x.getTime()) || Number.isNaN(y.getTime())) return false;
+  return x.getFullYear() === y.getFullYear() && x.getMonth() === y.getMonth() && x.getDate() === y.getDate();
+}
+
+function formatShortDayMonth(value) {
+  const d = new Date(value);
+  if (Number.isNaN(d.getTime())) return "";
+  return d.toLocaleDateString("en-GB", { day: "2-digit", month: "short" });
+}
+
+function TaskBlock({ task, onOtClick, onOpenTask, dayDate }) {
   const systemBadge = getSystemBlockBadge(task.requestType);
   const hatchStyle = getSystemBlockHatchStyle(task.requestType);
   const bgClass = systemBadge
@@ -66,7 +80,13 @@ function TaskBlock({ task, onOtClick, onOpenTask }) {
   const canOpenTask = onOpenTask && !task.isSystemBlock;
   const label = task.requestLabel || task.label;
   const designTypeLabel = formatRetailDesignTypeLabel(task.designType);
-  const blockTitle = designTypeLabel ? `${label} — ${designTypeLabel}` : label;
+  // Rule 16 — ✓ on the day the design was actually finished; tooltip keeps the original deadline.
+  const isDesignDone = !task.isSystemBlock && isTaskReassignmentBlocked(task.taskStatus) && Boolean(task.designCompletedAt);
+  const completedOnThisDay = isDesignDone && dayDate && sameLocalDay(task.designCompletedAt, dayDate);
+  const completionSuffix = isDesignDone
+    ? ` — completed ${formatShortDayMonth(task.designCompletedAt)}${task.dueDate ? `, deadline ${formatShortDayMonth(task.dueDate)}` : ""}`
+    : "";
+  const blockTitle = `${designTypeLabel ? `${label} — ${designTypeLabel}` : label}${completionSuffix}`;
   return (
     <div className="h-full flex items-center w-full relative z-10 px-0.5 group/task">
       <div
@@ -95,6 +115,9 @@ function TaskBlock({ task, onOtClick, onOpenTask }) {
               {systemBadge.label}
             </span>
           ) : null}
+          {completedOnThisDay && (
+            <span className="text-[9px] font-bold leading-none shrink-0 text-emerald-700" aria-label="Completed">✓</span>
+          )}
           {!systemBadge && (
             <div className="text-[9px] font-semibold truncate leading-none">{label}</div>
           )}
@@ -209,7 +232,7 @@ function SchedulerRow({ day, daySlot, dayDate, onOtClick, onOpenTask }) {
                     className="absolute top-0 bottom-0 pointer-events-auto"
                     style={{ left: `${leftPct}%`, width: `${widthPct}%` }}
                   >
-                    <TaskBlock task={task} onOtClick={onOtClick} onOpenTask={onOpenTask} />
+                    <TaskBlock task={task} onOtClick={onOtClick} onOpenTask={onOpenTask} dayDate={dayDate} />
                   </div>
                 );
               })}
@@ -228,7 +251,7 @@ function SchedulerRow({ day, daySlot, dayDate, onOtClick, onOpenTask }) {
                     className="absolute top-1 bottom-0 pointer-events-auto"
                     style={{ left: `${leftPct}%`, width: `${Math.max(widthPct, (1 / TOTAL_COLS) * 100)}%` }}
                   >
-                    <TaskBlock task={task} onOtClick={null} onOpenTask={null} />
+                    <TaskBlock task={task} onOtClick={null} onOpenTask={null} dayDate={dayDate} />
                   </div>
                 );
               })}

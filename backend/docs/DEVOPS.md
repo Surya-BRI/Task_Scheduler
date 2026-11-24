@@ -41,18 +41,21 @@ npm run ci
 npm run build
 ```
 
-## Prisma migrations in deploy
+## Schema changes in deploy
 
-Production deploy sequence:
+There is **no Prisma migration history** (`backend/prisma/migrations/` is empty), so `prisma migrate deploy` is not part of the deploy. Schema changes ship as idempotent SQL in `backend/prisma/sql/` and are run by hand against ERP-Live **before** the code that needs them goes out (pre-deploy backup first — see [DATABASE_BACKUP_RESTORE.md](./DATABASE_BACKUP_RESTORE.md)).
+
+Production deploy sequence (current setup: WinSCP upload + PM2, see [DEPLOYMENT_RUNBOOK.md](../../DEPLOYMENT_RUNBOOK.md)):
 
 ```bash
-npm run prisma:migrate:deploy --workspace backend
-npm run build --workspace backend
+# 1. run any new prisma/sql/*.sql script against ERP-Live (sqlcmd)
+cd /home/ubuntu/bri-erp-api/task-scheduler/backend
+npm run build
 pm2 restart task-sc
 curl -sf http://localhost:7000/api/v1/health/ready
 ```
 
-For greenfield databases use `npm run prisma:deploy:bootstrap --workspace backend` once, then rely on migrations.
+A brand-new database is built from `live-create-erpts-tables.sql` + `live-create-erpts-indexes.sql`. `prisma:deploy:bootstrap` / `deploy:bootstrap` are legacy (their ensure scripts reference the retired `ErpTSUser` table) — don't run them against ERP-Live. Keep `RUNTIME_SCHEMA_BOOTSTRAP=false` in production.
 
 ## Structured logging
 
@@ -71,7 +74,7 @@ Every response includes `X-Request-Id`. Error payloads include `requestId` for s
 
 | Variable | Default | Purpose |
 |----------|---------|---------|
-| `LOG_LEVEL` | `debug` | Minimum level (`info` maps to `log`) |
+| `LOG_LEVEL` | `debug` | Minimum level (`info` maps to `log`). Production should use `info` — the server still runs `debug` (`PRODUCTION_MIGRATION_PROGRESS.md` open item 6) |
 | `SERVICE_NAME` | `task-scheduler-api` | Service identifier for traces |
 
 ## Sentry (optional)
@@ -98,7 +101,7 @@ OTEL_EXPORTER_OTLP_ENDPOINT=http://localhost:4318/v1/traces
 1. **Application rollback** — redeploy previous Git tag or WinSCP upload of last stable `dist/` artifacts; `pm2 restart task-sc`.
 2. **Database rollback** — restore from pre-deploy backup (see [DATABASE_BACKUP_RESTORE.md](./DATABASE_BACKUP_RESTORE.md)); never `migrate reset` in production.
 3. **Docker rollback** — retag previous image digest and `docker compose up -d`.
-4. **Verify** — `curl -sf /api/v1/health/ready` and run post-deploy smoke tests from [DEPLOYMENT_RUNBOOK.md](../DEPLOYMENT_RUNBOOK.md).
+4. **Verify** — `curl -sf /api/v1/health/ready` and run post-deploy smoke tests from [DEPLOYMENT_RUNBOOK.md](../../DEPLOYMENT_RUNBOOK.md).
 
 ## Monitoring checklist
 

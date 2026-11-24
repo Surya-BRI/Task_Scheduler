@@ -461,6 +461,13 @@ function formatHoldDuration(holdStartedAt) {
     return `${diffDays} Days`;
 }
 
+/** "17 Nov" — short day + month for scheduler tooltips. */
+function formatShortDayMonth(value) {
+    const d = new Date(value);
+    if (Number.isNaN(d.getTime())) return "";
+    return d.toLocaleDateString("en-GB", { day: "2-digit", month: "short" });
+}
+
 /** Maps a slim scheduler task summary (queue or assignment embed) into queue-record shape. */
 function mapApiTaskToQueueRecord(task) {
     if (!task?.id) return null;
@@ -483,6 +490,9 @@ function mapApiTaskToQueueRecord(task) {
         // Lifecycle status from API (DESIGN_COMPLETED, etc.). Remains available after
         // sidebar remaps `status` to assigned/unassigned/ON_HOLD for grid cards.
         taskStatus: String(task.status ?? "").trim().toUpperCase() || null,
+        // Rule 16 — real design-completion date + original deadline, for the completed badge.
+        designCompletedAt: task.designCompletedAt || null,
+        dueDate: task.dueDate || null,
         updatedAt: task.updatedAt,
         holdStartedAt: task.updatedAt,
         holdPreviousStatus: task.holdPreviousStatus || null,
@@ -750,6 +760,8 @@ function buildSchedulerStateFromErpAssignments(records, rows, designers) {
                 priority: baseRecord.priority || "",
                 baseName: baseRecord.name,
                 taskStatus: baseRecord.taskStatus || String(baseRecord.status ?? "").trim().toUpperCase() || null,
+                designCompletedAt: baseRecord.designCompletedAt || null,
+                dueDate: baseRecord.dueDate || null,
                 colorClass: resolveRetailDesignTypeBlockClass(baseRecord.designType)
                     ?? resolveDisciplineBlockClass(baseRecord.disciplineType)
                     ?? firstPartEntry?.colorClass
@@ -838,6 +850,7 @@ function useStateRef(initial) {
 const SCHEDULER_GRID_REFRESH_EVENTS = new Set([
     'scheduler_week_saved',
     'scheduler_leave_rescheduled',
+    'scheduler_completion_trimmed',
     'overtime_scheduler_action',
     'leave_approved',
     'leave_revoked',
@@ -3352,6 +3365,13 @@ export function DesignSchedulerScreen({ readOnly = false } = {}) {
                                 const taskWidth = `calc((100% - ${(Math.max(visualRegularTaskIds.length - 1, 0)) * 4}px) / ${Math.max(visualRegularTaskIds.length, 1)})`;
                                 const isDragLocked = readOnly || Boolean(taskInfo?.isLocked) || isTaskReassignmentBlocked(taskInfo?.taskStatus);
                                 const blockLabel = getTaskLabel(taskInfo);
+                                // Rule 16 — mark the card on the day the design was actually finished.
+                                const completedOnThisDay = isTaskReassignmentBlocked(taskInfo?.taskStatus)
+                                    && Boolean(taskInfo?.designCompletedAt)
+                                    && formatLocalYyyyMmDd(new Date(taskInfo.designCompletedAt)) === formatLocalYyyyMmDd(weekDates[dayIndex]);
+                                const completionTitle = taskInfo?.designCompletedAt
+                                    ? ` — completed ${formatShortDayMonth(taskInfo.designCompletedAt)}${taskInfo.dueDate ? `, deadline ${formatShortDayMonth(taskInfo.dueDate)}` : ""}`
+                                    : (isTaskReassignmentBlocked(taskInfo?.taskStatus) ? " — completed" : "");
                                 return (<div key={`${taskId}-${designer.id}-${dayIndex}-${idx}`} draggable={!isDragLocked} onDragStart={(e) => {
                                         if (isDragLocked) return;
                                         handleDragStart(e, taskId, designer.id, dayIndex.toString());
@@ -3374,7 +3394,8 @@ export function DesignSchedulerScreen({ readOnly = false } = {}) {
                                         ? dropIndicator.position === "before"
                                             ? "ring-2 ring-blue-400 ring-offset-1"
                                             : "ring-2 ring-green-400 ring-offset-1"
-                                        : ""} ${taskInfo.colorClass}`} style={{ width: taskWidth, maxWidth: taskWidth }} title={`${blockLabel} (${formatHoursAsHm(taskInfo.estimatedHours)})${taskInfo.isPinned ? " — pinned: exempt from auto-fill" : ""}${isTaskReassignmentBlocked(taskInfo?.taskStatus) ? " — completed: reopen before reassigning" : ""}`}>
+                                        : ""} ${taskInfo.colorClass}`} style={{ width: taskWidth, maxWidth: taskWidth }} title={`${blockLabel} (${formatHoursAsHm(taskInfo.estimatedHours)})${taskInfo.isPinned ? " — pinned: exempt from auto-fill" : ""}${completionTitle}${isTaskReassignmentBlocked(taskInfo?.taskStatus) ? " (reopen before reassigning)" : ""}`}>
+                                          {completedOnThisDay && (<span className="text-[9px] font-bold leading-none mr-0.5 shrink-0 select-none text-emerald-700" aria-label="Completed">✓</span>)}
                                           {taskInfo.isPinned && (<span className="text-[8px] leading-none mr-0.5 shrink-0 select-none" aria-hidden="true">📌</span>)}
                                           <div className="text-[9px] font-semibold truncate leading-none mr-1 select-none">{blockLabel}</div>
                                           <div className="text-[8px] font-bold opacity-60 bg-black/5 rounded px-1 shrink-0">{formatHoursAsHm(taskInfo.estimatedHours)}</div>

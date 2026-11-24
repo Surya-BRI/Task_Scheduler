@@ -19,6 +19,9 @@ Monorepo for task scheduling and resource workflows: **Next.js** frontend + **Ne
 | ERP auth & middleware (Scheduler) | [backend/docs/ERP_AUTH_MIDDLEWARE.md](backend/docs/ERP_AUTH_MIDDLEWARE.md) |
 | ERP auth & middleware (generic) | [docs/ERP_MIDDLEWARE_INTEGRATION.md](docs/ERP_MIDDLEWARE_INTEGRATION.md) |
 | UAT / smoke-test log | [TESTING_PROGRESS.md](TESTING_PROGRESS.md) |
+| Scheduler behaviour rules | [SCHEDULER_RULES.md](SCHEDULER_RULES.md) |
+| Deploy steps (WinSCP + PM2) | [DEPLOYMENT_RUNBOOK.md](DEPLOYMENT_RUNBOOK.md) |
+| Open gaps | [backend/docs/KNOWN_GAPS.md](backend/docs/KNOWN_GAPS.md), [backend/docs/REALLOCATION_GAPS.md](backend/docs/REALLOCATION_GAPS.md) |
 | Full repository technical reference | [repo-reference.md](repo-reference.md) |
 
 ## Recent Feature Notes
@@ -58,6 +61,7 @@ npm install
 Create `backend/.env` and set at minimum:
 - `JWT_ACCESS_SECRET`
 - `CORS_ORIGIN` (usually `http://localhost:5000`)
+- `PORT` — this repo's local setup uses `7000` (code default is `4000`)
 - Database via `DATABASE_URL` or DB parts (`DB_SERVER`, `DB_NAME`, `DB_USER`, `DB_PASSWORD`, ...)
 
 ### 3) Configure frontend env
@@ -69,22 +73,22 @@ Create `frontend/.env.local` and set:
 
 ### 4) Prepare Prisma + DB
 
-For a new database (migrations):
-
 ```bash
 npm run prisma:generate
-npm run prisma:migrate
-npm run prisma:seed
 ```
 
-For an existing ERP database:
+That is normally all you need: local work points at ERP-Dev or ERP-Live, where the `ErpTS*` tables already exist.
+
+For a **brand-new** SQL Server database, create the schema from the SQL scripts (not `prisma migrate` — `backend/prisma/migrations/` is empty):
 
 ```bash
-npm run prisma:setup
-npm run prisma:seed
+sqlcmd ... -i backend/prisma/sql/live-create-erpts-tables.sql
+sqlcmd ... -I -i backend/prisma/sql/live-create-erpts-indexes.sql   # -I = QUOTED_IDENTIFIER, needed for the filtered index
 ```
 
-You can also use manual SQL when attaching to an existing ERP database. Details and password-hash notes are in [backend/docs/DEVELOPMENT.md](backend/docs/DEVELOPMENT.md).
+The ERP-owned tables (`ErpAuthUsers`, `ErpAuthUserRoleMap`, `ErpMasterRole`, `ErpAuthSession`, `ErpMasterEmployee`, `ErpMasterProject`, `ErpMasterOpportunity`, `Middlewares`) must already exist in that database.
+
+> **Legacy scripts — do not use:** `npm run prisma:seed`, `prisma:setup` and `deploy:bootstrap` still target the retired local `ErpTSUser` / `ErpTSRole` tables and fail against the current schema. Users come from ERP. See [backend/docs/DEVELOPMENT.md](backend/docs/DEVELOPMENT.md).
 
 ### 5) Run development servers
 
@@ -113,9 +117,9 @@ npm run dev:frontend
 | `npm run dev:backend` | NestJS watch mode |
 | `npm run dev:frontend` | Next.js dev server (port 5000) |
 | `npm run prisma:generate` | Generate Prisma client |
-| `npm run prisma:migrate` | Apply Prisma migrations |
-| `npm run prisma:seed` | Seed roles and demo users |
-| `npm run prisma:setup` | Generate client + ensure tables and foreign keys |
+| `npm run prisma:migrate` | `prisma migrate dev` — not used (no migration history; schema changes ship as SQL in `backend/prisma/sql/`) |
+| `npm run prisma:seed` | **Legacy, broken** — seeds the retired local role/user tables |
+| `npm run prisma:setup` | **Legacy** — ensure scripts reference the retired `ErpTSUser` table; don't run against ERP-Live |
 | `npm run prisma:audit-schema` | Report ErpTS tables, FKs, and orphan rows |
 | `npm run build` | Build backend then frontend |
 | `npm run lint` | Lint both workspaces |

@@ -1,7 +1,7 @@
 # Reallocation — Issues, Gaps & Efficiency
 
 Audit date: 2026-07-28  
-Updated: 2026-08-07 — fixed #1 (atomic freeze), #2 (6-week pack + warn toast), and #3 (pending unique index); #11 `mapWithRemaining` batch; #12 `listEligibleDesigners` team-first.  
+Updated: 2026-08-07 — fixed #1 (atomic freeze), #2 (6-week pack + warn toast), and #3 (pending unique index); #11 `mapWithRemaining` batch; #12 `listEligibleDesigners` team-first. 2026-09-16 — #13 handoff row updates batched. 2026-11-24 — doc sync (#6).  
 Scope: designer → HOD reallocation request flow (API, handoff packing, Requests UI, Design List queue).
 
 Related: `SCHEDULER_RULES.md` Rule 13, `backend/src/reallocation-requests/`, `applyReallocationHandoff` in scheduler-assignments.
@@ -38,11 +38,11 @@ Related: `SCHEDULER_RULES.md` Rule 13, `backend/src/reallocation-requests/`, `ap
 | # | Gap | Notes |
 |---|-----|--------|
 | 5 | **Old designer can still “own” the task** after approve if locked logged cards remain | CTA is hidden (correct). Task may still appear on their list / `TaskDesigner` junction — intentional for Rule 11-style logged remainder, but confusing. Document clearly or hide from “active work” lists when unlocked hours = 0. |
-| 6 | **Two review UIs** | Design List (`?view=reallocation`) and Requests → Reallocation. Both work; Rule 13 docs still mainly mention Design List. Update `SCHEDULER_RULES.md`. |
+| 6 | **Two review UIs** | Design List (`?view=reallocation`) and Requests → Reallocation. Both work; both are now listed in `SCHEDULER_RULES.md` Rule 13. |
 | 7 | **Create form task options** | Doesn’t exclude tasks that already have a pending request; after submit, options aren’t refreshed. |
 | 8 | **Approve response partly used** | `unplacedHours` / moved hours now shown in toast; `affectedWeekStarts` still unused in UI. |
 | 9 | **HOD create path** | Managers can create if they “own” the task (role gate allows HOD). Unusual; confirm product intent. |
-| 10 | **Activity `messageKey`s** | Events logged (`reallocation_request_*`); confirm activity feed copy maps them. |
+| 10 | **Activity `messageKey`s** | Events logged (`REALLOCATION_REQUEST_SUBMITTED/APPROVED/REJECTED/CANCELLED`); they are excluded from project/task history timelines (`PROJECT_HISTORY_EXCLUDED_ACTIONS`). Confirm the team feed copy maps them. |
 
 ---
 
@@ -52,7 +52,7 @@ Related: `SCHEDULER_RULES.md` Rule 13, `backend/src/reallocation-requests/`, `ap
 |---|--------|--------|------------------------|
 | 11 | **`mapWithRemaining` N+1** | ~~One hours query per pending row~~ **Fixed 2026-08-07:** single `groupBy` `_sum` by `(taskId, designerId)` |
 | ~~12~~ | ~~**`listEligibleDesigners`**~~ | ~~Loads all Designer/HOD users, then filters by project team names in memory~~ | **Fixed 2026-08-07:** `collectProjectTeamNames` + team-name `findMany` (empty-team fallback unchanged) |
-| 13 | **Handoff split-index rewrite** | One `update` per assignment part inside the long (60s) transaction | Batch update or fewer round-trips |
+| ~~13~~ | ~~**Handoff split-index rewrite**~~ | ~~One `update` per assignment part inside the long transaction~~ | **Fixed 2026-09-16:** `batchUpdateLoggedRemainder()` / `batchUpdateSplitIndices()` — one `CASE`-keyed `UPDATE` each (see `TESTING_PROGRESS.md` session 2). The ~15–20 fixed round-trips per handoff remain; slow routes get a 90s timeout (`HTTP_SLOW_ROUTE_TIMEOUT_MS`) |
 | 14 | **Task detail extras** | `GET /tasks/:id` always loads pending reallocation + viewer remaining hours | Acceptable for one task; keep unless profiling shows cost |
 
 ---
@@ -65,7 +65,7 @@ Related: `SCHEDULER_RULES.md` Rule 13, `backend/src/reallocation-requests/`, `ap
 4. Invalidate stale pendings on review (and optionally on work completion)  
 5. ~~Batch remaining-hours for list endpoints~~ **done** (#11)  
 6. ~~Team-first `listEligibleDesigners`~~ **done** (#12)  
-7. Doc/UX polish (Rule 13, task-options filter)
+7. UX polish (task-options filter) — Rule 13 doc update done
 
 ---
 

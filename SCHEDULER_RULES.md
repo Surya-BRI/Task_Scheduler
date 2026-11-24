@@ -55,7 +55,7 @@ Triggered when `allowOvertime=true` assignment uses hours beyond 8h/day on any p
 - Splits across multiple days/weeks if one day isn't enough, bounded by a 56-day lookahead (`maxLookaheadDays`)
 - The save response includes `overflowPlacements` (where hours landed) and `unplacedOverflow` (hours that didn't fit within the lookahead — reported to the user via toast, never silently dropped)
 - This replaced the old `localStorage` key `scheduler_overflow_v1_YYYY-MM-DD` mechanism entirely (`SCHEDULER_OVERFLOW_KEY`, `addDaysToDateStr`, `pruneOldOverflowKeys`, and the Monday-restore-on-load effect were all removed)
-- ⚠️ Known gap: `placeOverflowCapacity` does not check whether the destination week is `isLocked` before writing to it (the primary week-save path does check this for the week being saved) — see `backend/docs/SCHEDULER_FIXES_NEEDED.md` item 11
+- Locked destination weeks (`SchedulerWeek.isLocked`) are skipped: they're loaded up front for the lookahead range and the day-walk never writes into them (fixed 2026-09-17 — `backend/docs/SCHEDULER_FIXES_NEEDED.md` item 11, `TESTING_PROGRESS.md` bug #18)
 
 ---
 
@@ -196,7 +196,8 @@ Runs as a React effect whenever `schedules` reference changes and `loadedFromErp
 
 - Request status is separate from task status (`Pending` / `Approved` / `Rejected` / `Cancelled`); task status is unchanged while pending
 - On approve: freeze requester timer; keep logged hours as locked cards on requester; pack remaining hours onto target **after existing cards** (same packing family as Rule 11 / overflow placement), looking ahead **6 weeks**. If some hours still don't fit, approve still succeeds and the UI warns with `unplacedHours` (never silently drop)
-- HOD reviews from Design List toggle **All | Reallocation** (`/design-list?view=reallocation`)
+- HOD reviews from either of two UIs: Design List toggle **All | Reallocation** (`/design-list?view=reallocation`) or the **Reallocation** tab on the Requests page (next to Overtime / Regularization)
+- Destination locked weeks are skipped while packing; a locked **source** week blocks approve
 - API: `/reallocation-requests` (create, cancel, pending-approvals, review)
 
 ---
@@ -216,6 +217,37 @@ Runs as a React effect whenever `schedules` reference changes and `loadedFromErp
 
 ---
 
+## Rule 15 — Nightly Carryover of Past-Due Work
+
+> Scheduled hours on a day that has already passed, for a task that isn't finished, are rolled forward automatically each night.
+
+- Cron `20 2 * * *` UTC (06:20 GST), in `backend/src/scheduler-carryover/scheduler-carryover.service.ts`; guarded by an in-process flag + `sp_getapplock` (`TaskScheduler:SchedulerCarryoverCron`) like the other crons
+- Picks every `SchedulerAssignment` row whose day is before today (GST) and whose task status is `DESIGN_NEW`, `DESIGN_PLANNED`, `IN_PROGRESS` or `REWORK` (`CARRYOVER_ELIGIBLE_STATUSES`)
+- Rows are grouped per designer and re-placed in original day order onto that designer's next open days — **additive only**: it fills spare capacity and never moves or resizes other tasks' rows. Spills across days/weeks like Rule 3 overflow, 56-day lookahead (`CARRYOVER_LOOKAHEAD_DAYS`); one transaction per designer
+- Self-healing: every run re-scans all past-due rows, so a missed run catches up on the next one (no watermark)
+- Background writes need an actor id, so the first HOD/Admin user is used as `assignedBy`/`changedBy`; each run logs a `SCHEDULER_CARRYOVER` activity
+- Disable with `CARRYOVER_ENABLED=false` (default on)
+- API (HOD): `GET /scheduler-carryover/last-run` → `{ lastRunAt }`; `POST /scheduler-carryover/trigger` runs it immediately as the caller
+
+---
+
+## Rule 16 — Early Completion Frees Later Days
+
+> When a designer finishes a task before its planned days are used up, the task shows as completed on the day it was actually finished, and its later planned days are removed.
+
+- **Completion date:** `ErpTSTask.designCompletedAt` is stamped when a task moves from an active status (`DESIGN_NEW`, `DESIGN_PLANNED`, `IN_PROGRESS`, `REWORK`) into a done status (`DESIGN_COMPLETED`, `HOD_REVIEW`, `SALES_REVIEW`, `CLIENT_ACCEPTED`, `CLIENT_REJECTED`) — via Submit Work or `PATCH /tasks/:id/status`. It is **not** overwritten when the task later moves through review or the client accepts/rejects (`completedAt` still records the client close). Resuming from ON_HOLD never re-stamps it; a REWORK → complete cycle stamps the new date
+- **Deadline unchanged:** `dueDate` is never touched
+- **Trim:** right after the status change, `trimScheduleAfterDesignCompletion` deletes the task's `SchedulerAssignment` rows on days **after** the completion day (GST calendar day). Rows on/before the completion day stay. Applies to every designer on the task (split tasks too)
+- **Never removed:** locked logged-time rows (`isLocked`, Rule 11) and rows in locked weeks (Rule 8)
+- Remaining parts are renumbered (Rule 5); a single survivor loses its split metadata. Affected weeks get a version bump + `SchedulerAssignmentHistory` entry, so open tabs with stale state hit the normal version check
+- Best-effort: the status change commits first; if the trim fails it is logged and the status change still succeeds
+- Realtime event `scheduler_completion_trimmed` (with `affectedWeekStarts`) reloads open scheduler grids
+- **UI:** the card on the completion day shows ✓; its tooltip shows "completed DD Mon, deadline DD Mon" (HOD grid and designer dashboard grid). The designer dashboard's Completed-by-week list and weekly counts use `designCompletedAt` first, then `completedAt`
+- Removed rows are not restored if the task is later sent back to REWORK — the HOD re-plans the rework
+- Deploy: run `backend/prisma/sql/add-design-completed-at.sql` (adds + backfills the column) **before** the backend that reads it
+
+---
+
 ## What Is NOT Currently Handled
 
 | Case | Status |
@@ -223,6 +255,6 @@ Runs as a React effect whenever `schedules` reference changes and `loadedFromErp
 | Pulling tasks across designers | Supported for hours (Rule 11); optimizer itself still only packs within each designer |
 | Splitting a task manually by hours | Not supported — only drag-based and optimizer splitting |
 | Fractional hours (< 1h granularity) | No practical floor at the optimizer level (`MIN_SPLIT_HOURS = 5min/0.0833h`, see Constants); the backend DTO's `assignedHours`/`hours` fields separately enforce `@Min(0.01)` (2-decimal precision) — a lower-level "must be positive" guard, not the same threshold as `MIN_SPLIT_HOURS` |
-| Re-assigning overflow if next week is also full | Overflow lands on the last available day or Monday as fallback |
+| Re-assigning overflow if next week is also full | Server walks forward up to 56 days (Rule 3); anything that still doesn't fit comes back as `unplacedOverflow` and is shown in a toast, never silently dropped |
 | Partial work submission | `POST /tasks/:id/submit-work` always marks the task fully `DESIGN_COMPLETED` — there's no "submit partial, keep in progress" flow yet |
 | Locking Mon–Fri days | Not supported — day-locks are weekend-only (Rule 14) |

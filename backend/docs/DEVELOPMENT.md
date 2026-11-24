@@ -6,8 +6,8 @@ NestJS REST API with Prisma (SQL Server). Global route prefix defaults to `/api/
 
 | Item | Default |
 |------|---------|
-| HTTP port | `4000` (`PORT`) |
-| API base | `http://localhost:4000/api/v1` |
+| HTTP port | `4000` code default (`PORT`); this repo's `backend/.env` and production use `7000` |
+| API base | `http://localhost:<PORT>/api/v1` |
 | Health | `GET /api/v1/health` |
 
 ## Environment
@@ -27,7 +27,13 @@ Required:
 sqlserver://HOST:1433;database=YOUR_DB;user=USER;password=PASS;encrypt=true;trustServerCertificate=true
 ```
 
-Auth (production uses `AUTH_MODE=external` — the ERP portal does the login; see `backend/.env.example` for `EXTERNAL_*` and `ERP_*` options and `docs/ERP_AUTH_MIDDLEWARE.md`).
+Auth (production uses `AUTH_MODE=external` — the ERP portal does the login; see `backend/.env.example` for `EXTERNAL_*` and `ERP_*` options and [ERP_AUTH_MIDDLEWARE.md](ERP_AUTH_MIDDLEWARE.md)).
+
+Other notable optional variables:
+- `BACKUP_HOD_REVIEWER_USER_IDS` — comma-separated ERP `userId`s of designers who may stand in for an HOD on the `HOD_REVIEW` step only (see "Backup HOD reviewers" below). Restart to apply.
+- `CARRYOVER_ENABLED` — nightly past-due carryover cron, default on (`SCHEDULER_RULES.md` Rule 15).
+- `HTTP_REQUEST_TIMEOUT_MS` (30000) / `HTTP_SLOW_ROUTE_TIMEOUT_MS` (90000, reallocation + regularization + `PATCH /tasks/:id/status`).
+- `SCHEDULER_HISTORY_RETENTION_MONTHS` (18), `SCHEDULER_SPLIT_RECOMPUTE_WEEK_WINDOW` (26).
 
 Common optional:
 - `PORT` (default `4000`)
@@ -80,27 +86,12 @@ If not regenerated, TypeScript errors appear for missing model properties/fields
 - Against ERP-Live keep `RUNTIME_SCHEMA_BOOTSTRAP=false` (with `NODE_ENV=development` the app would otherwise run boot-time DDL). Tables are created from `backend/prisma/sql/live-*.sql`, not `migrate deploy`.
 - Local dev can point at ERP-Dev or Live; check `backend/.env` before running anything that writes. Details: `PRODUCTION_MIGRATION_PROGRESS.md`.
 
-### Migrations and seed
+### Schema changes, migrations and seed
 
-```bash
-npm run prisma:migrate
-npm run prisma:seed
-```
-
-Seed currently upserts:
-- Roles: `HOD`, `DESIGNER`, `SALESPERSON`, `QS`
-- Legacy demo users (own passwords):
-  - `sarah.mitchell@bluerhine.com` / `hod123`
-  - `alex.johnson@bluerhine.com` / `alex123`
-  - `alexander.allen@bluerhine.com` / `alex123`
-  - `benjamin.harris@bluerhine.com` / `ben123`
-  - `rehman@bluerhine.com` / `rehman123`
-  - `qs.team@bluerhine.com` / `qs1234`
-- UAT accounts (all password `tester@321`; email = `firstname.lastname@bluerhine.com` from display name):
-  - Sales (`SALESPERSON`): Sithara Sukumaran, Fahad
-  - HOD: Gopan, Tony, Subin
-  - Designers (`DESIGNER`): Retail — Navin Saju, Saji Saju, Amal, Alekhya, Sulakshana, Sunayana, Arjun, Sooraj, Anagha, Fougil, Ganesh, Gokul, Vipin, Ashik; Project — Rajil Ravindran, Aakash Vijayan, Joseph Shilton
-  - QS: Aleena, Chithira, Rony, Sreekutty, Vishun T K
+- **No Prisma migration history.** `backend/prisma/migrations/` is empty; `prisma migrate dev/deploy` is not used. Schema changes ship as idempotent SQL files in `backend/prisma/sql/` that are run by hand (e.g. `sqlcmd -i`), plus a matching edit to `schema.prisma` and `npm run prisma:generate`.
+- A fresh database is built from `live-create-erpts-tables.sql` + `live-create-erpts-indexes.sql` (see `PRODUCTION_MIGRATION_PROGRESS.md`).
+- **`npm run prisma:seed` is broken and obsolete.** `prisma/seed.ts` still calls `prisma.role` and creates local demo/UAT users; the `Role` / `ErpTSUser` tables were retired in the 2026-09 ERP-auth migration. Users and roles come from ERP (`ErpAuthUsers`, `ErpAuthUserRoleMap`, `ErpMasterRole`). The ERP-Dev UAT accounts are listed in `TESTING_PROGRESS.md` (password `Tester@321`).
+- **`npm run prisma:setup` / `deploy:bootstrap` are legacy.** `prisma/sql/ensure-erp-ts-foreign-keys.sql` joins the retired `ErpTSUser` table; do not run them against ERP-Live.
 
 ## Run API
 
@@ -128,25 +119,32 @@ npm run start:dev
 - Design List
 - Regularization Requests
 - Overtime Requests
+- Reallocation Requests
 - Scheduler Assignments
+- Scheduler Carryover (nightly past-due cron + HOD trigger — `SCHEDULER_RULES.md` Rule 15)
 - Chatter Posts
 - Activities
 - Requests (Leave)
 - Dashboard
-- Notifications
 - Chat (Conversations)
+- Notifications
+- Deadline Alerts (cron: deadline reminder / overdue notifications)
+
+Plus `ThrottlerModule` (100 req/min default) and `ScheduleModule` (crons).
 
 ## Auth Endpoints
 
-- `POST /api/v1/auth/register`
-- `POST /api/v1/auth/login`
+- `POST /api/v1/auth/login` — dev-only username/password login (rejected when `AUTH_MODE=external`)
+- `POST /api/v1/auth/register` — legacy demo route
+- `POST /api/v1/auth/logout` — marks `ErpAuthSession.isLoggedOut`, clears the user's FCM token
 - `GET /api/v1/auth/me`
+- `GET /api/v1/auth/ws-token` — short-lived (2 min) token for the dashboard Socket.IO connection (used when the frontend is on Vercel)
 
-Protected routes use:
+In production (`AUTH_MODE=external`) the ERP portal sets the session cookies and the backend validates the ERP JWT from them. In demo mode, protected routes accept `Authorization: Bearer <accessToken>`.
 
-```http
-Authorization: Bearer <accessToken>
-```
+## Backup HOD reviewers
+
+Designers listed in `BACKUP_HOD_REVIEWER_USER_IDS` (ERP `userId`s) can cover a busy HOD on the `HOD_REVIEW` step only (`isBackupHodReviewer()` in `common/utils/workflow-roles.util.ts`). They can act on any task already in `HOD_REVIEW` (including issuing REWORK), appear in HOD pick lists, and receive HOD_REVIEW notifications. Everywhere else they are plain designers — no scheduler locks, no leave/OT/HR approvals. Not a separate role.
 
 ## Project + File Endpoints
 
@@ -169,7 +167,7 @@ A task is "split" when the HOD assigns it to multiple designers in the scheduler
 - `Task.assigneeId` is set to `null` for split tasks. All designers are in `ErpTSTaskDesigner` junction.
 - Single-designer tasks keep `assigneeId` populated and may or may not have a junction row.
 - **Any query filtering by designer must check both:** `assigneeId = userId` OR `taskDesigners.some({ designerId: userId })`.
-- Setting a task to ON_HOLD via `PATCH /tasks/:id/status` automatically deletes all future `SchedulerAssignment` rows.
+- Setting a task to ON_HOLD via `PATCH /tasks/:id/status` deletes its `SchedulerAssignment` rows whose `weekStartDate >= today`, inside one transaction (note: rows in the current week are kept unless today is that week's Monday). An optional `expectedAssignmentIds` guard rejects with 409 if a live row exists outside that set (used by the scheduler's drag-to-hold; the task-detail Hold button omits it on purpose).
 - Notifications for status changes (COMPLETED, REWORK) and scheduler saves are sent to all junction-table designers, not just `assigneeId`.
 - Work submission (`POST /tasks/:id/submit-work`) builds the submitter display name from the junction when `assigneeId` is null.
 - SQL migration: `backend/prisma/sql/add-task-designer-junction.sql`
@@ -178,7 +176,7 @@ A task is "split" when the HOD assigns it to multiple designers in the scheduler
 
 - **REWORK** (`PATCH /tasks/:id/status` with `status: REWORK`) keeps the **same** task and assignee(s). Instructions (`reworkNote` / attachment / link) are stored on that task. No revision bump and no new task row. Designer can continue (or HOD can reassign via existing flows).
 - **CLIENT_REJECTED** marks the old task rejected and **creates a new revision task** (next `R{n}`), cloned from the rejected task, unassigned (`DESIGN_NEW`), with `previousRevisionTaskId` pointing at the old task. Optional reject instructions are copied onto the new revision.
-- Only `SALESPERSON` or `ADMIN` may issue REWORK or CLIENT_REJECTED.
+- REWORK may be issued by `HOD`, `SALESPERSON`, `ADMIN`, or a backup HOD reviewer (designer in `BACKUP_HOD_REVIEWER_USER_IDS`). CLIENT_REJECTED is `SALESPERSON` / `ADMIN` only. A salesperson can only change status once the task is in `SALES_REVIEW`.
 - **Revision lock (Create Task):** `GET /tasks/next-revision` and create paths (`POST /tasks`, `POST /tasks/extended`) stay on the current **open** revision for the same `projectId` + `opNo` + `designType`. They never mint `R{n+1}` while any non-terminal task exists in that scope. Advancement to the next revision happens **only** via `CLIENT_REJECTED` (which creates a new `DESIGN_NEW` task at `R{n+1}`). If the highest revision is already `CLIENT_REJECTED` and no open successor exists yet, Create Task / next-revision may use `R{n+1}` (reject already authorized the bump). Pure `CLIENT_ACCEPTED` lines still cannot start a new revision from Create Task.
 
 ## Task Create Rules (Important)
@@ -247,7 +245,7 @@ Chatter list responses include `authorName` and `authorRole`.
 
 ## Regularization Request Endpoints
 
-- `GET /api/v1/regularization-requests` — list (query: `designerId` UUID)
+- `GET /api/v1/regularization-requests` — list (query: `designerId`, ERP bigint user id)
 - `GET /api/v1/regularization-requests/:id` — get by ID
 - `GET /api/v1/regularization-requests/task-options` — tasks available for regularization
 - `GET /api/v1/regularization-requests/pending-approvals` — HOD: pending approvals
@@ -302,12 +300,25 @@ WebSocket events emitted to room `conv:{conversationId}`:
 
 Models: `ErpTSConversation`, `ErpTSConversationParticipant`, `ErpTSMessage`
 
-## Task Sign Rows Endpoints
+## Project Sign Rows / QS Endpoints
 
-- `GET /api/v1/tasks/:id/sign-rows` — fetch project sign rows
-- `PUT /api/v1/tasks/:id/sign-rows` — bulk save/update sign rows
+Sign rows are **project-scoped** (the old `/tasks/:id/sign-rows` routes were removed in the 2026-06-28 QS refactor):
 
-Model: `ErpTSProjectSignRow` (signType, planCode, estQty, qsQty, areaZone, levelParcel, sequence, status, contRef)
+- `GET /api/v1/projects/:id/sign-rows` — fetch sign rows (HOD, DESIGNER, SALESPERSON, QS)
+- `PUT /api/v1/projects/:id/sign-rows` — full-replace (HOD, QS)
+- `GET` / `PATCH /api/v1/projects/:id/qs-status` — QS workflow status (HOD, QS)
+- `POST /api/v1/projects/:id/qs-submit` — save rows + mark Completed atomically (HOD, QS)
+
+Model: `ErpTSProjectSignRow` (signType, planCode, estQty, qsQty, areaZone, levelParcel, sequence, status, contRef). See `docs/SIGN-ROWS-ARCHITECTURE.md`.
+
+## Reallocation Request Endpoints
+
+`/api/v1/reallocation-requests` — `task-options`, `eligible-designers`, `pending-approvals`, `team-requests`, list, create, `:id/cancel`, `:id/review`. Behaviour: `SCHEDULER_RULES.md` Rule 13; open items: `REALLOCATION_GAPS.md`.
+
+## Scheduler Carryover Endpoints
+
+- `GET /api/v1/scheduler-carryover/last-run` (HOD) — `{ lastRunAt }`
+- `POST /api/v1/scheduler-carryover/trigger` (HOD) — run the carryover now
 
 ## Troubleshooting
 
@@ -316,14 +327,15 @@ Model: `ErpTSProjectSignRow` (signType, planCode, estQty, qsQty, areaZone, level
 2. Restart backend watcher.
 3. Verify backend is pointing at intended DB/schema.
 
-### 401 Invalid credentials
-- User not found, or
-- `passwordHash` in DB is not a bcrypt hash for supplied password.
+### 401 Invalid credentials (dev login)
+- `AUTH_MODE=external` is set (local login is rejected), or
+- user not found / inactive in `ErpAuthUsers`, has no active mapped role, or
+- `ErpAuthUsers.password` is not a bcrypt hash of the supplied password.
 
 ### Port conflict
 
 ```powershell
-netstat -ano | findstr :4000
+netstat -ano | findstr :7000
 ```
 
 Stop conflicting process or change `PORT` and align frontend `NEXT_PUBLIC_API_BASE_URL`.

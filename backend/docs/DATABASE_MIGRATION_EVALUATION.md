@@ -1,5 +1,7 @@
 # Runtime DDL vs Prisma Migrations — Evaluation
 
+> **Status 2026-11-24:** historical evaluation. What actually happened: production moved to ERP-Live (2026-09-25) with `RUNTIME_SCHEMA_BOOTSTRAP=false`, and the schema was created from `backend/prisma/sql/live-create-erpts-tables.sql` — **not** Prisma migrations. `backend/prisma/migrations/` is empty (the "baseline" mentioned below is not in the repo), and the `deploy:bootstrap` / `prisma:setup` path is legacy (references the retired `ErpTSUser` table). New schema changes ship as hand-run SQL in `backend/prisma/sql/`. See `PRODUCTION_MIGRATION_PROGRESS.md`.
+
 This document evaluates replacing application-startup DDL (`$executeRawUnsafe` in `onModuleInit`) with Prisma-managed migrations.
 
 ## Current Runtime DDL Locations

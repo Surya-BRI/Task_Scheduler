@@ -74,6 +74,10 @@ const pushTimelineBlock = (rawTasks, task, startHr, endHr, { isOvertime = false,
     isSystemBlock,
     requestType: task.requestType,
     requestLabel: task.requestLabel ?? null,
+    // Rule 16 — completed badge on the real completion day.
+    taskStatus: task.taskStatus ?? null,
+    designCompletedAt: task.designCompletedAt ?? null,
+    dueDate: task.dueDate ?? null,
   });
 };
 

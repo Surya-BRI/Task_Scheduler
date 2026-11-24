@@ -15,6 +15,16 @@ describe("designer-task-stats.util", () => {
     expect(date?.toISOString()).toBe("2026-07-10T12:00:00.000Z");
   });
 
+  it("prefers the designer's real completion date (designCompletedAt) over the client close date", () => {
+    // Designer finished 17-Nov; client accepted 25-Nov — the designer's date wins (Rule 16).
+    const date = getTaskCompletionDate({
+      status: "CLIENT_ACCEPTED",
+      designCompletedAt: "2026-11-17T11:00:00.000Z",
+      completedAt: "2026-11-25T09:00:00.000Z",
+    });
+    expect(date?.toISOString()).toBe("2026-11-17T11:00:00.000Z");
+  });
+
   it("blocks reassignment for Design Completed and review/closed statuses", () => {
     expect(isTaskReassignmentBlocked("DESIGN_COMPLETED")).toBe(true);
     expect(isTaskReassignmentBlocked("HOD_REVIEW")).toBe(true);

@@ -15,6 +15,8 @@ export const SCHEDULER_TASK_SUMMARY_SELECT = {
   holdPreviousStatus: true,
   projectId: true,
   updatedAt: true,
+  dueDate: true,
+  designCompletedAt: true,
   project: {
     select: {
       id: true,
@@ -57,6 +59,10 @@ export type SchedulerTaskSummaryDto = {
   holdPreviousStatus: string | null;
   projectId: string | null;
   updatedAt: string;
+  /** Original deadline (unchanged by completion). */
+  dueDate: string | null;
+  /** When the design was actually finished — Rule 16 completion day. */
+  designCompletedAt: string | null;
   estimatedHours: number;
   hasTaskDesigners: boolean;
   project: {
@@ -116,6 +122,8 @@ export function mapSchedulerTaskSummary(task: SchedulerTaskSummaryRow): Schedule
     holdPreviousStatus: task.holdPreviousStatus,
     projectId: task.projectId ?? project?.id ?? null,
     updatedAt: task.updatedAt.toISOString(),
+    dueDate: task.dueDate ? task.dueDate.toISOString() : null,
+    designCompletedAt: task.designCompletedAt ? task.designCompletedAt.toISOString() : null,
     estimatedHours: computeSchedulerEstimatedHours(task),
     hasTaskDesigners: (task.taskDesigners?.length ?? 0) > 0,
     project,

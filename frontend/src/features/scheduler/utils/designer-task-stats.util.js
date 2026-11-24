@@ -38,7 +38,16 @@ export function isTaskReassignmentBlocked(status) {
   return NON_REASSIGNABLE_TASK_STATUSES.has(normalizeTaskStatus(status));
 }
 
+/**
+ * Completion date for designer stats: the real design-completion date (designCompletedAt,
+ * Rule 16) first, then completedAt (client close), then updatedAt for closed rows.
+ * Keep in sync with backend/src/dashboard/designer-stats.util.ts.
+ */
 export function getTaskCompletionDate(task) {
+  if (task?.designCompletedAt) {
+    const designCompletedAt = new Date(task.designCompletedAt);
+    if (!Number.isNaN(designCompletedAt.getTime())) return designCompletedAt;
+  }
   if (task?.completedAt) {
     const completedAt = new Date(task.completedAt);
     if (!Number.isNaN(completedAt.getTime())) return completedAt;

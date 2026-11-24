@@ -220,6 +220,75 @@ describe('TasksService', () => {
     });
   });
 
+  describe('updateStatus — early completion (Rule 16)', () => {
+    const schedulerAssignments: any = { trimScheduleAfterDesignCompletion: jest.fn() };
+    const serviceWithScheduler = new TasksService(
+      prisma,
+      taskFilesService,
+      activityLogger,
+      notificationsService,
+      dashboardRealtime,
+      undefined,
+      schedulerAssignments,
+    );
+
+    beforeEach(() => {
+      schedulerAssignments.trimScheduleAfterDesignCompletion.mockReset();
+      schedulerAssignments.trimScheduleAfterDesignCompletion.mockResolvedValue({
+        removedCount: 0,
+        removedHours: 0,
+        affectedWeeks: [],
+      });
+      prisma.task.update.mockResolvedValue({ ...updatedTask, status: 'DESIGN_COMPLETED' });
+      mockNotifyUsersByRole({});
+    });
+
+    it('stamps designCompletedAt and trims the schedule when an active task is completed', async () => {
+      await serviceWithScheduler.updateStatus(TASK_ID, '9002', UserRole.HOD, { status: 'DESIGN_COMPLETED' } as any);
+
+      const data = prisma.task.update.mock.calls[0][0].data;
+      expect(data.status).toBe('DESIGN_COMPLETED');
+      expect(data.designCompletedAt).toBeInstanceOf(Date);
+      expect(schedulerAssignments.trimScheduleAfterDesignCompletion).toHaveBeenCalledWith(
+        TASK_ID,
+        data.designCompletedAt,
+        '9002',
+      );
+    });
+
+    it('does not re-stamp or trim when a done task moves on to a review status', async () => {
+      prisma.task.findUnique.mockResolvedValue({ ...existingTask, status: 'DESIGN_COMPLETED' });
+
+      await serviceWithScheduler.updateStatus(TASK_ID, '9002', UserRole.HOD, { status: 'HOD_REVIEW' } as any);
+
+      const data = prisma.task.update.mock.calls[0][0].data;
+      expect(data.designCompletedAt).toBeUndefined();
+      expect(schedulerAssignments.trimScheduleAfterDesignCompletion).not.toHaveBeenCalled();
+    });
+
+    it('does not re-stamp when resuming a done task from ON_HOLD', async () => {
+      prisma.task.findUnique.mockResolvedValue({
+        ...existingTask,
+        status: 'ON_HOLD',
+        holdPreviousStatus: 'DESIGN_COMPLETED',
+      });
+
+      await serviceWithScheduler.updateStatus(TASK_ID, '9002', UserRole.HOD, { status: 'DESIGN_COMPLETED' } as any);
+
+      const data = prisma.task.update.mock.calls[0][0].data;
+      expect(data.designCompletedAt).toBeUndefined();
+      expect(schedulerAssignments.trimScheduleAfterDesignCompletion).not.toHaveBeenCalled();
+    });
+
+    it('still succeeds when the schedule trim fails', async () => {
+      schedulerAssignments.trimScheduleAfterDesignCompletion.mockRejectedValue(new Error('db down'));
+
+      await expect(
+        serviceWithScheduler.updateStatus(TASK_ID, '9002', UserRole.HOD, { status: 'DESIGN_COMPLETED' } as any),
+      ).resolves.toBeDefined();
+    });
+  });
+
   describe('getHoldImpact', () => {
     it('returns zero impact when nothing is scheduled from today onward', async () => {
       prisma.schedulerAssignment.findMany.mockResolvedValue([]);

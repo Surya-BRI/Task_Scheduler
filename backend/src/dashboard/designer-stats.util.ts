@@ -5,12 +5,22 @@ export function normalizeTaskStatus(status?: string | null): string {
   return String(status ?? '').trim().toUpperCase();
 }
 
+/**
+ * The date a task counts as "completed" for the designer: the real design-completion date
+ * (designCompletedAt — when the designer finished, Rule 16) first, then completedAt (client close),
+ * then updatedAt for closed rows with neither.
+ */
 export function getTaskCompletionDate(task: {
   status?: string | null;
+  designCompletedAt?: Date | string | null;
   completedAt?: Date | string | null;
   updatedAt?: Date | string | null;
   createdAt?: Date | string | null;
 }): Date | null {
+  if (task?.designCompletedAt) {
+    const designCompletedAt = new Date(task.designCompletedAt);
+    if (!Number.isNaN(designCompletedAt.getTime())) return designCompletedAt;
+  }
   if (task?.completedAt) {
     const completedAt = new Date(task.completedAt);
     if (!Number.isNaN(completedAt.getTime())) return completedAt;
@@ -61,6 +71,7 @@ export function resolveAssignmentScheduledHours(row: {
 
 export type DesignerTaskStatRow = {
   status?: string | null;
+  designCompletedAt?: Date | string | null;
   completedAt?: Date | string | null;
   updatedAt?: Date | string | null;
   createdAt?: Date | string | null;

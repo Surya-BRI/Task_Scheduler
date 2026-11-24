@@ -2,6 +2,8 @@
 
 This document defines the backup strategy for the Task Scheduler SQL Server database (`ErpTS*` tables).
 
+> **Since 2026-09-25 the `ErpTS*` tables live inside ERP-Live** (FULL recovery model), so they are backed up by ERP-Live's own backup job, not a separate Scheduler database. Whether that job covers the new tables is still to be confirmed (`PRODUCTION_MIGRATION_PROGRESS.md` open item 7). The schedule below is the target policy.
+
 ## Objectives
 
 | Metric | Target |
@@ -89,21 +91,21 @@ RESTORE DATABASE [TaskScheduler_Restore] WITH RECOVERY;
 
 - Scheduler week snapshots (`ErpTSSchedulerAssignmentHistory`) provide audit trail for assignment changes.
 - Leave reschedule snapshots (`ErpTSLeaveRescheduleSnapshot`) allow scheduler rollback on leave revocation.
-- Prisma migrations (`backend/prisma/migrations/`) are version-controlled schema history.
+- Schema history is the SQL in `backend/prisma/sql/` (version-controlled); `backend/prisma/migrations/` is empty.
 
 ## Disaster recovery checklist
 
 1. Provision replacement SQL Server instance.
-2. Restore latest full + log backups.
-3. Run `npm run prisma:migrate:deploy --workspace backend` (idempotent).
-4. Run `npm run prisma:audit-schema --workspace backend` to verify FK integrity.
+2. Restore latest full + log backups of ERP-Live (the `ErpTS*` tables come back with it).
+3. If restoring onto an empty database instead, create the schema with `backend/prisma/sql/live-create-erpts-tables.sql` and `live-create-erpts-indexes.sql` (`sqlcmd -I`), then any later `prisma/sql/*.sql` changes.
+4. Run `npm run prisma:audit-schema --workspace backend` to check ErpTS tables / FKs.
 5. Deploy application with `RUNTIME_SCHEMA_BOOTSTRAP=false`.
-6. Verify `/health` and login flow.
+6. Verify `/health/ready` and the ERP-portal login flow.
 
 ## Related commands
 
 ```bash
-npm run prisma:migrate:deploy   # Apply pending migrations
-npm run prisma:audit-schema     # FK orphan / schema drift audit
-npm run deploy:bootstrap        # Legacy SQL bootstrap (brownfield only)
+npm run prisma:audit-schema     # ErpTS tables / FK / orphan audit
+# Legacy — do not run against ERP-Live (references retired ErpTSUser):
+# npm run deploy:bootstrap / prisma:setup / prisma:migrate:deploy
 ```

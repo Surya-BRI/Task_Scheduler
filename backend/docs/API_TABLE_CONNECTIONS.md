@@ -53,7 +53,7 @@ Prisma schema models in `backend/prisma/schema.prisma`: **44** — 42 `ErpTS*` t
 23. `OvertimeRequest` → `ErpTSOvertimeRequest`
 24. `OvertimeApprovalHistory` → `ErpTSOvertimeApprovalHistory`
 25. `OvertimeAttachment` → `ErpTSOvertimeAttachment`
-- *(raw SQL, no Prisma model)* `ErpTSLeaveRescheduleSnapshot` — assignment snapshots taken before leave-driven rescheduling; used to restore on revocation. Auto-created by `SchedulerAssignmentsService.onModuleInit`.
+- `LeaveRescheduleSnapshot` → `ErpTSLeaveRescheduleSnapshot` — assignment snapshots taken before leave-driven rescheduling; used to restore on revocation. Now a Prisma model; on ERP-Live it was created by `live-create-erpts-tables.sql` (boot-time DDL is off).
 
 **Scheduler**
 26. `SchedulerAssignment` → `ErpTSSchedulerAssignment`
@@ -61,14 +61,16 @@ Prisma schema models in `backend/prisma/schema.prisma`: **44** — 42 `ErpTS*` t
 28. `SchedulerAssignmentHistory` → `ErpTSSchedulerAssignmentHistory`
 29. `Holiday` → `ErpTSHoliday` (holiday calendar; skipped during leave rescheduling)
 
+30. `SchedulerDayUnlock` → `ErpTSSchedulerDayUnlock` (weekend day-**locks**; row present = locked — Rule 14)
+
 **Activity, Notifications & Inbox**
-29. `ActivityLog` → `ErpTSActivityLog`
-30. `Notification` → `ErpTSNotification`
-31. `InboxReadMarker` → `ErpTSInboxRead`
+31. `ActivityLog` → `ErpTSActivityLog`
+32. `Notification` → `ErpTSNotification`
+33. `InboxReadMarker` → `ErpTSInboxRead`
 
 **Task Work Sessions**
-32. `TaskWorkSession` → `ErpTSTaskWorkSession`
-33. `TaskWorkSessionFile` → `ErpTSTaskWorkSessionFile`
+34. `TaskWorkSession` → `ErpTSTaskWorkSession`
+35. `TaskWorkSessionFile` → `ErpTSTaskWorkSessionFile`
 
 ## Module to Table Mapping
 
@@ -117,7 +119,7 @@ Prisma schema models in `backend/prisma/schema.prisma`: **44** — 42 `ErpTS*` t
 - Timer state endpoints: `GET /tasks/:id/timer-state` and `POST /tasks/:id/save-timer` upsert a Draft `ErpTSTaskWorkSession` for cold-start restore.
 - Work submission endpoint: `POST /tasks/:id/submit-work` promotes session to Submitted status, uploads files to S3 into `ErpTSTaskWorkSessionFile`, and logs `TASK_WORK_SUBMITTED` activity.
 - `GET /tasks/:id/hold-impact` — read-only preview of how many live/future `SchedulerAssignment` rows an ON_HOLD would delete, grouped by designer (`{partCount, designers[]}`); does not return assignment ids, so it can't itself be used to build `expectedAssignmentIds` below.
-- `PATCH /tasks/:id/status` (ON_HOLD) accepts an optional `expectedAssignmentIds: UUID[]` consolidation guard — if a live `SchedulerAssignment` row exists for the task outside that set, the update is rejected with `ConflictException`. **Not wrapped in a transaction** (check, `task.update()`, and the later `schedulerAssignment.deleteMany` are separate calls) — see `SCHEDULER_FIXES_NEEDED.md` item 9.
+- `PATCH /tasks/:id/status` (ON_HOLD) accepts an optional `expectedAssignmentIds: UUID[]` consolidation guard — if a live `SchedulerAssignment` row exists for the task outside that set, the update is rejected with `ConflictException`. The check, `task.update()` and the `schedulerAssignment.deleteMany` run in one `$transaction` (fixed — `SCHEDULER_FIXES_NEEDED.md` item 9).
 - `freezeDraftWorkSession(taskId, designerId, closeSession)`: when `closeSession=false` and the designer had a running timer, the timer is now paused (`runStartedAt` cleared) and a "Timer Paused" notification + realtime refresh is sent — previously the timer was just left running.
 - `GET /tasks/next-phase` — suggested release `phase` (int) for a project's next Create-Task batch, project-wide (not per-opNo), with a smart per-sign-type lineage suggestion. Full detail: `PROJECT_TASK_PHASE.md`.
 
@@ -188,6 +190,20 @@ Prisma schema models in `backend/prisma/schema.prisma`: **44** — 42 `ErpTS*` t
 - **Leave revocation:** `revokeLeaveReschedule(leaveId)` — loads unrestored snapshots, restores assignment rows, stamps `restoredAt`.
 - **Cross-week overflow placement:** `PUT /scheduler-assignments/week/:weekStart` accepts an optional `overflow[]` (`SchedulerOverflowInputDto[]`); `placeOverflowCapacity` walks forward day-by-day from the day after the saved week (skip holidays/full-day leave/designer weekend day-locks; weekends otherwise open), live-checks capacity inside the same save transaction, bounded by a 56-day lookahead. Replaces the old client-side `localStorage` overflow carry-forward. Response adds `overflowPlacements`/`unplacedOverflow`. Skips destination weeks whose `isLocked` flag is set (fixed 2026-09-17; see `SCHEDULER_FIXES_NEEDED.md` item 11).
 - `DELETE /scheduler-assignments/task/:taskId` (`clearTaskSchedule`) accepts an optional `expectedAssignmentIds` query param (comma-separated); when given, the check-then-delete runs inside one `$transaction` and throws `ConflictException` on any live row outside the set. Omitting it preserves the old unconditional wipe.
+
+### `reallocation-requests`
+- Controller/Service: `backend/src/reallocation-requests/`
+- Connected tables: `ErpTSReallocationRequest` (filtered unique index `UQ_ErpTSReallocationRequest_pending_task_requester`), plus `ErpTSSchedulerAssignment` / `ErpTSTaskWorkSession` via `applyReallocationHandoff` on approve
+- See `SCHEDULER_RULES.md` Rule 13 and `REALLOCATION_GAPS.md`
+
+### `scheduler-carryover`
+- Controller/Service: `backend/src/scheduler-carryover/` (nightly cron + `GET last-run` / `POST trigger`, HOD)
+- Connected tables: `ErpTSSchedulerAssignment`, `ErpTSSchedulerWeek`, `ErpTSSchedulerAssignmentHistory`, `ErpTSActivityLog` (`SCHEDULER_CARRYOVER`) — via `SchedulerAssignmentsService.carryOverPastDueAssignments`
+- See `SCHEDULER_RULES.md` Rule 15
+
+### `deadline-alerts`
+- Service: `backend/src/deadline-alerts/` (cron every 5 min, `sp_getapplock`-guarded)
+- Connected tables: `ErpTSTask`, `ErpTSTaskDesigner`, `ErpTSNotification`, `ErpTSActivityLog` (`DEADLINE_REMINDER`, `DEADLINE_OVERDUE`)
 
 ### `design-list`
 - Controller: `backend/src/design-list/design-list.controller.ts`
